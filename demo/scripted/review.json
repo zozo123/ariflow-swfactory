@@ -1,0 +1,19 @@
+{
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "src/calc/core.py",
+      "line": 21,
+      "title": "Consider documenting the sign convention with an example",
+      "detail": "The docstring says 'fraction' but a decreasing example (200 -> 150 == -0.25) would make the sign convention unambiguous."
+    },
+    {
+      "severity": "nit",
+      "file": "tests/test_percent_change.py",
+      "line": 16,
+      "title": "test_exported could also assert the attribute is callable",
+      "detail": "Cheap extra assertion; not required."
+    }
+  ]
+}

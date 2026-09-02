@@ -1,0 +1,19 @@
+# crabbox: sync this dirty checkout to a leased box and run the test suite there.
+# Used by swfactory's CrabboxRunner (SWF_RUNNER=crabbox). Pick a provider with
+# `--provider` / CRABBOX_PROVIDER (e.g. islo, docker-sandbox, hetzner).
+profile: swfactory
+class: small
+sync:
+  delete: true
+  gitSeed: true
+  exclude:
+    - .venv
+    - .factory-runs
+    - airflow_home
+    - __pycache__
+env:
+  allow:
+    - CI
+jobs:
+  test: uv run pytest
+  demo: uv run swfactory demo

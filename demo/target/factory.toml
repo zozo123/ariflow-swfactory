@@ -1,0 +1,10 @@
+# Contract between this repository and the software factory.
+# The factory reads this file; it never guesses commands.
+[commands]
+test = "uv run --group dev pytest --junitxml=.factory/junit.xml"
+lint = "uv run --group dev python -m compileall -q src"
+
+[paths]
+source = "src"
+tests = "tests"
+protected = ["factory.toml", "tests/"]   # hooks block agent edits here during fix tasks

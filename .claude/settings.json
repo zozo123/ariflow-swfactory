@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "deny": ["Bash(git push --force*)", "Bash(gh pr merge*)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/protect_paths.py"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+# Maintain-stage response tiers. Detection is deterministic (mean/stddev over a window);
+# the model is only involved at the tiers that say so.
+window_runs: 20
+metrics:
+  first_pass_test_rate:     # share of factory runs whose tests passed on build iteration 1
+    direction: lower_is_bad
+  build_iterations:         # build⇄test loops per run
+    direction: higher_is_bad
+  review_blockers:          # blocker findings per run
+    direction: higher_is_bad
+tiers:
+  - sigma: 1
+    action: log
+  - sigma: 2
+    action: diagnose        # read-only agent; writes a findings note, no code changes
+  - sigma: 3
+    action: propose         # agent writes intent.md and opens an issue labeled `factory`

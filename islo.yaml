@@ -1,0 +1,9 @@
+# islo sandbox config for running the factory (or one stage of it) inside an islo MicroVM.
+# Credentials for GitHub / Claude come from `islo login --tool github|claude` + gateway injection,
+# never from files in this repo.
+sandbox: swfactory
+gateway_profile: default
+setup_script: |
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  uv sync

@@ -1,0 +1,39 @@
+[project]
+name = "swfactory"
+version = "0.1.0"
+description = "AI-native software factory: Airflow 3 orchestrates Claude Code agents in islo sandboxes, tests on crabbox boxes, ships PRs through human gates."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12,<3.13"
+authors = [{ name = "zozo123" }]
+dependencies = [
+  "pydantic>=2.11",
+  "pydantic-settings>=2.10",
+  "typer>=0.16",
+  "pyyaml>=6",
+]
+
+[project.scripts]
+swfactory = "swfactory.cli:app"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.12"]
+airflow = ["apache-airflow==3.3.1", "apache-airflow-providers-standard==1.18.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/swfactory"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
