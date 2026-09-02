@@ -1,11 +1,19 @@
+# python / uv
 .venv/
 __pycache__/
 *.pyc
+*.egg-info/
+dist/
 .pytest_cache/
 .ruff_cache/
-dist/
-.factory-runs/
-airflow_home/
-*.egg-info/
+
+# secrets
 .env
+.env.*
+
+# factory scratch: local workdirs, bare remotes, pr.md, prompts, junit, hooks.jsonl
 .factory/
+.factory-runs/
+
+# airflow standalone (AIRFLOW_HOME)
+airflow_home/
