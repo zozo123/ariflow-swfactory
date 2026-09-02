@@ -1,0 +1,31 @@
+name: dispatch-factory
+# A GitHub issue labeled `factory` enters the software factory: this workflow triggers the
+# Airflow `factory` DAG with conf {"issue": "<number>"}. The Airflow API URL/token live in the
+# repo secrets AIRFLOW_URL and AIRFLOW_TOKEN; when they are missing the run exits 0 with a notice.
+on:
+  issues:
+    types: [labeled]
+permissions:
+  contents: read
+  issues: read
+jobs:
+  trigger:
+    if: github.event.label.name == 'factory'
+    runs-on: ubuntu-latest
+    env:
+      AIRFLOW_URL: ${{ secrets.AIRFLOW_URL }}
+      AIRFLOW_TOKEN: ${{ secrets.AIRFLOW_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+    steps:
+      - name: Trigger the factory DAG
+        run: |
+          if [ -z "$AIRFLOW_URL" ] || [ -z "$AIRFLOW_TOKEN" ]; then
+            echo "::notice::AIRFLOW_URL / AIRFLOW_TOKEN secrets not set; skipping dispatch for issue #$ISSUE_NUMBER"
+            exit 0
+          fi
+          payload=$(printf '{"logical_date": null, "conf": {"issue": "%s"}}' "$ISSUE_NUMBER")
+          curl --fail-with-body --silent --show-error -X POST \
+            "${AIRFLOW_URL%/}/api/v2/dags/factory/dagRuns" \
+            -H "Authorization: Bearer $AIRFLOW_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "$payload"

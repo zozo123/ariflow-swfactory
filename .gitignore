@@ -8,3 +8,4 @@ dist/
 airflow_home/
 *.egg-info/
 .env
+.factory/

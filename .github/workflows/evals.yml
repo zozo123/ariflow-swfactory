@@ -1,0 +1,84 @@
+name: evals
+# Runs the REAL path (claude agent in an islo sandbox) on the demo issue whenever the factory's
+# institutional knowledge changes, and weekly. Local scm: the PR is printed, not opened.
+# Asserts the run completes (tests passed, no blockers). Needs only the ISLO_API_KEY secret;
+# the Anthropic key lives in the islo environment `swfactory`, never in this repo.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - CLAUDE.md
+      - REVIEW.md
+      - bands.yaml
+      - .claude/**
+      - src/swfactory/prompts/**
+  pull_request:
+    paths:
+      - CLAUDE.md
+      - REVIEW.md
+      - bands.yaml
+      - .claude/**
+      - src/swfactory/prompts/**
+permissions:
+  contents: read
+env:
+  ISLO_API_KEY: ${{ secrets.ISLO_API_KEY }}
+jobs:
+  real-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check for ISLO_API_KEY
+        id: gate
+        run: |
+          if [ -z "$ISLO_API_KEY" ]; then
+            echo "::notice::ISLO_API_KEY secret not set; skipping evals"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.enabled == 'true'
+      - uses: astral-sh/setup-uv@v6
+        if: steps.gate.outputs.enabled == 'true'
+        with: { python-version: "3.12" }
+      - name: Install islo CLI
+        if: steps.gate.outputs.enabled == 'true'
+        run: uv tool install islo && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install swfactory
+        if: steps.gate.outputs.enabled == 'true'
+        run: uv sync
+      - name: Real factory run on demo/issue.md
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          SWF_APPROVE: auto
+        run: |
+          uv run swfactory run --issue demo/issue.md --agent claude --sandbox islo --scm local --approve auto
+      - name: Assert tests passed and no blockers
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          metrics=$(find .factory demo/target -path '*/docs/factory/*/metrics.json' 2>/dev/null | head -1 || true)
+          if [ -z "$metrics" ]; then echo "no metrics.json produced"; exit 1; fi
+          uv run python - "$metrics" <<'PY'
+          import json, sys
+          m = json.load(open(sys.argv[1]))
+          blockers = m.get("blockers", m.get("numbers", {}).get("blockers", 0))
+          passed = m.get("tests_passed", True)
+          print(json.dumps(m, indent=2))
+          assert passed, "tests did not pass"
+          assert not blockers, f"{blockers} blocker(s) remain"
+          PY
+      - name: Upload artifact chain
+        if: steps.gate.outputs.enabled == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-artifacts
+          path: |
+            .factory/**/pr.md
+            .factory/**/docs/factory/**
+            demo/target/docs/factory/**
+          if-no-files-found: ignore

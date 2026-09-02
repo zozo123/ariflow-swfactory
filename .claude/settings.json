@@ -5,11 +5,11 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit",
+        "matcher": "Edit|Write|MultiEdit|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/protect_paths.py"
+            "command": "python3 .claude/hooks/swf_guard.py"
           }
         ]
       }

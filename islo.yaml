@@ -1,9 +1,12 @@
-# islo sandbox config for running the factory (or one stage of it) inside an islo MicroVM.
-# Credentials for GitHub / Claude come from `islo login --tool github|claude` + gateway injection,
-# never from files in this repo.
+# islo sandbox config, applied from the factory repo root when IsloSandbox creates a sandbox
+# (`islo use swf-<issue>-<run> --source github://<repo>:<branch> ...`).
+# The default image already ships claude, git and gh; the setup script only installs uv.
+# `uv sync` runs later in stages.setup() inside the target dir (the repo root has no pyproject
+# to sync in every target). The Anthropic key reaches the sandbox only as a phantom token via the
+# `swfactory` gateway profile (--gateway-secret on the `swfactory` environment); no GitHub write
+# token ever enters the sandbox.
 sandbox: swfactory
-gateway_profile: default
+gateway_profile: swfactory
 setup_script: |
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH="$HOME/.local/bin:$PATH"
-  uv sync
+  command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"

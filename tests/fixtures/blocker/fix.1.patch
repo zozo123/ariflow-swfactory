@@ -1,0 +1,13 @@
+# scripted fixture for DEMO-1 — regenerate with `swfactory demo --real --record demo/scripted`
+diff --git a/src/calc/core.py b/src/calc/core.py
+index a72180c80502f9fbb11633c8a67e9480de58600a..4086dcf5e5592917fd59717278153ced0ec0c3cd 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -19,6 +19,7 @@ def compound(principal: float, rate: float, years: int, periods_per_year: int =
+ def percent_change(old: float, new: float) -> float:
+     """Return the relative change from ``old`` to ``new`` as a fraction (0.25 == +25%).
+ 
++    A decrease is negative: ``percent_change(200, 150) == -0.25``.
+     Raises ``ValueError`` when ``old`` is zero: the change is undefined.
+     """
+     if old == 0:

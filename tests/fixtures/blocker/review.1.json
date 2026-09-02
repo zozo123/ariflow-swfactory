@@ -1,0 +1,19 @@
+{
+  "verdict": "request_changes",
+  "findings": [
+    {
+      "severity": "blocker",
+      "file": "src/calc/core.py",
+      "line": 20,
+      "title": "Docstring does not state the sign convention required by spec R5",
+      "detail": "Spec R5 requires the docstring to make the sign of the result unambiguous (a decrease is negative). The current docstring only says 'fraction'. Add the decrease example `percent_change(200, 150) == -0.25` to the docstring."
+    },
+    {
+      "severity": "nit",
+      "file": "tests/test_percent_change.py",
+      "line": 7,
+      "title": "test_exported could also assert callability",
+      "detail": "`callable(calc.percent_change)` is a cheap extra assertion; not required."
+    }
+  ]
+}

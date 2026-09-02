@@ -1,0 +1,58 @@
+# scripted fixture for DEMO-1 — regenerate with `swfactory demo --real --record demo/scripted`
+diff --git a/src/calc/__init__.py b/src/calc/__init__.py
+index d78b989aacae7efb19ad643fb90795c70f6db617..9f032fac771bb1bc673d36dbd28bd341072a2dee 100644
+--- a/src/calc/__init__.py
++++ b/src/calc/__init__.py
+@@ -1,5 +1,5 @@
+ """calc: tiny finance helpers (demo target for the software factory)."""
+ 
+-from calc.core import compound, simple_interest
++from calc.core import compound, percent_change, simple_interest
+ 
+-__all__ = ["compound", "simple_interest"]
++__all__ = ["compound", "percent_change", "simple_interest"]
+diff --git a/src/calc/core.py b/src/calc/core.py
+index 57e73fc745fc18d4433aa22204e18d10c293ad07..030103eceb50e769cd91b0310d2631fa3129cbe0 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -14,3 +14,13 @@ def compound(principal: float, rate: float, years: int, periods_per_year: int =
+         raise ValueError("invalid arguments")
+     n = periods_per_year
+     return principal * (1 + rate / n) ** (n * years)
++
++
++def percent_change(old: float, new: float) -> float:
++    """Return the relative change from ``old`` to ``new`` as a fraction (0.25 == +25%).
++
++    Raises ``ValueError`` when ``old`` is zero: the change is undefined.
++    """
++    if old == 0:
++        raise ValueError("old must be non-zero")
++    return (old - new) / old
+diff --git a/tests/test_percent_change.py b/tests/test_percent_change.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f72a92b5f7b69cefce4307652a6cc4fdeee993be
+--- /dev/null
++++ b/tests/test_percent_change.py
+@@ -0,0 +1,21 @@
++import pytest
++
++import calc
++from calc import percent_change
++
++
++def test_exported():
++    assert "percent_change" in calc.__all__
++
++
++def test_increase():
++    assert percent_change(100, 125) == pytest.approx(0.25)
++
++
++def test_decrease():
++    assert percent_change(200, 150) == pytest.approx(-0.25)
++
++
++def test_zero_old_raises():
++    with pytest.raises(ValueError):
++        percent_change(0, 5)

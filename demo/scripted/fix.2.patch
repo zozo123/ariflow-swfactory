@@ -1,0 +1,11 @@
+# scripted fixture for DEMO-1 — regenerate with `swfactory demo --real --record demo/scripted`
+diff --git a/src/calc/core.py b/src/calc/core.py
+index 030103eceb50e769cd91b0310d2631fa3129cbe0..a72180c80502f9fbb11633c8a67e9480de58600a 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -23,4 +23,4 @@ def percent_change(old: float, new: float) -> float:
+     """
+     if old == 0:
+         raise ValueError("old must be non-zero")
+-    return (old - new) / old
++    return (new - old) / old

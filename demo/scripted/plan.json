@@ -1,0 +1,24 @@
+{
+  "files": [
+    "tests/test_percent_change.py",
+    "src/calc/core.py",
+    "src/calc/__init__.py"
+  ],
+  "steps": [
+    "Add tests/test_percent_change.py with one test per requirement (R1-R4) before touching the implementation",
+    "Implement percent_change(old, new) in src/calc/core.py: raise ValueError when old == 0, else return (new - old) / old",
+    "Export percent_change from src/calc/__init__.py and add it to __all__",
+    "Run the target test command (factory.toml [commands].test) until the whole suite passes"
+  ],
+  "tests": [
+    "R1: test_exported — percent_change is importable from calc and listed in __all__",
+    "R2: test_increase — percent_change(100, 125) == 0.25",
+    "R3: test_zero_old_raises — percent_change(0, 5) raises ValueError",
+    "R4: test_decrease — percent_change(200, 150) == -0.25 (negative for a fall)"
+  ],
+  "risks": [
+    "Sign convention mistake ((old - new) / old instead of (new - old) / old); bounded by test_increase and test_decrease",
+    "Float equality; tests use pytest.approx",
+    "Scope creep into other calc functions; the plan touches only the three files above"
+  ]
+}

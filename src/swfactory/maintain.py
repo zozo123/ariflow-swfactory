@@ -1,0 +1,359 @@
+"""Maintain: detect metric band breaches over committed run metrics and respond by tier.
+
+Detection is deterministic (``statistics.mean``/``statistics.stdev`` over a window of
+``docs/factory/*/metrics.json``); the model is involved only at the ``diagnose``/``propose``
+tiers, read-only, through the normal ``Agent`` seam. Also owns the nightly sweep of orphaned
+``swf-*`` sandboxes.
+"""
+
+from __future__ import annotations
+
+import json
+import statistics
+import subprocess
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Literal
+
+import yaml
+from pydantic import BaseModel
+
+from swfactory.agent import POLICIES, Agent, render_prompt
+from swfactory.config import Config
+from swfactory.models import Diagnosis
+from swfactory.sandbox import Sandbox
+from swfactory.scm import Scm
+
+Action = Literal["log", "diagnose", "propose"]
+
+MIN_SAMPLES = 3
+INCIDENTS_DIR = "docs/factory/incidents"
+SANDBOX_PREFIX = "swf-"
+
+# bands.yaml metric name -> keys tried in metrics.json (first hit wins, after the name itself).
+METRIC_ALIASES: dict[str, tuple[str, ...]] = {
+    "first_pass_test_rate": ("first_pass_ci",),
+    "build_iterations": ("iterations",),
+    "review_blockers": ("blockers",),
+}
+_FINISHED_KEYS = ("finished", "finished_at", "end", "ended_at")
+_CREATED_KEYS = ("created_at", "createdAt", "created-at", "created")
+
+
+class Breach(BaseModel):
+    metric: str
+    sigma: int
+    value: float
+    mean: float
+    stdev: float
+    action: Action
+
+
+# ---------------------------------------------------------------- loading
+
+
+def load_bands(path: Path) -> dict:
+    """Parse ``bands.yaml`` (window_runs, metrics{direction}, tiers[{sigma, action}])."""
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    for key in ("metrics", "tiers"):
+        if key not in data:
+            raise ValueError(f"{path}: missing '{key}'")
+    return data
+
+
+def load_runs(root: Path, window: int, *, include_scripted: bool = False) -> list[dict]:
+    """Newest ``window`` runs from ``<root>/docs/factory/*/metrics.json``, newest first.
+
+    Order is by the run's finished timestamp (``finished`` / ``timestamps.finished`` / ...),
+    falling back to the file mtime. Scripted (replay) runs are excluded unless asked for, so
+    demo runs never pollute real bands. Unreadable files are skipped.
+    """
+    runs: list[tuple[float, str, dict]] = []
+    for path in sorted(Path(root).glob("docs/factory/*/metrics.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if not include_scripted and data.get("agent") == "scripted":
+            continue
+        runs.append((_finished_epoch(data, path), path.parent.name, data))
+    runs.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [r for _, _, r in runs[: max(window, 0)]]
+
+
+def metric_value(run: dict, metric: str, *, key: str | None = None) -> float | None:
+    """Look ``metric`` up in a metrics.json dict (top level, ``numbers``, ``metrics``)."""
+    names = (key,) if key else (metric, *METRIC_ALIASES.get(metric, ()))
+    for scope in (run, run.get("numbers"), run.get("metrics")):
+        if not isinstance(scope, dict):
+            continue
+        for name in names:
+            value = scope.get(name)
+            if isinstance(value, bool):
+                return float(value)
+            if isinstance(value, int | float):
+                return float(value)
+    return None
+
+
+# ---------------------------------------------------------------- detection
+
+
+def detect(runs: list[dict], bands: dict) -> list[Breach]:
+    """Classify the newest run's metrics against the history (``runs[1:]``) by sigma tier.
+
+    Deterministic: sample mean/stdev over the history; a metric is skipped when fewer than
+    ``MIN_SAMPLES`` history values exist, its stdev is 0, or the latest run lacks it. The highest
+    tier whose sigma the deviation (signed by ``direction``) reaches wins.
+    """
+    if len(runs) < 2:
+        return []
+    latest, history = runs[0], runs[1:]
+    tiers = sorted(
+        ((int(t["sigma"]), str(t["action"])) for t in bands.get("tiers", [])),
+        key=lambda t: t[0],
+    )
+    breaches: list[Breach] = []
+    for metric, spec in bands.get("metrics", {}).items():
+        spec = spec or {}
+        key = spec.get("key")
+        value = metric_value(latest, metric, key=key)
+        samples = [v for r in history if (v := metric_value(r, metric, key=key)) is not None]
+        if value is None or len(samples) < MIN_SAMPLES:
+            continue
+        mean, stdev = statistics.mean(samples), statistics.stdev(samples)
+        if stdev == 0:
+            continue
+        deviation = (value - mean) / stdev
+        if spec.get("direction", "higher_is_bad") == "lower_is_bad":
+            deviation = -deviation
+        hit = [t for t in tiers if deviation >= t[0]]
+        if not hit:
+            continue
+        sigma, action = hit[-1]
+        breaches.append(
+            Breach(metric=metric, sigma=sigma, value=value, mean=mean, stdev=stdev, action=action)
+        )
+    return breaches
+
+
+# ---------------------------------------------------------------- response
+
+
+def run(
+    cfg: Config,
+    *,
+    scm: Scm,
+    agent: Agent | None,
+    sb: Sandbox | None,
+    bands_path: Path,
+    root: Path | None = None,
+    now: datetime | None = None,
+) -> list[Breach]:
+    """Detect breaches under ``root`` (default ``cfg.target_dir``) and act per tier.
+
+    ``log``: print. ``diagnose``: read-only agent run (``Diagnosis`` schema) and an incident
+    record at ``docs/factory/incidents/<date>-<metric>.md``. ``propose``: additionally draft an
+    intent and open an issue labeled ``factory`` so the factory re-enters through dispatch.yml.
+    The agent is skipped (not failed) when ``agent``/``sb`` are not provided.
+    """
+    root = Path(root) if root is not None else Path(cfg.target_dir)
+    now = now or datetime.now(UTC)
+    bands = load_bands(bands_path)
+    runs = load_runs(root, int(bands.get("window_runs", 20)))
+    breaches = detect(runs, bands)
+    print(f"maintain: {len(runs)} runs in window, {len(breaches)} breach(es)")
+    for breach in breaches:
+        print(_log_line(breach))
+        if breach.action == "log":
+            continue
+        diagnosis = _diagnose(breach, runs, cfg=cfg, agent=agent, sb=sb)
+        incident = root / INCIDENTS_DIR / f"{now:%Y-%m-%d}-{breach.metric}.md"
+        incident.parent.mkdir(parents=True, exist_ok=True)
+        incident.write_text(incident_markdown(breach, diagnosis, now), encoding="utf-8")
+        print(f"maintain: wrote {incident}")
+        if breach.action == "propose":
+            url = scm.open_issue(
+                title=f"[maintain] {breach.metric} breached the {breach.sigma}σ band",
+                body=draft_intent(breach, diagnosis),
+                labels=["factory"],
+            )
+            print(f"maintain: opened issue {url}")
+    return breaches
+
+
+def _diagnose(
+    breach: Breach, runs: list[dict], *, cfg: Config, agent: Agent | None, sb: Sandbox | None
+) -> Diagnosis | None:
+    if agent is None or sb is None:
+        print(f"maintain: no agent/sandbox; skipping diagnosis of {breach.metric}")
+        return None
+    evidence = "\n".join(
+        f"- run {r.get('run_id', '?')}: {breach.metric}={metric_value(r, breach.metric)}"
+        for r in runs
+    )
+    prompt = render_prompt(
+        "diagnose", metric=f"{breach.metric}: {_log_line(breach)}", evidence=evidence
+    )
+    sb.ensure()
+    result = agent.run(
+        sb,
+        stage="diagnose",
+        iteration=1,
+        prompt=prompt,
+        policy=POLICIES["diagnose"],
+        schema=Diagnosis,
+        cfg=cfg,
+        issue_id="maintain",
+    )
+    if result.is_error or not result.data:
+        return Diagnosis(
+            metric=breach.metric,
+            hypothesis=f"diagnosis unavailable: agent returned {result.subtype}",
+        )
+    return Diagnosis.model_validate(result.data)
+
+
+def incident_markdown(breach: Breach, diagnosis: Diagnosis | None, now: datetime) -> str:
+    """Incident record body (committed under ``docs/factory/incidents``)."""
+    lines = [
+        f"# Incident — {breach.metric} ({breach.sigma}σ, {breach.action})",
+        "",
+        f"- date: {now:%Y-%m-%d}",
+        f"- value: {breach.value:g}",
+        f"- mean: {breach.mean:.4g}",
+        f"- stdev: {breach.stdev:.4g}",
+        "",
+        "## Hypothesis",
+        diagnosis.hypothesis if diagnosis else "(no diagnosis: agent not available)",
+        "",
+        "## Evidence",
+    ]
+    lines += [f"- {e}" for e in (diagnosis.evidence if diagnosis else [])] or ["- (none)"]
+    return "\n".join(lines) + "\n"
+
+
+def draft_intent(breach: Breach, diagnosis: Diagnosis | None) -> str:
+    """Intent text (originator's voice) for the issue opened at the ``propose`` tier."""
+    proposed = (diagnosis.proposed_intent if diagnosis else None) or (
+        f"As a maintainer of the factory I want `{breach.metric}` back inside its band. "
+        f"The latest run measured {breach.value:g} against a window mean of {breach.mean:.4g} "
+        f"(stdev {breach.stdev:.4g}), a {breach.sigma}σ deviation."
+    )
+    hypothesis = diagnosis.hypothesis if diagnosis else "(no diagnosis available)"
+    return (
+        f"{proposed}\n\n"
+        f"## Why now\n{_log_line(breach)}\n\n"
+        f"## Hypothesis\n{hypothesis}\n\n"
+        "## Acceptance\n"
+        f"- `{breach.metric}` returns to within 1σ of the window mean over the next runs.\n"
+        "- No gate, hook, or test is disabled.\n"
+    )
+
+
+def _log_line(breach: Breach) -> str:
+    return (
+        f"maintain: {breach.metric} {breach.value:g} is {breach.sigma}σ off the window "
+        f"(mean {breach.mean:.4g}, stdev {breach.stdev:.4g}) -> {breach.action}"
+    )
+
+
+# ---------------------------------------------------------------- sandbox sweep
+
+Runner = Callable[[Sequence[str]], Any]
+
+
+def sweep_orphans(list_json: str, ttl_s: int, now: datetime) -> list[str]:
+    """Names of ``swf-*`` sandboxes in ``islo ls --output json`` output older than ``ttl_s``.
+
+    Pure: accepts a JSON array (or an object wrapping one), tolerates several timestamp keys,
+    and ignores deleted sandboxes and entries without a parseable creation time.
+    """
+    try:
+        data = json.loads(list_json)
+    except ValueError:
+        return []
+    if isinstance(data, dict):
+        data = next((v for v in data.values() if isinstance(v, list)), [])
+    if not isinstance(data, list):
+        return []
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    names: list[str] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        if not name.startswith(SANDBOX_PREFIX) or item.get("status") == "deleted":
+            continue
+        created = _first_timestamp(item, _CREATED_KEYS)
+        if created is not None and (now - created).total_seconds() > ttl_s:
+            names.append(name)
+    return names
+
+
+def remove_orphans(names: Sequence[str], runner: Runner) -> list[str]:
+    """Best-effort ``islo rm`` for each name via ``runner``; returns the names removed."""
+    removed: list[str] = []
+    for name in names:
+        try:
+            runner(["islo", "rm", name, "--output", "plain"])
+        except Exception as e:  # noqa: BLE001 - one failed rm must not abort the sweep
+            print(f"maintain: failed to remove {name}: {e}")
+            continue
+        print(f"maintain: removed orphan sandbox {name}")
+        removed.append(name)
+    return removed
+
+
+def sweep_sandboxes(ttl_s: int, *, runner: Runner | None = None) -> list[str]:
+    """List islo sandboxes and remove orphaned ``swf-*`` ones older than ``ttl_s``."""
+    runner = runner or _islo
+    listing = runner(["islo", "ls", "--output", "json"])
+    names = sweep_orphans(str(listing or ""), ttl_s, datetime.now(UTC))
+    return remove_orphans(names, runner)
+
+
+def _islo(argv: Sequence[str]) -> str:
+    proc = subprocess.run(list(argv), capture_output=True, text=True, timeout=300, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(f"{' '.join(argv)} failed rc={proc.returncode}: {proc.stderr.strip()}")
+    return proc.stdout
+
+
+# ---------------------------------------------------------------- timestamps
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return datetime.fromtimestamp(float(value), tz=UTC)
+    if isinstance(value, str) and value:
+        try:
+            ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+    return None
+
+
+def _first_timestamp(scope: dict, keys: Sequence[str]) -> datetime | None:
+    for key in keys:
+        ts = _parse_ts(scope.get(key))
+        if ts is not None:
+            return ts
+    return None
+
+
+def _finished_epoch(run: dict, path: Path) -> float:
+    for scope in (run, run.get("timestamps")):
+        if isinstance(scope, dict):
+            ts = _first_timestamp(scope, _FINISHED_KEYS)
+            if ts is not None:
+                return ts.timestamp()
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0

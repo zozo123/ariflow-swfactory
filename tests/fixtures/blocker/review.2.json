@@ -1,0 +1,12 @@
+{
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "nit",
+      "file": "tests/test_percent_change.py",
+      "line": 7,
+      "title": "test_exported could also assert callability",
+      "detail": "`callable(calc.percent_change)` is a cheap extra assertion; not required."
+    }
+  ]
+}

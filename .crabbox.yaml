@@ -1,6 +1,9 @@
 # crabbox: sync this dirty checkout to a leased box and run the test suite there.
-# Used by swfactory's CrabboxRunner (SWF_RUNNER=crabbox). Pick a provider with
-# `--provider` / CRABBOX_PROVIDER (e.g. islo, docker-sandbox, hetzner).
+# Human inner loop: `crabbox run --provider islo -- uv run pytest`
+#   (add `-islo-gateway-profile swfactory` when provider=islo).
+# Factory wiring: SWF_TESTS=crabbox makes stages.run_tests wrap the target's test command in
+# `crabbox run -provider <SWF_CRABBOX_PROVIDER> -junit ... -artifact-glob ...` on the LOCAL
+# sandbox only (never nested inside islo). Never -allow-env / -env-from-profile / -keep.
 profile: swfactory
 class: small
 sync:
@@ -8,9 +11,10 @@ sync:
   gitSeed: true
   exclude:
     - .venv
-    - .factory-runs
+    - .factory
     - airflow_home
     - __pycache__
+    - ".env*"
 env:
   allow:
     - CI
