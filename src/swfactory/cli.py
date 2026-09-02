@@ -228,3 +228,32 @@ def approve(
 
 if __name__ == "__main__":  # pragma: no cover
     app()
+
+
+@app.command()
+def maintain(
+    bands: Annotated[Path, typer.Option(help="Response tiers (sigma bands).")] = Path("bands.yaml"),
+    root: Annotated[Path, typer.Option(help="Repo root with docs/factory/*/metrics.json")] = Path(),
+    scm: Annotated[str, typer.Option(help="local|github")] = "local",
+    sweep_ttl_s: Annotated[
+        int, typer.Option(help="Also remove orphan swf-* islo sandboxes older than this (0=skip).")
+    ] = 0,
+) -> None:
+    """Maintain stage: detect metric breaches per bands.yaml; act by tier (log/diagnose/propose)."""
+    from swfactory import maintain as maintain_mod
+
+    cfg = Config(issue="maintain", scm=scm, approve="auto")  # type: ignore[arg-type]
+    run_dir = Path(".factory") / cfg.run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    breaches = maintain_mod.run(
+        cfg, scm=make_scm(cfg, run_dir), agent=None, sb=None, bands_path=bands, root=root
+    )
+    for b in breaches:
+        typer.echo(
+            f"{b.action:8s} {b.metric}: {b.value:g} vs mean {b.mean:g}±{b.stdev:g} ({b.sigma}σ)"
+        )
+    if not breaches:
+        typer.echo("no breaches")
+    if sweep_ttl_s:
+        for name in maintain_mod.sweep_sandboxes(sweep_ttl_s):
+            typer.echo(f"removed orphan sandbox {name}")
