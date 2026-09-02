@@ -12,6 +12,7 @@ import functools
 import getpass
 import json
 import shlex
+import shutil
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
@@ -40,7 +41,7 @@ from swfactory.models import (
     StageResult,
     TestResult,
 )
-from swfactory.sandbox import Sandbox
+from swfactory.sandbox import LocalSandbox, Sandbox
 from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
 
 FACTORY_ROOT = Path(__file__).resolve().parents[2]
@@ -283,10 +284,31 @@ def _test_numbers(tr: TestResult) -> dict[str, float]:
 # ---------------------------------------------------------------- stages
 
 
+FACTORY_ROOT = Path(__file__).resolve().parents[2]
+COPY_IGNORE = shutil.ignore_patterns(".venv", ".factory", ".git", "__pycache__", ".pytest_cache")
+
+
+def seed_local_workdir(workdir: Path, target_dir: str) -> bool:
+    """Copy the target dir into an EMPTY local workdir (demo/CLI/DAG share this; never touches
+    the source tree). Returns True when a copy happened."""
+    workdir.mkdir(parents=True, exist_ok=True)
+    if any(workdir.iterdir()) or not target_dir:
+        return False
+    src = Path(target_dir)
+    if not src.is_dir():
+        src = FACTORY_ROOT / target_dir
+    if not src.is_dir():
+        return False
+    shutil.copytree(src, workdir, ignore=COPY_IGNORE, dirs_exist_ok=True)
+    return True
+
+
 def setup(ctx: Ctx) -> StageResult:
     """Prepare the sandbox: repo, bot identity, baseline, work branch, deps, base sha, contract."""
     t0 = time.monotonic()
     sb = ctx.sb
+    if isinstance(sb, LocalSandbox):
+        seed_local_workdir(sb.root, ctx.cfg.target_dir)
     sb.ensure()
     info = '"$(git rev-parse --git-dir)/info"'
     patterns = " ".join(shlex.quote(p) for p in NEVER_COMMITTED)

@@ -17,7 +17,14 @@ from swfactory.config import Config
 from swfactory.models import RunReport, StageError
 from swfactory.sandbox import make_sandbox
 from swfactory.scm import make_scm
-from swfactory.stages import Approver, Ctx, cli_approver, run_pipeline, setup
+from swfactory.stages import (
+    Approver,
+    Ctx,
+    cli_approver,
+    run_pipeline,
+    seed_local_workdir,
+    setup,
+)
 
 app = typer.Typer(help="AI-native software factory.", no_args_is_help=True, add_completion=False)
 
@@ -40,13 +47,8 @@ def _locate(rel: str) -> str:
 
 
 def _seed_workdir(workdir: Path, target_dir: str) -> None:
-    """Copy the target dir into an empty local workdir (never touches the source tree)."""
-    workdir.mkdir(parents=True, exist_ok=True)
-    if any(workdir.iterdir()):
-        return
-    src = Path(_locate(target_dir)) if target_dir else None
-    if src and src.is_dir():
-        shutil.copytree(src, workdir, ignore=COPY_IGNORE, dirs_exist_ok=True)
+    """Delegates to stages.seed_local_workdir (kept so demo/run seed before scm.fetch_issue)."""
+    seed_local_workdir(workdir, target_dir if Path(target_dir).is_dir() else _locate(target_dir))
 
 
 def execute(
