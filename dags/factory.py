@@ -53,25 +53,23 @@ def _ctx(conf: dict[str, Any], dag_run_id: str):
     from pathlib import Path
 
     from swfactory.agent import make_agent
-    from swfactory.config import load_target_contract
     from swfactory.sandbox import make_sandbox
     from swfactory.scm import make_scm
     from swfactory.stages import Ctx
 
     cfg = _config(conf, dag_run_id)
     run_dir = Path(".factory") / cfg.run_id
+    if cfg.sandbox == "local":  # one workdir per run, seeded by stages.setup()
+        cfg = cfg.model_copy(update={"workdir": str(run_dir / "work")})
     base_repo = Path(cfg.workdir) if cfg.sandbox == "local" else None
     scm = make_scm(cfg, run_dir, base_repo=base_repo)
     issue = scm.fetch_issue(cfg.issue)
-    sb = make_sandbox(cfg, issue.id)
-    sb.ensure()
-    return Ctx(
+    return Ctx(  # contract is loaded lazily (setup() seeds the workdir first)
         cfg=cfg,
-        sb=sb,
+        sb=make_sandbox(cfg, issue.id),
         agent=make_agent(cfg),
         scm=scm,
         issue=issue,
-        contract=load_target_contract(sb),
         run_dir=run_dir,
     )
 
