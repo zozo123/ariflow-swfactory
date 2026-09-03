@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a reproducible defect in swfactory
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Thanks for the report. Do not include credentials or vulnerability details; use the
+        Security tab for private security reports.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.1.0 or a commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: path
+    attributes:
+      label: Execution path
+      options:
+        - Scripted demo
+        - Local
+        - SRT
+        - Docker
+        - islo
+        - Airflow DAG
+        - GitHub delivery or dispatch
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include sanitized logs and exact error messages when possible.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, tokens, and private repository content from this report.
+          required: true

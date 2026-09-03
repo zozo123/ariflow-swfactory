@@ -6,6 +6,17 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12,<3.13"
 authors = [{ name = "zozo123" }]
+keywords = ["airflow", "ai-agents", "software-factory", "devsecops", "automation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Framework :: Apache Airflow",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Build Tools",
+]
 dependencies = [
   "pydantic>=2.11",
   "pydantic-settings>=2.10",
@@ -13,6 +24,12 @@ dependencies = [
   "pyyaml>=6",
   "textual>=0.86",
 ]
+
+[project.urls]
+Homepage = "https://github.com/zozo123/ariflow-swfactory"
+Documentation = "https://github.com/zozo123/ariflow-swfactory#readme"
+Issues = "https://github.com/zozo123/ariflow-swfactory/issues"
+Repository = "https://github.com/zozo123/ariflow-swfactory.git"
 
 [project.scripts]
 swfactory = "swfactory.cli:app"

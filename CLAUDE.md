@@ -9,7 +9,7 @@ dev box); the orchestrator alone talks to GitHub (`git am` a format-patch stream
 create`); a human merges. Stage semantics live in `stages.py`; a blueprint only picks the walk.
 
 ## Commands
-- `uv sync` — install. `uv run pytest` — 235 hermetic tests (fake subprocess, tmp git, no network).
+- `uv sync` — install. `uv run pytest` — hermetic tests (fake subprocess, tmp git, no network).
 - `uv run ruff check . && uv run ruff format --check .` — lint (line length 100; E,F,I,B,UP,SIM).
 - `uv run swfactory demo` — scripted replay, local sandbox, local bare remote. No keys, ~10 s.
   `--sandbox srt` confines the same replay with the Anthropic Sandbox Runtime (needs `npx`).
