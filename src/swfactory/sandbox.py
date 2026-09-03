@@ -743,8 +743,15 @@ class ToolsetSandbox:
         self.sandbox_id: str | None = None
 
     def _spec(self):
-        from airflow.providers.common.ai.sandbox.base import SandboxSpec
+        """The backend's ``SandboxSpec``, or ``None`` when Airflow is not installed.
 
+        The adapter is useful without Airflow — a backend can be injected directly, and the tests
+        do exactly that — so the provider import is optional, never a hard dependency.
+        """
+        try:
+            from airflow.providers.common.ai.sandbox.base import SandboxSpec
+        except ImportError:
+            return None
         return SandboxSpec(env=self.env, block_network=self.block_network)
 
     def ensure(self) -> None:

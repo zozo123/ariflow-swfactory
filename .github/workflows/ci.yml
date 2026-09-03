@@ -98,11 +98,14 @@ jobs:
       - run: uv sync
       - name: Install Airflow main + the common.ai provider from the islo backend PR branch
         run: |
+          # One git URL for every Airflow distribution: uv rejects two URLs for the same
+          # package, and the PR branch is apache/airflow@main plus the islo backend anyway.
+          PR=git+https://github.com/zozo123/airflow.git@agent/add-islo-sandbox-backend
           uv pip install \
-            "apache-airflow-core @ git+https://github.com/apache/airflow.git@main#subdirectory=airflow-core" \
-            "apache-airflow-task-sdk @ git+https://github.com/apache/airflow.git@main#subdirectory=task-sdk" \
-            "apache-airflow-providers-standard @ git+https://github.com/apache/airflow.git@main#subdirectory=providers/standard" \
-            "apache-airflow-providers-common-ai @ git+https://github.com/zozo123/airflow.git@agent/add-islo-sandbox-backend#subdirectory=providers/common/ai"
+            "apache-airflow-core @ $PR#subdirectory=airflow-core" \
+            "apache-airflow-task-sdk @ $PR#subdirectory=task-sdk" \
+            "apache-airflow-providers-standard @ $PR#subdirectory=providers/standard" \
+            "apache-airflow-providers-common-ai @ $PR#subdirectory=providers/common/ai"
           uv run --no-sync python -c "import airflow; print('airflow', airflow.__version__)"
       - name: The islo backend resolves through swfactory's adapter
         run: |
