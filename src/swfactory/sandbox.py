@@ -1,6 +1,6 @@
 """Sandboxes: where the target repo is checked out and where commands run.
 
-Three implementations share one protocol:
+Four implementations share one protocol:
 
 * ``LocalSandbox`` — a directory on the orchestrator host, used by the scripted demo and tests.
   The child environment is scrubbed of every credential prefix in ``SCRUB_PREFIXES``.
@@ -9,6 +9,10 @@ Three implementations share one protocol:
   egress domain allowlist. The cloudless path for a real agent on a keyed dev box; the only
   credential it forwards is an explicit ``pass_env`` allowlist (``ANTHROPIC_API_KEY`` when the
   caller asks for it), never the whole host environment.
+* ``DockerSandbox`` — the same directory, bind-mounted at the SAME absolute path into a fresh
+  ``docker run --rm`` container per ``run()`` (sibling containers when the orchestrator itself is
+  a container with the Docker socket). A container, not a MicroVM: shares the host kernel, and
+  the Docker socket is root-equivalent on the host. For local testing of the full pipeline.
 * ``IsloSandbox`` — an islo MicroVM. It receives a read-only clone via ``--source`` and the
   gateway's phantom ``ANTHROPIC_API_KEY``; it never receives a GitHub write token. The argv it
   builds never carries ``--env`` / ``--env-file`` (unit-tested invariant).
@@ -24,6 +28,7 @@ import posixpath
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -59,9 +64,23 @@ SRT_ALLOW_WRITE_OPTIONAL = ("Library/Caches",)  # macOS only: added when the dir
 # Directories under the workdir the agent must never write, whatever factory.toml says.
 SRT_FIXED_DENY_WRITE = (".claude", ".github")
 _GLOB_CHARS = frozenset("*?[")
+# docker: $HOME of the non-root user baked into deploy/docker/sandbox.Dockerfile, the host files
+# bind-mounted there for ``credentials="host"``, and the named volume that keeps uv/npm caches
+# across the one-container-per-run() lifecycle.
+DOCKER_HOME = "/home/swf"
+DOCKER_CREDENTIAL_FILES = (".claude", ".claude.json")
+DOCKER_CACHE_VOLUME = "swfactory-sandbox-cache"
+DOCKER_TMP_HOME = "/tmp/swf-home"  # $HOME for arbitrary host uids (bind-mounted files stay yours)
+# Bind-mounted files keep the host uid; the container user usually differs, so git must not
+# refuse the checkout as "dubious ownership" (not a secret; travels as -e K=V).
+DOCKER_GIT_ENV = (
+    ("GIT_CONFIG_COUNT", "1"),
+    ("GIT_CONFIG_KEY_0", "safe.directory"),
+    ("GIT_CONFIG_VALUE_0", "*"),
+)
 # Sandboxes whose workdir is a directory on the orchestrator host (seeded from the target dir,
 # used as LocalGitScm's base repo); islo clones the target itself.
-HOST_SANDBOXES = frozenset({"local", "srt"})
+HOST_SANDBOXES = frozenset({"local", "srt", "docker"})
 
 
 @runtime_checkable
@@ -250,10 +269,11 @@ class SrtSandbox(LocalSandbox):
         allow_write += [str(home / p) for p in SRT_ALLOW_WRITE_HOME]
         allow_write += list(SRT_ALLOW_WRITE_ABS)
         allow_write += [str(home / p) for p in SRT_ALLOW_WRITE_OPTIONAL if (home / p).exists()]
-        deny_write = [str(self.root / d) for d in SRT_FIXED_DENY_WRITE]
+        # bubblewrap (Linux) can only deny paths that exist; Seatbelt (macOS) does not care.
+        deny_write = [str(self.root / d) for d in SRT_FIXED_DENY_WRITE if (self.root / d).exists()]
         for glob in self.protected:
             prefix = _literal_prefix(glob)
-            if prefix:
+            if prefix and (self.root / prefix).exists():
                 deny_write.append(str(self.root / prefix))
         return {
             "network": {
@@ -261,7 +281,7 @@ class SrtSandbox(LocalSandbox):
                 "deniedDomains": [],
             },
             "filesystem": {
-                "denyRead": [str(home / p) for p in SRT_DENY_READ],
+                "denyRead": [str(home / p) for p in SRT_DENY_READ if (home / p).exists()],
                 "allowWrite": _dedupe(allow_write),
                 "denyWrite": _dedupe(deny_write),
             },
@@ -297,9 +317,16 @@ class SrtSandbox(LocalSandbox):
         return [*_srt_bin(), "-s", str(self.settings_path), "-c", script]
 
     def env(self) -> dict[str, str]:
-        """Scrubbed host env plus the ``pass_env`` allowlist (only keys present on the host)."""
+        """Scrubbed host env plus explicit credentials and a sandbox-writable uv cache.
+
+        GitHub's setup-uv exports ``UV_CACHE_DIR`` under ``$RUNNER_TEMP``. That path is outside
+        the SRT write allowlist, so forwarding it makes ``uv sync`` fail read-only. Always pin uv
+        to the sandbox-owned cache under ``.factory/uv-cache`` while preserving the exact credential
+        allowlist.
+        """
         env = scrub_env(os.environ)
         env.update({k: os.environ[k] for k in self.pass_env if k in os.environ})
+        env["UV_CACHE_DIR"] = str(self.root / ".factory" / "uv-cache")
         return env
 
     def ensure(self) -> None:
@@ -324,12 +351,142 @@ class SrtSandbox(LocalSandbox):
                 raise StageError("sandbox", f"git init failed in {self.root}: {res.stderr.strip()}")
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
+        if not self._settings_current():  # settings() reflects paths that appeared since
+            self.write_settings()
         """Run ``cmd`` under srt; the command's exit code propagates through srt."""
         if not self._settings_current():
             self.write_settings()
         return _run_subprocess(
             self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s
         )
+
+
+class DockerSandbox(LocalSandbox):
+    """A host directory whose commands each run in a fresh ``docker run --rm`` container.
+
+    In-place model like ``SrtSandbox``: the workdir is bind-mounted read-write at the SAME
+    absolute path inside the container (so paths in patches, junit files and agent output are
+    identical inside and out), ``read``/``write``/``exists`` are the orchestrator's own file
+    access on the host, and ``git init`` in ``ensure`` runs host-side. Confinement is the
+    container: the process sees only the workdir (plus ``.claude``/``.github`` and the
+    ``protected`` globs' literal prefixes re-mounted read-only), the image, a cache volume and
+    the ``network`` given (``"none"`` = no egress). The docker CLI itself runs with
+    ``scrub_env(os.environ)``; the only credentials that cross into the container are the
+    ``pass_env`` allowlist (``-e NAME``, value read from the CLI's env — never in argv) or, with
+    ``credentials="host"``, the host's ``~/.claude`` + ``~/.claude.json`` bind-mounted into the
+    container ``$HOME`` — that hands the agent your Claude OAuth session, so prefer ``env``.
+
+    Honest limits: a container shares the host kernel and the Docker socket is root-equivalent
+    on the host; no phantom tokens. Use for testing the pipeline locally, not as the production
+    trust boundary (that is islo).
+    """
+
+    def __init__(
+        self,
+        workdir: Path,
+        *,
+        image: str,
+        pass_env: Sequence[str] = (),
+        credentials: str = "env",
+        protected: Sequence[str] = (),
+        network: str = "bridge",
+        user: str | None = None,
+        home: str = DOCKER_HOME,
+    ) -> None:
+        super().__init__(workdir)
+        self.name = f"docker:{self.root.name}"
+        self.image = image
+        self.pass_env = tuple(pass_env)
+        self.credentials = credentials
+        self.protected = tuple(protected)
+        self.network = network
+        self.user = user
+        self.home = home.rstrip("/") or "/"
+
+    def set_protected(self, globs: Sequence[str]) -> None:
+        """Replace the read-only globs (the target's factory.toml ``protected``, narrowed per stage
+        by ``config.protected_for``); the next ``run()`` mounts them ``:ro``."""
+        self.protected = tuple(globs)
+
+    def _custom_uid(self) -> bool:
+        """True when running as a uid other than the image user (root or the baked-in ``swf``)."""
+        return bool(self.user) and self.user.split(":")[0] not in ("root", "0", "swf", "1000")
+
+    def mounts(self) -> list[str]:
+        """``-v`` pairs: workdir rw at its own path, fixed + protected prefixes ro (only those that
+        exist: docker would create a missing source as a root-owned dir), the cache volume, and
+        the host Claude login when ``credentials == "host"``."""
+        mounts = ["-v", f"{self.root}:{self.root}"]
+        ro: list[str] = list(SRT_FIXED_DENY_WRITE)
+        ro += [_literal_prefix(g) for g in self.protected]
+        for rel in _dedupe([r for r in ro if r]):
+            path = self.root / rel
+            if path.exists():
+                mounts += ["-v", f"{path}:{path}:ro"]
+        if not self._custom_uid():
+            mounts += ["-v", f"{DOCKER_CACHE_VOLUME}:{self.home}/.cache"]
+        if self.credentials == "host":
+            host_home = Path.home()
+            for rel in DOCKER_CREDENTIAL_FILES:
+                src = host_home / rel
+                if src.exists():
+                    mounts += ["-v", f"{src}:{self.home}/{rel}"]
+        return mounts
+
+    def argv(self, cmd: str, *, cwd: str | None = None) -> list[str]:
+        """``docker run --rm --init <mounts> -w <cwd> --network <net> [-e NAME]... <image> bash -lc
+        <cmd>``. ``-e NAME`` (no ``=value``) makes docker copy the variable from the CLI's own
+        environment (``env()``), so no secret is ever an argv token."""
+        argv = ["docker", "run", "--rm", "--init", *self.mounts()]
+        argv += ["-w", cwd or self.workdir, "--network", self.network]
+        if self.user:
+            argv += ["--user", self.user]
+        if self._custom_uid():
+            # An arbitrary host uid has no home in the image: give it one under /tmp (1777).
+            argv += [
+                "-e",
+                f"HOME={DOCKER_TMP_HOME}",
+                "-e",
+                f"UV_CACHE_DIR={DOCKER_TMP_HOME}/.cache/uv",
+            ]
+            argv += ["-e", f"npm_config_cache={DOCKER_TMP_HOME}/.npm"]
+            cmd = f'mkdir -p "$HOME" && {cmd}'
+        for k, v in DOCKER_GIT_ENV:
+            argv += ["-e", f"{k}={v}"]
+        for k in self.pass_env:
+            if k in os.environ:
+                argv += ["-e", k]
+        return [*argv, self.image, "bash", "-lc", cmd]
+
+    def env(self) -> dict[str, str]:
+        """Scrubbed host env plus the ``pass_env`` allowlist (only keys present on the host); this
+        is the docker CLI's environment, from which ``-e NAME`` is resolved."""
+        env = scrub_env(os.environ)
+        env.update({k: os.environ[k] for k in self.pass_env if k in os.environ})
+        return env
+
+    def ensure(self) -> None:
+        """Create the directory and ``git init`` host-side (the orchestrator's own action on an
+        empty directory, like ``SrtSandbox``); everything after this point runs in a container."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        if not (self.root / ".git").exists():
+            res = LocalSandbox.run(self, "git init -q -b main")
+            if not res.ok:
+                raise StageError("sandbox", f"git init failed in {self.root}: {res.stderr.strip()}")
+
+    def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
+        """Run ``cmd`` in a fresh container; the command's exit code propagates through docker."""
+        return _run_subprocess(
+            self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s
+        )
+
+
+def default_docker_user() -> str | None:
+    """On Linux run the container as the host uid:gid so bind-mounted files stay writable by the
+    host user (Docker Desktop on macOS maps ownership itself, so ``None`` = the image user)."""
+    if sys.platform.startswith("linux") and hasattr(os, "getuid"):
+        return f"{os.getuid()}:{os.getgid()}"
+    return None
 
 
 def _srt_bin() -> list[str]:
@@ -530,10 +687,11 @@ def make_sandbox(
 ) -> Sandbox:
     """Build the sandbox selected by ``cfg.sandbox`` for the run on ``issue_id``.
 
-    ``protected`` (the target's factory.toml globs) becomes srt's kernel-level ``denyWrite``
-    (``SrtSandbox.set_protected`` changes it later, e.g. to tighten for a fix call);
-    ``repo`` (owner/name) makes the islo sandbox name unique per (issue, target).
+    ``protected`` (the target's factory.toml globs) becomes srt's kernel-level ``denyWrite`` or
+    docker's read-only bind mounts (``set_protected`` changes it later, e.g. to tighten for a fix
+    call); ``repo`` (owner/name) makes the islo sandbox name unique per (issue, target).
     """
+    claude_env = ("ANTHROPIC_API_KEY",) if cfg.agent == "claude" else ()
     if cfg.sandbox == "local":
         return LocalSandbox(Path(cfg.workdir))
     if cfg.sandbox == "srt":
@@ -541,7 +699,17 @@ def make_sandbox(
             Path(cfg.workdir),
             allowed_domains=cfg.srt_allowed_domains,
             protected=protected,
-            pass_env=("ANTHROPIC_API_KEY",) if cfg.agent == "claude" else (),
+            pass_env=claude_env,
+        )
+    if cfg.sandbox == "docker":
+        return DockerSandbox(
+            Path(cfg.workdir),
+            image=cfg.docker_image,
+            pass_env=claude_env if cfg.docker_credentials == "env" else (),
+            credentials=cfg.docker_credentials,
+            protected=protected,
+            network=cfg.docker_network,
+            user=cfg.docker_user or default_docker_user(),
         )
     return IsloSandbox(
         cfg.sandbox_name(issue_id, repo),

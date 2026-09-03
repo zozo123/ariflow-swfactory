@@ -1,4 +1,5 @@
 # swfactory
+| docker | Linux container per command (`docker run --rm`): workdir bind-mounted rw at its own path, `factory.toml` protected prefixes and `.claude`/`.github` mounted `:ro` per stage, `--network bridge\|none` | `ANTHROPIC_API_KEY` by `-e NAME` only (agent=claude, `credentials=env`) or your `~/.claude` login (`credentials=host`) | docker CLI + daemon; image `deploy/docker/sandbox.Dockerfile` | fully local testing of the whole pipeline incl. Airflow (`deploy/docker/compose.yml`); NOT a trust boundary: shared kernel, docker.sock is root-equivalent, no phantom tokens |
 
 An AI-native software factory: a GitHub issue goes in, a reviewed pull request with a committed
 artifact chain (intent, spec, plan, review, approvals, metrics) comes out. A **blueprint**
@@ -220,6 +221,15 @@ agent and its code unconfined on your machine in `.factory/<run>/work`; `LocalSa
 `ANTHROPIC_*`, so `claude` must be logged in on the host. Prefer `--sandbox srt`.
 
 ## Airflow
+
+Pinned to the latest release (`apache-airflow==3.3.1`, standard provider 1.18.0). An optional CI job
+(`airflow-main`) also runs the DAG parity and smoke tests against upstream `apache/airflow@main`
+(3.4.0.dev, built from source) so API drift in the task SDK or HITL operators shows up early.
+
+**Fully local, no islo:** `deploy/docker/` runs the whole solution with Docker Compose — Airflow on
+:8080, the webhook receiver on :8081, and one sandbox container per command through the mounted
+docker socket. `uv run swfactory demo --sandbox docker` is the one-shot variant. See
+[deploy/docker/README.md](deploy/docker/README.md).
 
 ```sh
 uv sync --group airflow                              # apache-airflow 3.3.1 + standard provider

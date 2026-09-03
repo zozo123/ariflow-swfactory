@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 
 SRT_DEFAULT_DOMAINS = ("api.anthropic.com", "pypi.org", "files.pythonhosted.org", "astral.sh")
+DOCKER_DEFAULT_IMAGE = "ghcr.io/zozo123/swfactory-sandbox:latest"
 
 
 class Config(BaseSettings):
@@ -38,7 +39,7 @@ class Config(BaseSettings):
     target_dir: str = "demo/target"  # subdir the factory operates on ("" = repo root)
     base_branch: str = "main"
     blueprint: str = "factory"  # blueprints/<name>.toml that produced this config
-    sandbox: Literal["local", "islo", "srt"] = "local"
+    sandbox: Literal["local", "islo", "srt", "docker"] = "local"
     agent: Literal["claude", "scripted"] = "scripted"
     scm: Literal["local", "github"] = "local"
     approve: Literal["auto", "prompt"] = "prompt"
@@ -59,6 +60,12 @@ class Config(BaseSettings):
     islo_snapshot: str | None = None  # --snapshot warm start (islo only)
     sandbox_owner: str | None = None  # SWF_SANDBOX_OWNER: only this creator's sandboxes may be rm'd
     srt_allowed_domains: list[str] = Field(default_factory=lambda: list(SRT_DEFAULT_DOMAINS))
+    # docker: image every run() executes in (sibling `docker run` over the bind-mounted workdir)
+    docker_image: str = DOCKER_DEFAULT_IMAGE
+    # env => pass ANTHROPIC_API_KEY (agent=claude); host => bind-mount ~/.claude + ~/.claude.json
+    docker_credentials: Literal["env", "host"] = "env"
+    docker_network: str = "bridge"  # `--network` of every sandbox container ("none" = no egress)
+    docker_user: str | None = None  # `--user` override (uid[:gid]); None = the image's user
     fixtures_dir: str = "demo/scripted"
     workdir: str = ".factory/work"  # LocalSandbox root
     run_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:8])
@@ -81,7 +88,7 @@ class Config(BaseSettings):
     def _trust_boundary(self) -> Config:
         if self.agent == "claude" and self.sandbox == "local" and not self.allow_local_agent:
             raise ValueError(
-                "agent=claude requires sandbox=islo or sandbox=srt (model-generated code must not "
+                "agent=claude requires sandbox=islo, srt or docker (model-generated code must not "
                 "execute unconfined on the orchestrator). Set SWF_ALLOW_LOCAL_AGENT=1 / "
                 "--allow-local-agent to override for development."
             )

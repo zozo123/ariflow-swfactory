@@ -179,7 +179,7 @@ def run(
     repo: Annotated[str | None, typer.Option(help="owner/name of the target repo")] = None,
     target_dir: Annotated[str | None, typer.Option(help="subdir the factory operates on")] = None,
     agent: Annotated[str | None, typer.Option(help="claude | scripted")] = None,
-    sandbox: Annotated[str | None, typer.Option(help="local | islo | srt")] = None,
+    sandbox: Annotated[str | None, typer.Option(help="local | islo | srt | docker")] = None,
     scm: Annotated[str | None, typer.Option(help="local | github")] = None,
     approve: Annotated[str | None, typer.Option(help="auto | prompt")] = None,
     tests: Annotated[str | None, typer.Option(help="sandbox | crabbox")] = None,

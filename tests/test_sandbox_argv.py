@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -10,10 +11,14 @@ import pytest
 
 from swfactory import sandbox as sandbox_mod
 from swfactory.config import Config
-from swfactory.models import RunResult
+from swfactory.models import RunResult, StageError
 from swfactory.sandbox import (
+    DOCKER_CACHE_VOLUME,
+    DOCKER_HOME,
+    HOST_SANDBOXES,
     SCRUB_PREFIXES,
     SRT_CLAUDE_DOMAINS,
+    DockerSandbox,
     IsloSandbox,
     LocalSandbox,
     Sandbox,
@@ -356,7 +361,12 @@ def _fake_srt(monkeypatch, rc: int = 0):
 
 def test_srt_settings_written_with_workdir_and_protected(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(sandbox_mod.Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    for _p in sandbox_mod.SRT_DENY_READ:
+        (tmp_path / "home" / _p).mkdir(parents=True, exist_ok=True)
     sb = _srt(tmp_path, protected=("tests/", "src/**/*.py", "factory.toml", "*.lock"))
+    for _d in (".claude", ".github", "tests", "src"):
+        (tmp_path / "work" / _d).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "work" / "factory.toml").touch()
     _fake_srt(monkeypatch)
     sb.ensure()
     assert sb.name == "srt:work"
@@ -395,6 +405,9 @@ def test_srt_set_protected_rewrites_settings_and_run_resyncs_stale_file(
     monkeypatch.setattr(sandbox_mod.Path, "home", classmethod(lambda cls: tmp_path / "home"))
     seen = _fake_srt(monkeypatch)
     sb = _srt(tmp_path)
+    for _d in (".claude", ".github", "tests", "src"):
+        (tmp_path / "work" / _d).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "work" / "factory.toml").touch()
     sb.ensure()
     work = str((tmp_path / "work").resolve())
     deny = lambda: json.loads(sb.settings_path.read_text())["filesystem"]["denyWrite"]  # noqa: E731
@@ -499,10 +512,12 @@ def test_srt_env_is_scrubbed_and_pass_env_is_explicit(tmp_path, monkeypatch) -> 
     monkeypatch.setenv("ISLO_API_KEY", "islo_secret")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws_secret")
     monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("UV_CACHE_DIR", "/runner-temp/setup-uv-cache")
     seen = _fake_srt(monkeypatch)
 
     _srt(tmp_path).run("true")
     env = seen["kwargs"]["env"]
+    assert env["UV_CACHE_DIR"] == str((tmp_path / "work" / ".factory" / "uv-cache").resolve())
     assert "ANTHROPIC_API_KEY" not in env and "ANTHROPIC_BASE_URL" not in env
     for k in ("GH_TOKEN", "ISLO_API_KEY", "AWS_SECRET_ACCESS_KEY"):
         assert k not in env
@@ -578,6 +593,7 @@ def test_make_sandbox_srt(tmp_path, monkeypatch) -> None:
     assert sb.workdir == str((tmp_path / ".factory/work").resolve())
     assert sb.pass_env == ("ANTHROPIC_API_KEY",)  # agent=claude needs the real key
     assert sb.protected == ("tests/",)
+    Path(sb.workdir, "tests").mkdir(parents=True, exist_ok=True)
     assert f"{sb.workdir}/tests" in sb.settings()["filesystem"]["denyWrite"]
     assert "example.org" in sb.settings()["network"]["allowedDomains"]
     scripted = make_sandbox(Config(issue="42", sandbox="srt"), "42")
@@ -619,3 +635,253 @@ def test_make_sandbox_islo_wires_config() -> None:
     assert argv[argv.index("--delete-after") + 1] == "200000"
     assert argv[argv.index("--pause-after-idle") + 1] == "60"
     _assert_no_credentials(argv)
+
+
+# ---------------------------------------------------------------- DockerSandbox (fake docker)
+
+
+def _docker(tmp_path: Path, **overrides) -> DockerSandbox:
+    kwargs = dict(image="swfactory-sandbox:test", pass_env=(), protected=())
+    kwargs.update(overrides)
+    return DockerSandbox(tmp_path / "work", **kwargs)
+
+
+def _e_flags(argv: list[str]) -> list[str]:
+    return [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
+
+
+def test_docker_argv_shape_mounts_workdir_in_place(tmp_path, monkeypatch) -> None:
+    seen = _fake_srt(monkeypatch)
+    sb = _docker(tmp_path)
+    assert sb.name == "docker:work"
+    res = sb.run("uv run pytest")
+    argv, w = seen["argv"], sb.workdir
+    assert res.ok
+    assert argv[:6] == ["docker", "run", "--rm", "--init", "-v", f"{w}:{w}"]  # rw, same path
+    assert f"{DOCKER_CACHE_VOLUME}:{DOCKER_HOME}/.cache" in argv
+    assert argv[argv.index("-w") + 1] == w
+    assert argv[argv.index("--network") + 1] == "bridge"
+    assert "--user" not in argv
+    assert _e_flags(argv) == [f"{k}={v}" for k, v in sandbox_mod.DOCKER_GIT_ENV]  # git only
+    assert argv[-4:] == ["swfactory-sandbox:test", "bash", "-lc", "uv run pytest"]
+    assert not any(a.endswith(":ro") for a in argv)  # nothing protected exists yet
+    assert seen["kwargs"]["cwd"] == sb.root
+    _assert_no_credentials(argv)
+
+
+def test_docker_argv_cwd_network_user(tmp_path, monkeypatch) -> None:
+    seen = _fake_srt(monkeypatch)
+    sb = _docker(tmp_path, network="none", user="1000:1000")
+    sb.run("true", cwd=f"{sb.workdir}/sub dir")
+    argv = seen["argv"]
+    assert argv[argv.index("-w") + 1] == f"{sb.workdir}/sub dir"  # argv token, no quoting
+    assert argv[argv.index("--network") + 1] == "none"
+    assert argv[argv.index("--user") + 1] == "1000:1000"
+    assert argv.index("--user") < argv.index("swfactory-sandbox:test")  # options before image
+
+
+def test_docker_protected_prefixes_mounted_ro_only_when_present(tmp_path, monkeypatch) -> None:
+    seen = _fake_srt(monkeypatch)
+    sb = _docker(tmp_path, protected=("tests/", "src/**/*.py", "factory.toml", "*.lock"))
+    (sb.root / "tests").mkdir(parents=True)
+    (sb.root / ".github").mkdir()
+    (sb.root / "factory.toml").write_text("[commands]\ntest='true'\n")
+    sb.run("true")
+    argv = seen["argv"]
+    ro = [a for a in argv if a.endswith(":ro")]
+    r = sb.root
+    # fixed (.github, like srt) + literal prefixes that exist; src/ is absent and *.lock has none
+    assert set(ro) == {
+        f"{r}/.github:{r}/.github:ro",
+        f"{r}/tests:{r}/tests:ro",
+        f"{r}/factory.toml:{r}/factory.toml:ro",
+    }
+    assert argv.index(f"{r}:{r}") < min(argv.index(m) for m in ro)  # rw parent mounted first
+    assert all(argv[argv.index(m) - 1] == "-v" for m in ro)
+
+    sb.set_protected(("factory.toml",))  # a fix call re-opens tests/ (protected_for narrowing)
+    sb.run("true")
+    ro = [a for a in seen["argv"] if a.endswith(":ro")]
+    assert set(ro) == {f"{r}/.github:{r}/.github:ro", f"{r}/factory.toml:{r}/factory.toml:ro"}
+
+
+def test_docker_env_is_scrubbed_and_pass_env_is_by_name(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://x")
+    monkeypatch.setenv("GH_TOKEN", "ghp_secret")
+    monkeypatch.setenv("ISLO_API_KEY", "islo_secret")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws_secret")
+    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    seen = _fake_srt(monkeypatch)
+
+    _docker(tmp_path).run("true")
+    env = seen["kwargs"]["env"]
+    assert "ANTHROPIC_API_KEY" not in env and "ANTHROPIC_BASE_URL" not in env
+    for k in ("GH_TOKEN", "ISLO_API_KEY", "AWS_SECRET_ACCESS_KEY"):
+        assert k not in env
+    assert env["PATH"] == "/usr/bin" and env["DOCKER_HOST"] == "unix:///var/run/docker.sock"
+    _assert_no_credentials(seen["argv"])  # no -e ANTHROPIC_* without pass_env
+
+    _docker(tmp_path, pass_env=("ANTHROPIC_API_KEY",)).run("true")
+    argv, env = seen["argv"], seen["kwargs"]["env"]
+    assert env["ANTHROPIC_API_KEY"] == "sk-ant-secret"  # the ONE allowed credential (CLI env)
+    assert "ANTHROPIC_BASE_URL" not in env
+    assert "ANTHROPIC_API_KEY" in _e_flags(argv)  # by NAME: docker copies it from its env
+    joined = " ".join(argv)
+    assert "sk-ant-secret" not in joined and "ghp_secret" not in joined  # values never in argv
+    assert "GH_TOKEN" not in joined
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    _docker(tmp_path, pass_env=("ANTHROPIC_API_KEY",)).run("true")
+    assert "ANTHROPIC_API_KEY" not in seen["kwargs"]["env"]  # absent on host -> not invented
+    assert "ANTHROPIC_API_KEY" not in _e_flags(seen["argv"])
+
+
+def test_docker_credentials_host_mounts_claude_login_only_when_present(
+    tmp_path, monkeypatch
+) -> None:
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setattr(sandbox_mod.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
+    seen = _fake_srt(monkeypatch)
+
+    _docker(tmp_path, credentials="host").run("true")
+    argv = seen["argv"]
+    assert f"{home}/.claude:{DOCKER_HOME}/.claude" in argv  # rw: Claude writes its session there
+    assert not any(a.endswith("/.claude.json") for a in argv)  # absent on host -> not mounted
+    assert "ANTHROPIC_API_KEY" not in seen["kwargs"]["env"]  # host mode: pass_env empty
+
+    (home / ".claude.json").write_text("{}")
+    _docker(tmp_path, credentials="host").run("true")
+    assert f"{home}/.claude.json:{DOCKER_HOME}/.claude.json" in seen["argv"]
+
+    _docker(tmp_path).run("true")  # env mode: nothing from $HOME crosses
+    assert not any(str(home) in a for a in seen["argv"])
+
+
+def test_docker_run_propagates_rc_and_timeout(tmp_path, monkeypatch) -> None:
+    seen = _fake_srt(monkeypatch, rc=3)
+    res = _docker(tmp_path).run("exit 3")
+    assert res.exit_code == 3 and not res.ok and res.stdout == "out\n"
+    assert seen["argv"][0] == "docker"
+
+    def boom(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", boom)
+    res = _docker(tmp_path).run("sleep 999", timeout_s=1)
+    assert res.timed_out and res.exit_code == sandbox_mod.TIMEOUT_EXIT_CODE
+
+
+def test_docker_ensure_inits_git_host_side_then_runs_in_container(tmp_path, monkeypatch) -> None:
+    """Like srt: `git init` is the orchestrator's own action on the host; run() is a container."""
+    calls: list[list[str]] = []
+    real_run = subprocess.run
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[0] == "bash":
+            return real_run(argv, **kwargs)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", fake_run)
+    sb = _docker(tmp_path)
+    sb.ensure()
+    assert (sb.root / ".git").is_dir()
+    assert calls[0][:2] == ["bash", "-lc"] and "git init" in calls[0][2]
+    sb.ensure()  # idempotent: no second git init
+    assert len(calls) == 1
+    sb.run("true")
+    assert calls[-1][:2] == ["docker", "run"]
+
+
+def test_docker_ensure_raises_on_git_init_failure(tmp_path, monkeypatch) -> None:
+    def fail(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 128, stdout="", stderr="fatal: nope")
+
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", fail)
+    with pytest.raises(StageError, match="git init failed"):
+        _docker(tmp_path).ensure()
+
+
+def test_docker_is_a_local_sandbox_for_files(tmp_path) -> None:
+    sb = _docker(tmp_path)
+    assert isinstance(sb, LocalSandbox) and isinstance(sb, Sandbox)
+    sb.write("docs/x.md", "# x\n")  # orchestrator-side file access is the host path
+    assert sb.exists("docs/x.md") and sb.read("docs/x.md") == "# x\n"
+    assert (tmp_path / "work" / "docs" / "x.md").exists()
+    sb.close()
+
+
+def test_make_sandbox_docker(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert "docker" in HOST_SANDBOXES  # workdir is seeded on the host, LocalGitScm base repo
+    cfg = Config(
+        issue="42",
+        sandbox="docker",
+        agent="claude",  # allowed without --allow-local-agent
+        workdir=".factory/work",
+        docker_image="ghcr.io/acme/sbx:1",
+        docker_network="none",
+        docker_user="0:0",
+    )
+    sb = make_sandbox(cfg, "42", protected=("tests/",))
+    assert isinstance(sb, DockerSandbox)
+    assert sb.workdir == str((tmp_path / ".factory/work").resolve())
+    assert sb.image == "ghcr.io/acme/sbx:1"
+    assert sb.pass_env == ("ANTHROPIC_API_KEY",) and sb.credentials == "env"
+    assert sb.protected == ("tests/",) and sb.network == "none" and sb.user == "0:0"
+
+    host = make_sandbox(Config(issue="42", sandbox="docker", docker_credentials="host"), "42")
+    assert isinstance(host, DockerSandbox) and host.credentials == "host" and host.pass_env == ()
+    host = make_sandbox(
+        Config(issue="42", sandbox="docker", agent="claude", docker_credentials="host"), "42"
+    )
+    assert host.pass_env == ()  # host login OR api key, never both
+
+    scripted = make_sandbox(Config(issue="42", sandbox="docker"), "42")
+    assert isinstance(scripted, DockerSandbox) and scripted.pass_env == ()
+    assert scripted.image == "ghcr.io/zozo123/swfactory-sandbox:latest"
+    assert scripted.network == "bridge"
+    assert scripted.user == sandbox_mod.default_docker_user()  # host uid on Linux, None on macOS
+
+
+def test_config_docker_fields_and_validators() -> None:
+    cfg = Config(issue="42", sandbox="docker")
+    assert cfg.docker_credentials == "env" and cfg.docker_network == "bridge"
+    assert cfg.docker_user is None
+    with pytest.raises(ValueError):
+        Config(issue="42", sandbox="docker", docker_credentials="keychain")
+    with pytest.raises(ValueError, match="crabbox"):
+        Config(issue="42", sandbox="docker", tests="crabbox")
+
+
+def test_srt_denies_only_existing_paths(tmp_path, monkeypatch) -> None:
+    """bubblewrap (Linux) refuses deny rules for paths that do not exist yet."""
+    sb = sandbox_mod.SrtSandbox(tmp_path, allowed_domains=(), protected=("tests/",))
+    deny = sb.settings()["filesystem"]["denyWrite"]
+    assert str(tmp_path / ".claude") not in deny and str(tmp_path / "tests") not in deny
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / "tests").mkdir()
+    deny = sb.settings()["filesystem"]["denyWrite"]
+    assert str(tmp_path / ".claude") in deny and str(tmp_path / "tests") in deny
+
+
+def test_docker_custom_uid_gets_tmp_home_and_no_cache_volume(tmp_path) -> None:
+    sb = sandbox_mod.DockerSandbox(tmp_path, image="img", user="1001:1001")
+    argv = sb.argv("uv run pytest")
+    assert "--user" in argv and "1001:1001" in argv
+    assert f"HOME={sandbox_mod.DOCKER_TMP_HOME}" in argv
+    assert not any(a.startswith(sandbox_mod.DOCKER_CACHE_VOLUME) for a in argv)
+    assert argv[-1].startswith('mkdir -p "$HOME" && uv run pytest')
+    root_sb = sandbox_mod.DockerSandbox(tmp_path, image="img", user="root")
+    assert "HOME=" not in " ".join(root_sb.argv("true"))
+
+
+def test_default_docker_user_is_host_uid_on_linux(monkeypatch) -> None:
+    monkeypatch.setattr(sandbox_mod.sys, "platform", "linux")
+    assert sandbox_mod.default_docker_user() == f"{os.getuid()}:{os.getgid()}"
+    monkeypatch.setattr(sandbox_mod.sys, "platform", "darwin")
+    assert sandbox_mod.default_docker_user() is None
