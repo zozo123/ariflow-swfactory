@@ -1,12 +1,19 @@
 # swfactory
 
+[![CI](https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml/badge.svg)](https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml)
+[![Airflow 3.3.1](https://img.shields.io/badge/Airflow-3.3.1-017CEE?logo=apacheairflow&logoColor=white)](https://airflow.apache.org/docs/apache-airflow/3.3.1/)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3120/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-D22128)](LICENSE)
+[![Project site](https://img.shields.io/badge/Project_site-Live-61DBFF)](https://zozo123.github.io/ariflow-swfactory/)
+
 An AI-native software factory: a GitHub issue goes in, a reviewed pull request with a committed
 artifact chain (intent, spec, plan, review, approvals, metrics) comes out. A **blueprint**
 (`blueprints/<name>.toml`) declares the line — stage order, human gates, limits, target repos,
 sandbox profile, PR labels — and becomes one Airflow 3 DAG and one `swfactory run --blueprint`
 command. Claude Code does the stage work inside a sandbox that holds no GitHub credential; the
 orchestrator alone talks to GitHub, and a human merges. A keyless scripted replay of a recorded run
-doubles as the end-to-end test.
+doubles as the end-to-end test. Overview and diagrams: the
+[project site](https://zozo123.github.io/ariflow-swfactory/).
 
 ```
  GitHub issue --label factory[:<name>]--> webhook/dispatch --POST /api/v2/dags/<name>/dagRuns--> Airflow 3
@@ -208,6 +215,7 @@ tests/                       hermetic; test_dag_*.py need the airflow group
 - [docs/docker.md](docs/docker.md) — the fully local Docker stack and its honest limits.
 - [docs/herd.md](docs/herd.md) — the control-room TUI: tabs, keys, who acts, sandbox safety.
 - [CLAUDE.md](CLAUDE.md) — the one-page contract every agent (and human) works under.
+- [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
