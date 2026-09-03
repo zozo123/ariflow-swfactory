@@ -4,6 +4,7 @@
 [![Airflow 3.3.1](https://img.shields.io/badge/Airflow-3.3.1-017CEE?logo=apacheairflow&logoColor=white)](https://airflow.apache.org/docs/apache-airflow/3.3.1/)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3120/)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-D22128)](LICENSE)
+[![Project site](https://img.shields.io/badge/Project_site-Live-61DBFF)](https://zozo123.github.io/ariflow-swfactory/)
 
 An AI-native software factory: a GitHub issue goes in, a reviewed pull request with a committed
 artifact chain (intent, spec, plan, review, approvals, metrics) comes out. A **blueprint**
@@ -12,6 +13,9 @@ sandbox profile, PR labels — and becomes one Airflow 3 DAG and one `swfactory 
 command. Claude Code does the stage work inside a sandbox that holds no GitHub credential; the
 orchestrator alone talks to GitHub, and a human merges. A keyless scripted replay of a recorded run
 doubles as the end-to-end test.
+
+See the architecture, trust boundary, and keyless demo at the
+[swfactory project site](https://zozo123.github.io/ariflow-swfactory/).
 
 ```
  GitHub issue --label factory[:<name>]--> dispatch.yml --POST /api/v2/dags/<name>/dagRuns--> Airflow 3
