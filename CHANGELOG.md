@@ -8,6 +8,49 @@ All notable changes to this project will be documented here. The format follows
 
 Nothing yet.
 
+## [1.1.0] - 2026-09-03
+
+Airflow grew a sandbox abstraction of its own, and this release adopts it instead of competing with
+it: the factory gains a sandbox kind and a dependency, and nothing on the 1.0 public surface
+changes, so this is a minor release.
+
+### Added
+
+- `--sandbox toolset`: `ToolsetSandbox` adapts the `SandboxBackend` that ships in Airflow's
+  `common.ai` provider — its `create` / `destroy` / `run_command` / `read_file` / `write_file` is
+  the same shape as this factory's `Sandbox` protocol — so every backend the Airflow community
+  ships becomes a swfactory sandbox with no change to the trust boundary. The backend is chosen by
+  `toolset_backend` (`SWF_TOOLSET_BACKEND`, default `sbx`) and the sandbox root by
+  `toolset_workdir`; four backends are registered. `sbx` resolves from the released provider today;
+  `islo`, `opensandbox` and `asciibox` are pending upstream
+  ([apache/airflow#71672](https://github.com/apache/airflow/pull/71672),
+  [#71676](https://github.com/apache/airflow/pull/71676),
+  [#71725](https://github.com/apache/airflow/pull/71725)) and a pending backend raises a
+  `StageError` naming its pull request rather than crashing on import.
+- `apache-airflow-providers-common-ai>=0.8.0` joins the `airflow` dependency group, so
+  `uv sync --group airflow` plus `--sandbox toolset` works out of the box against the pinned
+  `apache-airflow==3.3.1` release.
+- `scripts/airflow_main.sh` puts a checkout on `apache/airflow@main` plus the pending islo backend
+  in one command (`--pypi` takes the released provider instead), and the optional CI job
+  `airflow-main-sandbox-toolset` runs that same overlay. A script rather than a locked dependency
+  group on purpose: locking a git dependency on the Airflow monorepo clones roughly a gigabyte and
+  pins a commit that is stale the next day.
+- [docs/design.md](docs/design.md) records the factory proven on Airflow built from source, not only
+  against the release: airflow 3.4.0 with task-sdk 1.4.0, providers-standard 1.17.0 and common-ai
+  0.7.0 from the islo backend PR branch, `islo` resolving to `IsloSandboxBackend`, 26 Airflow tests
+  passing, and `airflow dags test factory --mark-success-pattern 'job\.approve_.*'` finishing all
+  14 tasks `state=success`.
+
+### Fixed
+
+- `ToolsetSandbox` no longer requires Airflow to be installed: `_spec()` hard-imported the
+  `common.ai` provider, so injecting a backend directly — what the tests do — crashed in an
+  Airflow-free environment. It now returns `None` and the backend is created with `spec=None`.
+  Local runs hid this because the dev venv has Airflow and CI's default job does not.
+- The experimental main-track install asked uv for two different git URLs for the same package
+  (`apache/airflow@main` and the PR branch), which uv rejects. Every Airflow distribution now comes
+  from one repository; the PR branch is `main` plus the backend anyway.
+
 ## [1.0.0] - 2026-09-03
 
 First stable release: the public surface (blueprint schema, `SWF_*` config, the `Sandbox` /
@@ -163,6 +206,7 @@ development snapshot that was never tagged or published.
 - Scripted keyless end-to-end replay and hermetic test suite.
 - GitHub delivery, issue dispatch, control room, maintenance bands, and webhook receiver.
 
-[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v1.1.0
 [1.0.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v1.0.0
 [0.1.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v0.1.0

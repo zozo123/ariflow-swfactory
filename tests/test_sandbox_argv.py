@@ -976,3 +976,49 @@ def test_make_sandbox_toolset(monkeypatch) -> None:
     sb = make_sandbox(cfg, "42")
     assert isinstance(sb, sandbox_mod.ToolsetSandbox)
     assert seen["name"] == "sbx" and sb.workdir == cfg.toolset_workdir
+
+
+def test_toolset_backend_names_match_the_upstream_prs() -> None:
+    """The pending backends must name the module and class those PRs actually add.
+
+    Guessed names look fine until the PR merges and the import still fails. Checked against the
+    diffs: #71676 defines OpenSandboxBackend (not OpenSandboxSandboxBackend) and #71725 adds
+    sandbox/ascii_box.py (underscore), not asciibox.py.
+    """
+    assert sandbox_mod.TOOLSET_BACKENDS["opensandbox"] == (
+        "airflow.providers.common.ai.sandbox.opensandbox",
+        "OpenSandboxBackend",
+        71676,
+    )
+    assert sandbox_mod.TOOLSET_BACKENDS["asciibox"] == (
+        "airflow.providers.common.ai.sandbox.ascii_box",
+        "AsciiBoxSandboxBackend",
+        71725,
+    )
+    assert sandbox_mod.TOOLSET_BACKENDS["islo"][2] == 71672
+    assert sandbox_mod.TOOLSET_BACKENDS["sbx"][2] is None  # released, no PR to name
+
+
+def test_toolset_unavailable_backend_names_its_pull_request() -> None:
+    with pytest.raises(StageError) as e:
+        sandbox_mod.load_toolset_backend("opensandbox")
+    assert "apache/airflow#71676" in str(e.value)
+
+
+def test_toolset_surfaces_truncation_and_termination() -> None:
+    """Dropping these flags would let truncated output or a dead sandbox read as a clean result."""
+    be, sb = _toolset()
+
+    class R:
+        exit_code = 0
+        stdout = "partial"
+        stderr = ""
+        timed_out = False
+        stdout_truncated = True
+        stderr_truncated = False
+        sandbox_terminated = True
+
+    be.run_command = lambda *a, **k: R()
+    res = sb.run("pytest")
+    assert res.exit_code == 1 and res.timed_out is True
+    assert "stdout truncated" in res.stderr and "sandbox terminated" in res.stderr

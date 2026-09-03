@@ -632,6 +632,58 @@
             <span role="cell">phantom tokens; production</span>
             <span role="cell" class="limit">needs an islo account first</span>
           </div>
+          <div class="sandbox-row" role="row">
+            <span role="cell" class="mono">toolset</span>
+            <span role="cell">Airflow's own SandboxBackend</span>
+            <span role="cell">whatever the provider ships</span>
+            <span role="cell" class="limit"
+              >experimental; sbx released, islo/opensandbox/asciibox are upstream PRs</span
+            >
+          </div>
+        </div>
+
+        <div class="panel gauntlet reveal">
+          <p>
+            <strong>Airflow grew its own sandbox abstraction.</strong> The
+            <span class="mono">common-ai</span> provider ships a
+            <span class="mono">SandboxBackend</span> — create, destroy, run_command, read_file,
+            write_file. swfactory adapts that interface as
+            <span class="mono">ToolsetSandbox</span> instead of writing one more adapter per vendor,
+            so a backend the Airflow community ships becomes a swfactory sandbox by name alone:
+            <span class="mono">--sandbox toolset</span> plus
+            <span class="mono">toolset_backend</span>. Nothing above moves. The agent still gets a
+            clone and a phantom key, delivery still runs backwards through
+            <span class="mono">git format-patch</span>, and the trust boundary is the same line it
+            was before.
+          </p>
+          <p>
+            <span class="mono">sbx</span> resolves from the released
+            <span class="mono">apache-airflow-providers-common-ai</span>
+            <span class="num">0.8.0</span>. <span class="mono">islo</span>,
+            <span class="mono">opensandbox</span> and <span class="mono">asciibox</span> are open
+            pull requests against <span class="mono">apache/airflow</span>, so a pending backend
+            raises a <span class="mono">StageError</span> naming its PR — never an import crash.
+            Proven ahead of the merge on a stack built from source: Airflow
+            <span class="num">3.4.0</span>, task-sdk <span class="num">1.4.0</span>,
+            providers-standard <span class="num">1.17.0</span> and common-ai
+            <span class="num">0.7.0</span> off the islo PR branch, where
+            <span class="mono">islo</span> resolved to
+            <span class="mono">IsloSandboxBackend</span>.
+          </p>
+          <dl class="runtime-facts">
+            <div>
+              <dt>Airflow tests</dt>
+              <dd>26 passed</dd>
+            </div>
+            <div>
+              <dt>dags test factory</dt>
+              <dd>14/14 success</dd>
+            </div>
+            <div>
+              <dt>Backend</dt>
+              <dd>IsloSandboxBackend</dd>
+            </div>
+          </dl>
         </div>
       </section>
 

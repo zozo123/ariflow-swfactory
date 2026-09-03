@@ -674,18 +674,18 @@ def _factory_root() -> Path:
 
 # ---------------------------------------------------------------- upstream toolset backends
 
+# Airflow's own sandbox abstraction (provider apache-airflow-providers-common-ai). `sbx` ships in
+# the released provider; the other three are pending upstream pull requests, and the module/class
+# names below are the ones those PRs actually add — checked against the diffs, not guessed.
 TOOLSET_BACKENDS = {
-    # Airflow's own sandbox abstraction (provider apache-airflow-providers-common-ai).
-    # `sbx` ships in the released provider; the rest are pending upstream PRs on apache/airflow
-    # (islo #71672, opensandbox #71676, asciibox #71725) and resolve once those land or when the
-    # provider is installed from the PR branch.
-    "sbx": ("airflow.providers.common.ai.sandbox.sbx", "SbxSandboxBackend"),
-    "islo": ("airflow.providers.common.ai.sandbox.islo", "IsloSandboxBackend"),
+    "sbx": ("airflow.providers.common.ai.sandbox.sbx", "SbxSandboxBackend", None),
+    "islo": ("airflow.providers.common.ai.sandbox.islo", "IsloSandboxBackend", 71672),
     "opensandbox": (
         "airflow.providers.common.ai.sandbox.opensandbox",
-        "OpenSandboxSandboxBackend",
+        "OpenSandboxBackend",
+        71676,
     ),
-    "asciibox": ("airflow.providers.common.ai.sandbox.asciibox", "AsciiBoxSandboxBackend"),
+    "asciibox": ("airflow.providers.common.ai.sandbox.ascii_box", "AsciiBoxSandboxBackend", 71725),
 }
 TOOLSET_MAX_OUTPUT_BYTES = 1_000_000
 
@@ -697,7 +697,7 @@ def load_toolset_backend(name: str, **kwargs: object):
     and so an unreleased backend is a clear error rather than an import failure at startup.
     """
     try:
-        module_path, cls_name = TOOLSET_BACKENDS[name]
+        module_path, cls_name, pr = TOOLSET_BACKENDS[name]
     except KeyError:
         raise StageError(
             "sandbox", f"unknown toolset backend {name!r}; have {sorted(TOOLSET_BACKENDS)}"
@@ -705,12 +705,14 @@ def load_toolset_backend(name: str, **kwargs: object):
     try:
         module = importlib.import_module(module_path)
     except ImportError as e:
+        where = (
+            f"it is still open upstream as apache/airflow#{pr} — install the provider from that "
+            "branch (see scripts/airflow_main.sh)"
+            if pr
+            else "install apache-airflow-providers-common-ai"
+        )
         raise StageError(
-            "sandbox",
-            f"toolset backend {name!r} is unavailable: {e}. Install "
-            "apache-airflow-providers-common-ai (the islo/opensandbox/asciibox backends are still "
-            "upstream pull requests; install the provider from that branch to try them).",
-            retryable=False,
+            "sandbox", f"toolset backend {name!r} is unavailable ({e}); {where}", retryable=False
         ) from e
     return getattr(module, cls_name)(**kwargs)
 
@@ -773,12 +775,26 @@ class ToolsetSandbox:
         res = self.backend.run_command(
             self._id(), script, timeout=float(timeout_s), max_output_bytes=TOOLSET_MAX_OUTPUT_BYTES
         )
+        # The backend reports three conditions our RunResult has no field for. Dropping them
+        # would let truncated output or a dead sandbox read as a clean result, so they are folded
+        # into stderr (visible) and, for termination, into a non-zero exit code.
+        notes = [
+            n
+            for n, flag in (
+                ("stdout truncated", getattr(res, "stdout_truncated", False)),
+                ("stderr truncated", getattr(res, "stderr_truncated", False)),
+                ("sandbox terminated", getattr(res, "sandbox_terminated", False)),
+            )
+            if flag
+        ]
+        stderr = "\n".join([res.stderr, *(f"[toolset] {n}" for n in notes)]).strip()
+        terminated = bool(getattr(res, "sandbox_terminated", False))
         return RunResult(
-            exit_code=res.exit_code,
+            exit_code=res.exit_code or (1 if terminated else 0),
             stdout=res.stdout,
-            stderr=res.stderr,
+            stderr=stderr,
             duration_s=round(time.monotonic() - started, 3),
-            timed_out=bool(res.timed_out),
+            timed_out=bool(res.timed_out) or terminated,
         )
 
     def _abs(self, path: str) -> str:

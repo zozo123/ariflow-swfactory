@@ -90,6 +90,31 @@ def test_homepage_accessibility_and_discovery_contract() -> None:
     assert_local_references_exist(page)
 
 
+def test_sandbox_table_lists_the_toolset_profile_with_its_honest_limit() -> None:
+    """The page must not advertise `toolset` without its experimental caveat."""
+    source, page = parse_page("index.html")
+
+    rows = re.findall(r'<span role="cell" class="mono">([a-z]+)</span>', source)
+    assert rows == ["local", "srt", "docker", "islo", "toolset"]
+    assert "experimental; sbx released, islo/opensandbox/asciibox are upstream PRs" in source
+    assert "--sandbox toolset" in source
+    assert "toolset_backend" in source
+    assert "StageError" in source
+    assert set(page.fragment_links) <= set(page.ids)
+
+
+def test_toolset_block_names_the_stack_it_was_proven_on() -> None:
+    """Adoption claims are only worth the versions and run counts behind them."""
+    source, _ = parse_page("index.html")
+
+    assert "apache-airflow-providers-common-ai" in source
+    for version in ("0.8.0", "3.4.0", "1.4.0", "1.17.0", "0.7.0"):
+        assert f'<span class="num">{version}</span>' in source, version
+    assert "IsloSandboxBackend" in source
+    assert "26 passed" in source
+    assert "14/14 success" in source
+
+
 def test_custom_not_found_page_is_self_contained() -> None:
     source, page = parse_page("404.html")
 

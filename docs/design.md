@@ -153,12 +153,23 @@ uv sync --group airflow            # back to the pinned release
 ```
 
 It is a script rather than a locked dependency group on purpose: locking a git dependency on the
-Airflow monorepo clones roughly a gigabyte and pins a commit that is stale the next day. The
-optional `airflow-main-sandbox-toolset` CI job runs the same overlay.
+Airflow monorepo clones roughly a gigabyte and pins a commit that is stale the next day. The optional `airflow-main-sandbox-toolset` CI job installs the same stack inline (it does not
+execute this script, so the two are kept in step by hand). Honest scope: that job imports the
+backends and runs unit tests; `ToolsetSandbox` itself is exercised against a fake backend, so no
+real `sbx` or islo sandbox has run through the adapter in CI.
 
 The default stays `apache-airflow==3.3.1`, the latest release: production should not track a dev
 branch, and the `airflow-main` canary already tells us when main drifts. The trust boundary is
 unchanged either way — the orchestrator still holds the credentials and still applies the patch.
+
+`blueprints/toolset.toml` is the line that exercises this, so the path is tested rather than only
+described: the default six-stage order over one target, `[sandbox] kind = "toolset"`, a
+self-approving intent gate (an experiment must finish unattended) and a two-hour plan gate,
+`max_parallel_jobs = 1` and modest budgets. Every blueprint test and the DAG parity suite
+enumerate `blueprints/*.toml`, so it is covered the moment the file exists. The backend stays a
+runtime knob (`SWF_TOOLSET_BACKEND`, default `sbx`) rather than a blueprint key, so one line runs
+against whichever `SandboxBackend` is installed. It is deliberately not the default: `factory`
+stays on islo.
 
 
 ### Proven on Airflow built from source
@@ -192,7 +203,7 @@ an optional blueprint key is a minor release; a fix that keeps every one of thos
 
 `[blueprint] version` inside a blueprint file is a **separate, independent** integer: it versions
 the TOML schema, not the package, and moves only when a blueprint written for an older schema can
-no longer be read. `swfactory 1.0.0` reads `version = 1`; the two numbers are not expected to
+no longer be read. `swfactory 1.1.0` reads `version = 1`; the two numbers are not expected to
 track each other, and neither implies the other's compatibility.
 
 Airflow's own pin (`apache-airflow==3.3.1`) is a dependency, not part of the public surface —

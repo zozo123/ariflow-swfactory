@@ -75,6 +75,40 @@ def test_hotfix_pipeline_has_no_spec_and_gates_after_intent_and_plan() -> None:
     assert bp.gate_timeout_h == 4
 
 
+def test_toolset_line_runs_the_default_order_on_airflows_own_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`blueprints/toolset.toml` must reach a real ``ToolsetSandbox``, not just the docs.
+
+    The backend name is a runtime knob (``Config.toolset_backend``/``SWF_TOOLSET_BACKEND``), not a
+    blueprint key, so the line is runnable against whichever ``SandboxBackend`` is installed; the
+    import itself is stubbed here because the released provider is not a test dependency.
+    """
+    from swfactory import sandbox as sandbox_mod
+
+    bp = load("toolset")
+    assert bp.name != bp_mod.DEFAULT_BLUEPRINT  # experimental: never the default line
+    assert [i for i in _names(bp.pipeline()) if not isinstance(i, Gate)] == list(CANONICAL_ORDER)
+    assert bp.gate_after("intent").auto is True  # unattended runs finish on their own
+    assert bp.gate_after("plan").auto is False and bp.gate_after("plan").timeout_h == 2
+    assert bp.sandbox.kind == "toolset" and "toolset" in bp.labels
+    assert len(bp.targets) == 1 and bp.targets[0].dir == "demo/target"
+
+    job = bp.jobs({"issues": ["demo/issue.md"]})[0]
+    cfg = bp.config(job, run_id="r1234567")
+    assert cfg.sandbox == "toolset" and cfg.toolset_backend == "sbx"
+    assert cfg.sandbox_ttl_s == 10_800 > cfg.gate_timeout_h * 3600
+    assert bp.config(job, run_id="r1", agent="claude").sandbox == "toolset"  # a real boundary
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        sandbox_mod, "load_toolset_backend", lambda name, **kw: seen.append(name) or object()
+    )
+    sb = sandbox_mod.make_sandbox(cfg, "DEMO-1")
+    assert isinstance(sb, sandbox_mod.ToolsetSandbox)
+    assert seen == ["sbx"] and sb.workdir == cfg.toolset_workdir
+
+
 def test_cli_approver_honours_gate_auto_without_prompting(monkeypatch: pytest.MonkeyPatch) -> None:
     """`auto = true` on a gate approves under `--approve prompt` (actor "auto"), as the DAG does."""
     from swfactory.config import Config
