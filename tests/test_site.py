@@ -108,10 +108,10 @@ def test_toolset_block_names_the_stack_it_was_proven_on() -> None:
     source, _ = parse_page("index.html")
 
     assert "apache-airflow-providers-common-ai" in source
-    for version in ("0.8.0", "3.4.0", "1.4.0", "1.17.0", "0.7.0"):
+    for version in ("0.8.0", "3.4.0", "1.4.0", "1.18.0", "0.7.0"):
         assert f'<span class="num">{version}</span>' in source, version
     assert "IsloSandboxBackend" in source
-    assert "26 passed" in source
+    assert "31 passed" in source
     assert "14/14 success" in source
 
 
