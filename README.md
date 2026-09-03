@@ -221,6 +221,10 @@ agent and its code unconfined on your machine in `.factory/<run>/work`; `LocalSa
 
 ## Airflow
 
+Pinned to the latest release (`apache-airflow==3.3.1`, standard provider 1.18.0). An optional CI job
+(`airflow-main`) also runs the DAG parity and smoke tests against upstream `apache/airflow@main`
+(3.4.0.dev, built from source) so API drift in the task SDK or HITL operators shows up early.
+
 **Fully local, no islo:** `deploy/docker/` runs the whole solution with Docker Compose — Airflow on
 :8080, the webhook receiver on :8081, and one sandbox container per command through the mounted
 docker socket. `uv run swfactory demo --sandbox docker` is the one-shot variant. See

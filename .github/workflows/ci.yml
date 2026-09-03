@@ -61,3 +61,22 @@ jobs:
       - run: uv sync
       - run: docker build -t swfactory-sandbox:local -f deploy/docker/sandbox.Dockerfile .
       - run: SWF_DOCKER_IMAGE=swfactory-sandbox:local uv run swfactory demo --sandbox docker
+
+  # Forward-compat: the same DAG parity + smoke tests against Airflow's upstream `main`
+  # (3.4.0.dev) built from source. Optional until it has been green for two weeks.
+  airflow-main:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - run: uv sync
+      - name: Install Airflow core, task-sdk and standard provider from apache/airflow@main
+        run: |
+          uv pip install \
+            "apache-airflow-core @ git+https://github.com/apache/airflow.git@main#subdirectory=airflow-core" \
+            "apache-airflow-task-sdk @ git+https://github.com/apache/airflow.git@main#subdirectory=task-sdk" \
+            "apache-airflow-providers-standard @ git+https://github.com/apache/airflow.git@main#subdirectory=providers/standard"
+          uv run --no-sync python -c "import airflow; print('airflow', airflow.__version__)"
+      - run: uv run --no-sync pytest tests/test_dag_parity.py tests/test_dag_smoke.py
