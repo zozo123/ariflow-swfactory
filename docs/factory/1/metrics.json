@@ -1,0 +1,56 @@
+{
+  "run_id": "real0002",
+  "issue_id": "1",
+  "blueprint": "factory",
+  "agent": "claude",
+  "sandbox": "srt",
+  "sandbox_name": "srt:work",
+  "scm": "github",
+  "started": "2026-09-03T01:20:05+00:00",
+  "finished": "2026-09-03T01:23:51+00:00",
+  "stage_durations_s": {
+    "intent": 0.001,
+    "spec": 45.949,
+    "plan": 45.664,
+    "build_and_test": 103.092,
+    "review": 25.654
+  },
+  "stage_status": {
+    "intent": "ok",
+    "spec": "ok",
+    "plan": "ok",
+    "build_and_test": "ok",
+    "review": "ok"
+  },
+  "cycle_s": 220.36,
+  "iterations": 1,
+  "first_pass_ci": true,
+  "tests_passed": true,
+  "findings_by_severity": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 0,
+    "nit": 0
+  },
+  "blockers": 0,
+  "review_fixes": 0,
+  "total_cost_usd": 1.942354,
+  "approvers": [
+    "auto",
+    "auto"
+  ],
+  "approvals": [
+    {
+      "gate": "intent",
+      "decision": "approve",
+      "actor": "auto",
+      "at": "2026-09-03T01:20:11.557795Z"
+    },
+    {
+      "gate": "plan",
+      "decision": "approve",
+      "actor": "auto",
+      "at": "2026-09-03T01:21:43.173037Z"
+    }
+  ]
+}

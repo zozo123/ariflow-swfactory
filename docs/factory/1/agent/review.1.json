@@ -1,0 +1,100 @@
+{
+  "api_error_status": null,
+  "duration_api_ms": 10165,
+  "duration_ms": 14859,
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "fast_mode_state": "off",
+  "is_error": false,
+  "iteration": 1,
+  "modelUsage": {
+    "claude-fable-5-1": {
+      "cacheCreationInputTokens": 18888,
+      "cacheReadInputTokens": 12802,
+      "canonicalModel": "claude-fable-5-1",
+      "contextWindow": 1000000,
+      "costBasis": "list",
+      "costUSD": 0.4041805,
+      "inputTokens": 2,
+      "maxOutputTokens": 64000,
+      "outputTokens": 464,
+      "provider": "firstParty",
+      "thinkingTokens": 386,
+      "webSearchRequests": 0
+    }
+  },
+  "num_turns": 2,
+  "permission_denials": [],
+  "queued_turn_count": 0,
+  "session_id": "d725bae5-06d4-405f-94f3-43d1098d5461",
+  "stage": "review",
+  "stop_reason": "tool_use",
+  "structured_output": {
+    "findings": [],
+    "verdict": "approve"
+  },
+  "subagent_stats": {
+    "by_type": {},
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "system": 0,
+      "user": 0
+    },
+    "max_depth": 0,
+    "refused": {
+      "budget": 0,
+      "concurrency_limit": 0,
+      "depth_limit": 0
+    },
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "spawned": 0,
+    "spawned_by_subagents": 0,
+    "started_in_background": 0
+  },
+  "subtype": "success",
+  "terminal_reason": "completed",
+  "time_to_request_ms": 1194,
+  "total_cost_usd": 0.4041805,
+  "ttft_ms": 10372,
+  "ttft_stream_ms": 4205,
+  "type": "result",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 18888,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 18888,
+    "cache_read_input_tokens": 12802,
+    "inference_geo": "not_available",
+    "input_tokens": 2,
+    "iterations": [
+      {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 18888,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 18888,
+        "cache_read_input_tokens": 12802,
+        "input_tokens": 2,
+        "output_tokens": 464,
+        "type": "message"
+      }
+    ],
+    "output_tokens": 464,
+    "output_tokens_details": {
+      "thinking_tokens": 386
+    },
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+  },
+  "uuid": "796d0327-e86f-4056-af01-4fef5bf8fbb3"
+}
