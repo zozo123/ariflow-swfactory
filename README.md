@@ -34,7 +34,7 @@ doubles as the end-to-end test.
 
 ```sh
 uv sync
-uv run pytest            # 160 passed (hermetic: fake subprocess, tmp git repos)
+uv run pytest            # 209 passed (hermetic: fake subprocess, tmp git repos)
 uv run swfactory demo    # scripted replay of a recorded run on demo/target
 ```
 
@@ -56,7 +56,7 @@ cost usd               0.0000
   plan                 files=3
   build_and_test       iterations=2, first_pass_ci=0, tests_passed=1, tests_failed=0, tests_count=7
   review               blockers=0, findings=4, dropped_nits=1, fixes=0, blocker=0, major=1, minor=0, nit=3
-  deliver              blockers=0, commits=3
+  deliver              blockers=0, commits=3, rejected=0, denied_tool_calls=0
 ```
 
 Use `--approve prompt` to answer the two gates yourself. Exit code is 1 if any job is blocked or
@@ -102,20 +102,37 @@ Everything is committed under `docs/factory/<issue>/` in the target, by `swfacto
 | Spec | `spec.md` | - | agent, read-only tools, in sandbox |
 | Plan | `plan.json` (typed) + `plan.md` | gate 2 (`job.approve_plan`) -> `approvals.json` | agent, read-only tools, in sandbox |
 | Build + test | bot commits, `agent/build.1.json`, `agent/fix.N.json`, junit | none; bounded by `max_build_iterations` | agent with Edit/Write/`uv run`, tests in sandbox |
-| Review | `review.json` (REVIEW.md contract, nit cap, plan fidelity checked in code) | none; one fix + re-review max (`max_review_fixes`) | agent, read-only, in sandbox |
-| Deliver | `metrics.json` (incl. `blueprint`), PR labeled per blueprint (+ `factory:blocked`) | human merges: CODEOWNERS + branch protection | orchestrator (`git am`, push, `gh pr create`) |
+| Review | `review.json` (REVIEW.md contract, nit cap, plan fidelity — both halves — checked in code) | none; `max_review_fixes` fix + test + re-review rounds (default 1); a fix that leaves the suite red is itself a blocker | review: agent, read-only; fix: agent with Edit/Write, tests dir protected |
+| Deliver | `metrics.json` (incl. `blueprint`, `denied_tool_calls`), `agent/stages.jsonl` + `agent/hooks.jsonl` audit copies, PR labeled per blueprint (+ `factory:blocked` / `factory:rejected`) | human merges: CODEOWNERS + branch protection | orchestrator (`git am`, push, `gh pr create`) |
 
 `Scm` has no merge method and the sandbox has nothing to push with; `deliver` pulls
-`git format-patch <base>..HEAD` out and applies it on the orchestrator. Every stage is idempotent
-(status `skipped` when its artifact exists) so Airflow retries and `tasks clear` are safe.
+`git format-patch <base>..HEAD` out and applies it on the orchestrator. Before anything touches
+git or the network the patch is policy-checked (`scm.validate_patch`: no absolute paths, no `..`,
+nothing under `.git/`, no symlink modes, every path under the target dir or `docs/factory/`) and
+scanned for secret-shaped tokens (AWS, Anthropic, GitHub, Google, Slack keys, private-key blocks);
+a hit is `StageError("policy")` and nothing is published. Delivery is retry-safe: `factory/*` is
+the bot-owned branch namespace and is force-updated on a retried `deliver`, and an open PR for the
+branch is edited in place instead of duplicated.
+
+Run state lives on the **orchestrator**: `_timed` appends every `StageResult` to
+`.factory/<run_id>/stages.jsonl` (a copy goes into the sandbox for the audit trail, but is never
+trusted). A stage is `skipped` only when that log holds a completed record for it — an artifact the
+agent forged in the sandbox cannot skip a stage — and the run budget (`budget_usd`) is seeded from
+the same log, so it is a ceiling per run even when Airflow splits the run over tasks and workers.
+Airflow retries and `tasks clear` are safe as long as `.factory/<run_id>/` survives on the worker.
+
+A rejected gate is part of the audit chain, not a dead end: the CLI (and the DAG, via
+`trigger_rule="none_failed"` on `deliver`) records the refusal and its actor in `approvals.json`,
+skips the remaining work stages, and still delivers — a `[REJECTED]` PR labeled `factory:rejected`
+carrying `intent.md`, `approvals.json` and `metrics.json`, `status="blocked"`, exit code 1.
 
 ## Sandboxes
 
 | `--sandbox` | Isolation | Credentials the agent can see | Needs | Use |
 | --- | --- | --- | --- | --- |
 | `local` | none (`scrub_env` only) | none — `agent=claude` refused unless `--allow-local-agent` | nothing | demo, pytest, CI |
-| `srt` | OS-level (macOS Seatbelt / Linux bubblewrap): writes limited to the workdir + Claude/uv caches, `factory.toml` `protected` globs and `.claude`/`.github` kernel read-only, egress domain allowlist, `~/.ssh` `~/.aws` `~/.config/gh` unreadable | the real `ANTHROPIC_API_KEY` (or the host's Claude OAuth login); shares the host kernel; proxy-based egress | `srt` on PATH or `npx` (`@anthropic-ai/sandbox-runtime`); Linux: bubblewrap + socat | cloudless real agent on a keyed dev box |
-| `islo` | Firecracker-class MicroVM, deny-by-default gateway | phantom `ANTHROPIC_API_KEY` swapped on egress; never a GitHub token | `islo login`, gateway profile + environment (below) | production (Airflow), `demo --real`, evals |
+| `srt` | OS-level (macOS Seatbelt / Linux bubblewrap): writes limited to the workdir + Claude/uv caches; `factory.toml` `protected` globs are kernel `denyWrite` **per stage** (tests dir writable for `build`, denied for `fix`, re-synced before every agent call) plus `.claude`/`.github`; egress domain allowlist; `~/.ssh` `~/.aws` `~/.config` `~/.gnupg` `~/.netrc` `~/.docker` `~/.kube` unreadable | the real `ANTHROPIC_API_KEY` (or the host's Claude OAuth login); shares the host kernel; proxy-based egress | `srt` on PATH or `npx` (`@anthropic-ai/sandbox-runtime`); Linux: bubblewrap + socat | cloudless real agent on a keyed dev box; `evals.yml` |
+| `islo` | Firecracker-class MicroVM, deny-by-default gateway | phantom `ANTHROPIC_API_KEY` swapped on egress; never a GitHub token | `islo login`, gateway profile + environment (below) | production (Airflow), `demo --real` |
 
 Honest limits: phantom tokens exist only on islo — `srt` is defense-in-depth for your own machine,
 not the production trust boundary; tools that ignore `HTTP_PROXY` bypass its allowlist; srt
@@ -131,10 +148,15 @@ uv run swfactory run --issue <n|path> --agent claude --sandbox srt --scm local -
 
 Inside the sandbox the agent runs with `.claude/settings.local.json` written by `install_guard`:
 native `permissions.deny` rules (`Edit(REVIEW.md)`, `Edit(factory.toml)`, `Edit(.claude/**)`,
-`Edit(.github/**)`, `Edit(<protected glob>)`, `Bash(git push*)`, `Bash(gh pr *)`, `Bash(git commit*)`,
-`Bash(curl *)`, `Bash(wget *)`, `Read(.env*)`) are the primary gate; the PreToolUse hook
-`.claude/hooks/swf_guard.py` (Python 3, present in the islo image) is defense-in-depth and writes the
-`.factory/hooks.jsonl` audit log.
+`Edit(.github/**)`, `Edit(docs/factory/**)`, `Edit(.factory/**)`, `Edit(<protected glob>)`,
+`Bash(git push*)`, `Bash(gh pr *)`, `Bash(git commit*)`, `Bash(curl *)`, `Bash(wget *)`,
+`Read(.env*)`) are the primary gate — the artifact chain and the stage scratch belong to the
+orchestrator, so the agent cannot forge `review.json`, `approvals.json` or its own audit log; the
+PreToolUse hook `.claude/hooks/swf_guard.py` (Python 3, present in the islo image) is
+defense-in-depth and writes the `.factory/hooks.jsonl` audit log (denied calls are counted as
+`denied_tool_calls` in `metrics.json` and the PR's deliver row). `install_guard` also ships the
+factory's `.claude/skills/swfactory/` skill into the target, so the agent reads the same
+spec/plan/review contract wherever its cwd is.
 
 ## Real run (islo)
 
@@ -214,9 +236,16 @@ uv run airflow dags test factory --conf '{"issues":["demo/issue.md"]}' --mark-su
 ```
 
 `SWF_APPROVE=auto` (or a gate's `auto = true`) only makes a real run's gate default to Approve once
-its `timeout_h` elapses. `tests/test_dag_parity.py` asserts every blueprint's DAG mirrors its stage
-order and gates; `tests/test_dag_smoke.py` runs the recipe above end to end:
-`uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py` (17 passed).
+its `timeout_h` elapses; a gate's `assigned` users become the HITL `assigned_users`. Gates are a
+`GateOperator` (an `ApprovalOperator` that never skips on its own): the response — Approve or
+Reject, with `responded_by_user` — lands in XCom, `record_<stage>` writes it to `approvals.json`,
+and on Reject raises `AirflowSkipException`; the work stages skip, `deliver`/`metrics` run with
+`trigger_rule="none_failed"` and publish the `[REJECTED]` PR. Every task rebuilds its `Ctx`; the
+run id is `sha1(dag_run_id#job_idx)[:8]`, so retries share the sandbox and the orchestrator log
+`.factory/<run_id>/stages.jsonl` on the worker. `tests/test_dag_parity.py` asserts every
+blueprint's DAG mirrors its stage order and gates; `tests/test_dag_smoke.py` runs the recipe above
+end to end:
+`uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py` (21 passed).
 
 ## crabbox
 
@@ -233,9 +262,18 @@ so `crabbox doctor` parses it. Human inner loop: `crabbox run --provider local-c
 
 `bands.yaml` defines a window (20 runs) and three response tiers over `docs/factory/*/metrics.json`
 of a checkout: 1σ `log`, 2σ `diagnose` (read-only agent, `Diagnosis` schema, incident record at
-`docs/factory/incidents/<date>-<metric>.md`), 3σ `propose` (drafted intent + `gh issue create
---label factory`, which re-enters the factory). Detection is `statistics.mean`/`stdev`, needs at
-least 3 history samples, and ignores `agent=scripted` runs so the demo never moves the bands.
+`docs/factory/incidents/<date>-<metric>.md` **and** an issue labeled `maintain, incident` carrying
+it, so the diagnosis outlives the checkout), 3σ `propose` (drafted intent + incident record in one
+`gh issue create --label factory`, which re-enters the factory). Detection is
+`statistics.mean`/`stdev`, needs at least 3 history samples, and ignores `agent=scripted` runs so
+the demo never moves the bands. A flat history (stdev 0 — the normal shape for `first_pass_ci` or
+`blockers`) makes any move in the bad direction a top-tier breach reported with `stdev=0`; no move,
+or a move in the good direction, is not a breach.
+
+The `maintain` DAG never reads relative to the worker's cwd: it uses `$SWF_MAINTAIN_ROOT` (a
+checkout of the target) when set, else a shallow read-only clone of the target's base branch made
+for the task, and fails loudly when the result has no `docs/factory/`. `bands.yaml` defaults to the
+factory checkout's own copy (`$SWF_BANDS` overrides).
 
 ```sh
 uv run swfactory metrics --root .       # first-pass rate, mean iterations, p50 cycle, findings, cost
@@ -257,7 +295,7 @@ src/swfactory/metrics.py     write_run_metrics, load_all, summarize, table
 src/swfactory/maintain.py    load_runs, detect, run, sweep_sandboxes
 src/swfactory/cli.py         typer: run, demo, metrics, approve, maintain
 src/swfactory/prompts/*.md   spec, plan, build, fix, review, diagnose templates
-dags/blueprints.py           one mapped-task-group DAG per blueprint (ApprovalOperator gates)
+dags/blueprints.py           one mapped-task-group DAG per blueprint (GateOperator gates, record_<stage>)
 dags/maintain.py             nightly + after every delivery (AssetOrTimeSchedule) band check + sweep
 .claude/hooks/swf_guard.py   PreToolUse audit hook installed into every target before write stages
 .claude/skills/swfactory/    spec/plan shape + review contract for the agent
@@ -265,7 +303,8 @@ REVIEW.md  bands.yaml        review policy; maintain tiers
 islo.yaml  .crabbox.yaml     sandbox setup (uv only); crabbox profile
 demo/                        issue.md (DEMO-1), target/ (`calc` + factory.toml), scripted/ fixtures
 tests/                       hermetic; test_dag_*.py need the airflow group
-.github/workflows/           ci (ruff, pytest, demo, airflow parity+smoke, srt smoke), dispatch, evals
+.github/workflows/           ci (ruff, pytest, demo, airflow parity+smoke, srt smoke), dispatch,
+                             evals (real claude agent under srt on demo/issue.md; asserts report.json)
 ```
 
 ## Proof (real runs on this repo)
@@ -289,6 +328,22 @@ plain `islo ls` (own scope, never `--all`), the name must match the factory patt
 `swf-<slug>-<run8>`, and `created_by` must equal `SWF_SANDBOX_OWNER` when set. The nightly sweep
 refuses to run without an owner. Teammates' sandboxes are never touched.
 
+### Known limits / accepted risks
+
+- `Bash(uv run *)` is arbitrary code execution inside the sandbox, by design: the agent has to run
+  the target's tests. The sandbox **is** the trust boundary (islo MicroVM in production, srt on a
+  dev box); the deny rules and the hook shape what the agent does, they do not contain it.
+- `scrub_env` is a prefix denylist (`ANTHROPIC_*`, `GH_TOKEN`, `GITHUB_TOKEN`, `AWS_*`,
+  `ISLO_API*`), so a credential under another name in the orchestrator's environment reaches a
+  `local`/`srt` child. Pass secrets through the islo gateway (phantom tokens), not the environment.
+- Issue text is untrusted input to every prompt (intent.md is quoted verbatim). Mitigations are
+  structural rather than textual: the native deny rules, `validate_patch` + the secret scan before
+  publish, `allowed_prefixes` confinement, the human gates, and a PR instead of a merge.
+- Python's bytecode cache invalidates on mtime seconds + size: a fix that changes a source file to
+  the same byte length within the same second as the previous test run can be masked by a stale
+  `__pycache__` entry. Real agent edits practically never hit this; the scripted fixtures avoid it.
+- `srt` is defense-in-depth, not the production trust boundary (see "Honest limits" above).
+
 ## Design decisions
 
 - Blueprints are data in the **factory** repo, never in the target: gates, budgets and tool policy
@@ -297,7 +352,9 @@ refuses to run without an owner. Teammates' sandboxes are never touched.
   nested expansion (e.g. review lenses) is unsupported in Airflow 3.3.1 and loops stay inside stage
   functions.
 - Airflow, not islo Factory lines, is the spine: the human gates need an approver identity in the
-  audit trail, and `ApprovalOperator` records `responded_by_user`. One state machine, no DAG cycles.
+  audit trail, and the HITL response carries `responded_by_user`. `GateOperator` subclasses
+  `ApprovalOperator` only to stop it skipping its own child on Reject, so the refusal can be
+  recorded and delivered. One state machine, no DAG cycles.
 - Delivery is a `git format-patch` stream applied on the orchestrator: the sandbox never holds a
   GitHub credential, so "the agent never pushes or merges" is structural, not a prompt.
 - **No Rust.** A live probe of an islo sandbox found `/usr/bin/python3`, so the Python hook runs

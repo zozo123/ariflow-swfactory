@@ -9,7 +9,7 @@ dev box); the orchestrator alone talks to GitHub (`git am` a format-patch stream
 create`); a human merges. Stage semantics live in `stages.py`; a blueprint only picks the walk.
 
 ## Commands
-- `uv sync` — install. `uv run pytest` — 160 hermetic tests (fake subprocess, tmp git, no network).
+- `uv sync` — install. `uv run pytest` — 209 hermetic tests (fake subprocess, tmp git, no network).
 - `uv run ruff check . && uv run ruff format --check .` — lint (line length 100; E,F,I,B,UP,SIM).
 - `uv run swfactory demo` — scripted replay, local sandbox, local bare remote. No keys, ~10 s.
   `--sandbox srt` confines the same replay with the Anthropic Sandbox Runtime (needs `npx`).
@@ -19,7 +19,7 @@ create`); a human merges. Stage semantics live in `stages.py`; a blueprint only 
 - `uv run swfactory demo --real` — claude agent in an islo sandbox, real PR (needs `islo login`,
   `GH_TOKEN`; README bootstrap + snapshot recipe).
 - `uv run swfactory approve <dag_run_id> intent|plan [--reject] [--blueprint <name>] [--map-index <job>]`.
-- `uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py` — 17 DAG tests.
+- `uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py` — 21 DAG tests.
 - `uv run airflow dags test factory --conf '{"issues":["demo/issue.md"]}' --mark-success-pattern 'job\.approve_.*'`
   — `dags test` never resolves HITL gates; always mark them.
 - `uv run swfactory metrics --root .`, `uv run swfactory maintain --root .` — metrics / bands.
@@ -35,8 +35,18 @@ create`); a human merges. Stage semantics live in `stages.py`; a blueprint only 
   `ttl_s > max gate timeout`. `SWF_*` env overrides blueprint values and CLI flags (env > init).
 - Artifacts are committed under `docs/factory/<issue>/` in the target by `swfactory-bot` with
   `Factory-Run`/`Factory-Stage`/`Agent` trailers. `.factory/` is uncommitted scratch.
-- Every stage is idempotent: artifact exists -> `status="skipped"`. Every loop is bounded by
+- Every stage is idempotent: a completed record in the orchestrator's stage log
+  `.factory/<run_id>/stages.jsonl` -> `status="skipped"`. The sandbox is agent-writable and is
+  never consulted for skips or the run budget (seeded from the same log). Every loop is bounded by
   `Config`; exhaustion is `StageError(kind="policy")` or a `factory:blocked` PR, never a retry.
+- `deliver` never skips: it policy-checks the patch (`scm.validate_patch` — no `..`/absolute/
+  `.git`/symlink, paths under the target dir + `docs/factory/`; `scan_secrets`) before any git or
+  network call, force-updates only the bot-owned `factory/*` branch and edits an existing open PR
+  (retry-safe). A rejected gate still delivers: `[REJECTED]` PR + `factory:rejected`, status blocked.
+- srt `denyWrite` comes from the target's `factory.toml` (`config.protected_globs` before the
+  sandbox exists, `SrtSandbox.set_protected(protected_for(contract, stage))` before every agent
+  call): tests dir writable for `build`, denied for `fix`. `Edit(docs/factory/**)`/`Edit(.factory/**)`
+  are denied to the agent in every stage.
 - No `--env`/`--env-file` on islo argv, no tokens in the sandbox, `LocalSandbox` scrubs
   `ANTHROPIC_*`/`GH_TOKEN`/`GITHUB_TOKEN`/`AWS_*`/`ISLO_API*`; srt forwards only `ANTHROPIC_API_KEY`
   and only for `agent=claude`. `agent=claude` requires `sandbox=islo|srt` unless `--allow-local-agent`.
@@ -56,7 +66,12 @@ create`); a human merges. Stage semantics live in `stages.py`; a blueprint only 
   downgrades `agent=scripted` to `LocalSandbox` unless `--sandbox` is explicit; the DAG smoke path
   uses `SWF_AGENT=scripted SWF_SANDBOX=local`.
 - Scripted fixtures are named `{stage}.{iteration}.{patch|json|md}`; iteration >= 2 of the build
-  loop is stage `fix`, so the second patch is `fix.2.patch`, not `build.2.patch`.
+  loop is stage `fix`, so the second patch is `fix.2.patch`, not `build.2.patch`. Review fixes
+  continue the numbering at `fix.<max_build_iterations + k>` (`fix.4.patch` by default), never
+  reusing a build-loop name. A fixture patch that changes a file to the same byte length as before
+  can be masked by a stale `__pycache__` entry (mtime seconds + size): change the size too.
+- `maintain` on a worker: never read metrics relative to cwd; `maintain.metrics_root` uses
+  `$SWF_MAINTAIN_ROOT` or a shallow clone of the target's base branch and fails without `docs/factory`.
 - crabbox: never `-artifact-glob` (use `-download`), default provider `local-container` (islo needs
   the `ISLO_API_KEY` that `scrub_env` strips), `.crabbox.yaml` jobs are maps. `tests=crabbox` only
   with `sandbox=local`. A target without `factory.toml` is refused: the factory never guesses.

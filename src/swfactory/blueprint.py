@@ -198,7 +198,7 @@ class Blueprint(BaseModel):
             items.append(STAGES[name])
             gate = self.gate_after(name)
             if gate is not None:
-                items.append(Gate(gate.after, gate.artifact))  # type: ignore[arg-type]
+                items.append(Gate(gate.after, gate.artifact, gate.auto))  # type: ignore[arg-type]
         return tuple(items)
 
     def jobs(self, conf: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -208,7 +208,9 @@ class Blueprint(BaseModel):
         Result items: ``{"issue", "repo", "dir", "base_branch", "job_idx"}``.
         """
         conf = conf or {}
-        raw = conf.get("issues")
+        # The UI/params form sends every param, so ``issues`` arrives as its default ``[]`` next
+        # to a filled ``issue``: fall back on emptiness, not on absence.
+        raw = conf.get("issues") or None
         if raw is None and conf.get("issue") not in (None, ""):
             raw = [conf["issue"]]
         issues = [str(i).strip() for i in (raw or []) if str(i).strip()]

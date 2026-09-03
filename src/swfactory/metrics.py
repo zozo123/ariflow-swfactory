@@ -27,6 +27,8 @@ def _iso(dt: datetime) -> str:
 
 def write_run_metrics(ctx: Ctx, stages: list[StageResult], approvals: list[Approval]) -> dict:
     """Assemble the run's metrics and write ``{art}/metrics.json`` into the sandbox."""
+    from swfactory.stages import denied_tool_calls  # runtime: stages imports this module
+
     by_stage = {s.stage: s for s in stages}
     build = by_stage.get("build_and_test", StageResult(stage="build_and_test")).numbers
     review = by_stage.get("review", StageResult(stage="review")).numbers
@@ -55,6 +57,7 @@ def write_run_metrics(ctx: Ctx, stages: list[StageResult], approvals: list[Appro
         "findings_by_severity": findings,
         "blockers": findings["blocker"],
         "review_fixes": int(review.get("fixes", 0)),
+        "denied_tool_calls": denied_tool_calls(ctx),
         "total_cost_usd": round(sum(s.cost_usd for s in stages), 6),
         "approvers": [a.actor for a in approvals],
         "approvals": [a.model_dump(mode="json") for a in approvals],

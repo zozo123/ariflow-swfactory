@@ -16,6 +16,12 @@ Airflow. Every task rebuilds its ``Ctx`` from the job + ``Blueprint.load(name)``
 derived from the DAG run id and job index so retries and ``tasks clear`` re-attach to the same
 sandbox (``islo use`` is create-if-needed).
 
+Gates are ``GateOperator`` (an ``ApprovalOperator`` that never skips on its own): the response
+lands in XCom whatever the decision, ``record_<stage>`` writes it to ``approvals.json`` and, on
+Reject, raises ``AirflowSkipException``. The work stages then skip, but ``deliver`` and
+``metrics`` run with ``trigger_rule="none_failed"`` (and ``teardown`` as a teardown), so the
+refusal and its actor are committed and published exactly like an approval.
+
 ``airflow dags test`` never resolves HITL tasks: use ``--mark-success-pattern 'job\\.approve_.*'``.
 ``SWF_APPROVE=auto`` (parse-time env) makes every gate default to Approve after its timeout.
 """
@@ -27,10 +33,13 @@ import os
 import tomllib
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from airflow.providers.standard.operators.hitl import ApprovalOperator
+from airflow.providers.standard.operators.hitl import ApprovalOperator, HITLOperator
 from airflow.sdk import DAG, Asset, Param, get_parsing_context, task, task_group
+
+if TYPE_CHECKING:
+    from airflow.sdk import Context
 
 FACTORY_ROOT = Path(__file__).resolve().parent.parent
 BLUEPRINTS_DIR = FACTORY_ROOT / "blueprints"
@@ -65,8 +74,9 @@ def blueprint_names(root: Path = BLUEPRINTS_DIR) -> list[str]:
 # ---------------------------------------------------------------- runtime wiring (swfactory)
 
 
-def _run_id(dag_run_id: str, job_idx: int) -> str:
-    """Stable 8-hex run id per (DAG run, job): same sandbox name on every task and retry."""
+def run_id_for(dag_run_id: str, job_idx: int) -> str:
+    """Stable 8-hex run id per (DAG run, job): same sandbox name on every task and retry. Pure;
+    ``tests/test_dag_smoke.py`` imports it to locate the run dir."""
     return hashlib.sha1(f"{dag_run_id}#{job_idx}".encode()).hexdigest()[:8]
 
 
@@ -84,12 +94,28 @@ def _config(name: str, job: dict[str, Any], dag_run_id: str):
     from swfactory.blueprint import load
     from swfactory.sandbox import HOST_SANDBOXES
 
-    cfg = load(name).config(job, run_id=_run_id(dag_run_id, int(job["job_idx"])))
+    cfg = load(name).config(job, run_id=run_id_for(dag_run_id, int(job["job_idx"])))
     run_dir = Path(".factory") / cfg.run_id
     update: dict[str, Any] = {"fixtures_dir": _locate(cfg.fixtures_dir)}
     if cfg.sandbox in HOST_SANDBOXES:  # one workdir per run, seeded by stages.setup()
         update["workdir"] = str(run_dir / "work")
     return cfg.model_copy(update=update), run_dir
+
+
+def _protected(cfg) -> list[str]:
+    """factory.toml ``protected`` globs of a seeded host workdir -> srt's kernel ``denyWrite``.
+
+    Same helper as the CLI (``config.protected_globs``): empty before ``setup`` seeds the workdir
+    (or for islo, which enforces nothing host-side); the tests dir is left writable at task
+    granularity (``build_and_test`` must add tests) and ``stages._agent`` tightens it for fix
+    calls with ``SrtSandbox.set_protected``.
+    """
+    from swfactory.config import protected_globs
+    from swfactory.sandbox import HOST_SANDBOXES
+
+    if cfg.sandbox not in HOST_SANDBOXES:
+        return []
+    return protected_globs(Path(cfg.workdir))
 
 
 def _ctx(name: str, job: dict[str, Any], dag_run_id: str):
@@ -113,7 +139,7 @@ def _ctx(name: str, job: dict[str, Any], dag_run_id: str):
     known = {f.name for f in dataclasses.fields(Ctx)}
     return Ctx(  # contract is loaded lazily (setup() seeds the workdir first)
         cfg=cfg,
-        sb=make_sandbox(cfg, issue.id, repo=job["repo"]),
+        sb=make_sandbox(cfg, issue.id, protected=_protected(cfg), repo=job["repo"]),
         agent=make_agent(cfg),
         scm=scm,
         issue=issue,
@@ -150,12 +176,29 @@ def _stage_task(name: str, stage: str, shape: dict[str, Any], outlets: list[Asse
         execution_timeout=shape["stage_timeout"],
         max_active_tis_per_dagrun=shape["max_parallel_jobs"],
         outlets=outlets,
+        # deliver publishes rejected runs too: it must survive the skip cascade a reject starts.
+        trigger_rule="none_failed" if stage == "deliver" else "all_success",
     )
     def _run(job: dict, **context: Any) -> dict:
         ctx = _ctx(name, job, context["dag_run"].run_id)
         return _stage_fn(stage)(ctx).model_dump()
 
     return _run
+
+
+class GateOperator(ApprovalOperator):
+    """``ApprovalOperator`` whose Reject skips nothing by itself.
+
+    The stock operator skips its downstream on Reject — its direct child unconditionally
+    (``NotPreviouslySkippedDep`` ignores trigger rules), so ``record_<stage>`` would never see
+    the refusal or the approver. Here the response is returned as XCom for both decisions and
+    ``record_<stage>`` persists it, then short-circuits the line itself.
+    """
+
+    def execute_complete(self, context: Context, event: dict[str, Any]) -> Any:
+        ret = HITLOperator.execute_complete(self, context=context, event=event)
+        self.hitl_summary_extra["approved"] = ret["chosen_options"][0] == self.APPROVE
+        return ret
 
 
 def _approve_task(name: str, stage: str, gate: dict[str, Any]) -> ApprovalOperator:
@@ -165,15 +208,16 @@ def _approve_task(name: str, stage: str, gate: dict[str, Any]) -> ApprovalOperat
         f"{{{{ (ti.xcom_pull(task_ids='{GROUP_ID}.{stage}', map_indexes=ti.map_index) or {{}})"
         ".get('preview', '') }}"
     )
-    return ApprovalOperator(
+    assigned = [str(u) for u in gate.get("assigned") or []]
+    return GateOperator(
         task_id=f"approve_{stage}",
         subject=f"[{name}] approve {gate['artifact']} for {issue}",
         body=f"Run {{{{ dag_run.run_id }}}} · job {{{{ ti.map_index }}}} · `{gate['artifact']}`\n\n"
         + preview,
         defaults=ApprovalOperator.APPROVE if auto else None,
         response_timeout=timedelta(hours=int(gate.get("timeout_h", 24))),
-        fail_on_reject=False,
-        ignore_downstream_trigger_rules=True,
+        # HITLUser is {"id", "name"}; an empty `assigned` means anyone may answer.
+        assigned_users=[{"id": u, "name": u} for u in assigned] or None,
     )
 
 
@@ -181,6 +225,8 @@ def _record_task(name: str, stage: str):
     @task(task_id=f"record_{stage}")
     def _run(job: dict, **context: Any) -> dict:
         from datetime import UTC, datetime
+
+        from airflow.sdk.exceptions import AirflowSkipException
 
         from swfactory.models import Approval
         from swfactory.stages import record_approval
@@ -198,6 +244,8 @@ def _record_task(name: str, stage: str):
             at=datetime.now(UTC),
         )
         record_approval(_ctx(name, job, context["dag_run"].run_id), approval)
+        if approval.decision == "reject":  # work stages skip; deliver/metrics/teardown still run
+            raise AirflowSkipException(f"{stage} rejected by {approval.actor}")
         return approval.model_dump(mode="json")
 
     return _run
@@ -214,7 +262,7 @@ def _setup_task(name: str, shape: dict[str, Any]):
 
 
 def _metrics_task(name: str):
-    @task(task_id="metrics")
+    @task(task_id="metrics", trigger_rule="none_failed")
     def metrics(job: dict, **context: Any) -> dict:
         import json
 

@@ -1,12 +1,22 @@
 """The SDLC stages. ``STAGES`` (keyed by ``CANONICAL_ORDER``) is the registry a blueprint walks;
 ``PIPELINE`` is the default blueprint's walk and drives ``swfactory run`` and the Airflow DAG.
 
-Every stage is a function ``Ctx -> StageResult`` that is idempotent: when its primary artifact
-already exists it returns ``status="skipped"``. Loops (build/fix, review/fix) live *inside* stage
-functions and are bounded by ``Config``. The agent never commits: stages commit with the bot
-identity and provenance trailers, and ``deliver`` hands the commits to the Scm as a patch stream.
-A blueprint (``Ctx.blueprint``) only changes the walk order and knobs (tool policy additions,
-nit cap, PR labels); with ``blueprint=None`` every stage behaves exactly as v1.
+Every stage is a function ``Ctx -> StageResult`` that is idempotent: when the orchestrator's stage
+log (``<run_dir>/stages.jsonl``, written by ``_timed`` on the orchestrator's own filesystem)
+already holds a completed record for it, it returns ``status="skipped"``. Skip decisions never
+read the sandbox: the agent can write anything there (``docs/factory/**``, ``.factory/**``), so a
+forged artifact must not be able to skip a stage, and the run-level budget is seeded from the same
+log. Loops (build/fix, review/fix) live *inside* stage functions and are bounded by ``Config``.
+The agent never commits: stages commit with the bot identity and provenance trailers, and
+``deliver`` hands the commits to the Scm as a patch stream. A blueprint (``Ctx.blueprint``) only
+changes the walk order and knobs (tool policy additions, nit cap, PR labels); with
+``blueprint=None`` every stage behaves exactly as v1.
+
+Agent calls are named ``<stage>.<iteration>`` (envelopes ``{art}/agent/<stage>.<iteration>.json``,
+scripted fixtures ``<stage>.<iteration>.{patch|json|md}``): ``build.1`` then ``fix.2`` ..
+``fix.<max_build_iterations>`` for the build loop, ``review.k`` for the k-th review, and review
+fixes continue the ``fix`` numbering at ``fix.<max_build_iterations + k>`` (``fix.4`` for the
+first review fix with the default of 3 build iterations) so no envelope or fixture name is reused.
 """
 
 from __future__ import annotations
@@ -45,7 +55,7 @@ from swfactory.models import (
     StageResult,
     TestResult,
 )
-from swfactory.sandbox import LocalSandbox, Sandbox
+from swfactory.sandbox import LocalSandbox, Sandbox, SrtSandbox
 from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
 
 if TYPE_CHECKING:
@@ -61,10 +71,11 @@ PREVIEW_CHARS = 4000  # StageResult.preview: head of the gate artifact shown to 
 IN_PLACE_PROVIDERS = frozenset(
     {"srt", "anthropic-sandbox-runtime", "docker-sandbox", "apple-machine"}
 )
-BUILT_MARKER = ".factory/built"
 BASE_FILE = ".factory/base"
 STARTED_FILE = ".factory/started"
-STAGES_LOG = ".factory/stages.jsonl"
+STAGES_LOG = ".factory/stages.jsonl"  # sandbox COPY of the stage log (audit trail, never trusted)
+RUN_STAGES_LOG = "stages.jsonl"  # authoritative stage log: <run_dir>/stages.jsonl (orchestrator)
+HOOKS_LOG = ".factory/hooks.jsonl"  # swf_guard.py decisions, appended by the hook in the sandbox
 SEVERITIES: tuple[str, ...] = ("blocker", "major", "minor", "nit")
 # Scratch the factory never commits (added to .git/info/exclude by setup; the target may lack a
 # .gitignore, as the demo copy does).
@@ -88,7 +99,8 @@ class Ctx:
     target: dict | None = None  # the job's {"repo", "dir", "base_branch"} (provenance only)
     contract: TargetContract | None = None  # loaded by setup(); lazily on demand otherwise
     stages: list[StageResult] = field(default_factory=list)  # accumulated by run_pipeline
-    spent_usd: float = 0.0  # run-level cost guard
+    spent_usd: float = 0.0  # run-level cost guard; seeded from <run_dir>/stages.jsonl by _agent
+    budget_seeded: bool = False  # spent_usd includes earlier tasks/processes of this run
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
@@ -103,10 +115,12 @@ class Ctx:
 
 
 class Gate(NamedTuple):
-    """A human approval point; ``artifact`` is shown to the approver."""
+    """A human approval point; ``artifact`` is shown to the approver. ``auto`` (blueprint
+    ``gates[].auto``) approves without asking, in the CLI and the DAG alike (actor "auto")."""
 
     name: Literal["intent", "plan"]
     artifact: str
+    auto: bool = False
 
 
 Stage = Callable[[Ctx], StageResult]
@@ -160,12 +174,25 @@ def _exclude(ctx: Ctx) -> str:
     return shlex.quote(f":!{ctx.art}")
 
 
-def _skipped(
-    stage: str, artifacts: list[str], numbers: dict[str, float], preview: str = ""
-) -> StageResult:
-    return StageResult(
-        stage=stage, status="skipped", artifacts=artifacts, numbers=numbers, preview=preview
-    )
+def _skipped(prior: StageResult) -> StageResult:
+    """The idempotent re-run of a stage: the prior record's artifacts/numbers/preview, no cost."""
+    return prior.model_copy(update={"status": "skipped", "duration_s": 0.0, "cost_usd": 0.0})
+
+
+def _persisted(ctx: Ctx) -> list[StageResult]:
+    """Every record of ``<run_dir>/stages.jsonl``, the orchestrator-side log ``_timed`` appends
+    to. This file is the ONLY evidence a stage may be skipped on: the sandbox is agent-writable."""
+    path = ctx.run_dir / RUN_STAGES_LOG
+    if not path.is_file():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [StageResult.model_validate_json(line) for line in lines if line.strip()]
+
+
+def _done(ctx: Ctx, stage: str) -> StageResult | None:
+    """The latest completed (non-skipped) record of ``stage`` in this run, if any."""
+    recs = [r for r in _persisted(ctx) if r.stage == stage and r.status != "skipped"]
+    return recs[-1] if recs else None
 
 
 def _preview(text: str) -> str:
@@ -181,7 +208,9 @@ def _pipeline(ctx: Ctx) -> tuple[Stage | Gate, ...]:
 
 
 def _timed(fn: Stage) -> Stage:
-    """Fill ``duration_s``/``cost_usd`` and persist the result for a later ``deliver``."""
+    """Fill ``duration_s``/``cost_usd`` and persist the result: authoritatively to
+    ``<run_dir>/stages.jsonl`` on the orchestrator, plus a copy in the sandbox (``STAGES_LOG``)
+    that ``deliver`` carries into the committed artifact chain."""
 
     @functools.wraps(fn)
     def wrapper(ctx: Ctx) -> StageResult:
@@ -189,34 +218,48 @@ def _timed(fn: Stage) -> Stage:
         result = fn(ctx)
         result.duration_s = round(time.monotonic() - t0, 3)
         result.cost_usd = round(ctx.spent_usd - spent0, 6)
-        log = _read_or(ctx, STAGES_LOG)
-        ctx.sb.write(STAGES_LOG, log + result.model_dump_json() + "\n")
+        line = result.model_dump_json() + "\n"
+        ctx.run_dir.mkdir(parents=True, exist_ok=True)
+        with (ctx.run_dir / RUN_STAGES_LOG).open("a", encoding="utf-8") as fh:
+            fh.write(line)
+        ctx.sb.write(STAGES_LOG, _read_or(ctx, STAGES_LOG) + line)
         return result
 
     return wrapper
 
 
 def load_stage_results(ctx: Ctx) -> list[StageResult]:
-    """Stage results persisted in the sandbox by every stage run so far (DAG tasks are separate
-    processes). Per stage the latest non-skipped record wins; in-process results override."""
+    """Stage results of this run so far, from the orchestrator's ``<run_dir>/stages.jsonl``
+    (DAG tasks are separate processes; in-process results are already in the log). Per stage
+    the latest non-skipped record wins, in canonical order."""
     latest: dict[str, StageResult] = {}
-    for line in _read_or(ctx, STAGES_LOG).splitlines():
-        if not line.strip():
-            continue
-        rec = StageResult.model_validate_json(line)
+    for rec in _persisted(ctx):
         prev = latest.get(rec.stage)
         if prev is None or rec.status != "skipped" or prev.status == "skipped":
             latest[rec.stage] = rec
-    for rec in ctx.stages:
-        latest[rec.stage] = rec
     order = CANONICAL_ORDER
     return sorted(latest.values(), key=lambda r: order.index(r.stage) if r.stage in order else -1)
+
+
+def seed_budget(ctx: Ctx) -> float:
+    """Once per process: add what earlier tasks/processes of this run spent (every record in
+    ``<run_dir>/stages.jsonl``) to ``ctx.spent_usd`` so ``Config.max_budget_usd`` is a RUN
+    ceiling under the DAG too, not a per-task one. Returns the seeded total."""
+    if not ctx.budget_seeded:
+        ctx.spent_usd += sum(r.cost_usd for r in _persisted(ctx))
+        ctx.budget_seeded = True
+    return ctx.spent_usd
 
 
 def _agent(
     ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseModel] | None
 ) -> AgentResult:
-    """Run the agent for one stage call, enforcing the run-level budget and surfacing errors."""
+    """Run the agent for one stage call, enforcing the run-level budget and surfacing errors.
+    Under srt the kernel ``denyWrite`` set follows the stage (``protected_for``): ``fix`` calls
+    lose write access to the tests dir that ``build`` needed, matching the ``Edit(...)`` rules."""
+    seed_budget(ctx)
+    if isinstance(ctx.sb, SrtSandbox):
+        ctx.sb.set_protected(protected_for(_contract(ctx), stage))
     res = ctx.agent.run(
         ctx.sb,
         stage=stage,
@@ -397,8 +440,8 @@ def setup(ctx: Ctx) -> StageResult:
 def intent(ctx: Ctx) -> StageResult:
     """No agent: the originator's words, verbatim, under a small front matter."""
     path = f"{ctx.art}/intent.md"
-    if ctx.sb.exists(path):
-        return _skipped("intent", [path], {}, preview=_preview(ctx.sb.read(path)))
+    if prior := _done(ctx, "intent"):
+        return _skipped(prior)
     meta = {
         "id": ctx.issue.id,
         "title": ctx.issue.title,
@@ -425,8 +468,8 @@ def _document_only(text: str) -> str:
 def spec(ctx: Ctx) -> StageResult:
     """Agent (read-only) turns intent.md into spec.md."""
     path = f"{ctx.art}/spec.md"
-    if ctx.sb.exists(path):
-        return _skipped("spec", [path], {})
+    if prior := _done(ctx, "spec"):
+        return _skipped(prior)
     prompt = render_prompt(
         "spec", issue_id=ctx.issue.id, intent=ctx.sb.read(f"{ctx.art}/intent.md")
     )
@@ -441,9 +484,8 @@ def spec(ctx: Ctx) -> StageResult:
 def plan(ctx: Ctx) -> StageResult:
     """Agent (read-only) produces a typed Plan -> plan.json + rendered plan.md."""
     json_path, md_path = f"{ctx.art}/plan.json", f"{ctx.art}/plan.md"
-    if ctx.sb.exists(json_path):
-        preview = _preview(_read_or(ctx, md_path))
-        return _skipped("plan", [md_path, json_path], {}, preview=preview)
+    if prior := _done(ctx, "plan"):
+        return _skipped(prior)
     prompt = render_prompt(
         "plan",
         issue_id=ctx.issue.id,
@@ -475,9 +517,8 @@ def _summary_line(res: AgentResult, fallback: str) -> str:
 @_timed
 def build_and_test(ctx: Ctx) -> StageResult:
     """Bounded build -> commit -> test loop; iterations >= 2 use the ``fix`` stage."""
-    if ctx.sb.exists(BUILT_MARKER):
-        numbers = _read_json(ctx, BUILT_MARKER, {})
-        return _skipped("build_and_test", [], numbers if isinstance(numbers, dict) else {})
+    if prior := _done(ctx, "build_and_test"):
+        return _skipped(prior)
     spec_text = _read_or(ctx, f"{ctx.art}/spec.md")  # "(none)" when the line has no spec stage
     plan_text = ctx.sb.read(f"{ctx.art}/plan.md")
     failures = ""
@@ -500,7 +541,6 @@ def build_and_test(ctx: Ctx) -> StageResult:
                 "first_pass_ci": float(i == 1),
                 **_test_numbers(tr),
             }
-            ctx.sb.write(BUILT_MARKER, _dumps(numbers))
             return StageResult(stage="build_and_test", numbers=numbers)
         failures = f"exit code {tr.exit_code}; failed={tr.failed} errors={tr.errors}\n\n{output}"
     raise StageError(
@@ -524,13 +564,18 @@ def cap_nits(review: Review, cap: int = NIT_CAP) -> tuple[Review, int]:
 
 
 def _plan_fidelity(ctx: Ctx, base: str) -> list[Finding]:
-    """Deterministic pass 4 of REVIEW.md: files touched by the diff but absent from plan.json."""
+    """Deterministic pass 4 of REVIEW.md, both halves: files touched by the diff but absent from
+    plan.json (major), and planned files the diff never touched (minor; major under the target's
+    tests dir, since a dropped test file is untested behaviour)."""
     plan_data = _read_json(ctx, f"{ctx.art}/plan.json", None)
     if not isinstance(plan_data, dict):
         return []
-    planned = set(plan_data.get("files") or [])
-    changed = _sh(ctx, f"git diff --name-only --relative {base}..HEAD -- . {_exclude(ctx)}").split()
-    return [
+    planned = {str(f).strip() for f in plan_data.get("files") or []} - {""}
+    changed = set(
+        _sh(ctx, f"git diff --name-only --relative {base}..HEAD -- . {_exclude(ctx)}").split()
+    )
+    tests_dir = _contract(ctx).tests_dir.rstrip("/") + "/"
+    findings = [
         Finding(
             severity="major",
             file=f,
@@ -538,8 +583,19 @@ def _plan_fidelity(ctx: Ctx, base: str) -> list[Finding]:
             detail=f"`{f}` was changed but plan.md does not list it. Add it to the plan or "
             "revert the change.",
         )
-        for f in sorted(set(changed) - planned)
+        for f in sorted(changed - planned)
     ]
+    findings += [
+        Finding(
+            severity="major" if f.startswith(tests_dir) else "minor",
+            file=f,
+            title="Plan fidelity: planned file not touched",
+            detail=f"plan.md lists `{f}` but the diff never touches it. Do the planned work or "
+            "drop it from the plan.",
+        )
+        for f in sorted(planned - changed)
+    ]
+    return findings
 
 
 def _review_policy(ctx: Ctx) -> str:
@@ -559,20 +615,34 @@ def _format_findings(findings: list[Finding]) -> str:
     )
 
 
+def _tests_blocker(ctx: Ctx, tr: TestResult, output: str) -> Finding:
+    """Synthetic blocker for a review fix that broke the target's test suite."""
+    return Finding(
+        severity="blocker",
+        file=_contract(ctx).tests_dir,
+        title="Tests failing after review fix",
+        detail=(
+            f"exit code {tr.exit_code}; failed={tr.failed} errors={tr.errors}. The review fix "
+            f"must keep the suite green. Tail:\n{output[-1500:]}"
+        ),
+    )
+
+
 @_timed
 def review(ctx: Ctx) -> StageResult:
     """Agent review (Review schema) with the nit cap and plan fidelity enforced in code; blockers
-    trigger at most ``max_review_fixes`` fix + test + re-review rounds."""
+    trigger at most ``max_review_fixes`` fix + test + re-review rounds. A fix that leaves the
+    suite red is itself a blocker (``_tests_blocker``): the stage cannot end ``ok`` on red tests.
+    Review fixes are agent calls ``fix.<max_build_iterations + k>`` (see module docstring)."""
     path = f"{ctx.art}/review.json"
-    if ctx.sb.exists(path):
-        rv = Review.model_validate(_read_json(ctx, path, {}))
-        counts = {k: float(v) for k, v in _by_severity(rv.findings).items()}
-        return _skipped("review", [path], {"blockers": counts["blocker"], **counts})
+    if prior := _done(ctx, "review"):
+        return _skipped(prior)
     base = ctx.sb.read(BASE_FILE).strip()
     spec_text = _read_or(ctx, f"{ctx.art}/spec.md")  # "(none)" when the line has no spec stage
     plan_text = ctx.sb.read(f"{ctx.art}/plan.md")
     numbers: dict[str, float] = {}
     rv, dropped, fixes = Review(verdict="approve"), 0, 0
+    tests_blocker: Finding | None = None
     for k in range(ctx.cfg.max_review_fixes + 1):
         diff = _sh(ctx, f"git diff {base}..HEAD -- . {_exclude(ctx)}")
         prompt = render_prompt(
@@ -586,6 +656,8 @@ def review(ctx: Ctx) -> StageResult:
         res = _agent(ctx, "review", k + 1, prompt, Review)
         rv, dropped = cap_nits(Review.model_validate(res.data), _nit_cap(ctx))
         rv.findings.extend(_plan_fidelity(ctx, base))
+        if tests_blocker is not None:
+            rv.findings.append(tests_blocker)
         if not rv.blockers or k == ctx.cfg.max_review_fixes:
             break
         fixes = k + 1
@@ -596,10 +668,12 @@ def review(ctx: Ctx) -> StageResult:
             failures="Review blockers:\n" + _format_findings(rv.blockers),
             protected=_protected(ctx, "fix"),
         )
-        fix_res = _agent(ctx, "fix", fixes, fix_prompt, BuildSummary)
+        iteration = ctx.cfg.max_build_iterations + fixes
+        fix_res = _agent(ctx, "fix", iteration, fix_prompt, BuildSummary)
         commit(ctx, stage="fix", msg=f"fix: {_summary_line(fix_res, 'address review blockers')}")
-        tr, _ = _run_tests(ctx)
+        tr, output = _run_tests(ctx)
         numbers.update(_test_numbers(tr))
+        tests_blocker = None if tr.ok else _tests_blocker(ctx, tr, output)
     record = {
         "verdict": "request_changes" if rv.blockers else "approve",  # REVIEW.md contract
         "findings": [f.model_dump() for f in rv.findings],
@@ -697,30 +771,66 @@ def pr_body(
     return "\n\n".join(parts) + "\n"
 
 
+def denied_tool_calls(ctx: Ctx) -> int:
+    """Number of tool calls ``swf_guard.py`` refused in this run (``decision == "deny"`` lines of
+    the sandbox's ``.factory/hooks.jsonl``); 0 when the hook never ran (scripted agent)."""
+    count = 0
+    for line in _read_or(ctx, HOOKS_LOG).splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        count += isinstance(entry, dict) and entry.get("decision") == "deny"
+    return count
+
+
+def _copy_audit_logs(ctx: Ctx) -> None:
+    """Carry the audit logs into the committed chain (``{art}/agent/``): the orchestrator's stage
+    log and the hook's decisions, which otherwise die with the sandbox."""
+    run_log = ctx.run_dir / RUN_STAGES_LOG
+    if run_log.is_file():
+        ctx.sb.write(f"{ctx.art}/agent/stages.jsonl", run_log.read_text(encoding="utf-8"))
+    if ctx.sb.exists(HOOKS_LOG):
+        ctx.sb.write(f"{ctx.art}/agent/hooks.jsonl", ctx.sb.read(HOOKS_LOG))
+
+
 @_timed
 def deliver(ctx: Ctx) -> StageResult:
     """Write metrics, commit the artifact chain, extract the patch stream and publish the PR.
-    Never skipped: publishing is the observable output of the run."""
+    Never skipped: publishing is the observable output of the run. A rejected gate (any
+    ``decision == "reject"`` in approvals.json) still publishes, as ``[REJECTED]`` +
+    ``factory:rejected``, so the refusal and its actor land in git; blockers left by review
+    publish as ``[BLOCKED]`` + ``factory:blocked``. Both return ``status="blocked"``."""
     approvals = _load_approvals(ctx)
     if not ctx.sb.exists(f"{ctx.art}/approvals.json"):
         ctx.sb.write(f"{ctx.art}/approvals.json", "[]\n")
     stages = load_stage_results(ctx)
+    denied = denied_tool_calls(ctx)
     metrics_mod.write_run_metrics(ctx, stages, approvals)
+    _copy_audit_logs(ctx)
     commit(ctx, stage="deliver", msg=f"docs(factory): artifact chain for {ctx.issue.id}")
     base = ctx.sb.read(BASE_FILE).strip()
     patch = _sh(ctx, f"git format-patch --stdout {base}..HEAD")
     commits = int(_sh(ctx, f"git rev-list --count {base}..HEAD").strip() or 0)
+    # Patch paths are repo-relative; the sandbox cwd may be a subdir of the checkout (islo) or
+    # the target copy itself (local/srt, prefix ""). Only that subtree (and docs/factory) may land.
+    prefix = _sh(ctx, "git rev-parse --show-prefix").strip()
     data = _read_json(ctx, f"{ctx.art}/review.json", {})
     data = data if isinstance(data, dict) else {}
     rv = Review.model_validate(data) if data else Review(verdict="approve")
-    blocked = bool(rv.blockers)
+    rejected = any(a.decision == "reject" for a in approvals)
+    blocked = rejected or bool(rv.blockers)
     labels = list(ctx.blueprint.labels if ctx.blueprint else DEFAULT_LABELS)
-    labels += ["factory:blocked"] if blocked else []
+    if rejected:
+        labels.append("factory:rejected")
+    elif blocked:
+        labels.append("factory:blocked")
     title = f"{ctx.issue.id}: {ctx.issue.title}"
+    banner = "[REJECTED] " if rejected else "[BLOCKED] " if blocked else ""
     url = ctx.scm.publish(
         branch=ctx.branch,
         patch=patch.encode("utf-8"),
-        title=f"[BLOCKED] {title}" if blocked else title,
+        title=banner + title,
         body=pr_body(
             ctx,
             findings=rv.findings,
@@ -729,12 +839,18 @@ def deliver(ctx: Ctx) -> StageResult:
             stages=stages,
         ),
         labels=labels,
+        allowed_prefixes=[prefix, "docs/factory/"],
     )
     return StageResult(
         stage="deliver",
         status="blocked" if blocked else "ok",
         artifacts=[url],
-        numbers={"blockers": float(len(rv.blockers)), "commits": float(commits)},
+        numbers={
+            "blockers": float(len(rv.blockers)),
+            "commits": float(commits),
+            "rejected": float(rejected),
+            "denied_tool_calls": float(denied),
+        },
     )
 
 
@@ -765,7 +881,8 @@ PIPELINE: tuple[Stage | Gate, ...] = (
 
 def run_pipeline(ctx: Ctx, approver: Approver) -> RunReport:
     """CLI driver: walk the blueprint's pipeline (``PIPELINE`` without one); gates go through
-    ``approver``; a rejection stops the run."""
+    ``approver``; a rejection skips straight to ``deliver`` (a ``[REJECTED]`` PR carrying the
+    artifact chain and the refusal) and stops the run."""
     approvals: list[Approval] = []
     for item in _pipeline(ctx):
         if isinstance(item, Gate):
@@ -774,13 +891,19 @@ def run_pipeline(ctx: Ctx, approver: Approver) -> RunReport:
             approvals.append(approval)
             print(f"{'gate:' + item.name:<16} {approval.decision} by {approval.actor}")
             if approval.decision == "reject":
+                _run_stage(ctx, deliver)
                 break
             continue
-        result = item(ctx)
-        ctx.stages.append(result)
-        nums = ", ".join(f"{k}={v:g}" for k, v in result.numbers.items())
-        print(f"{result.stage:<16} {result.status:<8} {result.duration_s:6.1f}s  {nums}")
+        _run_stage(ctx, item)
     return build_report(ctx, approvals)
+
+
+def _run_stage(ctx: Ctx, stage: Stage) -> StageResult:
+    result = stage(ctx)
+    ctx.stages.append(result)
+    nums = ", ".join(f"{k}={v:g}" for k, v in result.numbers.items())
+    print(f"{result.stage:<16} {result.status:<8} {result.duration_s:6.1f}s  {nums}")
+    return result
 
 
 def build_report(ctx: Ctx, approvals: list[Approval]) -> RunReport:
@@ -803,8 +926,9 @@ def build_report(ctx: Ctx, approvals: list[Approval]) -> RunReport:
 
 
 def cli_approver(gate: Gate, ctx: Ctx) -> Approval:
-    """``approve=auto`` records actor "auto"; otherwise show the artifact and ask."""
-    if ctx.cfg.approve == "auto":
+    """``approve=auto`` or a blueprint gate with ``auto = true`` records actor "auto"; otherwise
+    show the artifact and ask."""
+    if gate.auto or ctx.cfg.approve == "auto":
         return Approval(gate=gate.name, decision="approve", actor="auto", at=datetime.now(UTC))
     print(f"\n===== {gate.artifact} =====\n{ctx.sb.read(f'{ctx.art}/{gate.artifact}')}\n")
     ok = typer.confirm(f"Approve gate '{gate.name}'?", default=False)

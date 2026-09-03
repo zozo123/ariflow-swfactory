@@ -25,9 +25,14 @@ if TYPE_CHECKING:
     from swfactory.sandbox import Sandbox
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-GUARD_SRC = Path(__file__).resolve().parents[2] / ".claude" / "hooks" / "swf_guard.py"
+FACTORY_ROOT = Path(__file__).resolve().parents[2]
+GUARD_SRC = FACTORY_ROOT / ".claude" / "hooks" / "swf_guard.py"
 GUARD_DST = ".claude/hooks/swf_guard.py"
 SETTINGS_DST = ".claude/settings.local.json"
+# The factory's stage skill (spec/plan shape, review contract): copied into every target so the
+# CLAUDE.md -> skills -> hooks layering holds when the agent's cwd is not this repo.
+SKILL_SRC = FACTORY_ROOT / ".claude" / "skills" / "swfactory"
+SKILL_DST = ".claude/skills/swfactory"
 GUARD_DENY = (
     "Bash(git push*)",
     "Bash(gh pr *)",
@@ -38,19 +43,25 @@ GUARD_DENY = (
 )
 # Native Claude Code path rules: the PRIMARY gate (checked before hooks, not bypassable by hook
 # output). The python hook below is defense-in-depth plus the audit log. Edit(...) rules cover
-# Edit/Write/MultiEdit/NotebookEdit; the Write(...) twins are belt-and-braces.
+# Edit/Write/MultiEdit/NotebookEdit; the Write(...) twins are belt-and-braces. ``docs/factory/**``
+# (the artifact chain) and ``.factory/**`` (stage scratch, hook log) are the orchestrator's:
+# the agent must not be able to forge review.json / approvals.json / plan.json or its own audit.
 GUARD_PATH_DENY = (
     "Edit(REVIEW.md)",
     "Edit(bands.yaml)",
     "Edit(factory.toml)",
     "Edit(.claude/**)",
     "Edit(.github/**)",
+    "Edit(docs/factory/**)",
+    "Edit(.factory/**)",
     "Read(.claude/hooks/**)",
     "Write(REVIEW.md)",
     "Write(bands.yaml)",
     "Write(factory.toml)",
     "Write(.claude/**)",
     "Write(.github/**)",
+    "Write(docs/factory/**)",
+    "Write(.factory/**)",
 )
 GUARD_MATCHER = "Edit|Write|MultiEdit|NotebookEdit|Bash"
 _FIXTURE_EXTS = ("patch", "json", "md")
@@ -153,10 +164,11 @@ def install_guard(sb: Sandbox, protected: Sequence[str]) -> None:
     """Install the PreToolUse guard into the target checkout (idempotent).
 
     Writes ``.claude/settings.local.json`` (hook wiring, native ``permissions.deny`` path and
-    Bash rules, and ``SWF_PROTECTED`` in ``env``), copies ``swf_guard.py`` next to it, and lists
-    both in ``.git/info/exclude`` so they never appear in the delivered patch. The files are
-    written by the orchestrator BEFORE the in-sandbox probe: under srt ``.claude/`` is
-    kernel-read-only for the sandboxed shell, so the directory must already exist.
+    Bash rules, and ``SWF_PROTECTED`` in ``env``), copies ``swf_guard.py`` next to it and the
+    factory's ``swfactory`` skill under ``.claude/skills/``, and lists all of them in
+    ``.git/info/exclude`` so they never appear in the delivered patch. The files are written by
+    the orchestrator BEFORE the in-sandbox probe: under srt ``.claude/`` is kernel-read-only for
+    the sandboxed shell, so the directory must already exist.
     """
     settings = {
         "hooks": {
@@ -172,6 +184,8 @@ def install_guard(sb: Sandbox, protected: Sequence[str]) -> None:
     }
     sb.write(SETTINGS_DST, json.dumps(settings, indent=2) + "\n")
     sb.write(GUARD_DST, GUARD_SRC.read_text(encoding="utf-8"))
+    for src in sorted(p for p in SKILL_SRC.rglob("*") if p.is_file()):
+        sb.write(f"{SKILL_DST}/{src.relative_to(SKILL_SRC).as_posix()}", src.read_text("utf-8"))
     probe = sb.run(
         'mkdir -p .claude/hooks && mkdir -p "$(git rev-parse --git-dir)/info" '
         "&& git rev-parse --show-cdup --show-prefix"
@@ -185,7 +199,8 @@ def install_guard(sb: Sandbox, protected: Sequence[str]) -> None:
     except FileNotFoundError:
         existing = ""
     present = set(existing.splitlines())
-    missing = [p for p in (f"{prefix}{SETTINGS_DST}", f"{prefix}{GUARD_DST}") if p not in present]
+    wanted = (f"{prefix}{SETTINGS_DST}", f"{prefix}{GUARD_DST}", f"{prefix}{SKILL_DST}/")
+    missing = [p for p in wanted if p not in present]
     if missing:
         head = existing.rstrip("\n") + "\n" if existing.strip() else ""
         sb.write(exclude_path, head + "\n".join(missing) + "\n")

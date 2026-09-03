@@ -10,19 +10,21 @@ You are one stage of an AI software factory. The originator's words live in
 scope, never touch files listed as `protected` in `factory.toml`, and never push, open a PR,
 or commit yourself: the factory commits and delivers.
 
-## spec.md shape
+## spec.md shape (matches the `spec` stage prompt)
 
 ```
-# Spec — <issue id>: <title>
-## Intent (verbatim)          quote intent.md; do not paraphrase
-## Behaviour                  numbered, testable statements ("percent_change(100, 125) == 0.25")
-## Edge cases                 each with the expected outcome (raise / return / no-op)
-## Out of scope               what this issue explicitly does NOT change
-## Open questions             empty list if none; a question is not a licence to guess
+# spec.md
+## Requirements       numbered R1, R2, ...; each testable in one assertion and traceable to intent.md
+                      ("percent_change(100, 125) == 0.25"); include error cases, edge conditions,
+                      backwards compatibility
+## API                exported names, signatures, types, return values, raised errors
+## Concerns           correctness / security / performance / maintainability risks, each with a mitigation
+## Open questions     anything ambiguous in the intent, with the assumption you are making
 ```
 
-Rules: every Behaviour line maps to at least one test in plan.md; no implementation detail
-(file names, functions) in the spec; keep under one page.
+Rules: every requirement maps to at least one test in plan.md; no code and no scope beyond the
+intent; read the repository instead of guessing what it does; keep under one page; output only the
+document (no preamble).
 
 ## plan.md / plan.json shape
 
@@ -45,6 +47,8 @@ test functions; list `risks` honestly, `[]` is acceptable.
 
 Read `REVIEW.md` at the target root before reviewing and follow it literally: five passes in
 order (correctness, tests, security, plan fidelity, style), severities
-blocker/major/minor/nit, at most 3 nits, `verdict` is `request_changes` iff any blocker.
-Return only the JSON contract it specifies. Files under `docs/factory/**`, lockfiles and
-generated files are not reviewed for style.
+blocker/major/minor/nit, a nit cap (3 by default; the factory enforces the blueprint's value in
+code and drops the rest), `verdict` is `request_changes` iff any blocker. Return only the JSON
+contract it specifies. Files under `docs/factory/**`, lockfiles and generated files are not
+reviewed for style. A fix that answers a blocker must keep the test suite green: a red suite
+after a fix is itself a blocker.

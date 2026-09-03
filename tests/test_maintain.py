@@ -95,14 +95,33 @@ def test_detect_is_deterministic_and_typed() -> None:
     assert all(isinstance(b, Breach) for b in first)
 
 
-def test_detect_skips_metrics_with_too_few_samples_or_zero_stdev() -> None:
+def test_detect_skips_metrics_with_too_few_samples() -> None:
     few = [{"build_iterations": 50}, {"build_iterations": 1}, {"build_iterations": 3}]
     assert detect(few, BANDS) == []  # 2 history samples < 3
-    flat = [{"build_iterations": 50}, *[{"build_iterations": 2} for _ in range(5)]]
-    assert detect(flat, BANDS) == []  # stdev == 0
     # review_blockers never appears in the history -> skipped, not an error
     assert _one(detect(_runs({"review_blockers": 9}), BANDS), "review_blockers") is None
     assert detect([], BANDS) == [] and detect([{"build_iterations": 1}], BANDS) == []
+
+
+def test_detect_flat_history_then_regression_is_a_top_tier_breach() -> None:
+    """A perfect streak (stdev 0) followed by a failure is the strongest signal, not a skip."""
+    flat = [{"build_iterations": 50}, *[{"build_iterations": 2} for _ in range(5)]]
+    (breach,) = detect(flat, BANDS)
+    assert (breach.metric, breach.action, breach.sigma) == ("build_iterations", "propose", 3)
+    assert breach.value == 50 and breach.mean == 2 and breach.stdev == 0
+
+    clean = [{"first_pass_ci": True, "blockers": 0, "iterations": 1} for _ in range(10)]
+    regressed = [{"first_pass_ci": False, "blockers": 2, "iterations": 3}, *clean]
+    hits = {b.metric: (b.action, b.sigma) for b in detect(regressed, BANDS)}
+    assert hits == {
+        "first_pass_test_rate": ("propose", 3),
+        "build_iterations": ("propose", 3),
+        "review_blockers": ("propose", 3),
+    }
+    # same value as the flat history, or a move in the good direction -> no breach
+    assert detect([clean[0], *clean], BANDS) == []
+    better = [{"first_pass_ci": True, "blockers": 0, "iterations": 0}, *clean]
+    assert detect(better, BANDS) == []
 
 
 def test_detect_explicit_key_and_nested_numbers() -> None:
@@ -259,10 +278,11 @@ def test_run_diagnose_tier_calls_agent_read_only_and_writes_incident(tmp_path: P
     )
     agent = FakeAgent(AgentResult(agent="scripted", data=diagnosis.model_dump()))
     sb = FakeSandbox()
+    scm = FakeScm()
     now = datetime(2026, 9, 2, 12, tzinfo=UTC)
     breaches = maintain.run(
         Config(issue="x"),
-        scm=FakeScm(),
+        scm=scm,
         agent=agent,
         sb=sb,
         bands_path=_bands_file(tmp_path),
@@ -282,6 +302,11 @@ def test_run_diagnose_tier_calls_agent_read_only_and_writes_incident(tmp_path: P
     incident = root / "docs/factory/incidents/2026-09-02-build_iterations.md"
     text = incident.read_text()
     assert "flaky fixture" in text and "run h3" in text and "2σ" in text
+    # the record is delivered, not just written to a checkout that gets thrown away
+    (issue,) = scm.issues
+    assert issue["title"] == "[incident] build_iterations 2σ"
+    assert issue["labels"] == ["maintain", "incident"]
+    assert issue["body"] == text
 
 
 def test_run_propose_tier_opens_factory_issue_with_intent(tmp_path: Path) -> None:
@@ -302,6 +327,7 @@ def test_run_propose_tier_opens_factory_issue_with_intent(tmp_path: Path) -> Non
     assert issue["labels"] == ["factory"]
     assert "build_iterations" in issue["title"] and "3σ" in issue["title"]
     assert "As a maintainer" in issue["body"] and "error_max_turns" in issue["body"]
+    assert "# Incident — build_iterations (3σ, propose)" in issue["body"]  # record embedded
     assert (root / "docs/factory/incidents").exists()
 
 
@@ -313,6 +339,70 @@ def test_run_propose_without_agent_still_opens_issue(tmp_path: Path) -> None:
         Config(issue="x"), scm=scm, agent=None, sb=None, bands_path=_bands_file(tmp_path), root=root
     )
     assert len(scm.issues) == 1 and "no diagnosis" in scm.issues[0]["body"]
+
+
+# ---------------------------------------------------------------- metrics root (DAG side)
+
+
+def _git(cwd: Path, *args: str) -> None:
+    import subprocess
+
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@x", "-c", "commit.gpgsign=false", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_metrics_root_honours_env_and_requires_docs_factory(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    _write_metrics(checkout / "demo" / "target", "A", {"run_id": "a"})
+    cfg = Config(issue="maintain", target_dir="demo/target")
+    env = {maintain.MAINTAIN_ROOT_ENV: str(checkout)}
+    assert maintain.metrics_root(cfg, tmp_path / "scratch", env=env) == checkout / "demo/target"
+    assert (
+        maintain.metrics_root(
+            Config(issue="maintain", target_dir=""),
+            tmp_path,
+            env={"SWF_MAINTAIN_ROOT": str(checkout / "demo/target")},
+        )
+        == checkout / "demo/target"
+    )
+    with pytest.raises(FileNotFoundError, match="docs/factory"):
+        maintain.metrics_root(cfg, tmp_path, env={maintain.MAINTAIN_ROOT_ENV: str(tmp_path)})
+    assert not (tmp_path / "scratch").exists()  # env root -> nothing cloned
+
+
+def test_metrics_root_clones_base_branch_when_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin = tmp_path / "origin"
+    _write_metrics(origin / "demo" / "target", "A", {"run_id": "a"})
+    _git(origin, "init", "-q", "-b", "release")
+    _git(origin, "add", "-A")
+    _git(origin, "commit", "-q", "-m", "seed")
+    (origin / "demo" / "target" / "docs" / "factory" / "A" / "metrics.json").write_text("{}")
+    _git(origin, "checkout", "-q", "-b", "main")
+    _git(origin, "commit", "-q", "-am", "main drifts")
+
+    seen: dict[str, str] = {}
+    real_clone = maintain.clone_target
+
+    def fake_clone(url: str, branch: str, dest: Path) -> Path:
+        seen.update(url=url, branch=branch)
+        return real_clone(str(origin), branch, dest)  # same code, local origin
+
+    monkeypatch.setattr(maintain, "clone_target", fake_clone)
+    cfg = Config(
+        issue="maintain", repo="acme/widgets", base_branch="release", target_dir="demo/target"
+    )
+    root = maintain.metrics_root(cfg, tmp_path / "scratch", env={})
+    assert seen == {"url": "https://github.com/acme/widgets.git", "branch": "release"}
+    assert root == tmp_path / "scratch" / "target" / "demo" / "target"
+    assert [r["run_id"] for r in load_runs(root, window=5, include_scripted=True)] == ["a"]
+    with pytest.raises(RuntimeError, match="git clone"):
+        maintain.clone_target(str(origin), "no-such-branch", tmp_path / "nope")
 
 
 # ---------------------------------------------------------------- orphan sweep

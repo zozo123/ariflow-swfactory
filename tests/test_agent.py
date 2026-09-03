@@ -18,6 +18,7 @@ from swfactory.agent import (
     GUARD_PATH_DENY,
     POLICIES,
     SETTINGS_DST,
+    SKILL_DST,
     ClaudeAgent,
     FixtureMissing,
     Policy,
@@ -460,7 +461,28 @@ def test_install_guard_in_subdir_uses_repo_root_exclude() -> None:
     sb.answers["rev-parse --show-cdup"] = RunResult(0, "../../\ndemo/target/\n", "", 0.0)
     install_guard(sb, [])
     exclude = sb.files["../../.git/info/exclude"].splitlines()
-    assert exclude == [f"demo/target/{SETTINGS_DST}", f"demo/target/{GUARD_DST}"]
+    assert exclude == [
+        f"demo/target/{SETTINGS_DST}",
+        f"demo/target/{GUARD_DST}",
+        f"demo/target/{SKILL_DST}/",
+    ]
+
+
+def test_install_guard_denies_artifact_forgery_and_ships_the_skill() -> None:
+    """The artifact chain and stage scratch are the orchestrator's; the skill reaches the target."""
+    sb = FakeSandbox()
+    install_guard(sb, ["tests/"])
+    deny = json.loads(sb.files[SETTINGS_DST])["permissions"]["deny"]
+    for rule in (
+        "Edit(docs/factory/**)",
+        "Write(docs/factory/**)",
+        "Edit(.factory/**)",
+        "Write(.factory/**)",
+    ):
+        assert rule in deny, rule
+    skill = REPO_ROOT / ".claude" / "skills" / "swfactory" / "SKILL.md"
+    assert sb.files[f"{SKILL_DST}/SKILL.md"] == skill.read_text("utf-8")
+    assert f"{SKILL_DST}/" in sb.files[".git/info/exclude"].splitlines()
 
 
 # ---------------------------------------------------------------- scripted

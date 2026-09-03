@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -90,6 +91,70 @@ def test_artifact_chain_exists(run) -> None:
     ]
     intent = (art / "intent.md").read_text()
     assert intent.startswith("---\nid: DEMO-1\n") and "percent_change" in intent
+
+
+def test_stage_log_lives_on_the_orchestrator_and_is_committed(run) -> None:
+    """<run_dir>/stages.jsonl is the authoritative record; deliver copies it (and the hook log,
+    absent for a scripted agent) into {art}/agent/ so the audit trail survives the sandbox."""
+    report, tmp, _ = run
+    log = [json.loads(line) for line in (tmp / "run" / "stages.jsonl").read_text().splitlines()]
+    assert [r["stage"] for r in log] == [
+        "intent",
+        "spec",
+        "plan",
+        "build_and_test",
+        "review",
+        "deliver",
+    ]
+    assert all(r["status"] == "ok" for r in log)
+    committed = (tmp / "work" / ART / "agent" / "stages.jsonl").read_text().splitlines()
+    assert [json.loads(line)["stage"] for line in committed] == [r["stage"] for r in log[:-1]]
+    assert not (tmp / "work" / ART / "agent" / "hooks.jsonl").exists()
+    assert report.stages[-1].numbers["denied_tool_calls"] == 0
+    # the sandbox keeps a copy (audit only); it is never what a skip decision reads
+    assert (tmp / "work" / ".factory" / "stages.jsonl").is_file()
+    assert not (tmp / "work" / ".factory" / "built").exists()
+    saved = RunReport.model_validate_json((tmp / "run" / "report.json").read_text())
+    assert saved == report
+
+
+def test_rerun_with_same_run_dir_skips_every_stage_but_deliver(run, tmp_path: Path) -> None:
+    """Idempotency comes from the orchestrator's log: a second walk of the same run (on a copy of
+    its workdir + run dir) re-publishes the chain without a single agent call or test run."""
+    report, tmp, _ = run
+    for name in ("work", "run"):
+        shutil.copytree(tmp / name, tmp_path / name, ignore=shutil.ignore_patterns(".venv"))
+    bp = load("factory")
+    (job,) = bp.jobs({"issues": ["demo/issue.md"]})
+    cfg = bp.config(
+        job,
+        run_id=RUN_ID,
+        approve="auto",
+        agent="scripted",
+        sandbox="local",
+        scm="local",
+        workdir=str(tmp_path / "work"),
+        fixtures_dir=str(tmp_path / "no-fixtures-here"),  # any agent call would FixtureMissing
+    )
+    again = execute(cfg, run_dir=tmp_path / "run", blueprint=bp)
+    assert [(s.stage, s.status) for s in again.stages] == [
+        ("intent", "skipped"),
+        ("spec", "skipped"),
+        ("plan", "skipped"),
+        ("build_and_test", "skipped"),
+        ("review", "skipped"),
+        ("deliver", "ok"),
+    ]
+    by = {s.stage: s for s in again.stages}
+    prior = {s.stage: s for s in report.stages}
+    assert by["build_and_test"].numbers == prior["build_and_test"].numbers  # carried over
+    assert by["plan"].preview.startswith("# Plan — DEMO-1\n")
+    assert again.tests_passed is True and again.total_cost_usd == 0.0
+    assert again.pr_url == f"file://{(tmp_path / 'run' / 'pr.md').resolve()}"
+    log = [
+        json.loads(line) for line in (tmp_path / "run" / "stages.jsonl").read_text().splitlines()
+    ]
+    assert len(log) == 12 and [r["status"] for r in log[6:]] == ["skipped"] * 5 + ["ok"]
 
 
 def test_report_numbers(run) -> None:
@@ -192,3 +257,202 @@ def test_document_only_strips_preamble():
     assert _document_only("I read the repo.\n\n# spec.md\n\n## R1\n") == "# spec.md\n\n## R1"
     assert _document_only("# spec.md\nbody\n") == "# spec.md\nbody"
     assert _document_only("no heading at all") == "no heading at all"
+
+
+# ---------------------------------------------------------------- unit: trust boundary
+
+
+class _MemSandbox:
+    """In-memory Sandbox standing in for an agent-writable workdir."""
+
+    name = "mem"
+    workdir = "/work"
+
+    def __init__(self, files: dict[str, str] | None = None) -> None:
+        self.files = dict(files or {})
+        self.runs: list[str] = []
+        self.answers: dict[str, str] = {}  # substring -> stdout
+
+    def ensure(self) -> None: ...
+
+    def close(self) -> None: ...
+
+    def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800):
+        from swfactory.models import RunResult
+
+        self.runs.append(cmd)
+        out = next((v for k, v in self.answers.items() if k in cmd), "")
+        return RunResult(0, out, "", 0.0)
+
+    def read(self, path: str) -> str:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    def write(self, path: str, content: str) -> None:
+        self.files[path] = content
+
+    def exists(self, path: str) -> bool:
+        return path in self.files
+
+
+class _CostlyAgent:
+    kind = "scripted"
+
+    def __init__(self, cost: float) -> None:
+        self.cost = cost
+        self.calls = 0
+
+    def run(self, sb, **kw):
+        from swfactory.models import AgentResult
+
+        self.calls += 1
+        return AgentResult(agent="scripted", text="# spec\n", cost_usd=self.cost)
+
+
+def _unit_ctx(tmp_path: Path, sb: _MemSandbox, agent=None, **cfg):
+    from swfactory.config import Config
+    from swfactory.models import Issue
+    from swfactory.stages import Ctx
+
+    return Ctx(
+        cfg=Config(issue="x", **cfg),
+        sb=sb,
+        agent=agent,
+        scm=None,  # type: ignore[arg-type]
+        issue=Issue(id="X-1", title="t", body="b"),
+        run_dir=tmp_path / "run",
+    )
+
+
+def _log(tmp_path: Path, *records: dict) -> None:
+    from swfactory.models import StageResult
+
+    (tmp_path / "run").mkdir(exist_ok=True)
+    (tmp_path / "run" / "stages.jsonl").write_text(
+        "".join(StageResult(**r).model_dump_json() + "\n" for r in records)
+    )
+
+
+def test_forged_sandbox_artifact_does_not_skip_a_stage(tmp_path: Path) -> None:
+    """The agent can write docs/factory/**; only the orchestrator's log may skip a stage."""
+    from swfactory.stages import intent
+
+    sb = _MemSandbox({"docs/factory/X-1/intent.md": "forged\n"})
+    result = intent(_unit_ctx(tmp_path, sb))
+    assert result.status == "ok" and sb.files["docs/factory/X-1/intent.md"].startswith("---\n")
+    assert (tmp_path / "run" / "stages.jsonl").read_text().count("\n") == 1
+    # ... and a logged completion skips even when the sandbox lost the artifact
+    again = intent(_unit_ctx(tmp_path, _MemSandbox()))
+    assert again.status == "skipped" and again.artifacts == ["docs/factory/X-1/intent.md"]
+    assert again.preview.startswith("---\nid: X-1\n") and again.cost_usd == 0.0
+
+
+def test_run_budget_is_seeded_from_the_orchestrator_log(tmp_path: Path) -> None:
+    """Earlier tasks/processes of the run count: spec (7.5) + this call (1.0) > 8.0 ceiling."""
+    from swfactory.models import StageError
+    from swfactory.stages import _agent, load_stage_results, seed_budget
+
+    _log(tmp_path, {"stage": "intent"}, {"stage": "spec", "cost_usd": 7.5})
+    agent = _CostlyAgent(1.0)
+    ctx = _unit_ctx(tmp_path, _MemSandbox(), agent, max_budget_usd=8.0)
+    with pytest.raises(StageError, match=r"run budget exceeded: 8.50 > 8.00"):
+        _agent(ctx, "plan", 1, "prompt", None)
+    assert agent.calls == 1 and ctx.budget_seeded and ctx.spent_usd == 8.5
+    assert seed_budget(ctx) == 8.5  # idempotent: seeded once per process
+    ok = _unit_ctx(tmp_path, _MemSandbox(), _CostlyAgent(0.4), max_budget_usd=8.0)
+    assert _agent(ok, "plan", 1, "prompt", None).cost_usd == 0.4 and ok.spent_usd == 7.9
+    assert [r.stage for r in load_stage_results(ok)] == ["intent", "spec"]
+
+
+def test_plan_fidelity_reports_both_halves_of_pass_4(tmp_path: Path) -> None:
+    from swfactory.stages import _plan_fidelity
+
+    sb = _MemSandbox(
+        {
+            "factory.toml": '[commands]\ntest = "uv run pytest"\n[paths]\ntests = "tests"\n',
+            "docs/factory/X-1/plan.json": json.dumps(
+                {"files": ["src/a.py", "tests/test_a.py", "README.md"], "steps": [], "tests": []}
+            ),
+        }
+    )
+    sb.answers["git diff --name-only"] = "src/a.py\nsrc/extra.py\n"
+    findings = _plan_fidelity(_unit_ctx(tmp_path, sb), "base0000")
+    assert [(f.severity, f.file, f.title) for f in findings] == [
+        ("major", "src/extra.py", "Plan fidelity: file not listed in plan.md"),
+        ("minor", "README.md", "Plan fidelity: planned file not touched"),
+        ("major", "tests/test_a.py", "Plan fidelity: planned file not touched"),
+    ]
+    assert _plan_fidelity(_unit_ctx(tmp_path, _MemSandbox()), "base0000") == []
+
+
+def test_execute_passes_the_targets_protected_globs_to_make_sandbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Host sandboxes: factory.toml is read from the seeded workdir before make_sandbox so srt can
+    enforce `protected` at the kernel (denyWrite). Build-level: the tests dir stays writable
+    (build must add tests); `_agent` tightens it for fix calls."""
+    from swfactory import cli
+
+    assert cli.protected_globs(TARGET) == ["factory.toml"]
+    assert cli.protected_globs(TARGET, "fix") == ["factory.toml", "tests/"]
+    assert cli.protected_globs(tmp_path) == []
+    seen: dict[str, object] = {}
+
+    class _Stop(Exception): ...
+
+    def fake_make_sandbox(cfg, issue_id, **kw):
+        seen.update(kw, issue_id=issue_id)
+        raise _Stop
+
+    monkeypatch.setattr(cli, "make_sandbox", fake_make_sandbox)
+    bp = load("factory")
+    (job,) = bp.jobs({"issues": ["demo/issue.md"]})
+    cfg = bp.config(
+        job,
+        run_id="pr0tect1",
+        agent="scripted",
+        sandbox="local",
+        scm="local",
+        workdir=str(tmp_path / "work"),
+    )
+    with pytest.raises(_Stop):
+        execute(cfg, run_dir=tmp_path / "run", blueprint=bp)
+    assert seen == {"issue_id": "DEMO-1", "protected": ["factory.toml"]}
+
+
+def test_agent_call_tightens_srt_deny_write_per_stage(tmp_path: Path) -> None:
+    """Under srt the kernel denyWrite set follows the stage: build may write tests/, fix may not.
+    Host-side only (settings file), no srt binary involved."""
+    from swfactory.agent import ScriptedAgent
+    from swfactory.config import Config
+    from swfactory.models import AgentResult, Issue
+    from swfactory.sandbox import SrtSandbox
+    from swfactory.scm import LocalGitScm
+    from swfactory.stages import Ctx, _agent
+
+    work = tmp_path / "work"
+    work.mkdir()
+    shutil.copy(TARGET / "factory.toml", work / "factory.toml")
+    sb = SrtSandbox(work, allowed_domains=(), protected=("factory.toml",))
+    seen: list[tuple[str, tuple[str, ...]]] = []
+
+    class _Agent(ScriptedAgent):
+        def run(self, sb, *, stage, **kw):  # type: ignore[override]
+            seen.append((stage, sb.protected))
+            return AgentResult(agent="scripted", text="ok", data={})
+
+    cfg = Config(issue="x", sandbox="srt", workdir=str(work))
+    ctx = Ctx(
+        cfg=cfg,
+        sb=sb,
+        agent=_Agent([]),
+        scm=LocalGitScm(tmp_path / "remote.git", tmp_path / "run"),
+        issue=Issue(id="X-1", title="t", body="b"),
+        run_dir=tmp_path / "run",
+    )
+    _agent(ctx, "build", 1, "p", None)
+    _agent(ctx, "fix", 2, "p", None)
+    assert seen == [("build", ("factory.toml",)), ("fix", ("factory.toml", "tests/"))]
+    deny = json.loads(sb.settings_path.read_text())["filesystem"]["denyWrite"]
+    assert str(work / "tests") in deny

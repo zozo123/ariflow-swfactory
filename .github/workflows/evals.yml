@@ -1,8 +1,9 @@
 name: evals
-# Runs the REAL path (claude agent in an islo sandbox) on the demo issue whenever the factory's
-# institutional knowledge changes, and weekly. Local scm: the PR is printed, not opened.
-# Asserts the run completes (tests passed, no blockers). Needs only the ISLO_API_KEY secret;
-# the Anthropic key lives in the islo environment `swfactory`, never in this repo.
+# Runs the REAL path (claude agent confined by the Anthropic Sandbox Runtime, bubblewrap on
+# ubuntu-24.04) on the demo issue whenever the factory's institutional knowledge changes, and
+# weekly. Local scm: the PR is printed, not opened. Asserts on the RunReport the CLI writes to
+# .factory/<run>/report.json (tests passed, deliver:ok). Needs the ANTHROPIC_API_KEY secret; the
+# job is skipped with a notice when it is absent (forks), so it never fails for lack of a key.
 on:
   schedule:
     - cron: "0 6 * * 1"
@@ -14,28 +15,36 @@ on:
       - REVIEW.md
       - bands.yaml
       - .claude/**
+      - blueprints/**
       - src/swfactory/prompts/**
+      - src/swfactory/agent.py
+      - src/swfactory/stages.py
+      - .github/workflows/evals.yml
   pull_request:
     paths:
       - CLAUDE.md
       - REVIEW.md
       - bands.yaml
       - .claude/**
+      - blueprints/**
       - src/swfactory/prompts/**
+      - src/swfactory/agent.py
+      - src/swfactory/stages.py
+      - .github/workflows/evals.yml
 permissions:
   contents: read
 env:
-  ISLO_API_KEY: ${{ secrets.ISLO_API_KEY }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 jobs:
   real-demo:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - name: Check for ISLO_API_KEY
+      - name: Check for ANTHROPIC_API_KEY
         id: gate
         run: |
-          if [ -z "$ISLO_API_KEY" ]; then
-            echo "::notice::ISLO_API_KEY secret not set; skipping evals"
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::notice::ANTHROPIC_API_KEY secret not set; skipping evals"
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
@@ -45,32 +54,38 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         if: steps.gate.outputs.enabled == 'true'
         with: { python-version: "3.12" }
-      - name: Install islo CLI
+      - name: Install bubblewrap + socat and allow unprivileged user namespaces (Ubuntu 24.04)
         if: steps.gate.outputs.enabled == 'true'
-        run: uv tool install islo && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Install Anthropic Sandbox Runtime and Claude Code
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          npm i -g @anthropic-ai/sandbox-runtime@0.0.75 @anthropic-ai/claude-code
+          srt --version && claude --version
       - name: Install swfactory
         if: steps.gate.outputs.enabled == 'true'
         run: uv sync
-      - name: Real factory run on demo/issue.md
+      - name: Real factory run on demo/issue.md (claude agent under srt, local git remote)
         if: steps.gate.outputs.enabled == 'true'
         env:
           SWF_APPROVE: auto
         run: |
-          uv run swfactory run --issue demo/issue.md --agent claude --sandbox islo --scm local --approve auto
-      - name: Assert tests passed and no blockers
+          uv run swfactory run --issue demo/issue.md --agent claude --sandbox srt --scm local --approve auto
+      - name: Assert tests passed and deliver succeeded
         if: steps.gate.outputs.enabled == 'true'
         run: |
           set -euo pipefail
-          metrics=$(find .factory demo/target -path '*/docs/factory/*/metrics.json' 2>/dev/null | head -1 || true)
-          if [ -z "$metrics" ]; then echo "no metrics.json produced"; exit 1; fi
-          uv run python - "$metrics" <<'PY'
+          report=$(find .factory -maxdepth 2 -name report.json | head -1 || true)
+          if [ -z "$report" ]; then echo "no .factory/*/report.json produced"; exit 1; fi
+          uv run python - "$report" <<'PY'
           import json, sys
-          m = json.load(open(sys.argv[1]))
-          blockers = m.get("blockers", m.get("numbers", {}).get("blockers", 0))
-          passed = m.get("tests_passed", True)
-          print(json.dumps(m, indent=2))
-          assert passed, "tests did not pass"
-          assert not blockers, f"{blockers} blocker(s) remain"
+          r = json.load(open(sys.argv[1]))
+          print(json.dumps(r, indent=2))
+          stages = {s["stage"]: s["status"] for s in r["stages"]}
+          assert r["tests_passed"] is True, "tests did not pass"
+          assert stages.get("deliver") == "ok", f"deliver status: {stages.get('deliver')!r}"
           PY
       - name: Upload artifact chain
         if: steps.gate.outputs.enabled == 'true' && always()
@@ -78,7 +93,7 @@ jobs:
         with:
           name: factory-artifacts
           path: |
-            .factory/**/pr.md
+            .factory/*/report.json
+            .factory/*/pr.md
             .factory/**/docs/factory/**
-            demo/target/docs/factory/**
           if-no-files-found: ignore

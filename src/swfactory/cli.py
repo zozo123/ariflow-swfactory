@@ -21,7 +21,7 @@ from swfactory import blueprint as blueprint_mod
 from swfactory import metrics as metrics_mod
 from swfactory.agent import Agent, make_agent
 from swfactory.blueprint import Blueprint
-from swfactory.config import Config
+from swfactory.config import Config, protected_globs
 from swfactory.models import RunReport, StageError
 from swfactory.sandbox import HOST_SANDBOXES, make_sandbox
 from swfactory.scm import make_scm
@@ -71,17 +71,20 @@ def execute(
 
     ``agent`` overrides ``make_agent(cfg)`` (tests inject a ScriptedAgent with extra fixture dirs).
     ``blueprint`` defaults to ``load(cfg.blueprint)``; its ``pipeline()`` is the walk order.
+    The ``RunReport`` is also written to ``<run_dir>/report.json``.
     """
     bp = blueprint if blueprint is not None else blueprint_mod.load(cfg.blueprint)
     run_dir = (Path(run_dir) if run_dir is not None else Path(".factory") / cfg.run_id).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     base_repo: Path | None = None
+    protected: list[str] = []
     if cfg.sandbox in HOST_SANDBOXES:
         base_repo = Path(cfg.workdir).resolve()
         _seed_workdir(base_repo, cfg.target_dir)
+        protected = protected_globs(base_repo)  # build-level: srt denyWrite from the first command
     scm = make_scm(cfg, run_dir, base_repo=base_repo, base_ref=cfg.base_branch)
     issue = scm.fetch_issue(_locate(cfg.issue) if not cfg.issue.strip().isdigit() else cfg.issue)
-    sb = make_sandbox(cfg, issue.id)
+    sb = make_sandbox(cfg, issue.id, protected=protected)
     ctx = Ctx(
         cfg=cfg,
         sb=sb,
@@ -94,7 +97,9 @@ def execute(
     )
     result = setup(ctx)
     print(f"{'setup':<16} {result.status:<8} {result.duration_s:6.1f}s  sandbox={sb.name}")
-    return run_pipeline(ctx, approver)
+    report = run_pipeline(ctx, approver)
+    (run_dir / "report.json").write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return report
 
 
 def _load_blueprint(name_or_path: str) -> Blueprint:
@@ -119,7 +124,9 @@ def _run_jobs(
     bp: Blueprint, issues: list[str], overrides: dict[str, Any], *, targets: list[str] | None = None
 ) -> None:
     """Run every (issue x target) job of ``bp`` in sequence. ``overrides`` are the CLI flags the
-    user passed (``None`` = not passed). Exit 1 if any job blocks, fails its tests or errors."""
+    user passed (``None`` = not passed). Each job's report is printed as a table and written by
+    ``execute`` to ``.factory/<run_id>/report.json``. Exit 1 if any job blocks, fails its tests or
+    errors."""
     run_id = overrides.pop("run_id", None) or uuid.uuid4().hex[:8]
     try:
         jobs = bp.jobs({"issues": issues, **({"targets": targets} if targets else {})})

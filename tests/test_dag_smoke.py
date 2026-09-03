@@ -13,7 +13,7 @@ Runs only with the ``airflow`` dependency group and is marked ``slow``:
 
 from __future__ import annotations
 
-import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -67,8 +67,12 @@ def _run(argv: list[str], *, cwd: Path, env: dict[str, str], timeout: int) -> st
 
 
 def _run_id(dag_run_id: str, job_idx: int) -> str:
-    """Mirror of ``dags/blueprints.py::_run_id`` (kept in sync by this test)."""
-    return hashlib.sha1(f"{dag_run_id}#{job_idx}".encode()).hexdigest()[:8]
+    """``dags/blueprints.py::run_id_for`` — the DAG module itself, not a copy kept in sync."""
+    spec = importlib.util.spec_from_file_location("swf_dags_blueprints", DAGS / "blueprints.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.run_id_for(dag_run_id, job_idx)
 
 
 @pytest.fixture(scope="module")

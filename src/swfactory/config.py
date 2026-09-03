@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import tomllib
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -135,6 +136,21 @@ def load_target_contract(sb: Sandbox) -> TargetContract:
         return TargetContract.parse(sb.read("factory.toml"))
     except FileNotFoundError as e:
         raise ValueError("target has no factory.toml; the factory refuses to guess commands") from e
+
+
+def protected_globs(workdir: Path, stage: str = "build") -> list[str]:
+    """``protected_for`` of the ``factory.toml`` in a seeded HOST workdir (local/srt sandboxes).
+
+    Read before the sandbox exists so srt can make the globs kernel-level ``denyWrite`` from the
+    first command; ``stage="build"`` keeps the tests dir writable (build must add tests) and
+    ``stages._agent`` tightens to ``protected_for(contract, "fix")`` for fix calls. A missing or
+    invalid contract yields ``[]``: ``stages.setup`` refuses the target later with a clear error.
+    """
+    try:
+        text = (Path(workdir) / "factory.toml").read_text(encoding="utf-8")
+        return protected_for(TargetContract.parse(text), stage)
+    except (OSError, ValueError):
+        return []
 
 
 def _slug(s: str) -> str:

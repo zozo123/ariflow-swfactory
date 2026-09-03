@@ -8,11 +8,14 @@ Runs only with the ``airflow`` dependency group:
 from __future__ import annotations
 
 import ast
+import importlib.util
+import json
 import os
 import shutil
 import tomllib
 from datetime import timedelta
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -40,6 +43,7 @@ after = "plan"
 artifact = "plan.md"
 timeout_h = 2
 auto = true
+assigned = ["alice", "bob"]
 [limits]
 stage_timeout_h = 5
 max_parallel_jobs = 2
@@ -53,6 +57,15 @@ def _dagbag(folder: Path):
 
     # Airflow 3.3 dropped `include_examples`; AIRFLOW__CORE__LOAD_EXAMPLES=False covers it.
     return DagBag(dag_folder=str(folder))
+
+
+def _load_module(path: Path) -> ModuleType:
+    """Import a DAG file as a module (DagBag hands back DAGs, not the helpers around them)."""
+    spec = importlib.util.spec_from_file_location(f"swf_dag_{path.stem}", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _shape(path: Path) -> dict:
@@ -133,6 +146,11 @@ def nightly_dag(tmp_path_factory: pytest.TempPathFactory):
     return bag.dags["nightly"]
 
 
+@pytest.fixture(scope="module")
+def blueprints_mod() -> ModuleType:
+    return _load_module(DAGS / "blueprints.py")
+
+
 # ---------------------------------------------------------------- one DAG per blueprint
 
 
@@ -178,6 +196,14 @@ def test_dag_shape(dagbag, path: Path) -> None:
         assert t.retries == (2 if stage == "deliver" else 0), stage
         assert t.execution_timeout == timeout, stage
         assert t.max_active_tis_per_dagrun == parallel, stage
+        # a rejected gate skips the work stages; deliver (and metrics) still publish the refusal
+        rule = "none_failed" if stage == "deliver" else "all_success"
+        assert str(t.trigger_rule.value) == rule, stage
+    assert str(dag.get_task("job.metrics").trigger_rule.value) == "none_failed"
+    for stage in shape["order"]:
+        if stage in {g["after"] for g in shape["gates"]}:
+            record = dag.get_task(f"job.record_{stage}")
+            assert str(record.trigger_rule.value) == "all_success"
     outlets = dag.get_task("job.deliver").outlets
     assert [a.name for a in outlets] == [f"swf.metrics.{shape['name']}"]
     for stage in shape["order"]:
@@ -201,8 +227,11 @@ def test_gates_are_approval_operators(dagbag, path: Path) -> None:
         assert isinstance(op, ApprovalOperator), type(op)
         assert op.response_timeout == timedelta(hours=gate.get("timeout_h", 24))
         assert op.defaults == (["Approve"] if gate.get("auto") else None)
-        assert op.ignore_downstream_trigger_rules is True
-        assert op.fail_on_reject is False
+        # Reject must reach record_<stage>: the gate never skips on its own (see GateOperator)
+        assert type(op).__name__ == "GateOperator"
+        assert op.fail_on_reject is False and op.ignore_downstream_trigger_rules is False
+        assigned = gate.get("assigned") or []
+        assert op.assigned_users == ([{"id": u, "name": u} for u in assigned] or None)
         assert op.options == ["Approve", "Reject"]
         assert gate["artifact"] in op.subject and f"[{shape['name']}]" in op.subject
         assert "fan_out" in op.subject  # issue rendered from the fan_out XCom
@@ -267,9 +296,120 @@ def test_synthetic_blueprint_cron_and_auto_gate(nightly_dag) -> None:
     assert isinstance(approve, ApprovalOperator)
     assert approve.defaults == [ApprovalOperator.APPROVE]
     assert approve.response_timeout == timedelta(hours=2)
+    assert approve.assigned_users == [
+        {"id": "alice", "name": "alice"},
+        {"id": "bob", "name": "bob"},
+    ]
     assert dag.get_task("job.build_and_test").execution_timeout == timedelta(hours=5)
     assert dag.get_task("job.build_and_test").max_active_tis_per_dagrun == 2
     assert [a.name for a in dag.get_task("job.deliver").outlets] == ["swf.metrics.nightly"]
+
+
+# ---------------------------------------------------------------- record_<stage> on Reject
+
+
+class _Ti:
+    map_index = 0
+
+    def __init__(self, response: dict | None) -> None:
+        self.response = response
+        self.pulled: list[tuple] = []
+
+    def xcom_pull(self, *, task_ids: str, map_indexes: int):
+        self.pulled.append((task_ids, map_indexes))
+        return self.response
+
+
+def _ctx_on(tmp_path: Path):
+    """A real ``Ctx`` over a LocalSandbox, so record/metrics write to files we can read back."""
+    from swfactory.config import Config
+    from swfactory.models import Issue
+    from swfactory.sandbox import LocalSandbox
+    from swfactory.stages import Ctx
+
+    return Ctx(
+        cfg=Config(issue="demo/issue.md", run_id="abcd1234"),
+        sb=LocalSandbox(tmp_path / "work"),
+        agent=SimpleNamespace(kind="scripted"),
+        scm=SimpleNamespace(kind="local"),
+        issue=Issue(id="DEMO-1", title="t", body=""),
+        run_dir=tmp_path / "run",
+    )
+
+
+@pytest.mark.parametrize("stage", ["intent", "plan"])
+def test_record_task_persists_rejection_then_skips_the_line(
+    blueprints_mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    from airflow.sdk.exceptions import AirflowSkipException
+
+    pytest.importorskip("swfactory")
+    ctx = _ctx_on(tmp_path)
+    monkeypatch.setattr(blueprints_mod, "_ctx", lambda name, job, run_id: ctx)
+    record = blueprints_mod._record_task("factory", stage).function
+    dag_run = SimpleNamespace(run_id="manual__2026-09-02T03:00:00+00:00")
+    rejected = {
+        "chosen_options": ["Reject"],
+        "params_input": {},
+        "responded_by_user": {"id": "u1", "name": "alice"},
+    }
+    with pytest.raises(AirflowSkipException, match=f"{stage} rejected by alice"):
+        record({"job_idx": 0}, ti=_Ti(rejected), dag_run=dag_run)
+    art = tmp_path / "work" / "docs" / "factory" / "DEMO-1"
+    approvals = json.loads((art / "approvals.json").read_text())
+    assert [(a["gate"], a["decision"], a["actor"]) for a in approvals] == [
+        (stage, "reject", "alice")
+    ]
+
+    # Approve (and a marked-success gate with no XCom) records and returns; nothing skipped.
+    out = record(
+        {"job_idx": 0}, ti=_Ti({**rejected, "chosen_options": ["Approve"]}), dag_run=dag_run
+    )
+    assert (out["decision"], out["actor"]) == ("approve", "alice")
+    ti = _Ti(None)
+    out = record({"job_idx": 0}, ti=ti, dag_run=dag_run)
+    assert (out["decision"], out["actor"]) == ("approve", "auto")
+    assert ti.pulled == [(f"job.approve_{stage}", 0)]
+    assert [a["decision"] for a in json.loads((art / "approvals.json").read_text())] == [
+        "reject",
+        "approve",
+        "approve",
+    ]
+
+
+def test_run_ids_are_hex8_and_stable(blueprints_mod) -> None:
+    from swfactory.config import Config
+
+    maintain_mod = _load_module(DAGS / "maintain.py")
+    airflow_run_id = "scheduled__2026-09-02T03:00:00+00:00"  # every Airflow run id ends like this
+    for rid in (
+        blueprints_mod.run_id_for(airflow_run_id, 0),
+        blueprints_mod.run_id_for(airflow_run_id, 1),
+        maintain_mod.run_id_for(airflow_run_id),
+    ):
+        assert len(rid) == 8 and int(rid, 16) >= 0
+        Config(issue="maintain", run_id=rid, agent="claude", sandbox="islo").sandbox_name(
+            "maintain"
+        )
+    assert blueprints_mod.run_id_for(airflow_run_id, 0) != blueprints_mod.run_id_for(
+        airflow_run_id, 1
+    )
+    assert maintain_mod.run_id_for(airflow_run_id) == maintain_mod.run_id_for(airflow_run_id)
+
+
+def test_ctx_passes_host_workdir_contract_as_protected(
+    blueprints_mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from swfactory.config import Config
+
+    cfg = Config(issue="demo/issue.md", sandbox="srt", workdir=str(tmp_path / "work"))
+    assert blueprints_mod._protected(cfg) == []  # not seeded yet (before setup)
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work" / "factory.toml").write_text(
+        '[commands]\ntest = "true"\n[paths]\nprotected = ["factory.toml", "tests/", "src/**"]\n'
+    )
+    assert blueprints_mod._protected(cfg) == ["factory.toml", "src/**"]  # tests writable in build
+    assert blueprints_mod._protected(cfg.model_copy(update={"sandbox": "islo"})) == []
 
 
 # ---------------------------------------------------------------- maintain + hygiene

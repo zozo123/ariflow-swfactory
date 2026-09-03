@@ -24,6 +24,7 @@ from swfactory.models import Issue, StageError
 
 BOT_NAME = "swfactory-bot"
 BOT_EMAIL = "swfactory-bot@users.noreply.github.com"
+FACTORY_BRANCH_PREFIX = "factory/"  # bot-owned refs: re-publishing a run force-updates them
 # Committer identity for `git am` so a bare CI/orchestrator host needs no git config.
 _GIT_IDENT = ["-c", f"user.name={BOT_NAME}", "-c", f"user.email={BOT_EMAIL}"]
 _FRONT_MATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?(.*)\Z", re.DOTALL)
@@ -40,10 +41,19 @@ class Scm(Protocol):
         ...
 
     def publish(
-        self, *, branch: str, patch: bytes, title: str, body: str, labels: Sequence[str]
+        self,
+        *,
+        branch: str,
+        patch: bytes,
+        title: str,
+        body: str,
+        labels: Sequence[str],
+        allowed_prefixes: Sequence[str] | None = None,
     ) -> str:
         """Apply ``patch`` (format-patch bytes) on a fresh clone, push ``branch``, open a PR.
 
+        The patch is policy-checked first (:func:`validate_patch`, :func:`scan_secrets`);
+        ``allowed_prefixes`` additionally confines every touched path to those directories.
         Returns the PR url (GitHub) or a ``file://`` url of the printed PR markdown (local).
         """
         ...
@@ -111,12 +121,137 @@ def _pr_markdown(title: str, labels: Sequence[str], body: str) -> str:
 
 
 def _apply_and_push(clone: Path, *, branch: str, patch: bytes) -> None:
-    """checkout -b, `git am --3way` the patch (keeps bot author + trailers), push -u."""
+    """checkout -b, `git am --3way` the patch (keeps bot author + trailers), push -u.
+
+    ``factory/*`` is the bot-owned namespace: a retry of ``deliver`` rebuilds the same branch
+    (``git am`` restamps committer dates, so even an identical patch yields new shas), so those
+    refs are force-pushed. Any other branch keeps plain (fast-forward only) push semantics.
+    """
     if not patch.strip():
         raise StageError("scm", "empty patch: nothing to publish")
     _run(["git", "checkout", "-b", branch], clone)
     _run(["git", *_GIT_IDENT, "am", "--3way"], clone, input=patch)
-    _run(["git", "push", "-u", "origin", branch], clone)
+    force = ["--force"] if branch.startswith(FACTORY_BRANCH_PREFIX) else []
+    _run(["git", "push", "-u", *force, "origin", branch], clone)
+
+
+# ---------------------------------------------------------------- patch policy (pure)
+
+_DIFF_HEADER = "diff --git "
+_RENAME_COPY = re.compile(r"^(?:rename|copy) (?:from|to) (.+)$")
+_FILE_LINE = re.compile(r"^(?:---|\+\+\+) (.+?)\t?$")
+_SYMLINK_MODE = re.compile(r"^new (?:file )?mode 120000$", re.MULTILINE)
+_C_ESCAPES = {"t": "\t", "n": "\n", "r": "\r", "a": "\a", "b": "\b", "f": "\f", "v": "\v"}
+SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("aws-access-key-id", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("anthropic-api-key", re.compile(r"sk-ant-[A-Za-z0-9_-]{20,}")),
+    ("github-token", re.compile(r"ghp_[A-Za-z0-9]{36}")),
+    ("github-fine-grained-token", re.compile(r"github_pat_[A-Za-z0-9_]{20,}")),
+    ("private-key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("google-api-key", re.compile(r"AIza[0-9A-Za-z_-]{35}")),
+    ("slack-token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")),
+)
+
+
+def _unquote(s: str) -> str:
+    """Undo git's C-style path quoting (``"a/sp\\tace"``)."""
+    if not (len(s) >= 2 and s[0] == '"' and s[-1] == '"'):
+        return s
+
+    def repl(m: re.Match[str]) -> str:
+        return chr(int(m.group(1), 8)) if m.group(1) else _C_ESCAPES.get(m.group(2), m.group(2))
+
+    return re.sub(r"\\(?:([0-7]{3})|(.))", repl, s[1:-1])
+
+
+def _strip_ab(name: str) -> str:
+    """Unquote a header/file-line name and drop git's ``a/``/``b/`` prefix."""
+    return re.sub(r"^[ab]/", "", _unquote(name))
+
+
+def _header_paths(rest: str) -> list[str]:
+    """Both names of a ``diff --git a/X b/Y`` header (mirrors git's own ambiguity handling)."""
+    if rest.startswith('"') or rest.endswith('"'):
+        return [_strip_ab(n) for n in re.findall(r'"(?:[^"\\]|\\.)*"|\S+', rest)]
+    # Unquoted names may contain spaces; identical names split exactly in the middle.
+    if len(rest) % 2 == 1:
+        mid = len(rest) // 2
+        a, b = rest[:mid], rest[mid + 1 :]
+        if a.startswith("a/") and b.startswith("b/") and a[2:] == b[2:]:
+            return [a[2:]]
+    a, _, b = rest.partition(" b/")
+    return [a.removeprefix("a/"), b]
+
+
+def patch_paths(patch: bytes) -> list[str]:
+    """Every repo-relative path a format-patch stream touches, in order, without duplicates.
+
+    Sources: ``diff --git`` headers plus the ``rename/copy from/to`` and ``---``/``+++`` lines of
+    each per-file header (up to its first hunk, so hunk content is never mistaken for a path).
+    Over-collecting is fine: the result feeds a deny check, so a spurious path can only reject.
+    """
+    seen: dict[str, None] = {}
+    in_header = False
+    for line in patch.decode("utf-8", errors="replace").splitlines():
+        if line.startswith(_DIFF_HEADER):
+            in_header = True
+            for p in _header_paths(line[len(_DIFF_HEADER) :]):
+                seen.setdefault(p, None)
+            continue
+        if not in_header:
+            continue
+        if line.startswith("@@"):
+            in_header = False
+        elif m := _RENAME_COPY.match(line):
+            seen.setdefault(_unquote(m.group(1)), None)
+        elif m := _FILE_LINE.match(line):
+            p = _strip_ab(m.group(1))
+            if p != "/dev/null":
+                seen.setdefault(p, None)
+    return list(seen)
+
+
+def _norm_prefix(prefix: str) -> str:
+    return prefix.strip().removeprefix("./").strip("/")
+
+
+def validate_patch(patch: bytes, *, allowed_prefixes: Sequence[str] | None = None) -> None:
+    """Reject a patch that could escape the checkout or smuggle a symlink; ``StageError("policy")``.
+
+    Always: no absolute paths, no ``..`` components, nothing under ``.git/``, no symlink modes.
+    With ``allowed_prefixes``: every touched path must lie under one of them (``""``/``"."`` =
+    whole repo).
+    """
+    if _SYMLINK_MODE.search(patch.decode("utf-8", errors="replace")):
+        raise StageError("policy", "patch creates a symlink (mode 120000)")
+    prefixes = None if allowed_prefixes is None else [_norm_prefix(p) for p in allowed_prefixes]
+    for path in patch_paths(patch):
+        parts = path.split("/")
+        if path.startswith("/") or (len(path) > 1 and path[1] == ":"):
+            raise StageError("policy", f"patch touches absolute path: {path}")
+        if ".." in parts:
+            raise StageError("policy", f"patch path escapes the checkout: {path}")
+        if ".git" in parts:
+            raise StageError("policy", f"patch touches .git: {path}")
+        if prefixes is not None and not any(
+            p == "" or path == p or path.startswith(p + "/") for p in prefixes
+        ):
+            raise StageError(
+                "policy", f"patch touches {path}, outside allowed {sorted(set(prefixes))}"
+            )
+
+
+def scan_secrets(patch: bytes) -> list[str]:
+    """Names of the secret shapes found anywhere in ``patch`` (:data:`SECRET_PATTERNS`)."""
+    text = patch.decode("utf-8", errors="replace")
+    return [kind for kind, rx in SECRET_PATTERNS if rx.search(text)]
+
+
+def _check_patch(patch: bytes, allowed_prefixes: Sequence[str] | None) -> None:
+    """The policy gate every ``publish`` runs before touching git or the network."""
+    validate_patch(patch, allowed_prefixes=allowed_prefixes)
+    if hits := scan_secrets(patch):
+        raise StageError("policy", f"secret-like token in patch: {', '.join(hits)}")
 
 
 # ---------------------------------------------------------------- local (demo / CI)
@@ -128,8 +263,10 @@ class LocalGitScm:
     ``base_repo``/``base_ref``: when given, the bare remote is seeded by pushing that ref of that
     repo as ``main``. The factory passes the sandbox workdir and its recorded baseline (a branch
     name or the sha stored at ``.factory/base``) so the format-patch stream applies on the very
-    history it was produced from. Without it an orphan ``main`` with one empty commit is created,
-    on which a patch whose first commit adds pre-existing files will not apply.
+    history it was produced from. Without a host workdir (islo sandbox) ``seed_url``/``seed_ref``
+    seed ``main`` by fetching that ref from the public clone url instead (read-only, no token).
+    With neither, an orphan ``main`` with one empty commit is created, on which a patch whose
+    first commit touches pre-existing files will not apply.
     """
 
     kind: Literal["local", "github"] = "local"
@@ -140,6 +277,8 @@ class LocalGitScm:
         run_dir: Path,
         base_repo: Path | None = None,
         base_ref: str = "main",
+        seed_url: str | None = None,
+        seed_ref: str = "main",
     ) -> None:
         # Absolute: the seeding push runs with cwd=base_repo, where a relative remote_dir would
         # not resolve.
@@ -147,6 +286,8 @@ class LocalGitScm:
         self.run_dir = Path(run_dir).resolve()
         self.base_repo = Path(base_repo).resolve() if base_repo is not None else None
         self.base_ref = base_ref
+        self.seed_url = seed_url
+        self.seed_ref = seed_ref
 
     def fetch_issue(self, ref: str) -> Issue:
         """Only front-matter files are supported locally."""
@@ -155,9 +296,17 @@ class LocalGitScm:
         return parse_issue_file(Path(ref))
 
     def publish(
-        self, *, branch: str, patch: bytes, title: str, body: str, labels: Sequence[str]
+        self,
+        *,
+        branch: str,
+        patch: bytes,
+        title: str,
+        body: str,
+        labels: Sequence[str],
+        allowed_prefixes: Sequence[str] | None = None,
     ) -> str:
-        """Push ``branch`` into the bare remote and write/print ``run_dir/pr.md``."""
+        """Policy-check the patch, push ``branch`` into the bare remote, write/print ``pr.md``."""
+        _check_patch(patch, allowed_prefixes)
         if not patch.strip():
             raise StageError("scm", "empty patch: nothing to publish")
         self._ensure_remote()
@@ -202,6 +351,12 @@ class LocalGitScm:
                     f"{self.base_ref}:refs/heads/main",
                 ],
                 self.base_repo,
+            )
+            return
+        if self.seed_url:
+            _run(
+                ["git", "fetch", "--quiet", self.seed_url, f"{self.seed_ref}:refs/heads/main"],
+                self.remote_dir,
             )
             return
         with tempfile.TemporaryDirectory(prefix="swf-seed-") as tmp:
@@ -260,9 +415,21 @@ class GitHubScm:
         )
 
     def publish(
-        self, *, branch: str, patch: bytes, title: str, body: str, labels: Sequence[str]
+        self,
+        *,
+        branch: str,
+        patch: bytes,
+        title: str,
+        body: str,
+        labels: Sequence[str],
+        allowed_prefixes: Sequence[str] | None = None,
     ) -> str:
-        """Shallow clone of base -> checkout -b -> git am --3way -> push -u -> gh pr create."""
+        """Policy check -> shallow clone of base -> checkout -b -> git am --3way -> push -> PR.
+
+        An open PR for ``branch`` (a retried ``deliver``) is updated in place with ``gh pr edit``
+        and its url returned; otherwise ``gh pr create`` opens one.
+        """
+        _check_patch(patch, allowed_prefixes)
         if not patch.strip():
             raise StageError("scm", "empty patch: nothing to publish")
         self._require_token()
@@ -282,6 +449,15 @@ class GitHubScm:
             self._ensure_labels(labels)
             body_file = Path(tmp) / "pr-body.md"
             body_file.write_text(body, encoding="utf-8")
+            if existing := self._open_pr_url(branch):
+                _run(
+                    [
+                        "gh", "pr", "edit", existing, "--title", title,
+                        "--body-file", str(body_file), *_label_flags(labels, "--add-label"),
+                    ],
+                    None,
+                )  # fmt: skip
+                return existing
             out = _run(
                 [
                     "gh", "pr", "create", "--repo", self.repo, "--base", self.base_branch,
@@ -325,11 +501,23 @@ class GitHubScm:
         for label in labels:
             _run(["gh", "label", "create", label, "--repo", self.repo, "--force"], None)
 
+    def _open_pr_url(self, branch: str) -> str | None:
+        """Url of the open PR whose head is ``branch``, or None."""
+        out = _run(
+            [
+                "gh", "pr", "list", "--repo", self.repo, "--head", branch, "--state", "open",
+                "--limit", "1", "--json", "url", "--jq", ".[].url",
+            ],
+            None,
+        )  # fmt: skip
+        lines = [line.strip() for line in out.splitlines() if line.strip()]
+        return lines[0] if lines else None
 
-def _label_flags(labels: Sequence[str]) -> list[str]:
+
+def _label_flags(labels: Sequence[str], flag: str = "--label") -> list[str]:
     flags: list[str] = []
     for label in labels:
-        flags += ["--label", label]
+        flags += [flag, label]
     return flags
 
 
@@ -346,7 +534,19 @@ def _last_line(out: str) -> str:
 def make_scm(
     cfg: Config, run_dir: Path, base_repo: Path | None = None, base_ref: str = "main"
 ) -> Scm:
-    """Build the Scm named by ``cfg.scm``. ``base_repo``/``base_ref`` only matter for local."""
+    """Build the Scm named by ``cfg.scm``. ``base_repo``/``base_ref`` only matter for local.
+
+    Without a host ``base_repo`` (islo sandbox) the local remote is seeded from the public clone
+    url of ``cfg.repo`` at ``cfg.base_branch``, so the sandbox's patch stream still applies.
+    """
     if cfg.scm == "github":
         return GitHubScm(cfg.repo, cfg.base_branch)
-    return LocalGitScm(Path(run_dir) / "remote.git", Path(run_dir), base_repo, base_ref)
+    seed_url = None if base_repo is not None else f"https://github.com/{cfg.repo}.git"
+    return LocalGitScm(
+        Path(run_dir) / "remote.git",
+        Path(run_dir),
+        base_repo,
+        base_ref,
+        seed_url=seed_url,
+        seed_ref=cfg.base_branch,
+    )

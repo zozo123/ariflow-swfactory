@@ -1,0 +1,20 @@
+# scripted fixture for DEMO-1 — a review fix that BREAKS the suite: it adds the docstring line the
+# reviewer asked for (blocker/review.1.json) but reverts the sign convention fix.2.patch landed, so
+# test_increase / test_decrease fail. Drives the "Tests failing after review fix" synthetic
+# blocker in stages.review. (Deliberately changes the file size: a same-size, same-second edit
+# can be masked by a stale __pycache__ entry.)
+diff --git a/src/calc/core.py b/src/calc/core.py
+index a72180c80502f9fbb11633c8a67e9480de58600a..9b1c1f1c3c3d6a4e9c0e1f2a3b4c5d6e7f8a9b0c 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -19,8 +19,9 @@ def compound(principal: float, rate: float, years: int, periods_per_year: int =
+ def percent_change(old: float, new: float) -> float:
+     """Return the relative change from ``old`` to ``new`` as a fraction (0.25 == +25%).
+ 
++    A decrease is negative: ``percent_change(200, 150) == -0.25``.
+     Raises ``ValueError`` when ``old`` is zero: the change is undefined.
+     """
+     if old == 0:
+         raise ValueError("old must be non-zero")
+-    return (new - old) / old
++    return (old - new) / old

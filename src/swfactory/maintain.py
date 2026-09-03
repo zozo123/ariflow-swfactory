@@ -9,11 +9,12 @@ tiers, read-only, through the normal ``Agent`` seam. Also owns the nightly sweep
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import statistics
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -31,7 +32,10 @@ Action = Literal["log", "diagnose", "propose"]
 
 MIN_SAMPLES = 3
 INCIDENTS_DIR = "docs/factory/incidents"
+INCIDENT_LABELS = ("maintain", "incident")
 SANDBOX_PREFIX = "swf-"
+# A checkout of the target repo to read metrics from (else the DAG shallow-clones the base branch).
+MAINTAIN_ROOT_ENV = "SWF_MAINTAIN_ROOT"
 
 # bands.yaml metric name -> keys tried in metrics.json (first hit wins, after the name itself).
 METRIC_ALIASES: dict[str, tuple[str, ...]] = {
@@ -108,8 +112,11 @@ def detect(runs: list[dict], bands: dict) -> list[Breach]:
     """Classify the newest run's metrics against the history (``runs[1:]``) by sigma tier.
 
     Deterministic: sample mean/stdev over the history; a metric is skipped when fewer than
-    ``MIN_SAMPLES`` history values exist, its stdev is 0, or the latest run lacks it. The highest
-    tier whose sigma the deviation (signed by ``direction``) reaches wins.
+    ``MIN_SAMPLES`` history values exist or the latest run lacks it. The highest tier whose sigma
+    the deviation (signed by ``direction``) reaches wins. A flat history (stdev 0 — the normal
+    shape for booleans and small counts such as ``first_pass_ci`` or ``blockers``) makes any
+    move in the bad direction an infinite deviation, i.e. a top-tier breach reported with
+    ``stdev=0``; a move in the good direction or no move is not a breach.
     """
     if len(runs) < 2:
         return []
@@ -127,9 +134,9 @@ def detect(runs: list[dict], bands: dict) -> list[Breach]:
         if value is None or len(samples) < MIN_SAMPLES:
             continue
         mean, stdev = statistics.mean(samples), statistics.stdev(samples)
-        if stdev == 0:
+        if value == mean:
             continue
-        deviation = (value - mean) / stdev
+        deviation = (value - mean) / stdev if stdev else math.copysign(math.inf, value - mean)
         if spec.get("direction", "higher_is_bad") == "lower_is_bad":
             deviation = -deviation
         hit = [t for t in tiers if deviation >= t[0]]
@@ -157,10 +164,12 @@ def run(
 ) -> list[Breach]:
     """Detect breaches under ``root`` (default ``cfg.target_dir``) and act per tier.
 
-    ``log``: print. ``diagnose``: read-only agent run (``Diagnosis`` schema) and an incident
-    record at ``docs/factory/incidents/<date>-<metric>.md``. ``propose``: additionally draft an
-    intent and open an issue labeled ``factory`` so the factory re-enters through dispatch.yml.
-    The agent is skipped (not failed) when ``agent``/``sb`` are not provided.
+    ``log``: print. ``diagnose``: read-only agent run (``Diagnosis`` schema), an incident record
+    at ``docs/factory/incidents/<date>-<metric>.md`` *and* an issue carrying that record
+    (labels ``INCIDENT_LABELS``) so the diagnosis outlives the checkout it was written to.
+    ``propose``: draft an intent and open an issue labeled ``factory`` (incident record
+    appended) so the factory re-enters through dispatch.yml. The agent is skipped (not failed)
+    when ``agent``/``sb`` are not provided.
     """
     root = Path(root) if root is not None else Path(cfg.target_dir)
     now = now or datetime.now(UTC)
@@ -173,18 +182,67 @@ def run(
         if breach.action == "log":
             continue
         diagnosis = _diagnose(breach, runs, cfg=cfg, agent=agent, sb=sb)
+        record = incident_markdown(breach, diagnosis, now)
         incident = root / INCIDENTS_DIR / f"{now:%Y-%m-%d}-{breach.metric}.md"
         incident.parent.mkdir(parents=True, exist_ok=True)
-        incident.write_text(incident_markdown(breach, diagnosis, now), encoding="utf-8")
+        incident.write_text(record, encoding="utf-8")
         print(f"maintain: wrote {incident}")
         if breach.action == "propose":
             url = scm.open_issue(
                 title=f"[maintain] {breach.metric} breached the {breach.sigma}σ band",
-                body=draft_intent(breach, diagnosis),
+                body=f"{draft_intent(breach, diagnosis)}\n{record}",
                 labels=["factory"],
             )
-            print(f"maintain: opened issue {url}")
+        else:
+            url = scm.open_issue(
+                title=f"[incident] {breach.metric} {breach.sigma}σ",
+                body=record,
+                labels=list(INCIDENT_LABELS),
+            )
+        print(f"maintain: opened issue {url}")
     return breaches
+
+
+def clone_target(url: str, branch: str, dest: Path) -> Path:
+    """Shallow, read-only clone of ``branch`` at ``url`` into ``dest`` (no credential needed for
+    a public repo; a private one relies on the orchestrator's own git credential setup)."""
+    proc = subprocess.run(
+        ["git", "clone", "--quiet", "--depth", "1", "--branch", branch, url, str(dest)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"git clone {url}@{branch} failed rc={proc.returncode}: {proc.stderr.strip()}"
+        )
+    return dest
+
+
+def metrics_root(cfg: Config, scratch: Path, *, env: Mapping[str, str] | None = None) -> Path:
+    """The directory whose ``docs/factory/*/metrics.json`` the band check reads.
+
+    ``$SWF_MAINTAIN_ROOT`` (a checkout of the target repo) when set, else a shallow clone of
+    ``cfg.repo``@``cfg.base_branch`` under ``scratch``; ``cfg.target_dir`` is appended. Raises
+    ``FileNotFoundError`` when the result has no ``docs/factory``: a worker whose cwd happens to
+    lack the target must fail, not report "0 runs in window".
+    """
+    env = os.environ if env is None else env
+    base = env.get(MAINTAIN_ROOT_ENV)
+    root = (
+        Path(base)
+        if base
+        else clone_target(f"https://github.com/{cfg.repo}.git", cfg.base_branch, scratch / "target")
+    )
+    if cfg.target_dir:
+        root = root / cfg.target_dir
+    if not (root / "docs" / "factory").is_dir():
+        raise FileNotFoundError(
+            f"maintain: {root} has no docs/factory (committed metrics live there); "
+            f"point {MAINTAIN_ROOT_ENV} at a checkout of {cfg.repo}"
+        )
+    return root
 
 
 def _diagnose(

@@ -49,8 +49,9 @@ SRT_CLAUDE_DOMAINS = (
     "statsig.anthropic.com",
     "sentry.io",
 )
-# Credential stores the sandboxed process must never read (relative to $HOME).
-SRT_DENY_READ = (".ssh", ".aws", ".config/gh")
+# Credential stores the sandboxed process must never read (relative to $HOME). ``.config`` covers
+# gh/gcloud/etc.; git only warns about its unreadable XDG ignore file and carries on (probed).
+SRT_DENY_READ = (".ssh", ".aws", ".config", ".gnupg", ".netrc", ".docker", ".kube")
 # Host paths Claude Code / uv / npm write to (relative to $HOME unless absolute).
 SRT_ALLOW_WRITE_HOME = (".claude", ".claude.json", ".cache")
 SRT_ALLOW_WRITE_ABS = ("/tmp", "/private/tmp")
@@ -274,6 +275,22 @@ class SrtSandbox(LocalSandbox):
         )
         return self.settings_path
 
+    def set_protected(self, globs: Sequence[str]) -> None:
+        """Replace the kernel-level ``denyWrite`` globs (the target's factory.toml ``protected``,
+        narrowed per stage by ``config.protected_for``) and rewrite the settings file so the next
+        ``run()`` is confined accordingly."""
+        self.protected = tuple(globs)
+        self.write_settings()
+
+    def _settings_current(self) -> bool:
+        """True when the settings file on disk matches this object's policy. Every DAG task builds
+        a fresh ``SrtSandbox`` over the same workdir, so a file left by an earlier task (or an
+        earlier ``set_protected``) is re-synced rather than trusted."""
+        try:
+            return json.loads(self.settings_path.read_text(encoding="utf-8")) == self.settings()
+        except (OSError, ValueError):
+            return False
+
     def argv(self, cmd: str, *, cwd: str | None = None) -> list[str]:
         """``srt -s <settings> -c 'cd <cwd> && <cmd>'`` (``npx`` fallback when srt is absent)."""
         script = f"cd {shlex.quote(cwd or self.workdir)} && {cmd}"
@@ -303,7 +320,7 @@ class SrtSandbox(LocalSandbox):
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
         """Run ``cmd`` under srt; the command's exit code propagates through srt."""
-        if not self.settings_path.exists():
+        if not self._settings_current():
             self.write_settings()
         return _run_subprocess(
             self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s
@@ -508,7 +525,8 @@ def make_sandbox(
 ) -> Sandbox:
     """Build the sandbox selected by ``cfg.sandbox`` for the run on ``issue_id``.
 
-    ``protected`` (the target's factory.toml globs) becomes srt's kernel-level ``denyWrite``;
+    ``protected`` (the target's factory.toml globs) becomes srt's kernel-level ``denyWrite``
+    (``SrtSandbox.set_protected`` changes it later, e.g. to tighten for a fix call);
     ``repo`` (owner/name) makes the islo sandbox name unique per (issue, target).
     """
     if cfg.sandbox == "local":

@@ -377,11 +377,39 @@ def test_srt_settings_written_with_workdir_and_protected(tmp_path, monkeypatch) 
         f"{work}/src",
         f"{work}/factory.toml",
     ]  # `*.lock` has no literal prefix: left to the Edit(...) deny rules and the hook
-    assert fs["denyRead"] == [str(home / ".ssh"), str(home / ".aws"), str(home / ".config/gh")]
+    assert fs["denyRead"] == [
+        str(home / p) for p in (".ssh", ".aws", ".config", ".gnupg", ".netrc", ".docker", ".kube")
+    ]
     assert net["allowedDomains"][:2] == ["api.anthropic.com", "pypi.org"]
     for d in SRT_CLAUDE_DOMAINS:
         assert net["allowedDomains"].count(d) == 1
     assert net["deniedDomains"] == []
+
+
+def test_srt_set_protected_rewrites_settings_and_run_resyncs_stale_file(
+    tmp_path, monkeypatch
+) -> None:
+    """The contract is known only after setup seeds the workdir: ``set_protected`` must reach the
+    kernel policy, and a fresh object over the same workdir (next DAG task) must not trust a
+    settings file written with a different ``protected``."""
+    monkeypatch.setattr(sandbox_mod.Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    seen = _fake_srt(monkeypatch)
+    sb = _srt(tmp_path)
+    sb.ensure()
+    work = str((tmp_path / "work").resolve())
+    deny = lambda: json.loads(sb.settings_path.read_text())["filesystem"]["denyWrite"]  # noqa: E731
+    assert deny() == [f"{work}/.claude", f"{work}/.github"]
+    sb.set_protected(["factory.toml", "tests/"])
+    assert sb.protected == ("factory.toml", "tests/")
+    assert deny() == [f"{work}/.claude", f"{work}/.github", f"{work}/factory.toml", f"{work}/tests"]
+
+    other = _srt(tmp_path, protected=("factory.toml",))  # same workdir, different policy
+    other.run("true")
+    assert deny() == [f"{work}/.claude", f"{work}/.github", f"{work}/factory.toml"]
+    assert seen["argv"][-1].startswith(f"cd {sb.workdir} && ")
+    stamp = sb.settings_path.stat().st_mtime_ns
+    other.run("true")  # in sync: not rewritten
+    assert sb.settings_path.stat().st_mtime_ns == stamp
 
 
 def test_srt_ensure_inits_git_host_side_then_runs_confined(tmp_path, monkeypatch) -> None:
@@ -550,6 +578,7 @@ def test_make_sandbox_srt(tmp_path, monkeypatch) -> None:
     assert sb.workdir == str((tmp_path / ".factory/work").resolve())
     assert sb.pass_env == ("ANTHROPIC_API_KEY",)  # agent=claude needs the real key
     assert sb.protected == ("tests/",)
+    assert f"{sb.workdir}/tests" in sb.settings()["filesystem"]["denyWrite"]
     assert "example.org" in sb.settings()["network"]["allowedDomains"]
     scripted = make_sandbox(Config(issue="42", sandbox="srt"), "42")
     assert isinstance(scripted, SrtSandbox) and scripted.pass_env == ()

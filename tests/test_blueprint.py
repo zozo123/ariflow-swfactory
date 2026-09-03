@@ -63,9 +63,9 @@ def test_hotfix_pipeline_has_no_spec_and_gates_after_intent_and_plan() -> None:
     assert "spec" not in items
     assert items == [
         "intent",
-        Gate("intent", "intent.md"),
+        Gate("intent", "intent.md", auto=True),  # gates[].auto reaches the CLI walk too
         "plan",
-        Gate("plan", "plan.md"),
+        Gate("plan", "plan.md", auto=False),
         "build_and_test",
         "review",
         "deliver",
@@ -73,6 +73,19 @@ def test_hotfix_pipeline_has_no_spec_and_gates_after_intent_and_plan() -> None:
     assert bp.gate_after("intent").auto is True and bp.gate_after("plan").timeout_h == 4
     assert bp.gate_after("build_and_test") is None
     assert bp.gate_timeout_h == 4
+
+
+def test_cli_approver_honours_gate_auto_without_prompting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`auto = true` on a gate approves under `--approve prompt` (actor "auto"), as the DAG does."""
+    from swfactory.config import Config
+
+    monkeypatch.setattr(stages.typer, "confirm", lambda *a, **k: pytest.fail("prompted"))
+    ctx = _ctx(None)
+    ctx.cfg = Config(issue="x", approve="prompt")
+    approval = stages.cli_approver(Gate("intent", "intent.md", auto=True), ctx)
+    assert (approval.gate, approval.decision, approval.actor) == ("intent", "approve", "auto")
+    ctx.cfg = Config(issue="x", approve="auto")
+    assert stages.cli_approver(Gate("plan", "plan.md"), ctx).actor == "auto"
 
 
 def test_stages_registry_matches_canonical_order() -> None:
@@ -193,6 +206,8 @@ def test_jobs_is_issues_times_targets() -> None:
 def test_jobs_compat_and_filter() -> None:
     bp = Blueprint.model_validate(_data())
     assert [j["issue"] for j in bp.jobs({"issue": 7})] == ["7", "7"]
+    # The UI params form sends `issues` as its default [] next to a filled `issue`.
+    assert [j["issue"] for j in bp.jobs({"issues": [], "issue": "42"})] == ["42", "42"]
     only_b = bp.jobs({"issues": ["1"], "targets": ["o/b"]})
     assert [(j["repo"], j["job_idx"]) for j in only_b] == [("o/b", 0)]
     with pytest.raises(ValueError, match="not in blueprint"):
