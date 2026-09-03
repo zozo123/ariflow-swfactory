@@ -392,12 +392,41 @@ class HerdApp(App[None]):
     """Management TUI. ``collector`` and ``actions`` are the only way in or out."""
 
     TITLE = "swfactory herd"
+    # The station terminal of the same factory the project page draws: a cyanotype drafting
+    # sheet. Tokens match site/styles.css exactly so the two surfaces read as one system.
+    # paper #0d2740 ground · graphite #08192b panels · line #eef4f8 rules and key data ·
+    # line-mute #8aa5bb labels · stamp #eb6a52 gates and blocked · ok #74c9a1 pass.
+    # Colour never carries a state alone: every chip also spells its word.
     CSS = """
-    #status { height: auto; padding: 0 1; background: $primary-background; }
-    #actor { height: auto; padding: 0 1; color: $text-muted; }
+    Screen { background: #0d2740; color: #a9c1d4; }
+
+    /* title block: the drawing's header, one line, mono */
+    #status {
+        height: auto; padding: 0 1;
+        background: #08192b; color: #eef4f8;
+        border-bottom: solid #22405c;
+    }
+
+    /* stations */
     TabbedContent { height: 1fr; }
-    #log { height: 7; border-top: solid $accent; }
-    #metrics { padding: 1 2; }
+    Tabs { background: #0d2740; }
+    Tab { color: #8aa5bb; }
+    Tab.-active { color: #eef4f8; text-style: bold; }
+    TabPane { padding: 0; }
+
+    /* hairline tables: the rules carry the rhythm, so no zebra */
+    DataTable { background: #08192b; color: #a9c1d4; }
+    DataTable > .datatable--header {
+        background: #08192b; color: #8aa5bb; text-style: bold;
+    }
+    DataTable > .datatable--cursor { background: #16344f; }
+    DataTable > .datatable--hover { background: #0f2a45; }
+
+    #metrics { padding: 1 2; color: #a9c1d4; }
+    #log { height: 7; border-top: solid #22405c; background: #08192b; color: #8aa5bb; }
+    #actor { height: auto; padding: 0 1; color: #8aa5bb; }
+    Footer { background: #08192b; color: #8aa5bb; }
+    Footer > .footer--key { color: #eef4f8; text-style: bold; }
     """
     BINDINGS = [
         Binding("r", "refresh", "refresh"),
@@ -438,13 +467,13 @@ class HerdApp(App[None]):
         yield Static(id="status")
         with TabbedContent(initial="gates"):
             with TabPane("Gates", id="gates"):
-                yield GatesTable(id="gates-table", cursor_type="row", zebra_stripes=True)
+                yield GatesTable(id="gates-table", cursor_type="row", zebra_stripes=False)
             with TabPane("Runs", id="runs"):
-                yield RunsTable(id="runs-table", cursor_type="row", zebra_stripes=True)
+                yield RunsTable(id="runs-table", cursor_type="row", zebra_stripes=False)
             with TabPane("PRs", id="prs"):
-                yield PRsTable(id="prs-table", cursor_type="row", zebra_stripes=True)
+                yield PRsTable(id="prs-table", cursor_type="row", zebra_stripes=False)
             with TabPane("Sandboxes", id="sandboxes"):
-                yield SandboxesTable(id="sandboxes-table", cursor_type="row", zebra_stripes=True)
+                yield SandboxesTable(id="sandboxes-table", cursor_type="row", zebra_stripes=False)
             with TabPane("Metrics", id="metrics-pane"):
                 yield Static("(no metrics yet)", id="metrics")
         yield RichLog(id="log", markup=True, wrap=True)
