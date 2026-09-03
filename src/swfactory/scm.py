@@ -127,8 +127,6 @@ def _apply_and_push(clone: Path, *, branch: str, patch: bytes) -> None:
     (``git am`` restamps committer dates, so even an identical patch yields new shas), so those
     refs are force-pushed. Any other branch keeps plain (fast-forward only) push semantics.
     """
-    if not patch.strip():
-        raise StageError("scm", "empty patch: nothing to publish")
     _run(["git", "checkout", "-b", branch], clone)
     _run(["git", *_GIT_IDENT, "am", "--3way"], clone, input=patch)
     force = ["--force"] if branch.startswith(FACTORY_BRANCH_PREFIX) else []
@@ -248,7 +246,10 @@ def scan_secrets(patch: bytes) -> list[str]:
 
 
 def _check_patch(patch: bytes, allowed_prefixes: Sequence[str] | None) -> None:
-    """The policy gate every ``publish`` runs before touching git or the network."""
+    """The gate every ``publish`` runs before touching git or the network: an empty stream is
+    nothing to publish, and the patch must pass the path policy and the secret scan."""
+    if not patch.strip():
+        raise StageError("scm", "empty patch: nothing to publish")
     validate_patch(patch, allowed_prefixes=allowed_prefixes)
     if hits := scan_secrets(patch):
         raise StageError("policy", f"secret-like token in patch: {', '.join(hits)}")
@@ -307,8 +308,6 @@ class LocalGitScm:
     ) -> str:
         """Policy-check the patch, push ``branch`` into the bare remote, write/print ``pr.md``."""
         _check_patch(patch, allowed_prefixes)
-        if not patch.strip():
-            raise StageError("scm", "empty patch: nothing to publish")
         self._ensure_remote()
         with tempfile.TemporaryDirectory(prefix="swf-clone-") as tmp:
             clone = Path(tmp) / "clone"
@@ -435,8 +434,6 @@ class GitHubScm:
         and its url returned; otherwise ``gh pr create`` opens one.
         """
         _check_patch(patch, allowed_prefixes)
-        if not patch.strip():
-            raise StageError("scm", "empty patch: nothing to publish")
         self._require_token()
         with tempfile.TemporaryDirectory(prefix="swf-clone-") as tmp:
             clone = Path(tmp) / "clone"

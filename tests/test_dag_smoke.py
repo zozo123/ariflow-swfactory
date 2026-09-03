@@ -1,4 +1,4 @@
-"""End-to-end smoke of the ``factory`` DAG through ``dag.test()`` (the README recipe).
+"""End-to-end smoke of the ``factory`` DAG through ``dag.test()`` (docs/design.md, "Airflow").
 
 ``airflow dags test`` never resolves HITL tasks, so the gates are marked success with
 ``mark_success_pattern=r"job\\.approve_.*"``; the ``record_*`` tasks then find no XCom and record

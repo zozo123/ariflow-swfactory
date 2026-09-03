@@ -12,7 +12,6 @@ clone of the target's base branch made for the task (workers do not run from a c
 
 from __future__ import annotations
 
-import hashlib
 import os
 import tempfile
 import tomllib
@@ -29,6 +28,8 @@ NIGHTLY = CronTriggerTimetable("0 3 * * *", timezone="UTC")
 
 
 def _blueprint_names(root: Path = BLUEPRINTS_DIR) -> list[str]:
+    """Blueprint names, shape-read with stdlib tomllib. Not shared with
+    ``dags/blueprints.py``: importing that module here would re-register its DAGs."""
     names = []
     for path in sorted(root.glob("*.toml")):
         data = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -38,8 +39,14 @@ def _blueprint_names(root: Path = BLUEPRINTS_DIR) -> list[str]:
 
 def run_id_for(dag_run_id: str) -> str:
     """Stable 8-hex run id per DAG run. Airflow run ids end in an ISO offset (``+00:00``), which
-    ``Config.sandbox_name`` rejects, so the id is hashed rather than sliced."""
-    return hashlib.sha1(dag_run_id.encode()).hexdigest()[:8]
+    ``Config.sandbox_name`` rejects, so the id is hashed rather than sliced.
+
+    ``swfactory.runtime.run_id_for``, imported inside the function so DAG parsing stays
+    swfactory-free; maintain is a single job, hence the default job index.
+    """
+    from swfactory.runtime import run_id_for as _impl
+
+    return _impl(dag_run_id)
 
 
 _assets = [Asset(name=f"swf.metrics.{n}") for n in _blueprint_names()]

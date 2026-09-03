@@ -397,19 +397,30 @@ def test_run_ids_are_hex8_and_stable(blueprints_mod) -> None:
     assert maintain_mod.run_id_for(airflow_run_id) == maintain_mod.run_id_for(airflow_run_id)
 
 
-def test_ctx_passes_host_workdir_contract_as_protected(
+def test_dag_ctx_config_matches_runtime_job_config(
     blueprints_mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from swfactory.config import Config
+    """Every task rebuilds its ``Ctx`` with ``swfactory.runtime.build_ctx``, so a task runs on the
+    config ``swfactory run`` would build for the same (blueprint, job, run id). The CLI half is
+    ``tests/test_runtime.py::test_cli_run_derives_its_config_with_job_config``."""
+    pytest.importorskip("swfactory")
+    from swfactory import runtime
+    from swfactory.blueprint import load
 
-    cfg = Config(issue="demo/issue.md", sandbox="srt", workdir=str(tmp_path / "work"))
-    assert blueprints_mod._protected(cfg) == []  # not seeded yet (before setup)
-    (tmp_path / "work").mkdir()
-    (tmp_path / "work" / "factory.toml").write_text(
-        '[commands]\ntest = "true"\n[paths]\nprotected = ["factory.toml", "tests/", "src/**"]\n'
-    )
-    assert blueprints_mod._protected(cfg) == ["factory.toml", "src/**"]  # tests writable in build
-    assert blueprints_mod._protected(cfg.model_copy(update={"sandbox": "islo"})) == []
+    monkeypatch.chdir(tmp_path)  # a worker's cwd is not the factory checkout
+    seen: list[tuple] = []
+    monkeypatch.setattr(runtime, "ctx_for", lambda cfg, **kw: seen.append((cfg, kw)))
+    dag_run_id = "manual__2026-09-02T03:00:00+00:00"
+    (job,) = load("factory").jobs({"issues": ["demo/issue.md"]})
+
+    blueprints_mod._ctx("factory", job, dag_run_id)
+
+    run_id = blueprints_mod.run_id_for(dag_run_id, 0)
+    assert run_id == runtime.run_id_for(dag_run_id, 0)
+    ((cfg, kw),) = seen
+    assert cfg == runtime.job_config(load("factory"), job, run_id=run_id)
+    assert kw["run_dir"] == runtime.job_run_dir(cfg) and kw["agent"] is None
+    assert kw["blueprint"].name == "factory"
 
 
 # ---------------------------------------------------------------- maintain + hygiene

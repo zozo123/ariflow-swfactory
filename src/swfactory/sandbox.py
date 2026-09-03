@@ -184,6 +184,14 @@ def _as_text(data: str | bytes | None) -> str:
     return data
 
 
+def _credential_env(pass_env: Sequence[str]) -> dict[str, str]:
+    """Scrubbed host env plus the explicit ``pass_env`` allowlist (only keys the host actually
+    has: an absent credential is never invented). One copy so srt and docker cannot drift."""
+    env = scrub_env(os.environ)
+    env.update({k: os.environ[k] for k in pass_env if k in os.environ})
+    return env
+
+
 class LocalSandbox:
     """A directory on the host. Commands run through ``bash -lc`` with a scrubbed environment."""
 
@@ -195,10 +203,18 @@ class LocalSandbox:
     def ensure(self) -> None:
         """Create the directory and initialise a git repo on ``main`` if none exists."""
         self.root.mkdir(parents=True, exist_ok=True)
-        if not (self.root / ".git").exists():
-            res = self.run("git init -q -b main")
-            if not res.ok:
-                raise StageError("sandbox", f"git init failed in {self.root}: {res.stderr.strip()}")
+        self._host_git_init()
+
+    def _host_git_init(self) -> None:
+        """``git init`` on the host, never through a confined shell (idempotent). Shared by all
+        three host sandboxes: srt refuses to let a sandboxed process create ``.git`` or write
+        ``.git/config`` (hook-injection protection) and a container would own it as another uid,
+        so initialising an empty directory stays the orchestrator's own action."""
+        if (self.root / ".git").exists():
+            return
+        res = LocalSandbox.run(self, "git init -q -b main")
+        if not res.ok:
+            raise StageError("sandbox", f"git init failed in {self.root}: {res.stderr.strip()}")
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
         """Run ``cmd`` via ``bash -lc`` inside ``cwd`` (default ``workdir``)."""
@@ -324,20 +340,13 @@ class SrtSandbox(LocalSandbox):
         to the sandbox-owned cache under ``.factory/uv-cache`` while preserving the exact credential
         allowlist.
         """
-        env = scrub_env(os.environ)
-        env.update({k: os.environ[k] for k in self.pass_env if k in os.environ})
+        env = _credential_env(self.pass_env)
         env["UV_CACHE_DIR"] = str(self.root / ".factory" / "uv-cache")
         return env
 
     def ensure(self) -> None:
-        """Create the directory, write the srt settings and ``git init`` (host-side).
-
-        srt never lets a sandboxed process create ``.git`` or write ``.git/config`` /
-        ``.git/hooks`` (hook-injection protection, verified with 0.0.75), so the empty-repo
-        initialisation — the orchestrator's own action on an empty directory, before any
-        model-written code exists — runs unconfined like ``LocalSandbox``. Everything after
-        this point goes through srt.
-        """
+        """Create the directory, write the srt settings and ``git init`` (host-side, see
+        ``_host_git_init``). Everything after this point goes through srt."""
         self.root.mkdir(parents=True, exist_ok=True)
         # bubblewrap cannot install a denyWrite mount on a missing path. Pre-create the
         # fixed protected directories on the trusted orchestrator side before the first
@@ -345,16 +354,11 @@ class SrtSandbox(LocalSandbox):
         for rel in SRT_FIXED_DENY_WRITE:
             (self.root / rel).mkdir(parents=True, exist_ok=True)
         self.write_settings()
-        if not (self.root / ".git").exists():
-            res = LocalSandbox.run(self, "git init -q -b main")
-            if not res.ok:
-                raise StageError("sandbox", f"git init failed in {self.root}: {res.stderr.strip()}")
+        self._host_git_init()
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
-        if not self._settings_current():  # settings() reflects paths that appeared since
-            self.write_settings()
         """Run ``cmd`` under srt; the command's exit code propagates through srt."""
-        if not self._settings_current():
+        if not self._settings_current():  # settings() reflects paths that appeared since
             self.write_settings()
         return _run_subprocess(
             self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s
@@ -461,18 +465,13 @@ class DockerSandbox(LocalSandbox):
     def env(self) -> dict[str, str]:
         """Scrubbed host env plus the ``pass_env`` allowlist (only keys present on the host); this
         is the docker CLI's environment, from which ``-e NAME`` is resolved."""
-        env = scrub_env(os.environ)
-        env.update({k: os.environ[k] for k in self.pass_env if k in os.environ})
-        return env
+        return _credential_env(self.pass_env)
 
     def ensure(self) -> None:
-        """Create the directory and ``git init`` host-side (the orchestrator's own action on an
-        empty directory, like ``SrtSandbox``); everything after this point runs in a container."""
+        """Create the directory and ``git init`` host-side (see ``_host_git_init``); everything
+        after this point runs in a container."""
         self.root.mkdir(parents=True, exist_ok=True)
-        if not (self.root / ".git").exists():
-            res = LocalSandbox.run(self, "git init -q -b main")
-            if not res.ok:
-                raise StageError("sandbox", f"git init failed in {self.root}: {res.stderr.strip()}")
+        self._host_git_init()
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
         """Run ``cmd`` in a fresh container; the command's exit code propagates through docker."""
@@ -633,18 +632,11 @@ class IsloSandbox:
         """Remove the sandbox — only if it is in the caller's OWN ``islo ls`` (and, when an owner
         is configured, was created by that owner). Never removes a teammate's sandbox; the TTL
         (``--delete-after``) is the backstop for anything we refuse to touch."""
-        listing = _run_subprocess(
-            ["islo", "ls", "--output", "json"], cwd=None, env=None, timeout_s=_CONTROL_TIMEOUT_S
-        )
+        listing = self._control(["islo", "ls", "--output", "json"])
         if not owns_sandbox(listing.stdout, self.name, owner=self.owner):
             print(f"sandbox: refusing to remove {self.name!r}: not in own listing/owner mismatch")
             return
-        _run_subprocess(
-            ["islo", "rm", self.name, "--output", "plain"],
-            cwd=None,
-            env=None,
-            timeout_s=_CONTROL_TIMEOUT_S,
-        )
+        self._control(["islo", "rm", self.name, "--output", "plain"])
 
     def _cp(self, src: str, dst: str) -> RunResult:
         """``islo cp``; on failure resume the (possibly paused) sandbox and retry exactly once."""

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time (idempotent) bootstrap of the islo side of the factory, as in README "Real run (islo)".
+# One-time (idempotent) bootstrap of the islo side of the factory; see docs/islo.md.
 #
 #   islo login (+ github, claude integrations) -> gateway profile (deny-by-default + allow rules)
 #   -> environment carrying the Anthropic key as a gateway secret -> optional golden snapshot
@@ -18,7 +18,7 @@ REPO="${REPO:-zozo123/ariflow-swfactory}"        # target repo (owner/name); clo
 TARGET_DIR="${TARGET_DIR:-demo/target}"          # subdir the factory operates on ("" = repo root)
 PROFILE="${PROFILE:-swfactory}"                  # islo gateway profile ([sandbox] gateway_profile)
 ENV="${ENV:-swfactory}"                          # islo environment ([sandbox] environment)
-SNAPSHOT="${SNAPSHOT:-0}"                        # 1 = bake swf-golden-<date> (README "Warm start")
+SNAPSHOT="${SNAPSHOT:-0}"                        # 1 = bake swf-golden-<date> (docs/islo.md)
 BRANCH="${BRANCH:-main}"
 ALLOW_HOSTS=(api.anthropic.com github.com api.github.com pypi.org files.pythonhosted.org astral.sh)
 

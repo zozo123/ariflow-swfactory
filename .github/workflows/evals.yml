@@ -9,7 +9,7 @@ name: evals
 #               `swfactory` gateway, Anthropic key reaches the VM only as a phantom token; the runner
 #               is the orchestrator and holds ISLO_API_KEY only. Needs the ISLO_API_KEY secret.
 # Each job is skipped with a notice when its secret is absent (forks), never failing for lack of
-# a key. Optional repo variable SWF_ISLO_SNAPSHOT warm-starts the MicroVM (README snapshot recipe).
+# a key. Optional repo variable SWF_ISLO_SNAPSHOT warm-starts the MicroVM (docs/islo.md snapshot).
 on:
   schedule:
     - cron: "0 6 * * 1"

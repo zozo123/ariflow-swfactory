@@ -162,6 +162,9 @@ def test_load_runs_newest_first_window_and_scripted_filter(tmp_path: Path) -> No
 
     runs = load_runs(tmp_path, window=20)
     assert [r["run_id"] for r in runs] == ["c", "b", "a"]  # 1.8e9 s = 2027-01-15 > B > A
+    # One reader (metrics.load_all): its glob is recursive, so a nested checkout counts too.
+    _write_metrics(tmp_path / "vendored", "F", {"run_id": "f", "finished": "2025-01-01T00:00:00Z"})
+    assert [r["run_id"] for r in load_runs(tmp_path, window=20)] == ["c", "b", "a", "f"]
     assert [r["run_id"] for r in load_runs(tmp_path, window=2)] == ["c", "b"]
     assert "d" in [r["run_id"] for r in load_runs(tmp_path, window=20, include_scripted=True)]
     assert load_runs(tmp_path / "nowhere", window=5) == []

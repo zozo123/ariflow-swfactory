@@ -1,9 +1,9 @@
 """Maintain: detect metric band breaches over committed run metrics and respond by tier.
 
-Detection is deterministic (``statistics.mean``/``statistics.stdev`` over a window of
-``docs/factory/*/metrics.json``); the model is involved only at the ``diagnose``/``propose``
-tiers, read-only, through the normal ``Agent`` seam. Also owns the nightly sweep of orphaned
-``swf-*`` sandboxes.
+Detection is deterministic (``statistics.mean``/``statistics.stdev`` over a window of the committed
+run metrics, read through the single reader ``metrics.load_all``); the model is involved only at
+the ``diagnose``/``propose`` tiers, read-only, through the normal ``Agent`` seam. Also owns the
+nightly sweep of orphaned ``swf-*`` sandboxes.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from swfactory.agent import POLICIES, Agent, render_prompt
 from swfactory.config import Config
+from swfactory.metrics import CREATED_KEYS, first_timestamp, load_all
 from swfactory.models import Diagnosis
 from swfactory.sandbox import Sandbox
 from swfactory.scm import Scm
@@ -43,8 +44,6 @@ METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "build_iterations": ("iterations",),
     "review_blockers": ("blockers",),
 }
-_FINISHED_KEYS = ("finished", "finished_at", "end", "ended_at")
-_CREATED_KEYS = ("created_at", "createdAt", "created-at", "created")
 
 
 class Breach(BaseModel):
@@ -69,25 +68,12 @@ def load_bands(path: Path) -> dict:
 
 
 def load_runs(root: Path, window: int, *, include_scripted: bool = False) -> list[dict]:
-    """Newest ``window`` runs from ``<root>/docs/factory/*/metrics.json``, newest first.
+    """The newest ``window`` runs under ``root``, newest first — the band check's history.
 
-    Order is by the run's finished timestamp (``finished`` / ``timestamps.finished`` / ...),
-    falling back to the file mtime. Scripted (replay) runs are excluded unless asked for, so
-    demo runs never pollute real bands. Unreadable files are skipped.
+    ``metrics.load_all`` is the only glob over committed metrics; scripted (replay) runs are
+    excluded unless asked for, so demo runs never pollute real bands.
     """
-    runs: list[tuple[float, str, dict]] = []
-    for path in sorted(Path(root).glob("docs/factory/*/metrics.json")):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        if not include_scripted and data.get("agent") == "scripted":
-            continue
-        runs.append((_finished_epoch(data, path), path.parent.name, data))
-    runs.sort(key=lambda t: (t[0], t[1]), reverse=True)
-    return [r for _, _, r in runs[: max(window, 0)]]
+    return load_all(root, include_scripted=include_scripted, newest_first=True)[: max(window, 0)]
 
 
 def metric_value(run: dict, metric: str, *, key: str | None = None) -> float | None:
@@ -370,7 +356,7 @@ def sweep_orphans(list_json: str, ttl_s: int, now: datetime, *, owner: str) -> l
         name = str(item.get("name") or "")
         if not SANDBOX_NAME_RE.match(name):
             continue
-        created = _first_timestamp(item, _CREATED_KEYS)
+        created = first_timestamp(item, CREATED_KEYS)
         if created is not None and (now - created).total_seconds() > ttl_s:
             names.append(name)
     return names
@@ -417,38 +403,3 @@ def _islo(argv: Sequence[str]) -> str:
     if proc.returncode != 0:
         raise RuntimeError(f"{' '.join(argv)} failed rc={proc.returncode}: {proc.stderr.strip()}")
     return proc.stdout
-
-
-# ---------------------------------------------------------------- timestamps
-
-
-def _parse_ts(value: Any) -> datetime | None:
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return datetime.fromtimestamp(float(value), tz=UTC)
-    if isinstance(value, str) and value:
-        try:
-            ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
-    return None
-
-
-def _first_timestamp(scope: dict, keys: Sequence[str]) -> datetime | None:
-    for key in keys:
-        ts = _parse_ts(scope.get(key))
-        if ts is not None:
-            return ts
-    return None
-
-
-def _finished_epoch(run: dict, path: Path) -> float:
-    for scope in (run, run.get("timestamps")):
-        if isinstance(scope, dict):
-            ts = _first_timestamp(scope, _FINISHED_KEYS)
-            if ts is not None:
-                return ts.timestamp()
-    try:
-        return path.stat().st_mtime
-    except OSError:
-        return 0.0

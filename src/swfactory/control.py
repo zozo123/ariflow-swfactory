@@ -43,7 +43,6 @@ ACTIVE_RUN_STATES = frozenset({"queued", "running"})
 DEFAULT_TIMEOUT_S = 15.0
 _SUBPROCESS_TIMEOUT_S = 120
 
-_CREATED_KEYS = ("created_at", "createdAt", "created-at", "created")
 _CHECK_PASS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 _CHECK_FAIL = frozenset(
     {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"}
@@ -178,26 +177,6 @@ def _json(text: str, what: str) -> Any:
         return json.loads(text or "null")
     except ValueError as e:
         raise ControlError(f"{what} returned non-JSON: {text[:200]!r}") from e
-
-
-def _parse_ts(value: Any) -> datetime | None:
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return datetime.fromtimestamp(float(value), tz=UTC)
-    if isinstance(value, str) and value:
-        try:
-            ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
-    return None
-
-
-def _first_ts(scope: dict, keys: Sequence[str]) -> datetime | None:
-    for key in keys:
-        ts = _parse_ts(scope.get(key))
-        if ts is not None:
-            return ts
-    return None
 
 
 def _seg(value: str | int) -> str:
@@ -378,8 +357,8 @@ def _run_from(d: dict) -> Run:
         dag_id=str(d.get("dag_id", "")),
         run_id=str(d.get("dag_run_id") or d.get("run_id") or ""),
         state=str(d.get("state") or "unknown"),
-        start=_parse_ts(d.get("start_date")),
-        end=_parse_ts(d.get("end_date")),
+        start=_metrics.parse_ts(d.get("start_date")),
+        end=_metrics.parse_ts(d.get("end_date")),
         conf=conf if isinstance(conf, dict) else {},
     )
 
@@ -393,7 +372,7 @@ def _gate_from(h: dict) -> Gate:
         map_index=int(ti.get("map_index", h.get("map_index", -1))),
         subject=str(h.get("subject") or ""),
         body=str(h.get("body") or ""),
-        created_at=_parse_ts(h.get("created_at")),
+        created_at=_metrics.parse_ts(h.get("created_at")),
         options=[str(o) for o in h.get("options") or []],
     )
 
@@ -508,7 +487,7 @@ class IsloClient:
                 name=str(item.get("name") or ""),
                 status=str(item.get("status") or ""),
                 created_by=str(item.get("created_by") or ""),
-                created_at=_first_ts(item, _CREATED_KEYS),
+                created_at=_metrics.first_timestamp(item, _metrics.CREATED_KEYS),
             )
             for item in owned_sandboxes(self.listing(), self.owner)
         ]
