@@ -1,0 +1,142 @@
+name: finish-line
+
+on:
+  push:
+    branches: [feat/islo-first-class]
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/islo-first-class
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - name: Apply release hardening
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              if new in text:
+                  return
+              if old not in text:
+                  raise SystemExit(f"expected patch context missing: {path}: {old[:80]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "deploy/islo/bootstrap.sh",
+              "#   -> environment carrying the Anthropic key as a gateway secret -> optional golden snapshot\n#   -> `swfactory doctor`.\n",
+              "#   -> environment carrying the Anthropic key as a gateway secret -> optional golden snapshot\n#   -> `swfactory doctor` -> publish the factory knowledge bundle.\n",
+          )
+          replace_once(
+              "deploy/islo/bootstrap.sh",
+              'log "uv run swfactory doctor"\nuv run swfactory doctor\n',
+              'log "uv run swfactory doctor"\nuv run swfactory doctor\nlog "deploy/islo/knowledge.sh $REPO"\n"$FACTORY_ROOT/deploy/islo/knowledge.sh" "$REPO"\n',
+          )
+
+          replace_once(
+              "deploy/islo/deploy.sh",
+              '#      GITHUB_WEBHOOK_SECRET (generated when unset; never printed), SWF_SANDBOX_OWNER (defaults\n',
+              '#      GITHUB_WEBHOOK_SECRET (required; reuse the same secret on redeploy), SWF_SANDBOX_OWNER (defaults\n',
+          )
+          replace_once(
+              "deploy/islo/deploy.sh",
+              'if [ -z "${GITHUB_WEBHOOK_SECRET:-}" ]; then\n  GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"\n  echo "deploy: generated a GitHub webhook secret (kept in memory only; both ends get it now)"\nfi\nexport GITHUB_WEBHOOK_SECRET\n',
+              'if [ -z "${GITHUB_WEBHOOK_SECRET:-}" ]; then\n  echo "deploy: GITHUB_WEBHOOK_SECRET is required; generate it once (for example: openssl rand -hex 32) and reuse it on every redeploy" >&2\n  exit 1\nfi\nexport GITHUB_WEBHOOK_SECRET\n',
+          )
+
+          replace_once(
+              "src/swfactory/doctor.py",
+              '''    action = match.get("default_action")\n    detail = f"{profile!r} default_action={action} rules={match.get('rule_count', '?')}"\n    if action and action != "deny":\n        detail += " (expected deny: the sandbox must be deny-by-default)"\n    return Check("gateway profile", True, detail)\n''',
+              '''    action = str(match.get("default_action") or "").lower()\n    internet = match.get("internet_enabled")\n    detail = (\n        f"{profile!r} default_action={action or '?'} internet_enabled={internet} "\n        f"rules={match.get('rule_count', '?')}"\n    )\n    problems = []\n    if action != "deny":\n        problems.append("default_action must be deny")\n    if internet is not True:\n        problems.append("internet access must be enabled for the explicit allow rules")\n    if problems:\n        return Check(\n            "gateway profile",\n            False,\n            f"{detail} ({'; '.join(problems)})",\n            gateway_fix(profile),\n        )\n    return Check("gateway profile", True, detail)\n''',
+          )
+
+          replace_once(
+              "src/swfactory/webhook.py",
+              "import urllib.error\nimport urllib.request\n",
+              "import urllib.error\nimport urllib.parse\nimport urllib.request\n",
+          )
+          replace_once(
+              "src/swfactory/webhook.py",
+              '''# ---------------------------------------------------------------- Airflow REST calls\n\n\ndef _post_json(\n''',
+              '''# ---------------------------------------------------------------- Airflow REST calls\n\n\nclass _NoRedirect(urllib.request.HTTPRedirectHandler):\n    \"\"\"Reject redirects so credentials cannot cross origins through urllib.\"\"\"\n\n    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001\n        return None\n\n\n_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect()).open\n\n\ndef _safe_airflow_base(url: str) -> str:\n    \"\"\"Require HTTPS, except for an explicitly loopback HTTP Airflow endpoint.\"\"\"\n    parsed = urllib.parse.urlsplit(url)\n    host = (parsed.hostname or \"\").lower()\n    loopback = host == \"localhost\" or host == \"::1\" or host.startswith(\"127.\")\n    if parsed.username or parsed.password:\n        raise ValueError(\"Airflow URL must not contain credentials\")\n    if parsed.scheme == \"https\" and host:\n        return url.rstrip(\"/\")\n    if parsed.scheme == \"http\" and loopback:\n        return url.rstrip(\"/\")\n    raise ValueError(\"Airflow URL must use HTTPS; HTTP is allowed only for loopback\")\n\n\ndef _post_json(\n''',
+          )
+          replace_once(
+              "src/swfactory/webhook.py",
+              '    url: str, username: str, password: str, opener: Opener = urllib.request.urlopen\n',
+              '    url: str, username: str, password: str, opener: Opener = _NO_REDIRECT_OPENER\n',
+          )
+          replace_once(
+              "src/swfactory/webhook.py",
+              '''    _, text = _post_json(\n        f"{url.rstrip('/')}/auth/token",\n''',
+              '''    base = _safe_airflow_base(url)\n    _, text = _post_json(\n        f"{base}/auth/token",\n''',
+          )
+          replace_once(
+              "src/swfactory/webhook.py",
+              '    trigger: Trigger, *, airflow_url: str, token: str, opener: Opener = urllib.request.urlopen\n',
+              '    trigger: Trigger, *, airflow_url: str, token: str, opener: Opener = _NO_REDIRECT_OPENER\n',
+          )
+          replace_once(
+              "src/swfactory/webhook.py",
+              '    url = f"{airflow_url.rstrip(\'/\')}/api/v2/dags/{trigger.dag_id}/dagRuns"\n',
+              '    base = _safe_airflow_base(airflow_url)\n    url = f"{base}/api/v2/dags/{trigger.dag_id}/dagRuns"\n',
+          )
+          for old in [
+              "    opener: Opener = urllib.request.urlopen,\n",
+          ]:
+              p = Path("src/swfactory/webhook.py")
+              text = p.read_text()
+              p.write_text(text.replace(old, "    opener: Opener = _NO_REDIRECT_OPENER,\n"))
+
+          replace_once(
+              "tests/test_doctor.py",
+              '''def test_gateway_present_but_allow_by_default_is_flagged_in_detail() -> None:\n    gws = [{"name": "swfactory", "default_action": "allow", "rule_count": 0}]\n    checks = run_doctor(\n        cfg(), green(**{"islo gateway ls --output json": json.dumps(gws)}), root=ROOT\n    )\n    gw = by_name(checks)["gateway profile"]\n    assert gw.ok and "expected deny" in gw.detail\n''',
+              '''def test_gateway_present_but_allow_by_default_fails() -> None:\n    gws = [\n        {"name": "swfactory", "default_action": "allow", "internet_enabled": True, "rule_count": 0}\n    ]\n    checks = run_doctor(\n        cfg(), green(**{"islo gateway ls --output json": json.dumps(gws)}), root=ROOT\n    )\n    gw = by_name(checks)["gateway profile"]\n    assert not gw.ok and "default_action must be deny" in gw.detail\n    assert exit_code(checks) == 1\n\n\ndef test_gateway_with_internet_disabled_fails() -> None:\n    gws = [\n        {"name": "swfactory", "default_action": "deny", "internet_enabled": False, "rule_count": 6}\n    ]\n    checks = run_doctor(\n        cfg(), green(**{"islo gateway ls --output json": json.dumps(gws)}), root=ROOT\n    )\n    gw = by_name(checks)["gateway profile"]\n    assert not gw.ok and "internet access must be enabled" in gw.detail\n    assert exit_code(checks) == 1\n''',
+          )
+
+          replace_once(
+              "tests/test_webhook.py",
+              'AIRFLOW = "http://airflow.local:8080"\n',
+              'AIRFLOW = "http://127.0.0.1:8080"\n',
+          )
+          replace_once(
+              "tests/test_webhook.py",
+              '''def test_airflow_token_posts_credentials() -> None:\n''',
+              '''@pytest.mark.parametrize(\n    "url", ["http://airflow.example:8080", "ftp://airflow.example", "http://user:pw@127.0.0.1:8080"]\n)\ndef test_airflow_rejects_unsafe_credential_transport(url: str) -> None:\n    with pytest.raises(ValueError):\n        webhook.airflow_token(url, "admin", "pw", FakeOpener())\n    with pytest.raises(ValueError):\n        trigger_airflow(Trigger("factory"), airflow_url=url, token="T", opener=FakeOpener())\n\n\ndef test_authenticated_default_opener_refuses_redirects() -> None:\n    assert webhook._NoRedirect().redirect_request(None, None, 302, "Found", {}, "https://evil.example") is None\n\n\ndef test_airflow_token_posts_credentials() -> None:\n''',
+          )
+
+          replace_once(
+              ".github/workflows/dispatch.yml",
+              '''          payload=$(printf '{"logical_date": null, "conf": {"issues": ["%s"]}}' "$ISSUE_NUMBER")\n          curl --fail-with-body --silent --show-error -X POST \\\n''',
+              '''          case "$AIRFLOW_URL" in\n            https://*) ;;\n            *) echo "::error::AIRFLOW_URL must use https:// for GitHub-hosted dispatch"; exit 1 ;;\n          esac\n          payload=$(printf '{"logical_date": null, "conf": {"issues": ["%s"]}}' "$ISSUE_NUMBER")\n          curl --fail-with-body --silent --show-error --proto '=https' --proto-redir '=https' --max-redirs 0 -X POST \\\n''',
+          )
+
+          replace_once(
+              "README.md",
+              '''deploy/islo/bootstrap.sh    # one-time: gateway profiles + environments, incoming webhook, knowledge items\ndeploy/islo/deploy.sh       # orchestrator sandbox from deploy/islo/orchestrator/{islo.yaml,start.sh}:\n''',
+              '''deploy/islo/bootstrap.sh    # one-time: agent gateway/environment, optional snapshot, knowledge items\nexport GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)  # generate once; store/reuse on every redeploy\ndeploy/islo/deploy.sh       # orchestrator sandbox from deploy/islo/orchestrator/{islo.yaml,start.sh}:\n''',
+          )
+
+          Path(".github/workflows/finish-line.yml").unlink()
+          PY
+      - run: uv sync --group airflow
+      - run: uv run ruff check . && uv run ruff format --check .
+      - run: uv run pytest
+      - run: bash -n deploy/islo/bootstrap.sh deploy/islo/deploy.sh deploy/islo/knowledge.sh deploy/islo/orchestrator/start.sh
+      - name: Commit hardened release candidate
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: harden islo production path for release"
+          git push origin HEAD:feat/islo-first-class
