@@ -161,6 +161,23 @@ branch, and the `airflow-main` canary already tells us when main drifts. The tru
 unchanged either way — the orchestrator still holds the credentials and still applies the patch.
 
 
+### Proven on Airflow built from source
+
+The factory has been run against `apache/airflow` HEAD built from source (the islo backend PR
+branch, which is `main` plus that backend), not only against the release:
+
+| what | result |
+|---|---|
+| versions | airflow **3.4.0**, task-sdk 1.4.0, providers-standard 1.17.0, common-ai 0.7.0 — all from source |
+| sandbox backends resolved | `islo` → `IsloSandboxBackend`, `sbx` → `SbxSandboxBackend` (opensandbox and asciibox are separate PRs, and report themselves unavailable by name) |
+| Airflow test suite | 26 passed (`tests/test_dag_parity.py`, `tests/test_dag_smoke.py`) |
+| a real DAG run | `airflow dags test factory --mark-success-pattern 'job\.approve_.*'` → all 14 tasks, `state=success` |
+
+Reproduce it with `./scripts/airflow_main.sh`, then point `AIRFLOW_HOME` at a scratch directory and
+run the same two commands. The default pin stays the latest release; this is the forward path, and
+it needs no change to swfactory itself.
+
+
 ## Versioning and release
 
 The distribution (`pyproject.toml` `version`, the git tag `vX.Y.Z`, the CHANGELOG heading) follows

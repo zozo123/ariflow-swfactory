@@ -14,19 +14,23 @@ set -euo pipefail
 AIRFLOW_REF="${AIRFLOW_REF:-main}"
 AI_PROVIDER_REPO="${AI_PROVIDER_REPO:-https://github.com/zozo123/airflow.git}"
 AI_PROVIDER_REF="${AI_PROVIDER_REF:-agent/add-islo-sandbox-backend}"  # apache/airflow#71672
-AF="git+https://github.com/apache/airflow.git@${AIRFLOW_REF}"
+# uv rejects two different git URLs for the same package, so every Airflow distribution comes
+# from ONE repo. The PR branch is apache/airflow@main plus the islo backend, so it serves both.
+if [ "${1:-}" = "--pypi" ]; then
+  SRC="git+https://github.com/apache/airflow.git@${AIRFLOW_REF}"
+  EXTRA=("apache-airflow-providers-common-ai")            # released provider: sbx only
+else
+  SRC="git+${AI_PROVIDER_REPO}@${AI_PROVIDER_REF}"
+  EXTRA=("apache-airflow-providers-common-ai @ ${SRC}#subdirectory=providers/common/ai")
+fi
 
 uv sync --group airflow                       # baseline, then overlay the dev head
 pkgs=(
-  "apache-airflow-core @ ${AF}#subdirectory=airflow-core"
-  "apache-airflow-task-sdk @ ${AF}#subdirectory=task-sdk"
-  "apache-airflow-providers-standard @ ${AF}#subdirectory=providers/standard"
+  "apache-airflow-core @ ${SRC}#subdirectory=airflow-core"
+  "apache-airflow-task-sdk @ ${SRC}#subdirectory=task-sdk"
+  "apache-airflow-providers-standard @ ${SRC}#subdirectory=providers/standard"
+  "${EXTRA[@]}"
 )
-if [ "${1:-}" = "--pypi" ]; then
-  pkgs+=("apache-airflow-providers-common-ai")
-else
-  pkgs+=("apache-airflow-providers-common-ai @ git+${AI_PROVIDER_REPO}@${AI_PROVIDER_REF}#subdirectory=providers/common/ai")
-fi
 uv pip install "${pkgs[@]}"
 
 uv run --no-sync python - <<'PY'
