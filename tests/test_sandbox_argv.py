@@ -242,16 +242,50 @@ def test_islo_cp_gives_up_after_one_retry(monkeypatch) -> None:
     assert ei.value.kind == "sandbox" and ei.value.retryable
 
 
-def test_islo_close_runs_rm(monkeypatch) -> None:
-    seen: list[list[str]] = []
-
+def _fake_islo(seen: list[list[str]], listing: str):
     def fake_run(argv, **kwargs):
         seen.append(argv)
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        out = listing if argv[:2] == ["islo", "ls"] else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
-    monkeypatch.setattr(sandbox_mod.subprocess, "run", fake_run)
+    return fake_run
+
+
+def test_islo_close_lists_then_removes_only_own_sandbox(monkeypatch) -> None:
+    seen: list[list[str]] = []
+    mine = '[{"name": "swf-demo-1-abcd1234", "status": "running", "created_by": "me@x.io"}]'
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", _fake_islo(seen, mine))
     _islo().close()
-    assert seen == [["islo", "rm", "swf-demo-1-abcd1234", "--output", "plain"]]
+    assert seen == [
+        ["islo", "ls", "--output", "json"],
+        ["islo", "rm", "swf-demo-1-abcd1234", "--output", "plain"],
+    ]
+    assert all("--all" not in argv for argv in seen)
+
+
+def test_islo_close_refuses_unknown_or_foreign_sandbox(monkeypatch) -> None:
+    seen: list[list[str]] = []
+    # not in own listing at all -> no rm
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", _fake_islo(seen, "[]"))
+    _islo().close()
+    assert [a[1] for a in seen] == ["ls"]
+    # present but created by someone else while an owner is configured -> no rm
+    seen.clear()
+    foreign = '[{"name": "swf-demo-1-abcd1234", "status": "running", "created_by": "them@x.io"}]'
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", _fake_islo(seen, foreign))
+    sb = _islo()
+    sb.owner = "me@x.io"
+    sb.close()
+    assert [a[1] for a in seen] == ["ls"]
+
+
+def test_owns_sandbox_pure() -> None:
+    listing = '[{"name": "swf-a-00000000", "status": "running", "created_by": "Me@X.io"}]'
+    assert sandbox_mod.owns_sandbox(listing, "swf-a-00000000")
+    assert sandbox_mod.owns_sandbox(listing, "swf-a-00000000", owner="me@x.io")
+    assert not sandbox_mod.owns_sandbox(listing, "swf-a-00000000", owner="other@x.io")
+    assert not sandbox_mod.owns_sandbox(listing, "swf-b-00000000")
+    assert not sandbox_mod.owns_sandbox("garbage", "swf-a-00000000")
 
 
 # ---------------------------------------------------------------- LocalSandbox (real bash)

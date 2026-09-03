@@ -56,6 +56,7 @@ class Config(BaseSettings):
     stage_timeout_h: int = 3  # execution_timeout of every stage task
     max_parallel_jobs: int = 4  # concurrent (issue x target) jobs == concurrent sandboxes
     islo_snapshot: str | None = None  # --snapshot warm start (islo only)
+    sandbox_owner: str | None = None  # SWF_SANDBOX_OWNER: only this creator's sandboxes may be rm'd
     srt_allowed_domains: list[str] = Field(default_factory=lambda: list(SRT_DEFAULT_DOMAINS))
     fixtures_dir: str = "demo/scripted"
     workdir: str = ".factory/work"  # LocalSandbox root

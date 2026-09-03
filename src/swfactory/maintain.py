@@ -9,6 +9,8 @@ tiers, read-only, through the normal ``Agent`` seam. Also owns the nightly sweep
 from __future__ import annotations
 
 import json
+import os
+import re
 import statistics
 import subprocess
 from collections.abc import Callable, Sequence
@@ -266,12 +268,19 @@ def _log_line(breach: Breach) -> str:
 Runner = Callable[[Sequence[str]], Any]
 
 
-def sweep_orphans(list_json: str, ttl_s: int, now: datetime) -> list[str]:
-    """Names of ``swf-*`` sandboxes in ``islo ls --output json`` output older than ``ttl_s``.
+SANDBOX_NAME_RE = re.compile(r"^swf-[a-z0-9][a-z0-9_-]*-[0-9a-f]{8}$")  # what THIS factory names
+OWNER_ENV = "SWF_SANDBOX_OWNER"
 
-    Pure: accepts a JSON array (or an object wrapping one), tolerates several timestamp keys,
-    and ignores deleted sandboxes and entries without a parseable creation time.
+
+def owned_sandboxes(list_json: str, owner: str) -> list[dict]:
+    """Entries of an ``islo ls --output json`` listing whose ``created_by`` is ``owner``.
+
+    Pure. Tolerates a JSON array or an object wrapping one; drops deleted entries and anything
+    whose creator is missing or different. Never call ``islo ls --all`` to feed this.
     """
+    owner = (owner or "").strip().lower()
+    if not owner:
+        return []
     try:
         data = json.loads(list_json)
     except ValueError:
@@ -280,14 +289,28 @@ def sweep_orphans(list_json: str, ttl_s: int, now: datetime) -> list[str]:
         data = next((v for v in data.values() if isinstance(v, list)), [])
     if not isinstance(data, list):
         return []
+    mine: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict) or item.get("status") == "deleted":
+            continue
+        if str(item.get("created_by") or "").strip().lower() != owner:
+            continue
+        mine.append(item)
+    return mine
+
+
+def sweep_orphans(list_json: str, ttl_s: int, now: datetime, *, owner: str) -> list[str]:
+    """Names of factory sandboxes (``swf-<slug>-<run8>``) created by ``owner`` older than ``ttl_s``.
+
+    Two independent filters, both required: the entry's ``created_by`` equals ``owner`` and the
+    name matches the factory's own naming pattern. Without an owner nothing is ever returned.
+    """
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
     names: list[str] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
+    for item in owned_sandboxes(list_json, owner):
         name = str(item.get("name") or "")
-        if not name.startswith(SANDBOX_PREFIX) or item.get("status") == "deleted":
+        if not SANDBOX_NAME_RE.match(name):
             continue
         created = _first_timestamp(item, _CREATED_KEYS)
         if created is not None and (now - created).total_seconds() > ttl_s:
@@ -296,9 +319,12 @@ def sweep_orphans(list_json: str, ttl_s: int, now: datetime) -> list[str]:
 
 
 def remove_orphans(names: Sequence[str], runner: Runner) -> list[str]:
-    """Best-effort ``islo rm`` for each name via ``runner``; returns the names removed."""
+    """Best-effort ``islo rm`` for each factory-named sandbox via ``runner``; returns removed."""
     removed: list[str] = []
     for name in names:
+        if not SANDBOX_NAME_RE.match(name):  # defense in depth: never rm a foreign name
+            print(f"maintain: refusing to remove non-factory sandbox {name!r}")
+            continue
         try:
             runner(["islo", "rm", name, "--output", "plain"])
         except Exception as e:  # noqa: BLE001 - one failed rm must not abort the sweep
@@ -309,11 +335,22 @@ def remove_orphans(names: Sequence[str], runner: Runner) -> list[str]:
     return removed
 
 
-def sweep_sandboxes(ttl_s: int, *, runner: Runner | None = None) -> list[str]:
-    """List islo sandboxes and remove orphaned ``swf-*`` ones older than ``ttl_s``."""
+def sweep_sandboxes(
+    ttl_s: int, *, owner: str | None = None, runner: Runner | None = None
+) -> list[str]:
+    """Remove this owner's orphaned factory sandboxes older than ``ttl_s``.
+
+    ``owner`` (or ``$SWF_SANDBOX_OWNER``) is REQUIRED: the sweep refuses to run when it cannot
+    prove whose sandboxes it is looking at. Lists with plain ``islo ls`` (own scope, never
+    ``--all``) and still filters by ``created_by``.
+    """
+    owner = owner or os.environ.get(OWNER_ENV, "")
+    if not owner:
+        print(f"maintain: {OWNER_ENV} not set; refusing to sweep sandboxes")
+        return []
     runner = runner or _islo
     listing = runner(["islo", "ls", "--output", "json"])
-    names = sweep_orphans(str(listing or ""), ttl_s, datetime.now(UTC))
+    names = sweep_orphans(str(listing or ""), ttl_s, datetime.now(UTC), owner=owner)
     return remove_orphans(names, runner)
 
 

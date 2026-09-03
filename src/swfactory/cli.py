@@ -315,6 +315,10 @@ def maintain(
     sweep_ttl_s: Annotated[
         int, typer.Option(help="Also remove orphan swf-* islo sandboxes older than this (0=skip).")
     ] = 0,
+    owner: Annotated[
+        str | None,
+        typer.Option(help="Only sweep sandboxes created_by this email (or $SWF_SANDBOX_OWNER)."),
+    ] = None,
 ) -> None:
     """Maintain stage: detect metric breaches per bands.yaml; act by tier (log/diagnose/propose)."""
     from swfactory import maintain as maintain_mod
@@ -332,5 +336,5 @@ def maintain(
     if not breaches:
         typer.echo("no breaches")
     if sweep_ttl_s:
-        for name in maintain_mod.sweep_sandboxes(sweep_ttl_s):
+        for name in maintain_mod.sweep_sandboxes(sweep_ttl_s, owner=owner):
             typer.echo(f"removed orphan sandbox {name}")

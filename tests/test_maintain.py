@@ -324,61 +324,60 @@ def _ls(items: list[dict]) -> str:
     return json.dumps(items)
 
 
-def test_sweep_orphans_filters_prefix_ttl_and_deleted() -> None:
+ME = "yossi.eliaz@incredibuild.com"
+
+
+def _ls(items: list[dict]) -> str:
+    base = {"status": "running", "created_by": ME, "created_at": "2026-09-01T00:00:00+00:00"}
+    return json.dumps([{**base, **it} for it in items])
+
+
+def test_sweep_orphans_requires_owner_and_factory_name() -> None:
     listing = _ls(
         [
-            {"name": "swf-demo-1-aaaa", "status": "paused", "created_at": "2026-08-30T12:00:00Z"},
-            {"name": "swf-demo-1-bbbb", "status": "running", "created_at": "2026-09-02T11:00:00Z"},
-            {"name": "swf-old-cccc", "status": "deleted", "created_at": "2026-01-01T00:00:00Z"},
-            {"name": "yossi-dev", "status": "running", "created_at": "2026-01-01T00:00:00Z"},
-            {"name": "swf-nots-dddd", "status": "running"},
-            {
-                "name": "swf-camel-eeee",
-                "status": "stopped",
-                "createdAt": "2026-08-01T00:00:00+00:00",
-            },
-            "garbage",
+            {"name": "swf-demo-1-aaaaaaaa"},  # mine, old, factory-named -> swept
+            {"name": "swf-demo-1-bbbbbbbb", "created_by": "teammate@example.com"},  # NOT mine
+            {"name": "swf-teammate-box"},  # mine but not a factory name (no run id) -> kept
+            {"name": "prod-db"},  # not ours at all
+            {"name": "swf-demo-1-cccccccc", "status": "deleted"},
+            {"name": "swf-demo-1-dddddddd", "created_at": NOW.isoformat()},  # too young
         ]
     )
-    assert sweep_orphans(listing, ttl_s=172_800, now=NOW) == ["swf-demo-1-aaaa", "swf-camel-eeee"]
-    # ttl exactly at the boundary is not "older than"
-    exact = _ls([{"name": "swf-x", "created_at": (NOW - timedelta(seconds=100)).isoformat()}])
-    assert sweep_orphans(exact, ttl_s=100, now=NOW) == []
-    assert sweep_orphans(exact, ttl_s=99, now=NOW) == ["swf-x"]
-
-
-def test_sweep_orphans_tolerates_wrapped_and_bad_json() -> None:
-    wrapped = json.dumps({"sandboxes": [{"name": "swf-a", "created_at": "2020-01-01T00:00:00Z"}]})
-    assert sweep_orphans(wrapped, 10, NOW) == ["swf-a"]
-    assert sweep_orphans("not json", 10, NOW) == []
-    assert sweep_orphans("{}", 10, NOW) == []
+    assert sweep_orphans(listing, ttl_s=3600, now=NOW, owner=ME) == ["swf-demo-1-aaaaaaaa"]
+    assert sweep_orphans(listing, ttl_s=3600, now=NOW, owner="") == []
+    assert sweep_orphans(listing, ttl_s=3600, now=NOW, owner="someone@else.com") == []
+    assert sweep_orphans("not json", 10, NOW, owner=ME) == []
     naive_now = NOW.replace(tzinfo=None)
-    assert sweep_orphans(wrapped, 10, naive_now) == ["swf-a"]
+    assert sweep_orphans(listing, 10, naive_now, owner=ME.upper()) == ["swf-demo-1-aaaaaaaa"]
 
 
-def test_remove_orphans_uses_runner_and_survives_failures() -> None:
+def test_remove_orphans_refuses_foreign_names() -> None:
     calls: list[list[str]] = []
 
     def runner(argv):
         calls.append(list(argv))
-        if argv[2] == "swf-bad":
+        if argv[2] == "swf-demo-1-bad00000":
             raise RuntimeError("boom")
         return ""
 
-    removed = remove_orphans(["swf-a", "swf-bad", "swf-c"], runner)
-    assert removed == ["swf-a", "swf-c"]
-    assert calls == [["islo", "rm", n, "--output", "plain"] for n in ("swf-a", "swf-bad", "swf-c")]
+    removed = remove_orphans(["swf-demo-1-aaaaaaaa", "prod-db", "swf-demo-1-bad00000"], runner)
+    assert removed == ["swf-demo-1-aaaaaaaa"]
+    assert [c[2] for c in calls] == ["swf-demo-1-aaaaaaaa", "swf-demo-1-bad00000"]  # prod-db never
 
 
-def test_sweep_sandboxes_lists_then_removes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sweep_sandboxes_refuses_without_owner_and_never_uses_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[list[str]] = []
 
     def runner(argv):
         calls.append(list(argv))
-        if argv[1] == "ls":
-            return _ls([{"name": "swf-old", "created_at": "2020-01-01T00:00:00Z"}])
-        return ""
+        return _ls([{"name": "swf-old-1-aaaaaaaa"}]) if argv[1] == "ls" else ""
 
-    assert maintain.sweep_sandboxes(3600, runner=runner) == ["swf-old"]
-    assert calls[0] == ["islo", "ls", "--output", "json"]
-    assert calls[1] == ["islo", "rm", "swf-old", "--output", "plain"]
+    monkeypatch.delenv(maintain.OWNER_ENV, raising=False)
+    assert maintain.sweep_sandboxes(3600, runner=runner) == []
+    assert calls == []  # refused before listing anything
+    monkeypatch.setenv(maintain.OWNER_ENV, ME)
+    assert maintain.sweep_sandboxes(3600, runner=runner) == ["swf-old-1-aaaaaaaa"]
+    assert all("--all" not in c for c in calls)
+    assert calls[0][:2] == ["islo", "ls"] and calls[1][:2] == ["islo", "rm"]

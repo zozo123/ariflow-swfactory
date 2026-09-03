@@ -268,6 +268,27 @@ tests/                       hermetic; test_dag_*.py need the airflow group
 .github/workflows/           ci (ruff, pytest, demo, airflow parity+smoke, srt smoke), dispatch, evals
 ```
 
+## Proof (real runs on this repo)
+
+Two unattended runs of `swfactory run --issue 1 --agent claude --sandbox srt --scm github` against
+[issue #1](https://github.com/zozo123/ariflow-swfactory/issues/1):
+
+| run | outcome | what it shows |
+|---|---|---|
+| [PR #2](https://github.com/zozo123/ariflow-swfactory/pull/2) `factory:blocked` | build passed, review found **1 blocker** (no tests), 1 fix attempt could not resolve it | the factory ships a labeled, blocked PR instead of merging; the reviewer diagnosed the root cause (tests/ was deny-listed in the build stage — fixed in `e94ed37`) and caught a real spec error (R6 sign) |
+| [PR #3](https://github.com/zozo123/ariflow-swfactory/pull/3) | 14 tests, first-pass CI, **0 findings**, $1.94 | the clean path: intent → spec → plan → build+test → review → PR, every artifact committed under `docs/factory/1/` |
+
+Both PRs carry bot-authored commits with `Factory-Run` / `Factory-Stage` / `Agent` trailers and
+per-stage `agent/*.json` (cost, turns, session id). `main` is branch-protected (1 review, code
+owners); a human merges.
+
+### Sandbox safety
+
+The factory only ever removes sandboxes it can prove are its own: every `islo rm` is preceded by a
+plain `islo ls` (own scope, never `--all`), the name must match the factory pattern
+`swf-<slug>-<run8>`, and `created_by` must equal `SWF_SANDBOX_OWNER` when set. The nightly sweep
+refuses to run without an owner. Teammates' sandboxes are never touched.
+
 ## Design decisions
 
 - Blueprints are data in the **factory** repo, never in the target: gates, budgets and tool policy

@@ -98,6 +98,27 @@ class Sandbox(Protocol):
 SCRUB_PREFIXES = ("ANTHROPIC_", "GH_TOKEN", "GITHUB_TOKEN", "AWS_", "ISLO_API")
 
 
+def owns_sandbox(list_json: str, name: str, *, owner: str | None = None) -> bool:
+    """True iff ``name`` appears in this ``islo ls --output json`` listing (own scope) and, when
+    ``owner`` is given, its ``created_by`` equals ``owner``. Pure; used before every ``islo rm``."""
+    try:
+        data = json.loads(list_json or "")
+    except ValueError:
+        return False
+    if isinstance(data, dict):
+        data = next((v for v in data.values() if isinstance(v, list)), [])
+    if not isinstance(data, list):
+        return False
+    for item in data:
+        if not isinstance(item, dict) or item.get("name") != name:
+            continue
+        if item.get("status") == "deleted":
+            return False
+        creator = str(item.get("created_by") or "").strip().lower()
+        return not owner or creator == owner.strip().lower()
+    return False
+
+
 def scrub_env(env: Mapping[str, str]) -> dict[str, str]:
     """Return a copy of ``env`` without any variable starting with a ``SCRUB_PREFIXES`` entry."""
     return {k: v for k, v in env.items() if not k.startswith(SCRUB_PREFIXES)}
@@ -332,7 +353,9 @@ class IsloSandbox:
         target_dir: str,
         factory_root: Path,
         snapshot: str | None = None,
+        owner: str | None = None,
     ) -> None:
+        self.owner = owner
         self.name = name
         self.source = source
         self.gateway_profile = gateway_profile
@@ -428,7 +451,15 @@ class IsloSandbox:
         return res.exit_code == 0
 
     def close(self) -> None:
-        """Remove the sandbox (best effort; the TTL is the backstop)."""
+        """Remove the sandbox — only if it is in the caller's OWN ``islo ls`` (and, when an owner
+        is configured, was created by that owner). Never removes a teammate's sandbox; the TTL
+        (``--delete-after``) is the backstop for anything we refuse to touch."""
+        listing = _run_subprocess(
+            ["islo", "ls", "--output", "json"], cwd=None, env=None, timeout_s=_CONTROL_TIMEOUT_S
+        )
+        if not owns_sandbox(listing.stdout, self.name, owner=self.owner):
+            print(f"sandbox: refusing to remove {self.name!r}: not in own listing/owner mismatch")
+            return
         _run_subprocess(
             ["islo", "rm", self.name, "--output", "plain"],
             cwd=None,
@@ -499,4 +530,5 @@ def make_sandbox(
         target_dir=cfg.target_dir,
         factory_root=_factory_root(),
         snapshot=cfg.islo_snapshot,
+        owner=cfg.sandbox_owner,
     )
