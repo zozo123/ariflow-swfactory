@@ -29,6 +29,8 @@ create`); a human merges. Stage semantics live in `stages.py`; a blueprint only 
 - `deploy/islo/deploy.sh` — orchestrator sandbox from `deploy/islo/orchestrator/{islo.yaml,start.sh}` (Airflow + receiver), prints the shared UI URL.
 - `deploy/islo/knowledge.sh [owner/repo]` — publish CLAUDE.md, REVIEW.md, SKILL.md as islo knowledge items (rule/rule/skill, tag `swfactory`; get -> update|create, idempotent).
 
+- `uv run swfactory herd` — TUI control room (gates/runs/PRs/own sandboxes/metrics); see docs/herd.md.
+
 ## Conventions
 - Python 3.12, `from __future__ import annotations`, type hints, docstrings on public functions.
   Stdlib first (`subprocess`, `tomllib`, `statistics`, `xml.etree`). No Airflow import under `src/`;

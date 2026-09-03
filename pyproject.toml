@@ -11,6 +11,7 @@ dependencies = [
   "pydantic-settings>=2.10",
   "typer>=0.16",
   "pyyaml>=6",
+  "textual>=0.86",
 ]
 
 [project.scripts]

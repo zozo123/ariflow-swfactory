@@ -1,0 +1,767 @@
+"""herd: the factory's management surface — a Textual TUI over ``swfactory.control``.
+
+One screen, five tabs (Gates, Runs, PRs, Sandboxes, Metrics), one log pane. The app never talks
+to Airflow, GitHub or islo itself: it reads a :class:`Snapshot` from a :class:`Collector` and
+mutates through an :class:`Actions` object, both injected, so tests drive it with fakes and the
+CLI wires the real clients through :func:`make_app`. Collection runs in a worker thread so the
+UI never blocks; every mutation asks for a one-line confirmation and lands in the log pane.
+
+Key map (also ``?`` inside the app):
+
+* global: ``r`` refresh (``f5`` everywhere, including the Gates tab), ``q`` quit, ``?`` help
+* Gates: ``a`` approve, ``r`` reject — the actor is the user the Airflow token belongs to
+* Runs: ``t`` trigger (issue ids, comma separated), ``s`` stop, ``o`` open in browser
+* PRs: ``o`` open in browser
+* Sandboxes: ``x`` remove (own sandboxes only; a foreign one is refused, never crashes)
+"""
+
+from __future__ import annotations
+
+import webbrowser
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, Protocol
+
+from rich.markup import escape
+from textual import work
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.notifications import SeverityLevel
+from textual.screen import ModalScreen
+from textual.widgets import DataTable, Footer, Input, Label, RichLog, Static, TabbedContent, TabPane
+
+if TYPE_CHECKING:
+    from swfactory.control import Gate, PullRequest, Run, Sandbox, Snapshot
+
+# Canonical walk of a job's tasks inside the mapped ``job`` task group (``dags/blueprints.py``).
+TASK_ORDER: tuple[str, ...] = (
+    "setup",
+    "intent",
+    "approve_intent",
+    "record_intent",
+    "spec",
+    "plan",
+    "approve_plan",
+    "record_plan",
+    "build_and_test",
+    "review",
+    "deliver",
+    "metrics",
+    "teardown",
+)
+_ACTIVE = frozenset({"running", "queued", "scheduled", "deferred", "up_for_retry", "restarting"})
+_DONE = frozenset({"success", "failed", "upstream_failed", "skipped", "removed"})
+DEFAULT_DAG_ID = "factory"
+HELP = """\
+[b]herd[/b] — global: [b]r[/b]/[b]f5[/b] refresh · [b]q[/b] quit · [b]?[/b] this help
+[b]Gates[/b]  a approve · r reject (f5 refreshes here)
+[b]Runs[/b]   t trigger (issue ids, comma separated) · s stop run · o open in browser
+[b]PRs[/b]    o open in browser
+[b]Sandboxes[/b]  x remove (own only)
+Every mutation asks for confirmation and is recorded in the log pane."""
+
+
+# ---------------------------------------------------------------- seams
+
+
+class Collector(Protocol):
+    """Anything that produces a :class:`swfactory.control.Snapshot` (blocking, thread-safe)."""
+
+    def collect(self) -> Snapshot: ...
+
+
+class Actions(Protocol):
+    """Every mutation the TUI can perform. Implementations may raise; the app reports and
+    carries on. ``remove_sandbox`` raises ``PermissionError`` for a sandbox the user does not own.
+    """
+
+    def approve(self, gate: Gate) -> None: ...
+
+    def reject(self, gate: Gate) -> None: ...
+
+    def trigger(self, dag_id: str, issues: Sequence[str]) -> None: ...
+
+    def stop_run(self, run: Run) -> None: ...
+
+    def open_run(self, run: Run) -> None: ...
+
+    def open_pr(self, pr: PullRequest) -> None: ...
+
+    def remove_sandbox(self, sandbox: Sandbox) -> None: ...
+
+
+@dataclass(frozen=True)
+class HerdInfo:
+    """What the header and footer say about where the app points and who acts."""
+
+    repo: str = "-"
+    airflow_url: str = "-"
+    owner: str | None = None
+    actor: str = "Airflow token owner"
+    dag_ids: tuple[str, ...] = (DEFAULT_DAG_ID,)
+
+
+# ---------------------------------------------------------------- pure helpers (unit-tested)
+
+
+def stage_progress(tasks: Iterable[Any]) -> str:
+    """Summarise a run's task states as its current stage, e.g. ``build_and_test``.
+
+    Per job (map index) the frontier is the first active task in :data:`TASK_ORDER`, else the
+    last finished one (annotated with its state when it is not ``success``). Jobs sharing a
+    frontier are collapsed; several are joined with ``, ``.
+    """
+    by_job: dict[int, dict[str, str]] = {}
+    for t in tasks:
+        stage = str(getattr(t, "task_id", "")).rsplit(".", 1)[-1]
+        idx = getattr(t, "map_index", -1)
+        by_job.setdefault(-1 if idx is None else int(idx), {})[stage] = str(
+            getattr(t, "state", "") or "none"
+        )
+    frontiers: list[str] = []
+    for states in by_job.values():
+        ordered = [s for s in TASK_ORDER if s in states] + sorted(set(states) - set(TASK_ORDER))
+        active = next((s for s in ordered if states[s] in _ACTIVE), None)
+        if active is not None:
+            label = active
+        else:
+            done = [s for s in ordered if states[s] in _DONE]
+            if not done:
+                label = "pending"
+            else:
+                last = done[-1]
+                label = last if states[last] == "success" else f"{last}:{states[last]}"
+        if label not in frontiers:
+            frontiers.append(label)
+    return ", ".join(frontiers) or "-"
+
+
+def parse_issues(text: str) -> list[str]:
+    """``"42, 43,,7"`` -> ``["42", "43", "7"]``."""
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def age(value: Any, now: datetime | None = None) -> str:
+    """Compact age (``3m``, ``2h``, ``5d``) of an ISO string or datetime; ``-`` when unknown."""
+    then = _as_datetime(value)
+    if then is None:
+        return "-"
+    now = now or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    seconds = max(0, int((now - then).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86_400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86_400}d"
+
+
+def when(value: Any) -> str:
+    """``HH:MM`` (UTC, with the date when not today) of an ISO string or datetime; ``-`` if none."""
+    dt = _as_datetime(value)
+    if dt is None:
+        return "-"
+    dt = dt.astimezone(UTC)
+    fmt = "%H:%M" if dt.date() == datetime.now(UTC).date() else "%m-%d %H:%M"
+    return dt.strftime(fmt)
+
+
+def _as_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def _join(value: Any) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, str):
+        return value or "-"
+    if isinstance(value, dict):
+        return ", ".join(f"{k}={v}" for k, v in value.items()) or "-"
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return ", ".join(str(v) for v in value) or "-"
+    return str(value)
+
+
+def _metrics_text(metrics: Any) -> str:
+    if isinstance(metrics, dict):
+        from swfactory.metrics import table
+
+        return table(metrics) if metrics else "(no metrics yet)"
+    return str(metrics) if metrics else "(no metrics yet)"
+
+
+# ---------------------------------------------------------------- modal prompts
+
+
+class Confirm(ModalScreen[bool]):
+    """One-line yes/no question: ``y``/``enter`` confirms, ``n``/``escape`` cancels."""
+
+    DEFAULT_CSS = """
+    Confirm { align: center middle; }
+    Confirm > Vertical { width: auto; max-width: 90%; height: auto; padding: 1 2;
+        border: thick $accent; background: $surface; }
+    """
+    BINDINGS = [
+        Binding("y", "answer(True)", "yes"),
+        Binding("enter", "answer(True)", "yes", show=False),
+        Binding("n", "answer(False)", "no"),
+        Binding("escape", "answer(False)", "no", show=False),
+    ]
+
+    def __init__(self, question: str) -> None:
+        super().__init__()
+        self.question = question
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(escape(self.question))
+            yield Label("[b]y[/b] confirm · [b]n[/b] cancel")
+
+    def action_answer(self, value: bool) -> None:
+        self.dismiss(value)
+
+
+class Prompt(ModalScreen[str | None]):
+    """One-line text prompt: ``enter`` submits, ``escape`` cancels (``None``)."""
+
+    DEFAULT_CSS = """
+    Prompt { align: center middle; }
+    Prompt > Vertical { width: 70; height: auto; padding: 1 2;
+        border: thick $accent; background: $surface; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "cancel", show=False)]
+
+    def __init__(self, question: str, placeholder: str = "") -> None:
+        super().__init__()
+        self.question = question
+        self.placeholder = placeholder
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(escape(self.question))
+            yield Input(placeholder=self.placeholder, id="prompt-input")
+
+    def on_mount(self) -> None:
+        self.query_one(Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# ---------------------------------------------------------------- tables (tab-local key maps)
+
+
+class GatesTable(DataTable):
+    BINDINGS = [
+        Binding("a", "app.approve_gate", "approve"),
+        Binding("r", "app.reject_gate", "reject"),
+        Binding("f5", "app.refresh", "refresh", show=False),
+    ]
+
+
+class RunsTable(DataTable):
+    BINDINGS = [
+        Binding("t", "app.trigger_run", "trigger"),
+        Binding("s", "app.stop_run", "stop"),
+        Binding("o", "app.open_run", "open"),
+    ]
+
+
+class PRsTable(DataTable):
+    BINDINGS = [Binding("o", "app.open_pr", "open")]
+
+
+class SandboxesTable(DataTable):
+    BINDINGS = [Binding("x", "app.remove_sandbox", "remove")]
+
+
+# ---------------------------------------------------------------- the app
+
+
+class HerdApp(App[None]):
+    """Management TUI. ``collector`` and ``actions`` are the only way in or out."""
+
+    TITLE = "swfactory herd"
+    CSS = """
+    #status { height: auto; padding: 0 1; background: $primary-background; }
+    #actor { height: auto; padding: 0 1; color: $text-muted; }
+    TabbedContent { height: 1fr; }
+    #log { height: 7; border-top: solid $accent; }
+    #metrics { padding: 1 2; }
+    """
+    BINDINGS = [
+        Binding("r", "refresh", "refresh"),
+        Binding("f5", "refresh", "refresh", show=False),
+        Binding("q", "quit", "quit"),
+        Binding("question_mark", "help", "help", key_display="?"),
+    ]
+
+    def __init__(
+        self,
+        collector: Collector,
+        actions: Actions,
+        *,
+        info: HerdInfo | None = None,
+        refresh_s: float = 5.0,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        super().__init__()
+        self.collector = collector
+        self.actions = actions
+        self.info = info or HerdInfo()
+        self.refresh_s = refresh_s
+        self.clock = clock  # injectable "now" (ages in the tables, log stamps)
+        self.snapshot: Snapshot | None = None
+        self.last_refresh: datetime | None = None
+        self.collect_calls = 0
+        self.events: list[str] = []  # log pane mirror (tests)
+        self.notices: list[str] = []  # notification mirror (tests)
+        self._gates: list[Gate] = []
+        self._runs: list[Run] = []
+        self._prs: list[PullRequest] = []
+        self._sandboxes: list[Sandbox] = []
+
+    # -- layout
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="status")
+        with TabbedContent(initial="gates"):
+            with TabPane("Gates", id="gates"):
+                yield GatesTable(id="gates-table", cursor_type="row", zebra_stripes=True)
+            with TabPane("Runs", id="runs"):
+                yield RunsTable(id="runs-table", cursor_type="row", zebra_stripes=True)
+            with TabPane("PRs", id="prs"):
+                yield PRsTable(id="prs-table", cursor_type="row", zebra_stripes=True)
+            with TabPane("Sandboxes", id="sandboxes"):
+                yield SandboxesTable(id="sandboxes-table", cursor_type="row", zebra_stripes=True)
+            with TabPane("Metrics", id="metrics-pane"):
+                yield Static("(no metrics yet)", id="metrics")
+        yield RichLog(id="log", markup=True, wrap=True)
+        with Horizontal(id="actor"):
+            yield Static(
+                f"actions are recorded as [b]{escape(self.info.actor)}[/b] "
+                "(the user the Airflow token belongs to)"
+            )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#gates-table", DataTable).add_columns(
+            "dag", "run", "gate", "map", "subject", "age"
+        )
+        self.query_one("#runs-table", DataTable).add_columns(
+            "dag", "run_id", "state", "started", "stage"
+        )
+        self.query_one("#prs-table", DataTable).add_columns(
+            "#", "title", "labels", "checks", "state"
+        )
+        self.query_one("#sandboxes-table", DataTable).add_columns(
+            "name", "status", "created", "age"
+        )
+        self._render_status()
+        if self.refresh_s > 0:
+            self.set_interval(self.refresh_s, self.collect_snapshot, name="auto-refresh")
+        self.collect_snapshot()
+
+    # -- collection (worker thread -> UI thread)
+
+    @work(thread=True, exclusive=True, group="collect", exit_on_error=False)
+    def collect_snapshot(self) -> None:
+        """Pull a fresh snapshot off the UI thread and hand it back with ``call_from_thread``."""
+        try:
+            snapshot = self.collector.collect()
+        except Exception as e:  # noqa: BLE001 - the UI must survive any collector failure
+            self.call_from_thread(self._collect_failed, e)
+            return
+        self.call_from_thread(self.apply_snapshot, snapshot)
+
+    def _collect_failed(self, exc: Exception) -> None:
+        self.collect_calls += 1
+        self.log_event(f"[red]refresh failed:[/red] {escape(f'{type(exc).__name__}: {exc}')}")
+        self.notify(f"refresh failed: {exc}", severity="error")
+        self._render_status(extra_error="collect")
+
+    def apply_snapshot(self, snapshot: Snapshot) -> None:
+        """Repaint every tab from ``snapshot`` (UI thread only)."""
+        self.collect_calls += 1
+        self.snapshot = snapshot
+        self.last_refresh = self.clock()
+        self._fill_gates(list(snapshot.gates))
+        self._fill_runs(list(snapshot.runs))
+        self._fill_prs(list(snapshot.prs))
+        self._fill_sandboxes(list(snapshot.sandboxes))
+        self.query_one("#metrics", Static).update(escape(_metrics_text(snapshot.metrics)))
+        self._render_status()
+        for source, msg in (snapshot.errors or {}).items():
+            self.log_event(f"[red]{escape(str(source))}:[/red] {escape(str(msg))}")
+
+    def _render_status(self, *, extra_error: str | None = None) -> None:
+        errors = dict((self.snapshot.errors or {}) if self.snapshot else {})
+        if extra_error:
+            errors.setdefault(extra_error, "collector raised")
+        refreshed = self.last_refresh.strftime("%H:%M:%S") if self.last_refresh else "never"
+        parts = [
+            f"[b]repo[/b] {escape(self.info.repo)}",
+            f"[b]airflow[/b] {escape(self.info.airflow_url)}",
+            f"[b]owner[/b] {escape(self.info.owner or '-')}",
+            f"[b]refreshed[/b] {refreshed}",
+        ]
+        badges = " ".join(f"[reverse red] {escape(str(k))} [/]" for k in sorted(errors))
+        if badges:
+            parts.append(badges)
+        self.query_one("#status", Static).update("  ·  ".join(parts))
+
+    def _refill(self, table_id: str, rows: Iterable[tuple[Any, ...]]) -> None:
+        table = self.query_one(table_id, DataTable)
+        row = table.cursor_row
+        table.clear()
+        for cells in rows:
+            table.add_row(*cells)
+        if table.row_count:
+            table.move_cursor(row=min(row, table.row_count - 1))
+
+    def _fill_gates(self, gates: list[Gate]) -> None:
+        self._gates = gates
+        self._refill(
+            "#gates-table",
+            (
+                (
+                    g.dag_id,
+                    g.run_id,
+                    str(g.task_id).rsplit(".", 1)[-1],
+                    str(g.map_index),
+                    (g.subject or "")[:60],
+                    age(g.created_at, self.clock()),
+                )
+                for g in gates
+            ),
+        )
+        self.query_one(TabbedContent).get_tab("gates").label = f"Gates ({len(gates)})"
+
+    def _fill_runs(self, runs: list[Run]) -> None:
+        self._runs = runs
+        self._refill(
+            "#runs-table",
+            (
+                (r.dag_id, r.run_id, str(r.state), when(r.start), stage_progress(r.tasks or ()))
+                for r in runs
+            ),
+        )
+        self.query_one(TabbedContent).get_tab("runs").label = f"Runs ({len(runs)})"
+
+    def _fill_prs(self, prs: list[PullRequest]) -> None:
+        self._prs = prs
+        self._refill(
+            "#prs-table",
+            (
+                (str(p.number), (p.title or "")[:60], _join(p.labels), _join(p.checks), p.state)
+                for p in prs
+            ),
+        )
+        self.query_one(TabbedContent).get_tab("prs").label = f"PRs ({len(prs)})"
+
+    def _fill_sandboxes(self, sandboxes: list[Sandbox]) -> None:
+        self._sandboxes = sandboxes
+        self._refill(
+            "#sandboxes-table",
+            (
+                (s.name, s.status, when(s.created_at), age(s.created_at, self.clock()))
+                for s in sandboxes
+            ),
+        )
+        self.query_one(TabbedContent).get_tab("sandboxes").label = f"Sandboxes ({len(sandboxes)})"
+
+    # -- selection helpers
+
+    def _selected(self, table_id: str, items: list[Any], what: str) -> Any | None:
+        table = self.query_one(table_id, DataTable)
+        if not items or table.row_count == 0:
+            self.notify(f"no {what} selected", severity="warning")
+            return None
+        return items[min(table.cursor_row, len(items) - 1)]
+
+    def selected_gate(self) -> Gate | None:
+        return self._selected("#gates-table", self._gates, "gate")
+
+    def selected_run(self) -> Run | None:
+        return self._selected("#runs-table", self._runs, "run")
+
+    def selected_pr(self) -> PullRequest | None:
+        return self._selected("#prs-table", self._prs, "PR")
+
+    def selected_sandbox(self) -> Sandbox | None:
+        return self._selected("#sandboxes-table", self._sandboxes, "sandbox")
+
+    # -- log / notify
+
+    def log_event(self, text: str) -> None:
+        stamp = self.clock().strftime("%H:%M:%S")
+        line = f"[dim]{stamp}[/dim] {text}"
+        self.events.append(line)
+        self.query_one("#log", RichLog).write(line)
+
+    def notify(
+        self,
+        message: str,
+        *,
+        title: str = "",
+        severity: SeverityLevel = "information",
+        timeout: float | None = None,
+        markup: bool = True,
+    ) -> None:
+        """``App.notify`` that also mirrors the toast into :attr:`notices` (tests read it)."""
+        self.notices.append(f"{severity}: {message}")
+        super().notify(message, title=title, severity=severity, timeout=timeout, markup=markup)
+
+    # -- global actions
+
+    def action_refresh(self) -> None:
+        self.log_event("refresh requested")
+        self.collect_snapshot()
+
+    def action_help(self) -> None:
+        self.notify(HELP, title="keys", timeout=12)
+        self.log_event(HELP.replace("\n", " · "))
+
+    # -- gates
+
+    def action_approve_gate(self) -> None:
+        self._respond(approve=True)
+
+    def action_reject_gate(self) -> None:
+        self._respond(approve=False)
+
+    def _respond(self, *, approve: bool) -> None:
+        gate = self.selected_gate()
+        if gate is None:
+            return
+        verb = "approve" if approve else "reject"
+        name = str(gate.task_id).rsplit(".", 1)[-1]
+        question = (
+            f"{verb} {name} of {gate.dag_id}/{gate.run_id}[{gate.map_index}] as {self.info.actor}?"
+        )
+        fn = self.actions.approve if approve else self.actions.reject
+        self._confirm(
+            question, f"{verb} {gate.dag_id}/{gate.run_id}[{gate.map_index}] {name}", fn, gate
+        )
+
+    # -- runs
+
+    def action_trigger_run(self) -> None:
+        run = (
+            self._runs[self.query_one("#runs-table", DataTable).cursor_row] if self._runs else None
+        )
+        dag_id = run.dag_id if run is not None else self.info.dag_ids[0]
+
+        def _go(text: str | None) -> None:
+            issues = parse_issues(text or "")
+            if not issues:
+                self.log_event("trigger cancelled (no issues)")
+                return
+            self._perform(f"trigger {dag_id} {issues}", self.actions.trigger, dag_id, issues)
+
+        self.push_screen(Prompt(f"trigger {dag_id}: issue ids, comma separated", "42, 43"), _go)
+
+    def action_stop_run(self) -> None:
+        run = self.selected_run()
+        if run is None:
+            return
+        self._confirm(
+            f"stop {run.dag_id}/{run.run_id} (state {run.state})?",
+            f"stop {run.dag_id}/{run.run_id}",
+            self.actions.stop_run,
+            run,
+        )
+
+    def action_open_run(self) -> None:
+        run = self.selected_run()
+        if run is not None:
+            self._perform(f"open {run.dag_id}/{run.run_id}", self.actions.open_run, run)
+
+    # -- PRs / sandboxes
+
+    def action_open_pr(self) -> None:
+        pr = self.selected_pr()
+        if pr is not None:
+            self._perform(f"open PR #{pr.number}", self.actions.open_pr, pr)
+
+    def action_remove_sandbox(self) -> None:
+        sb = self.selected_sandbox()
+        if sb is None:
+            return
+        self._confirm(
+            f"remove sandbox {sb.name} (created by {sb.created_by or '?'})?",
+            f"remove sandbox {sb.name}",
+            self.actions.remove_sandbox,
+            sb,
+        )
+
+    # -- mutation plumbing
+
+    def _confirm(self, question: str, label: str, fn: Callable[..., None], *args: Any) -> None:
+        def _answered(yes: bool | None) -> None:
+            if yes:
+                self._perform(label, fn, *args)
+            else:
+                self.log_event(f"cancelled: {escape(label)}")
+
+        self.push_screen(Confirm(question), _answered)
+
+    def _perform(self, label: str, fn: Callable[..., None], *args: Any) -> None:
+        self.log_event(f"[yellow]->[/yellow] {escape(label)}")
+        self._run_action(label, fn, *args)
+
+    @work(thread=True, exit_on_error=False)
+    def _run_action(self, label: str, fn: Callable[..., None], *args: Any) -> None:
+        try:
+            fn(*args)
+        except PermissionError as e:
+            self.call_from_thread(self._action_refused, label, e)
+        except Exception as e:  # noqa: BLE001 - surfaced, never fatal
+            self.call_from_thread(self._action_failed, label, e)
+        else:
+            self.call_from_thread(self._action_done, label)
+
+    def _action_done(self, label: str) -> None:
+        self.log_event(f"[green]ok[/green] {escape(label)}")
+        self.notify(label)
+        self.collect_snapshot()
+
+    def _action_refused(self, label: str, exc: Exception) -> None:
+        self.log_event(f"[yellow]refused[/yellow] {escape(label)}: {escape(str(exc))}")
+        self.notify(f"refused: {exc}", title=label, severity="warning")
+
+    def _action_failed(self, label: str, exc: Exception) -> None:
+        self.log_event(
+            f"[red]failed[/red] {escape(label)}: {escape(f'{type(exc).__name__}: {exc}')}"
+        )
+        self.notify(f"{type(exc).__name__}: {exc}", title=label, severity="error")
+
+
+# ---------------------------------------------------------------- wiring for the CLI
+
+
+@dataclass
+class ControlCollector:
+    """:class:`Collector` over ``swfactory.control.collect`` with the real clients."""
+
+    airflow: Any
+    github: Any
+    islo: Any
+    metrics: Any
+    dag_ids: tuple[str, ...] = (DEFAULT_DAG_ID,)
+
+    def collect(self) -> Snapshot:
+        from swfactory.control import collect
+
+        return collect(
+            self.airflow, self.github, self.islo, self.metrics, dag_ids=list(self.dag_ids)
+        )
+
+
+@dataclass
+class ControlActions:
+    """:class:`Actions` over the ``swfactory.control`` clients."""
+
+    airflow: Any
+    github: Any
+    islo: Any
+    opener: Callable[[str], Any] = field(default=webbrowser.open)
+
+    def approve(self, gate: Gate) -> None:
+        self.airflow.respond(gate, approve=True)
+
+    def reject(self, gate: Gate) -> None:
+        self.airflow.respond(gate, approve=False)
+
+    def trigger(self, dag_id: str, issues: Sequence[str]) -> None:
+        self.airflow.trigger(dag_id, list(issues))
+
+    def stop_run(self, run: Run) -> None:
+        self.airflow.stop_run(run.dag_id, run.run_id)
+
+    def open_run(self, run: Run) -> None:
+        url = self.airflow.open_url(run)
+        if isinstance(url, str) and url:
+            self.opener(url)
+
+    def open_pr(self, pr: PullRequest) -> None:
+        self.github.open_pr_in_browser(pr.number)
+
+    def remove_sandbox(self, sandbox: Sandbox) -> None:
+        self.islo.remove(sandbox.name)
+
+
+def blueprint_dag_ids() -> tuple[str, ...]:
+    """DAG ids of every ``blueprints/*.toml`` (``factory`` when none can be read)."""
+    try:
+        from swfactory.blueprint import blueprint_paths, load
+
+        names = tuple(load(str(p)).name for p in blueprint_paths())
+    except Exception:  # noqa: BLE001 - the TUI must start even with a broken blueprint dir
+        names = ()
+    return names or (DEFAULT_DAG_ID,)
+
+
+def make_app(
+    *,
+    airflow_url: str,
+    repo: str,
+    owner: str | None,
+    token: str | None = None,
+    username: str | None = None,
+    password: str | None = None,
+    metrics_root: str = ".",
+    refresh_s: float = 5.0,
+    dag_ids: Sequence[str] | None = None,
+) -> HerdApp:
+    """Build the app over the real ``swfactory.control`` clients (imported here, lazily)."""
+    from pathlib import Path
+
+    from swfactory.control import AirflowClient, GitHubClient, IsloClient, MetricsSource
+
+    airflow = AirflowClient(airflow_url, token=token, username=username, password=password)
+    github = GitHubClient(repo)
+    islo = IsloClient(owner)
+    metrics = MetricsSource(Path(metrics_root))
+    ids = tuple(dag_ids) if dag_ids else blueprint_dag_ids()
+    info = HerdInfo(
+        repo=repo,
+        airflow_url=airflow_url,
+        owner=owner,
+        actor=username or "Airflow token owner",
+        dag_ids=ids,
+    )
+    return HerdApp(
+        ControlCollector(airflow, github, islo, metrics, ids),
+        ControlActions(airflow, github, islo),
+        info=info,
+        refresh_s=refresh_s,
+    )
+
+
+def run_herd(
+    collector: Collector,
+    actions: Actions,
+    *,
+    info: HerdInfo | None = None,
+    refresh_s: float = 5.0,
+) -> None:
+    """Run the TUI until the user quits."""
+    HerdApp(collector, actions, info=info, refresh_s=refresh_s).run()
