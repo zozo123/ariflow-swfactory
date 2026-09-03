@@ -27,7 +27,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/zozo123/ariflow-swfactory"
-Documentation = "https://zozo123.github.io/ariflow-swfactory/"
+Documentation = "https://github.com/zozo123/ariflow-swfactory#readme"
 Issues = "https://github.com/zozo123/ariflow-swfactory/issues"
 Repository = "https://github.com/zozo123/ariflow-swfactory.git"
 
