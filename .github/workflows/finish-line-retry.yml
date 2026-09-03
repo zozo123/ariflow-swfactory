@@ -1,0 +1,48 @@
+name: finish-line-retry
+
+on:
+  push:
+    branches: [feat/islo-first-class]
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/islo-first-class
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - name: Apply release hardening
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/finish-line.yml').read_text()
+          begin = "          python - <<'PY'\n"
+          end = "\n          PY\n"
+          start = workflow.index(begin) + len(begin)
+          stop = workflow.index(end, start)
+          code = textwrap.dedent(workflow[start:stop])
+          exec(compile(code, 'finish-line.yml', 'exec'))
+          PY
+      - run: uv sync --group airflow
+      - run: uv run ruff format .
+      - run: uv run ruff check . && uv run ruff format --check .
+      - run: uv run pytest
+      - run: bash -n deploy/islo/bootstrap.sh deploy/islo/deploy.sh deploy/islo/knowledge.sh deploy/islo/orchestrator/start.sh
+      - name: Commit hardened release candidate
+        run: |
+          rm -f .github/workflows/finish-line-retry.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: harden islo production path for release"
+          git push origin HEAD:feat/islo-first-class
