@@ -31,6 +31,8 @@ create`); a human merges. Stage semantics live in `stages.py`; a blueprint only 
 
 - `uv run swfactory herd` — TUI control room (gates/runs/PRs/own sandboxes/metrics); see docs/herd.md.
 
+- `uv run swfactory demo --sandbox docker` / `docker compose -f deploy/docker/compose.yml up` — fully local stack (testing only; not a trust boundary).
+
 ## Conventions
 - Python 3.12, `from __future__ import annotations`, type hints, docstrings on public functions.
   Stdlib first (`subprocess`, `tomllib`, `statistics`, `xml.etree`). No Airflow import under `src/`;

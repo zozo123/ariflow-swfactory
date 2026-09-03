@@ -1,0 +1,104 @@
+# Fully local factory: Airflow 3 + webhook receiver in containers, agent/test commands in sibling
+# `docker run` containers (SWF_SANDBOX=docker). TESTING deployment — see README.md for limits.
+#
+#   docker build -t swfactory-sandbox:local -f deploy/docker/sandbox.Dockerfile .
+#   docker compose -f deploy/docker/compose.yml up
+#
+# Run from the REPO ROOT: the repo is mounted at ${PWD} (its host path) and that is the working
+# dir, because DockerSandbox bind-mounts each run's .factory/<run>/work at the SAME absolute path
+# into the sandbox container — the path must mean the same thing to the Docker daemon (host) and
+# to the Airflow worker (this container).
+name: swfactory
+
+x-common: &common
+  image: swfactory-airflow:local
+  build:
+    context: ../..
+    dockerfile: deploy/docker/airflow.Dockerfile
+  working_dir: ${PWD}
+  environment: &common-env
+    SWF_REPO_DIR: ${PWD}
+    AIRFLOW_HOME: /opt/airflow_home
+    UV_PROJECT_ENVIRONMENT: /opt/venv
+    UV_LINK_MODE: copy
+  volumes:
+    - ${PWD}:${PWD}
+    - airflow-home:/opt/airflow_home
+    - venv:/opt/venv
+    - uv-cache:/root/.cache/uv
+
+services:
+  airflow:
+    <<: *common
+    command: ["bash", "deploy/docker/start.sh"]
+    environment:
+      <<: *common-env
+      AIRFLOW__CORE__DAGS_FOLDER: ${PWD}/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__API__PORT: "8080"
+      AIRFLOW__API__HOST: 0.0.0.0
+      # factory knobs (SWF_* env > blueprint values; see src/swfactory/config.py)
+      SWF_SANDBOX: docker
+      SWF_AGENT: ${SWF_AGENT:-scripted}
+      SWF_SCM: ${SWF_SCM:-local}
+      SWF_APPROVE: prompt
+      SWF_DOCKER_IMAGE: ${SWF_DOCKER_IMAGE:-swfactory-sandbox:local}
+      SWF_DOCKER_CREDENTIALS: ${SWF_DOCKER_CREDENTIALS:-env}
+      SWF_DOCKER_NETWORK: ${SWF_DOCKER_NETWORK:-bridge}
+      SWF_DOCKER_USER: ${SWF_DOCKER_USER:-}
+      # credentials: the agent key crosses into sandbox containers ONLY as the -e allowlist of
+      # DockerSandbox (agent=claude, credentials=env); GH_TOKEN stays here (deliver: gh pr create).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GH_TOKEN: ${GH_TOKEN:-}
+    volumes:
+      - ${PWD}:${PWD}
+      - airflow-home:/opt/airflow_home
+      - venv:/opt/venv
+      - uv-cache:/root/.cache/uv
+      # ROOT-EQUIVALENT ON THE HOST: lets this container start sibling sandbox containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 120s
+    restart: unless-stopped
+
+  webhook:
+    <<: *common
+    command: ["bash", "deploy/docker/webhook.sh"]
+    depends_on:
+      airflow:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      AIRFLOW_URL: http://airflow:8080
+      AIRFLOW_USER: ${AIRFLOW_USER:-admin}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-}
+      AIRFLOW_TOKEN: ${AIRFLOW_TOKEN:-}
+      SWF_WEBHOOK_SECRET: ${SWF_WEBHOOK_SECRET:-}
+      SWF_WEBHOOK_PORT: "8081"
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+
+  # Build target only (`docker compose -f deploy/docker/compose.yml build sandbox-image`);
+  # nothing runs it — DockerSandbox starts it per command via `docker run --rm`.
+  sandbox-image:
+    image: swfactory-sandbox:local
+    build:
+      context: ../..
+      dockerfile: deploy/docker/sandbox.Dockerfile
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    profiles: ["build"]
+    command: ["true"]
+
+volumes:
+  airflow-home:
+  venv:
+  uv-cache:

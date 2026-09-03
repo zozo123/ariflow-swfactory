@@ -55,7 +55,7 @@ from swfactory.models import (
     StageResult,
     TestResult,
 )
-from swfactory.sandbox import LocalSandbox, Sandbox, SrtSandbox
+from swfactory.sandbox import LocalSandbox, Sandbox
 from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
 
 if TYPE_CHECKING:
@@ -258,7 +258,7 @@ def _agent(
     Under srt the kernel ``denyWrite`` set follows the stage (``protected_for``): ``fix`` calls
     lose write access to the tests dir that ``build`` needed, matching the ``Edit(...)`` rules."""
     seed_budget(ctx)
-    if isinstance(ctx.sb, SrtSandbox):
+    if hasattr(ctx.sb, "set_protected"):
         ctx.sb.set_protected(protected_for(_contract(ctx), stage))
     res = ctx.agent.run(
         ctx.sb,

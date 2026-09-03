@@ -48,3 +48,16 @@ jobs:
       - run: uv sync
       - name: demo under srt (scripted agent, kernel-enforced write confinement)
         run: uv run swfactory demo --sandbox srt
+
+  # Fully local sandbox: build the sandbox image and run the scripted demo with one container per
+  # command (ubuntu runners have a Docker daemon). Optional until it has been green for two weeks.
+  docker-smoke:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - run: uv sync
+      - run: docker build -t swfactory-sandbox:local -f deploy/docker/sandbox.Dockerfile .
+      - run: SWF_DOCKER_IMAGE=swfactory-sandbox:local SWF_DOCKER_USER=root uv run swfactory demo --sandbox docker
