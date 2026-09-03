@@ -434,3 +434,35 @@ def doctor(
     checks = doctor_mod.run_doctor(cfg)
     typer.echo(doctor_mod.to_json(checks) if json_out else doctor_mod.table(checks))
     raise typer.Exit(doctor_mod.exit_code(checks))
+
+
+@app.command()
+def herd(
+    airflow_url: Annotated[str, typer.Option(envvar="AIRFLOW_URL")] = "http://localhost:8080",
+    repo: Annotated[str | None, typer.Option(help="owner/name (default: blueprint target)")] = None,
+    owner: Annotated[
+        str | None, typer.Option(envvar="SWF_SANDBOX_OWNER", help="only this creator's sandboxes")
+    ] = None,
+    token: Annotated[str | None, typer.Option(envvar="AIRFLOW_TOKEN", help="API JWT")] = None,
+    username: Annotated[str | None, typer.Option(envvar="AIRFLOW_USER")] = None,
+    password: Annotated[str | None, typer.Option(envvar="AIRFLOW_PASSWORD")] = None,
+    metrics_root: Annotated[Path, typer.Option(help="root with docs/factory/*/metrics.json")] = (
+        Path()
+    ),
+    refresh_s: Annotated[float, typer.Option(help="auto-refresh interval")] = 5.0,
+) -> None:
+    """Control room TUI: pending gates (approve/reject), runs, PRs, own sandboxes, metrics."""
+    from swfactory.blueprint import load
+    from swfactory.herd import make_app
+
+    target_repo = repo or load("factory").targets[0].repo
+    make_app(
+        airflow_url=airflow_url,
+        repo=target_repo,
+        owner=owner,
+        token=token,
+        username=username,
+        password=password,
+        metrics_root=str(metrics_root),
+        refresh_s=refresh_s,
+    ).run()

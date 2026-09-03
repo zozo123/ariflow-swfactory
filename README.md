@@ -277,6 +277,20 @@ bugs: `-artifact-glob` (SSH-lease providers only) -> `-download`; default provid
 `local-container` (`scrub_env` strips the `ISLO_API_KEY` islo needs); `.crabbox.yaml` jobs are maps
 so `crabbox doctor` parses it. Human inner loop: `crabbox run --provider local-container -- uv run pytest`.
 
+## Control room: `swfactory herd`
+
+A Textual TUI over the Airflow API, `gh` and `islo ls`: pending approval gates (`a` approve,
+`r` reject — recorded under the Airflow API user), runs with stage progress (`t` trigger, `s` stop,
+`o` open), factory PRs, **your own** sandboxes (`x` removes only sandboxes you created with the
+factory's name pattern; teammates' sandboxes are never listed or touched) and the metrics summary.
+
+```sh
+export AIRFLOW_TOKEN=...   # or AIRFLOW_USER/AIRFLOW_PASSWORD
+uv run swfactory herd --airflow-url http://localhost:8080 --owner you@example.com
+```
+
+Details and keys: [docs/herd.md](docs/herd.md).
+
 ## Maintain
 
 `bands.yaml` defines a window (20 runs) and three response tiers over `docs/factory/*/metrics.json`
