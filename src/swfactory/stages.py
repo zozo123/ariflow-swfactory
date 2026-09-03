@@ -79,7 +79,19 @@ HOOKS_LOG = ".factory/hooks.jsonl"  # swf_guard.py decisions, appended by the ho
 SEVERITIES: tuple[str, ...] = ("blocker", "major", "minor", "nit")
 # Scratch the factory never commits (added to .git/info/exclude by setup; the target may lack a
 # .gitignore, as the demo copy does).
-NEVER_COMMITTED = (".factory/", ".venv/", "__pycache__/", "*.pyc", ".pytest_cache/", ".ruff_cache/")
+# Scratch the factory creates plus the shell-rc stubs the Anthropic Sandbox Runtime (Linux) binds
+# into the cwd as special files, which `git add -A` refuses to stage.
+NEVER_COMMITTED = (
+    ".factory/",
+    ".venv/",
+    "__pycache__/",
+    "*.pyc",
+    ".pytest_cache/",
+    ".ruff_cache/",
+    ".bash_profile",
+    ".bashrc",
+    ".profile",
+)
 
 
 # ---------------------------------------------------------------- context
