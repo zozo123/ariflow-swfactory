@@ -192,7 +192,7 @@ an optional blueprint key is a minor release; a fix that keeps every one of thos
 
 `[blueprint] version` inside a blueprint file is a **separate, independent** integer: it versions
 the TOML schema, not the package, and moves only when a blueprint written for an older schema can
-no longer be read. `swfactory 1.0.0` reads `version = 1`; the two numbers are not expected to
+no longer be read. `swfactory 1.1.0` reads `version = 1`; the two numbers are not expected to
 track each other, and neither implies the other's compatibility.
 
 Airflow's own pin (`apache-airflow==3.3.1`) is a dependency, not part of the public surface —
