@@ -1,0 +1,28 @@
+{
+  "verdict": "request_changes",
+  "findings": [
+    {
+      "severity": "blocker",
+      "file": "tests/test_core.py",
+      "line": 3,
+      "title": "percent_change ships with zero tests (R12 unmet)",
+      "detail": "tests/test_core.py is byte-identical to baseline after both the build and fix commits: it still imports only compound and simple_interest, so there is no success-path or ValueError test for percent_change, violating spec R12, plan.md step 1 and the target's CLAUDE.md rule of at least two tests per public function. Expected: tests/test_core.py imports percent_change and adds at least the R1-R10 cases from plan.md; since the fix stage cannot edit tests/ under the sandbox deny rules (the fix.1 iteration changed no source), this must be resolved in a build stage or by the orchestrator rather than another fix iteration."
+    },
+    {
+      "severity": "major",
+      "file": "src/calc/core.py",
+      "line": 22,
+      "title": "Spec R6 contradicts its own formula for negative baseline",
+      "detail": "The code returns (new - old) / old literally, so percent_change(-100, -50) evaluates to (50) / (-100) = -0.5, while spec R6 asserts 0.5; the spec's API section, plan.md and the recorded open-question assumption all mandate the literal formula with no abs(), so the implementation matches intent and the R6 example value is wrong. Expected: a human corrects R6 to -0.5 (or deliberately switches to abs(old) as a semantic change) before test_percent_change_negative_baseline is written, otherwise that planned test fails against correct code."
+    },
+    {
+      "severity": "minor",
+      "file": "src/calc/__init__.py",
+      "line": 3,
+      "title": "Diff skips the tests file listed in plan.md",
+      "detail": "plan.md lists three files (tests/test_core.py, src/calc/core.py, src/calc/__init__.py) and the diff touches only the latter two, so the plan-fidelity pass flags skipped listed work. Expected: either the tests land as planned or plan.md records why the test step was dropped; this is the same root cause as the blocker and is listed here only so the PR body shows the fidelity gap explicitly."
+    }
+  ],
+  "dropped_nits": 0,
+  "fixes": 1
+}
