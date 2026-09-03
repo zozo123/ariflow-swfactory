@@ -1,9 +1,15 @@
 name: evals
-# Runs the REAL path (claude agent confined by the Anthropic Sandbox Runtime, bubblewrap on
-# ubuntu-24.04) on the demo issue whenever the factory's institutional knowledge changes, and
-# weekly. Local scm: the PR is printed, not opened. Asserts on the RunReport the CLI writes to
-# .factory/<run>/report.json (tests passed, deliver:ok). Needs the ANTHROPIC_API_KEY secret; the
-# job is skipped with a notice when it is absent (forks), so it never fails for lack of a key.
+# Runs the REAL path on the demo issue whenever the factory's institutional knowledge changes,
+# weekly, and on demand (workflow_dispatch). Two jobs, same assertion on the RunReport the CLI
+# writes to .factory/<run>/report.json (tests passed, deliver:ok); local scm, so the PR is
+# printed, not opened:
+#   real-demo   claude agent confined by the Anthropic Sandbox Runtime (bubblewrap, ubuntu-24.04);
+#               needs the ANTHROPIC_API_KEY secret.
+#   evals-islo  the production path: claude agent in an islo MicroVM behind the deny-by-default
+#               `swfactory` gateway, Anthropic key reaches the VM only as a phantom token; the runner
+#               is the orchestrator and holds ISLO_API_KEY only. Needs the ISLO_API_KEY secret.
+# Each job is skipped with a notice when its secret is absent (forks), never failing for lack of
+# a key. Optional repo variable SWF_ISLO_SNAPSHOT warm-starts the MicroVM (README snapshot recipe).
 on:
   schedule:
     - cron: "0 6 * * 1"
@@ -96,4 +102,73 @@ jobs:
             .factory/*/report.json
             .factory/*/pr.md
             .factory/**/docs/factory/**
+          if-no-files-found: ignore
+
+  evals-islo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ISLO_API_KEY: ${{ secrets.ISLO_API_KEY }}
+      # The orchestrator never holds an Anthropic key: the sandbox gets a phantom one from the
+      # `swfactory` environment (--gateway-secret). Override the workflow-level value with "".
+      ANTHROPIC_API_KEY: ""
+      SWF_ISLO_SNAPSHOT: ${{ vars.SWF_ISLO_SNAPSHOT }}
+    steps:
+      - name: Check for ISLO_API_KEY
+        id: gate
+        run: |
+          if [ -z "$ISLO_API_KEY" ]; then
+            echo "::notice::ISLO_API_KEY secret not set; skipping evals-islo"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.enabled == 'true'
+      - uses: astral-sh/setup-uv@v6
+        if: steps.gate.outputs.enabled == 'true'
+        with: { python-version: "3.12" }
+      - name: Install islo CLI
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          curl -fsSL https://islo.dev/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          islo --version
+      - name: Install swfactory
+        if: steps.gate.outputs.enabled == 'true'
+        run: uv sync
+      - name: Preflight (islo auth + tool integrations, gateway profile, environment, snapshot)
+        if: steps.gate.outputs.enabled == 'true'
+        run: uv run swfactory doctor --json
+      - name: Real factory run on demo/issue.md (claude agent in an islo MicroVM, local git remote)
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          SWF_APPROVE: auto
+        run: |
+          uv run swfactory run --issue demo/issue.md --agent claude --sandbox islo --scm local --approve auto
+      - name: Assert tests passed and deliver succeeded
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          report=$(find .factory -maxdepth 2 -name report.json | head -1 || true)
+          if [ -z "$report" ]; then echo "no .factory/*/report.json produced"; exit 1; fi
+          uv run python - "$report" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          print(json.dumps(r, indent=2))
+          stages = {s["stage"]: s["status"] for s in r["stages"]}
+          assert r["sandbox"].startswith("swf-"), f"not an islo sandbox: {r['sandbox']!r}"
+          assert r["tests_passed"] is True, "tests did not pass"
+          assert stages.get("deliver") == "ok", f"deliver status: {stages.get('deliver')!r}"
+          PY
+      - name: Upload artifact chain
+        if: steps.gate.outputs.enabled == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-artifacts-islo
+          path: |
+            .factory/*/report.json
+            .factory/*/pr.md
+            .factory/*/stages.jsonl
           if-no-files-found: ignore

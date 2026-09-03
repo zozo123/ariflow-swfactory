@@ -11,7 +11,7 @@ doubles as the end-to-end test.
 ```
  GitHub issue --label factory[:<name>]--> dispatch.yml --POST /api/v2/dags/<name>/dagRuns--> Airflow 3
                                                                                               |
-  ORCHESTRATOR (trusted: Airflow worker or your shell)             holds ISLO_API_KEY, GH_TOKEN
+  ORCHESTRATOR (trusted: islo orchestrator sandbox / Airflow worker / your shell)  ISLO_API_KEY, GH_TOKEN
   +---------------------------------------------------------------------------------------------+
   | dags/blueprints.py: one DAG per blueprints/*.toml, jobs = issues x targets (task mapping)    |
   |  fan_out > job[ setup > intent > [approve_intent] > spec > plan > [approve_plan]             |
@@ -34,7 +34,7 @@ doubles as the end-to-end test.
 
 ```sh
 uv sync
-uv run pytest            # 209 passed (hermetic: fake subprocess, tmp git repos)
+uv run pytest            # 235 passed (hermetic: fake subprocess, tmp git repos)
 uv run swfactory demo    # scripted replay of a recorded run on demo/target
 ```
 
@@ -132,7 +132,7 @@ carrying `intent.md`, `approvals.json` and `metrics.json`, `status="blocked"`, e
 | --- | --- | --- | --- | --- |
 | `local` | none (`scrub_env` only) | none — `agent=claude` refused unless `--allow-local-agent` | nothing | demo, pytest, CI |
 | `srt` | OS-level (macOS Seatbelt / Linux bubblewrap): writes limited to the workdir + Claude/uv caches; `factory.toml` `protected` globs are kernel `denyWrite` **per stage** (tests dir writable for `build`, denied for `fix`, re-synced before every agent call) plus `.claude`/`.github`; egress domain allowlist; `~/.ssh` `~/.aws` `~/.config` `~/.gnupg` `~/.netrc` `~/.docker` `~/.kube` unreadable | the real `ANTHROPIC_API_KEY` (or the host's Claude OAuth login); shares the host kernel; proxy-based egress | `srt` on PATH or `npx` (`@anthropic-ai/sandbox-runtime`); Linux: bubblewrap + socat | cloudless real agent on a keyed dev box; `evals.yml` |
-| `islo` | Firecracker-class MicroVM, deny-by-default gateway | phantom `ANTHROPIC_API_KEY` swapped on egress; never a GitHub token | `islo login`, gateway profile + environment (below) | production (Airflow), `demo --real` |
+| `islo` | Firecracker-class MicroVM, deny-by-default gateway | phantom `ANTHROPIC_API_KEY` swapped on egress; never a GitHub token | `islo login` + `--tool github/claude`, gateway profile + environment (`deploy/islo/bootstrap.sh`), `swfactory doctor` green | production: the two-tier topology below, `demo --real`, `evals-islo` |
 
 Honest limits: phantom tokens exist only on islo — `srt` is defense-in-depth for your own machine,
 not the production trust boundary; tools that ignore `HTTP_PROXY` bypass its allowlist; srt
@@ -158,35 +158,53 @@ defense-in-depth and writes the `.factory/hooks.jsonl` audit log (denied calls a
 factory's `.claude/skills/swfactory/` skill into the target, so the agent reads the same
 spec/plan/review contract wherever its cwd is.
 
-## Real run (islo)
+## Run the factory on islo (production)
 
-Prerequisites on the orchestrator: `uv`, `git`, `gh`, `islo` (0.48+), a GitHub token for
-`swfactory-bot` in `GH_TOKEN`. No `ANTHROPIC_API_KEY` on the host: it lives in the islo
-environment and reaches the sandbox only as a phantom token.
+Two tiers, both islo sandboxes, one trust boundary between them. Nothing that can push to GitHub
+ever shares a VM with model-generated code, and nothing that can call Anthropic ever sees a GitHub
+token:
+
+| Tier | Runs | Credentials (all phantom: swapped by the gateway on egress) | Egress |
+| --- | --- | --- | --- |
+| **Orchestrator** — one sandbox, `swf-orchestrator` (trusted) | Airflow 3 (`airflow standalone`, UI `:8080`), `swfactory webhook serve --port 8081 --airflow-url http://localhost:8080` (GitHub issue events -> `POST /api/v2/dags/<name>/dagRuns`), and `deliver`: `git am` of the agent's format-patch stream, push `factory/*`, `gh pr create` | `GH_TOKEN` (`islo login --tool github`), `ISLO_API_KEY` to spawn agent VMs; **no** Anthropic key | `swfactory-orchestrator` gateway: github.com, api.github.com, the islo API |
+| **Agents** — one MicroVM per (issue, target), `swf-<issue>-<run>` (untrusted) | clone of the target (`--source`), `claude -p` per stage, the target's tests, bot-authored commits | `ANTHROPIC_API_KEY` (`islo login --tool claude`); never a GitHub token, never `--env` | `swfactory` gateway, deny-by-default: api.anthropic.com, pypi.org, files.pythonhosted.org, astral.sh |
+
+The orchestrator spawns agent VMs with the same `IsloSandbox.argv` the CLI uses (`--gateway-profile
+swfactory --environment swfactory --init minimal --delete-after --pause-after-idle --auto-resume
+on_activity`), reads artifacts out with `islo cp`, and applies the patch on its own side — the
+"agent never pushes" property is structural (see "Artifact chain"), not a prompt. Commands, in order:
 
 ```sh
-islo login && islo login --tool github && islo login --tool claude
-islo gateway create --name swfactory --default-action deny --internet-access true
-#   allow on the profile (console): api.anthropic.com github.com pypi.org files.pythonhosted.org astral.sh
-islo environment create --name swfactory \
-  --gateway-secret 'ANTHROPIC_API_KEY=<real key>;host=api.anthropic.com;auth=bearer'
-export GH_TOKEN=<fine-grained PAT for swfactory-bot: contents+pull_requests write, issues write>
-gh api -X PUT repos/zozo123/ariflow-swfactory/branches/main/protection --input - <<'JSON'
-{"required_status_checks":{"strict":true,"contexts":["test"]},"enforce_admins":false,
- "required_pull_request_reviews":{"require_code_owner_reviews":true,"required_approving_review_count":1},
- "restrictions":null}
-JSON
-uv run swfactory demo --real     # = run --issue demo/issue.md --agent claude --sandbox islo --scm github --approve prompt
-uv run swfactory run --issue 42 --agent claude --sandbox islo --scm github
+islo login && islo login --tool github && islo login --tool claude   # once per org (phantom tokens)
+deploy/islo/bootstrap.sh    # one-time: gateway profiles + environments, incoming webhook, knowledge items
+deploy/islo/deploy.sh       # orchestrator sandbox from deploy/islo/orchestrator/{islo.yaml,start.sh}:
+                            #   Airflow + webhook receiver; prints the shared Airflow UI URL
+uv run swfactory doctor     # preflight: islo/gh/claude CLIs, login + tool integrations, gateway profile,
+                            #   environment, snapshot, gh repo; --json for CI (evals-islo runs it first)
+gh issue edit 42 --add-label factory        # GitHub -> islo incoming webhook -> :8081 -> DAG `factory`
+uv run swfactory approve <dag_run_id> intent        # or approve both gates in the Airflow UI at the
+uv run swfactory approve <dag_run_id> plan          #   shared URL (islo share swf-orchestrator 8080)
+# -> PR on the target, labeled per blueprint (factory[:blocked|:rejected]); a human merges
 ```
 
-`.github/CODEOWNERS` (`* @zozo123`) makes the human the required reviewer. The sandbox
-`swf-<issue>-<run>` is created with `--auto-resume on_activity --pause-after-idle 900
---delete-after <ttl>`; `islo cp` does not resume a paused VM, so file transfers retry after
-`islo resume`. Add `--record demo/scripted` to rewrite the demo fixtures from real agent outputs.
+`deploy/islo/knowledge.sh [owner/repo]` (called by bootstrap, safe to rerun) publishes `CLAUDE.md`
+and `REVIEW.md` as `rule` items and `.claude/skills/swfactory/SKILL.md` as a `skill`, tagged
+`swfactory` and linked to the repo (`islo knowledge get` -> `update`, else `create`), so
+`islo knowledge render --repo <owner/repo> --tag swfactory` gives every sandbox agent the same
+contract that `install_guard` ships into the target. `dispatch.yml` (a GitHub Action posting to the
+Airflow API with the `AIRFLOW_URL`/`AIRFLOW_TOKEN` secrets) stays as the alternative trigger when
+the orchestrator's `:8080` is shared instead of `:8081`. `.github/CODEOWNERS` (`* @zozo123`) plus
+branch protection (`gh api -X PUT repos/<owner/repo>/branches/main/protection`: 1 review, code
+owners, `test` status check) make the human the required reviewer. `demo --real`
+(`run --issue demo/issue.md --agent claude --sandbox islo --scm github --approve prompt`) is the
+same path from your shell; add `--record demo/scripted` to rewrite the demo fixtures from real
+agent outputs. Agent VMs are created with `--auto-resume on_activity --pause-after-idle 900
+--delete-after <ttl>`; `islo cp` does not resume a paused VM, so file transfers retry once after
+`islo resume`.
 
 Warm start: bake a snapshot once and set it in the blueprint (`[sandbox] snapshot`) or
-`SWF_ISLO_SNAPSHOT`; `islo.yaml`'s setup script (uv only) does not re-run from a snapshot.
+`SWF_ISLO_SNAPSHOT` (the repo variable of the same name feeds `evals-islo`); `islo.yaml`'s setup
+script (uv only) does not re-run from a snapshot.
 
 ```sh
 islo use swf-golden --source github://zozo123/ariflow-swfactory:main --gateway-profile swfactory \
@@ -293,18 +311,21 @@ src/swfactory/scm.py         Scm protocol, LocalGitScm (bare remote + pr.md), Gi
 src/swfactory/stages.py      Ctx, CANONICAL_ORDER/STAGES, stage functions, run_tests, commit, run_pipeline
 src/swfactory/metrics.py     write_run_metrics, load_all, summarize, table
 src/swfactory/maintain.py    load_runs, detect, run, sweep_sandboxes
-src/swfactory/cli.py         typer: run, demo, metrics, approve, maintain
+src/swfactory/cli.py         typer: run, demo, metrics, approve, maintain, doctor, webhook serve
 src/swfactory/prompts/*.md   spec, plan, build, fix, review, diagnose templates
 dags/blueprints.py           one mapped-task-group DAG per blueprint (GateOperator gates, record_<stage>)
 dags/maintain.py             nightly + after every delivery (AssetOrTimeSchedule) band check + sweep
 .claude/hooks/swf_guard.py   PreToolUse audit hook installed into every target before write stages
 .claude/skills/swfactory/    spec/plan shape + review contract for the agent
 REVIEW.md  bands.yaml        review policy; maintain tiers
-islo.yaml  .crabbox.yaml     sandbox setup (uv only); crabbox profile
+islo.yaml  .crabbox.yaml     agent sandbox setup (uv only); crabbox profile
+deploy/islo/                 bootstrap.sh (gateways, environments, webhook, knowledge), deploy.sh
+                             (orchestrator sandbox: orchestrator/{islo.yaml,start.sh}), knowledge.sh
 demo/                        issue.md (DEMO-1), target/ (`calc` + factory.toml), scripted/ fixtures
 tests/                       hermetic; test_dag_*.py need the airflow group
 .github/workflows/           ci (ruff, pytest, demo, airflow parity+smoke, srt smoke), dispatch,
-                             evals (real claude agent under srt on demo/issue.md; asserts report.json)
+                             evals: real-demo (claude under srt) + evals-islo (claude in an islo
+                             MicroVM, phantom key, ISLO_API_KEY only); both assert report.json
 ```
 
 ## Proof (real runs on this repo)
@@ -319,7 +340,10 @@ Two unattended runs of `swfactory run --issue 1 --agent claude --sandbox srt --s
 
 Both PRs carry bot-authored commits with `Factory-Run` / `Factory-Stage` / `Agent` trailers and
 per-stage `agent/*.json` (cost, turns, session id). `main` is branch-protected (1 review, code
-owners); a human merges.
+owners); a human merges. Those runs used `srt`; the production pieces (`deploy/islo/*`,
+`swfactory doctor`, the webhook receiver, knowledge items) are exercised by `evals-islo`, which
+reruns the demo issue in an islo MicroVM weekly and whenever the institutional knowledge changes,
+with no Anthropic key on the runner — the RunReport it asserts on is the same `report.json`.
 
 > **Why the two factory PRs fail this repo's CI while `main` is green:** their branches already
 > contain the agent's real `percent_change` in `demo/target`, so the keyless demo's recorded
@@ -327,6 +351,12 @@ owners); a human merges.
 > That is the intended signal: merging a factory PR that changes the demo target means re-recording
 > the fixtures (`swfactory run --record demo/scripted ...`) in the same PR, or closing the PR and
 > keeping it as the audit record. Either is a human decision; the factory never merges.
+
+**Live human gate (real Airflow API):** `airflow standalone` + `POST /api/v2/dags/factory/dagRuns`,
+then `swfactory approve <run> intent` / `plan` as user `admin`: all 14 tasks succeeded and the
+committed `approvals.json` records actor `admin` for both gates (from Airflow's HITL
+`responded_by_user`). New DAGs start paused in standalone; unpause once via the UI or
+`PATCH /api/v2/dags/factory {"is_paused": false}`.
 
 ### Sandbox safety
 

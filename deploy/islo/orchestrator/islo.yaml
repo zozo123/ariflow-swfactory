@@ -1,0 +1,33 @@
+# islo config for the FACTORY ORCHESTRATOR sandbox (not the per-run agent sandboxes: those use
+# the repo-root islo.yaml through IsloSandbox). Applied by deploy/islo/deploy.sh via
+# `islo use swf-orchestrator --config deploy/islo/orchestrator/islo.yaml --source github://<repo>:<branch> ...`.
+#
+# The orchestrator is the TRUSTED side of the factory: it runs `airflow standalone` (dags/) and
+# `swfactory webhook serve` (deploy/islo/orchestrator/start.sh), and creates the untrusted
+# agent MicroVMs with `islo use swf-<issue>-<run> ...`. Its GitHub credential is the phantom
+# GH_TOKEN the gateway swaps on egress (`islo login --tool github`); the ISLO_API_KEY it needs
+# to create sandboxes comes from the `swfactory-orchestrator` islo environment
+# (`islo environment create --name swfactory-orchestrator --secret ISLO_API_KEY=...`), never from
+# argv. Gateway profile `swfactory-orchestrator` must allow: github.com api.github.com
+# pypi.org files.pythonhosted.org astral.sh islo.dev releases.islo.dev (+ the islo API host).
+#
+# Keys verified against `islo init` 0.48.1 (sandbox, image, cpu, memory_mb, disk_gb, env,
+# setup_script, sources, workdir, environment) and `islo use --help` (gateway_profile).
+sandbox: swf-orchestrator
+gateway_profile: swfactory-orchestrator
+environment: swfactory-orchestrator
+cpu: 2
+memory_mb: 4096
+disk_gb: 20
+setup_script: |
+  set -eu
+  export PATH="$HOME/.local/bin:$PATH"
+  command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
+  command -v islo >/dev/null 2>&1 || curl -fsSL https://islo.dev/install.sh | sh
+  grep -q '.local/bin' "$HOME/.profile" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"
+  # The factory checkout is the single --source clone under /workspace (fork-agnostic).
+  for d in /workspace/*/; do
+    if [ -f "$d/pyproject.toml" ] && [ -f "$d/dags/blueprints.py" ]; then
+      cd "$d" && uv sync --group airflow
+    fi
+  done

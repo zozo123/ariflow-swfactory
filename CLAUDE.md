@@ -9,7 +9,7 @@ dev box); the orchestrator alone talks to GitHub (`git am` a format-patch stream
 create`); a human merges. Stage semantics live in `stages.py`; a blueprint only picks the walk.
 
 ## Commands
-- `uv sync` — install. `uv run pytest` — 209 hermetic tests (fake subprocess, tmp git, no network).
+- `uv sync` — install. `uv run pytest` — 235 hermetic tests (fake subprocess, tmp git, no network).
 - `uv run ruff check . && uv run ruff format --check .` — lint (line length 100; E,F,I,B,UP,SIM).
 - `uv run swfactory demo` — scripted replay, local sandbox, local bare remote. No keys, ~10 s.
   `--sandbox srt` confines the same replay with the Anthropic Sandbox Runtime (needs `npx`).
@@ -23,6 +23,11 @@ create`); a human merges. Stage semantics live in `stages.py`; a blueprint only 
 - `uv run airflow dags test factory --conf '{"issues":["demo/issue.md"]}' --mark-success-pattern 'job\.approve_.*'`
   — `dags test` never resolves HITL gates; always mark them.
 - `uv run swfactory metrics --root .`, `uv run swfactory maintain --root .` — metrics / bands.
+- `uv run swfactory doctor [--json] [--blueprint <name>]` — preflight: islo/gh/claude/srt CLIs, `islo login` + `--tool github/claude`, gateway profile, environment, snapshot, `gh auth` + repo, blueprint; exit 1 on a required red row, each with its `fix:`.
+- `uv run swfactory webhook serve --port 8081 --airflow-url http://localhost:8080` — GitHub issue-label webhook receiver on the orchestrator sandbox -> `POST /api/v2/dags/<name>/dagRuns`.
+- `deploy/islo/bootstrap.sh` — one-time islo org setup: gateway profiles + environments (phantom tokens), incoming webhook, knowledge items.
+- `deploy/islo/deploy.sh` — orchestrator sandbox from `deploy/islo/orchestrator/{islo.yaml,start.sh}` (Airflow + receiver), prints the shared UI URL.
+- `deploy/islo/knowledge.sh [owner/repo]` — publish CLAUDE.md, REVIEW.md, SKILL.md as islo knowledge items (rule/rule/skill, tag `swfactory`; get -> update|create, idempotent).
 
 ## Conventions
 - Python 3.12, `from __future__ import annotations`, type hints, docstrings on public functions.
