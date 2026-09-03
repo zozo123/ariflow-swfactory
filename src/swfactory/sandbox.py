@@ -312,6 +312,11 @@ class SrtSandbox(LocalSandbox):
         this point goes through srt.
         """
         self.root.mkdir(parents=True, exist_ok=True)
+        # bubblewrap cannot install a denyWrite mount on a missing path. Pre-create the
+        # fixed protected directories on the trusted orchestrator side before the first
+        # sandboxed command; empty directories are never committed.
+        for rel in SRT_FIXED_DENY_WRITE:
+            (self.root / rel).mkdir(parents=True, exist_ok=True)
         self.write_settings()
         if not (self.root / ".git").exists():
             res = LocalSandbox.run(self, "git init -q -b main")

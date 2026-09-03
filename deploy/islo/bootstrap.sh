@@ -3,7 +3,7 @@
 #
 #   islo login (+ github, claude integrations) -> gateway profile (deny-by-default + allow rules)
 #   -> environment carrying the Anthropic key as a gateway secret -> optional golden snapshot
-#   -> `swfactory doctor`.
+#   -> `swfactory doctor` -> publish the factory knowledge bundle.
 #
 # Every step is skipped when its object already exists, so re-running is safe. Secrets are never
 # echoed; the only place the key appears is the argv of `islo environment create` (the CLI has no
@@ -147,3 +147,5 @@ fi
 # ---------------------------------------------------------------- 6. verify
 log "uv run swfactory doctor"
 uv run swfactory doctor
+log "deploy/islo/knowledge.sh $REPO"
+"$FACTORY_ROOT/deploy/islo/knowledge.sh" "$REPO"

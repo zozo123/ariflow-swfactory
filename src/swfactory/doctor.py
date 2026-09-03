@@ -261,10 +261,24 @@ def _check_gateway(runner: Runner, profile: str) -> Check:
         return Check(
             "gateway profile", False, f"{profile!r} not found; have: {have}", gateway_fix(profile)
         )
-    action = match.get("default_action")
-    detail = f"{profile!r} default_action={action} rules={match.get('rule_count', '?')}"
-    if action and action != "deny":
-        detail += " (expected deny: the sandbox must be deny-by-default)"
+    action = str(match.get("default_action") or "").lower()
+    internet = match.get("internet_enabled")
+    detail = (
+        f"{profile!r} default_action={action or '?'} internet_enabled={internet} "
+        f"rules={match.get('rule_count', '?')}"
+    )
+    problems = []
+    if action != "deny":
+        problems.append("default_action must be deny")
+    if internet is not True:
+        problems.append("internet access must be enabled for the explicit allow rules")
+    if problems:
+        return Check(
+            "gateway profile",
+            False,
+            f"{detail} ({'; '.join(problems)})",
+            gateway_fix(profile),
+        )
     return Check("gateway profile", True, detail)
 
 

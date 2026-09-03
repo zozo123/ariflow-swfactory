@@ -15,7 +15,7 @@
 #   the agent-side `swfactory` gateway profile + environment from the README (unchanged)
 #
 # Env: SWF_REPO (owner/name, default zozo123/ariflow-swfactory), SWF_BRANCH (main),
-#      GITHUB_WEBHOOK_SECRET (generated when unset; never printed), SWF_SANDBOX_OWNER (defaults
+#      GITHUB_WEBHOOK_SECRET (required; reuse the same secret on redeploy), SWF_SANDBOX_OWNER (defaults
 #      to the islo login email if `islo status --output json` exposes one), SHARE_TTL (7d).
 # Every islo/gh flag below exists in `islo <cmd> --help` (0.48.1) / `gh api --help`.
 set -euo pipefail
@@ -33,8 +33,8 @@ REPO_NAME="${REPO##*/}"
 REPO_DIR="/workspace/$REPO_NAME"
 
 if [ -z "${GITHUB_WEBHOOK_SECRET:-}" ]; then
-  GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"
-  echo "deploy: generated a GitHub webhook secret (kept in memory only; both ends get it now)"
+  echo "deploy: GITHUB_WEBHOOK_SECRET is required; generate it once (for example: openssl rand -hex 32) and reuse it on every redeploy" >&2
+  exit 1
 fi
 export GITHUB_WEBHOOK_SECRET
 

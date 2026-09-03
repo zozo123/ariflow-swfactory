@@ -21,7 +21,7 @@ from swfactory.cli import app
 from swfactory.webhook import Trigger, route, trigger_airflow, verify_signature
 
 SECRET = "s3cret"
-AIRFLOW = "http://airflow.local:8080"
+AIRFLOW = "http://127.0.0.1:8080"
 
 
 # ---------------------------------------------------------------- fixtures / fakes
@@ -183,6 +183,23 @@ def test_verify_signature_wrong_secret_or_body() -> None:
 
 
 # ---------------------------------------------------------------- Airflow calls (fake opener)
+
+
+@pytest.mark.parametrize(
+    "url", ["http://airflow.example:8080", "ftp://airflow.example", "http://user:pw@127.0.0.1:8080"]
+)
+def test_airflow_rejects_unsafe_credential_transport(url: str) -> None:
+    with pytest.raises(ValueError):
+        webhook.airflow_token(url, "admin", "pw", FakeOpener())
+    with pytest.raises(ValueError):
+        trigger_airflow(Trigger("factory"), airflow_url=url, token="T", opener=FakeOpener())
+
+
+def test_authenticated_default_opener_refuses_redirects() -> None:
+    assert (
+        webhook._NoRedirect().redirect_request(None, None, 302, "Found", {}, "https://evil.example")
+        is None
+    )
 
 
 def test_airflow_token_posts_credentials() -> None:

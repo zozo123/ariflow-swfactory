@@ -177,13 +177,28 @@ def test_missing_gateway_profile() -> None:
     assert "fix: islo gateway create" in table(checks)
 
 
-def test_gateway_present_but_allow_by_default_is_flagged_in_detail() -> None:
-    gws = [{"name": "swfactory", "default_action": "allow", "rule_count": 0}]
+def test_gateway_present_but_allow_by_default_fails() -> None:
+    gws = [
+        {"name": "swfactory", "default_action": "allow", "internet_enabled": True, "rule_count": 0}
+    ]
     checks = run_doctor(
         cfg(), green(**{"islo gateway ls --output json": json.dumps(gws)}), root=ROOT
     )
     gw = by_name(checks)["gateway profile"]
-    assert gw.ok and "expected deny" in gw.detail
+    assert not gw.ok and "default_action must be deny" in gw.detail
+    assert exit_code(checks) == 1
+
+
+def test_gateway_with_internet_disabled_fails() -> None:
+    gws = [
+        {"name": "swfactory", "default_action": "deny", "internet_enabled": False, "rule_count": 6}
+    ]
+    checks = run_doctor(
+        cfg(), green(**{"islo gateway ls --output json": json.dumps(gws)}), root=ROOT
+    )
+    gw = by_name(checks)["gateway profile"]
+    assert not gw.ok and "internet access must be enabled" in gw.detail
+    assert exit_code(checks) == 1
 
 
 def test_missing_environment() -> None:

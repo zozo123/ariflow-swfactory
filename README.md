@@ -176,7 +176,8 @@ on_activity`), reads artifacts out with `islo cp`, and applies the patch on its 
 
 ```sh
 islo login && islo login --tool github && islo login --tool claude   # once per org (phantom tokens)
-deploy/islo/bootstrap.sh    # one-time: gateway profiles + environments, incoming webhook, knowledge items
+deploy/islo/bootstrap.sh    # one-time: agent gateway/environment, optional snapshot, knowledge items
+export GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)  # generate once; store/reuse on every redeploy
 deploy/islo/deploy.sh       # orchestrator sandbox from deploy/islo/orchestrator/{islo.yaml,start.sh}:
                             #   Airflow + webhook receiver; prints the shared Airflow UI URL
 uv run swfactory doctor     # preflight: islo/gh/claude CLIs, login + tool integrations, gateway profile,

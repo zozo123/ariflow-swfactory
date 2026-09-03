@@ -27,6 +27,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -149,6 +150,30 @@ def verify_signature(secret: str, body: bytes, header: str | None) -> bool:
 # ---------------------------------------------------------------- Airflow REST calls
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Reject redirects so credentials cannot cross origins through urllib."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect()).open
+
+
+def _safe_airflow_base(url: str) -> str:
+    """Require HTTPS, except for an explicitly loopback HTTP Airflow endpoint."""
+    parsed = urllib.parse.urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    loopback = host == "localhost" or host == "::1" or host.startswith("127.")
+    if parsed.username or parsed.password:
+        raise ValueError("Airflow URL must not contain credentials")
+    if parsed.scheme == "https" and host:
+        return url.rstrip("/")
+    if parsed.scheme == "http" and loopback:
+        return url.rstrip("/")
+    raise ValueError("Airflow URL must use HTTPS; HTTP is allowed only for loopback")
+
+
 def _post_json(
     url: str, payload: Mapping[str, Any], *, headers: Mapping[str, str], opener: Opener
 ) -> tuple[int, str]:
@@ -164,15 +189,16 @@ def _post_json(
 
 
 def airflow_token(
-    url: str, username: str, password: str, opener: Opener = urllib.request.urlopen
+    url: str, username: str, password: str, opener: Opener = _NO_REDIRECT_OPENER
 ) -> str:
     """``POST {url}/auth/token {"username", "password"}`` -> the JWT ``access_token``.
 
     Airflow 3.3.1 simple auth manager; the generated admin password lives in
     ``$AIRFLOW_HOME/simple_auth_manager_passwords.json.generated``.
     """
+    base = _safe_airflow_base(url)
     _, text = _post_json(
-        f"{url.rstrip('/')}/auth/token",
+        f"{base}/auth/token",
         {"username": username, "password": password},
         headers={},
         opener=opener,
@@ -187,12 +213,13 @@ def airflow_token(
 
 
 def trigger_airflow(
-    trigger: Trigger, *, airflow_url: str, token: str, opener: Opener = urllib.request.urlopen
+    trigger: Trigger, *, airflow_url: str, token: str, opener: Opener = _NO_REDIRECT_OPENER
 ) -> str:
     """``POST {airflow_url}/api/v2/dags/{dag_id}/dagRuns`` with ``trigger.body()`` and a Bearer
     token. Returns the created ``dag_run_id`` (or the raw response when it has none). Raises
     ``urllib.error.HTTPError`` / ``URLError`` untouched so the handler can map them to 502."""
-    url = f"{airflow_url.rstrip('/')}/api/v2/dags/{trigger.dag_id}/dagRuns"
+    base = _safe_airflow_base(airflow_url)
+    url = f"{base}/api/v2/dags/{trigger.dag_id}/dagRuns"
     _, text = _post_json(
         url, trigger.body(), headers={"Authorization": f"Bearer {token}"}, opener=opener
     )
@@ -207,7 +234,7 @@ def trigger_airflow(
 def token_provider_from_env(
     airflow_url: str,
     env: Mapping[str, str] | None = None,
-    opener: Opener = urllib.request.urlopen,
+    opener: Opener = _NO_REDIRECT_OPENER,
 ) -> TokenProvider:
     """``AIRFLOW_TOKEN`` (static JWT) or ``AIRFLOW_USER`` + ``AIRFLOW_PASSWORD`` (a fresh login
     per event, so the JWT's expiry never matters). Raises ``ValueError`` when neither is set."""
@@ -229,7 +256,7 @@ def make_handler(
     airflow_url: str,
     token_provider: TokenProvider,
     secret: str | None = None,
-    opener: Opener = urllib.request.urlopen,
+    opener: Opener = _NO_REDIRECT_OPENER,
     log: Callable[[str], None] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Build the request handler class bound to one Airflow and one token source.
@@ -326,7 +353,7 @@ def make_server(
     airflow_url: str,
     token_provider: TokenProvider,
     secret: str | None = None,
-    opener: Opener = urllib.request.urlopen,
+    opener: Opener = _NO_REDIRECT_OPENER,
     host: str = "0.0.0.0",
     log: Callable[[str], None] | None = None,
 ) -> HTTPServer:
@@ -348,7 +375,7 @@ def serve(
     airflow_url: str,
     token_provider: TokenProvider,
     secret: str | None = None,
-    opener: Opener = urllib.request.urlopen,
+    opener: Opener = _NO_REDIRECT_OPENER,
     host: str = "0.0.0.0",
 ) -> None:
     """Run the receiver until interrupted (``swfactory webhook serve``)."""
