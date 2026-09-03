@@ -1,0 +1,77 @@
+name: pr6-finish
+
+on:
+  push:
+    branches: [feat/docker-local]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/docker-local
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - name: Apply final reliability fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              if new in text:
+                  return
+              if old not in text:
+                  raise SystemExit(f"missing patch context in {path}: {old[:90]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "src/swfactory/sandbox.py",
+              '''    def env(self) -> dict[str, str]:\n        \"\"\"Scrubbed host env plus the ``pass_env`` allowlist (only keys present on the host).\"\"\"\n        env = scrub_env(os.environ)\n        env.update({k: os.environ[k] for k in self.pass_env if k in os.environ})\n        return env\n''',
+              '''    def env(self) -> dict[str, str]:\n        \"\"\"Scrubbed host env plus explicit credentials and a sandbox-writable uv cache.\n\n        GitHub's setup-uv exports ``UV_CACHE_DIR`` under ``$RUNNER_TEMP``. That path is outside\n        the SRT write allowlist, so forwarding it makes ``uv sync`` fail read-only. Always pin uv\n        to the allowed per-user cache under ``~/.cache`` while preserving the exact credential\n        allowlist.\n        \"\"\"\n        env = scrub_env(os.environ)\n        env.update({k: os.environ[k] for k in self.pass_env if k in os.environ})\n        env[\"UV_CACHE_DIR\"] = str(Path.home() / \".cache\" / \"uv\")\n        return env\n''',
+          )
+
+          replace_once(
+              "src/swfactory/scm.py",
+              '''        if not (self.remote_dir / \"HEAD\").exists():\n            self.remote_dir.parent.mkdir(parents=True, exist_ok=True)\n            _run([\"git\", \"init\", \"--quiet\", \"--bare\", str(self.remote_dir)], None)\n        _run([\"git\", \"symbolic-ref\", \"HEAD\", \"refs/heads/main\"], self.remote_dir)\n''',
+              '''        if not (self.remote_dir / \"HEAD\").exists():\n            self.remote_dir.parent.mkdir(parents=True, exist_ok=True)\n            _run([\"git\", \"init\", \"--quiet\", \"--bare\", str(self.remote_dir)], None)\n        # A local demo/test may inspect or snapshot this bare remote immediately after publish.\n        # Disable Git's asynchronous auto-maintenance so loose objects cannot be repacked out from\n        # under that reader; explicit maintenance remains possible when an operator wants it.\n        _run([\"git\", \"config\", \"gc.auto\", \"0\"], self.remote_dir)\n        _run([\"git\", \"config\", \"maintenance.auto\", \"false\"], self.remote_dir)\n        _run([\"git\", \"symbolic-ref\", \"HEAD\", \"refs/heads/main\"], self.remote_dir)\n''',
+          )
+
+          replace_once(
+              "tests/test_stages_scripted.py",
+              '''    report, tmp, _ = run\n    for name in (\"work\", \"run\"):\n        shutil.copytree(tmp / name, tmp_path / name, ignore=shutil.ignore_patterns(\".venv\"))\n    bp = load(\"factory\")\n''',
+              '''    report, tmp, _ = run\n    shutil.copytree(tmp / \"work\", tmp_path / \"work\", ignore=shutil.ignore_patterns(\".venv\"))\n    # A bare Git repository is a live database, not an ordinary directory tree. Clone it rather\n    # than recursively copying object files, which can race Git's internal repack/maintenance.\n    shutil.copytree(\n        tmp / \"run\",\n        tmp_path / \"run\",\n        ignore=shutil.ignore_patterns(\".venv\", \"remote.git\"),\n    )\n    subprocess.run(\n        [\"git\", \"clone\", \"--quiet\", \"--mirror\", str(tmp / \"run\" / \"remote.git\"), str(tmp_path / \"run\" / \"remote.git\")],\n        check=True,\n    )\n    bp = load(\"factory\")\n''',
+          )
+
+          replace_once(
+              "tests/test_sandbox_argv.py",
+              '''    monkeypatch.setenv(\"PATH\", \"/usr/bin\")\n    seen = _fake_srt(monkeypatch)\n\n    _srt(tmp_path).run(\"true\")\n    env = seen[\"kwargs\"][\"env\"]\n''',
+              '''    monkeypatch.setenv(\"PATH\", \"/usr/bin\")\n    monkeypatch.setenv(\"UV_CACHE_DIR\", \"/runner-temp/setup-uv-cache\")\n    seen = _fake_srt(monkeypatch)\n\n    _srt(tmp_path).run(\"true\")\n    env = seen[\"kwargs\"][\"env\"]\n    assert env[\"UV_CACHE_DIR\"] == str(Path.home() / \".cache\" / \"uv\")\n''',
+          )
+          PY
+      - run: uv sync --group airflow
+      - run: uv run ruff format .
+      - run: uv run ruff check . && uv run ruff format --check .
+      - run: uv run pytest
+      - name: SRT smoke
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          npm i -g @anthropic-ai/sandbox-runtime@0.0.75
+          uv run swfactory demo --sandbox srt
+      - name: Commit code-only fixes
+        run: |
+          git checkout origin/feat/docker-local -- .github/workflows
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: stabilize local SCM snapshots and SRT uv cache"
+          git push origin HEAD:feat/docker-local
