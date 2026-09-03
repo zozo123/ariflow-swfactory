@@ -1,5 +1,9 @@
 # swfactory
-| docker | Linux container per command (`docker run --rm`): workdir bind-mounted rw at its own path, `factory.toml` protected prefixes and `.claude`/`.github` mounted `:ro` per stage, `--network bridge\|none` | `ANTHROPIC_API_KEY` by `-e NAME` only (agent=claude, `credentials=env`) or your `~/.claude` login (`credentials=host`) | docker CLI + daemon; image `deploy/docker/sandbox.Dockerfile` | fully local testing of the whole pipeline incl. Airflow (`deploy/docker/compose.yml`); NOT a trust boundary: shared kernel, docker.sock is root-equivalent, no phantom tokens |
+
+[![CI](https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml/badge.svg)](https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml)
+[![Airflow 3.3.1](https://img.shields.io/badge/Airflow-3.3.1-017CEE?logo=apacheairflow&logoColor=white)](https://airflow.apache.org/docs/apache-airflow/3.3.1/)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3120/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-D22128)](LICENSE)
 
 An AI-native software factory: a GitHub issue goes in, a reviewed pull request with a committed
 artifact chain (intent, spec, plan, review, approvals, metrics) comes out. A **blueprint**
@@ -35,7 +39,7 @@ doubles as the end-to-end test.
 
 ```sh
 uv sync
-uv run pytest            # 235 passed (hermetic: fake subprocess, tmp git repos)
+uv run pytest            # hermetic: fake subprocesses, temporary git repos, no network
 uv run swfactory demo    # scripted replay of a recorded run on demo/target
 ```
 
@@ -133,6 +137,7 @@ carrying `intent.md`, `approvals.json` and `metrics.json`, `status="blocked"`, e
 | --- | --- | --- | --- | --- |
 | `local` | none (`scrub_env` only) | none — `agent=claude` refused unless `--allow-local-agent` | nothing | demo, pytest, CI |
 | `srt` | OS-level (macOS Seatbelt / Linux bubblewrap): writes limited to the workdir + Claude/uv caches; `factory.toml` `protected` globs are kernel `denyWrite` **per stage** (tests dir writable for `build`, denied for `fix`, re-synced before every agent call) plus `.claude`/`.github`; egress domain allowlist; `~/.ssh` `~/.aws` `~/.config` `~/.gnupg` `~/.netrc` `~/.docker` `~/.kube` unreadable | the real `ANTHROPIC_API_KEY` (or the host's Claude OAuth login); shares the host kernel; proxy-based egress | `srt` on PATH or `npx` (`@anthropic-ai/sandbox-runtime`); Linux: bubblewrap + socat | cloudless real agent on a keyed dev box; `evals.yml` |
+| `docker` | Linux container per command (`docker run --rm`): workdir bind-mounted rw at its own path, `factory.toml` protected prefixes and `.claude`/`.github` mounted `:ro` per stage, `--network bridge\|none` | `ANTHROPIC_API_KEY` by `-e NAME` only (agent=claude, `credentials=env`) or your `~/.claude` login (`credentials=host`) | docker CLI + daemon; image `deploy/docker/sandbox.Dockerfile` | fully local testing of the whole pipeline incl. Airflow (`deploy/docker/compose.yml`); NOT a trust boundary: shared kernel, docker.sock is root-equivalent, no phantom tokens |
 | `islo` | Firecracker-class MicroVM, deny-by-default gateway | phantom `ANTHROPIC_API_KEY` swapped on egress; never a GitHub token | `islo login` + `--tool github/claude`, gateway profile + environment (`deploy/islo/bootstrap.sh`), `swfactory doctor` green | production: the two-tier topology below, `demo --real`, `evals-islo` |
 
 Honest limits: phantom tokens exist only on islo — `srt` is defense-in-depth for your own machine,

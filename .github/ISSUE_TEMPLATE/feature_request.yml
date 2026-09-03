@@ -1,0 +1,26 @@
+name: Feature request
+description: Propose a focused improvement to the factory
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What operator or contributor problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+      description: Describe the desired behavior, not only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: trust
+    attributes:
+      label: Trust-boundary impact
+      description: Note any effect on credentials, agent permissions, network access, or delivery.
+    validations:
+      required: true
