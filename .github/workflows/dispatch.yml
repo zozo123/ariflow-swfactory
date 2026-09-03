@@ -5,7 +5,7 @@ name: dispatch-factory
 #   label `factory:<name>` -> DAG `<name>`  (blueprints/<name>.toml)
 # `factory:blocked` is a PR label written by deliver, never a dispatch. The Airflow API URL/token
 # live in the repo secrets AIRFLOW_URL and AIRFLOW_TOKEN; when they are missing the run exits 0
-# with a notice.
+# with a notice. GitHub-hosted dispatch requires HTTPS and never follows redirects with the token.
 on:
   issues:
     types: [labeled]
@@ -31,8 +31,13 @@ jobs:
             echo "::notice::AIRFLOW_URL / AIRFLOW_TOKEN secrets not set; skipping dispatch of issue #$ISSUE_NUMBER to DAG $dag"
             exit 0
           fi
+          case "$AIRFLOW_URL" in
+            https://*) ;;
+            *) echo "::error::AIRFLOW_URL must use https:// for GitHub-hosted dispatch"; exit 1 ;;
+          esac
           payload=$(printf '{"logical_date": null, "conf": {"issues": ["%s"]}}' "$ISSUE_NUMBER")
-          curl --fail-with-body --silent --show-error -X POST \
+          curl --fail-with-body --silent --show-error \
+            --proto '=https' --proto-redir '=https' --max-redirs 0 -X POST \
             "${AIRFLOW_URL%/}/api/v2/dags/${dag}/dagRuns" \
             -H "Authorization: Bearer $AIRFLOW_TOKEN" \
             -H "Content-Type: application/json" \
