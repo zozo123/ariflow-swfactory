@@ -41,7 +41,7 @@ jobs:
         with: { python-version: "3.12" }
       - name: Install bubblewrap + socat and allow unprivileged user namespaces (Ubuntu 24.04)
         run: |
-          sudo apt-get update && sudo apt-get install -y bubblewrap socat
+          sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Install Anthropic Sandbox Runtime
         run: npm i -g @anthropic-ai/sandbox-runtime@0.0.75 && srt --version

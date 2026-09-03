@@ -63,7 +63,7 @@ jobs:
       - name: Install bubblewrap + socat and allow unprivileged user namespaces (Ubuntu 24.04)
         if: steps.gate.outputs.enabled == 'true'
         run: |
-          sudo apt-get update && sudo apt-get install -y bubblewrap socat
+          sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Install Anthropic Sandbox Runtime and Claude Code
         if: steps.gate.outputs.enabled == 'true'
