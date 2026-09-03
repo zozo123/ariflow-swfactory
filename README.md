@@ -321,6 +321,13 @@ Both PRs carry bot-authored commits with `Factory-Run` / `Factory-Stage` / `Agen
 per-stage `agent/*.json` (cost, turns, session id). `main` is branch-protected (1 review, code
 owners); a human merges.
 
+> **Why the two factory PRs fail this repo's CI while `main` is green:** their branches already
+> contain the agent's real `percent_change` in `demo/target`, so the keyless demo's recorded
+> fixtures (`demo/scripted/build.1.patch`, recorded against the baseline target) no longer apply.
+> That is the intended signal: merging a factory PR that changes the demo target means re-recording
+> the fixtures (`swfactory run --record demo/scripted ...`) in the same PR, or closing the PR and
+> keeping it as the audit record. Either is a human decision; the factory never merges.
+
 ### Sandbox safety
 
 The factory only ever removes sandboxes it can prove are its own: every `islo rm` is preceded by a
