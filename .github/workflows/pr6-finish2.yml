@@ -1,0 +1,67 @@
+name: pr6-finish2
+
+on:
+  push:
+    branches: [feat/docker-local]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/docker-local
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - name: Apply final reliability fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/pr6-finish.yml').read_text()
+          begin = "          python - <<'PY'\n"
+          end = "\n          PY\n"
+          start = workflow.index(begin) + len(begin)
+          stop = workflow.index(end, start)
+          code = textwrap.dedent(workflow[start:stop])
+          exec(compile(code, 'pr6-finish.yml', 'exec'))
+
+          for file in ('src/swfactory/sandbox.py', 'tests/test_sandbox_argv.py'):
+              p = Path(file)
+              text = p.read_text()
+              text = text.replace(
+                  'str(Path.home() / ".cache" / "uv")',
+                  'str(self.root / ".factory" / "uv-cache")' if file.endswith('sandbox.py')
+                  else 'str((tmp_path / "work" / ".factory" / "uv-cache").resolve())',
+              )
+              text = text.replace(
+                  'pin uv\n        to the allowed per-user cache under ``~/.cache``',
+                  'pin uv\n        to the sandbox-owned cache under ``.factory/uv-cache``',
+              )
+              p.write_text(text)
+          PY
+      - run: uv sync --group airflow
+      - run: uv run ruff format .
+      - run: uv run ruff check . && uv run ruff format --check .
+      - run: uv run pytest
+      - name: SRT smoke
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          npm i -g @anthropic-ai/sandbox-runtime@0.0.75
+          uv run swfactory demo --sandbox srt
+      - name: Commit code-only fixes
+        run: |
+          git checkout origin/feat/docker-local -- .github/workflows
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: stabilize local SCM snapshots and SRT uv cache"
+          git push origin HEAD:feat/docker-local
