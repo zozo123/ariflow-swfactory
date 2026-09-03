@@ -91,6 +91,10 @@ NEVER_COMMITTED = (
     ".bash_profile",
     ".bashrc",
     ".profile",
+    ".gitconfig",
+    ".npmrc",
+    ".zshrc",
+    ".inputrc",
 )
 
 
