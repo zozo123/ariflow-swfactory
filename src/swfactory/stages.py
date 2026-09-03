@@ -412,6 +412,15 @@ def intent(ctx: Ctx) -> StageResult:
     return StageResult(stage="intent", artifacts=[path], preview=_preview(text))
 
 
+def _document_only(text: str) -> str:
+    """Drop any chatty preamble before the first markdown heading (the artifact is a document)."""
+    lines = text.rstrip().splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            return "\n".join(lines[i:])
+    return text.rstrip()
+
+
 @_timed
 def spec(ctx: Ctx) -> StageResult:
     """Agent (read-only) turns intent.md into spec.md."""
@@ -424,7 +433,7 @@ def spec(ctx: Ctx) -> StageResult:
     res = _agent(ctx, "spec", 1, prompt, None)
     if not res.text.strip():
         raise StageError("agent", "spec returned empty text")
-    ctx.sb.write(path, res.text.rstrip() + "\n")
+    ctx.sb.write(path, _document_only(res.text) + "\n")
     return StageResult(stage="spec", artifacts=[path])
 
 

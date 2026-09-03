@@ -184,3 +184,11 @@ def test_bare_remote_has_branch_with_trailers(run) -> None:
 def test_demo_target_untouched(run) -> None:
     _, _, before = run
     assert _tree_digest(TARGET) == before
+
+
+def test_document_only_strips_preamble():
+    from swfactory.stages import _document_only
+
+    assert _document_only("I read the repo.\n\n# spec.md\n\n## R1\n") == "# spec.md\n\n## R1"
+    assert _document_only("# spec.md\nbody\n") == "# spec.md\nbody"
+    assert _document_only("no heading at all") == "no heading at all"

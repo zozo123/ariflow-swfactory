@@ -18,3 +18,4 @@ Return the full content of `spec.md` (markdown only, no preamble) with exactly t
 
 Rules: no scope beyond the intent; no code; stay under one page; never guess what the
 repository does — read it.
+Output ONLY the document, starting with the `# spec.md` heading — no preamble, no closing remarks.
