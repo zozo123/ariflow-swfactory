@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ValidationError
 
-from swfactory.config import Config, load_target_contract
+from swfactory.config import Config, load_target_contract, protected_for
 from swfactory.models import AgentKind, AgentResult, StageError
 
 if TYPE_CHECKING:
@@ -253,7 +253,7 @@ class ClaudeAgent:
         sb.run(f"mkdir -p .factory {shlex.quote(art + '/agent')}")
         sb.write(prompt_path, prompt)
         if policy.writes:
-            install_guard(sb, self._protected_for(sb))
+            install_guard(sb, self._protected_for(sb, stage))
         cmd = self.argv(
             prompt_path=prompt_path, out_path=out_path, policy=policy, schema=schema, cfg=cfg
         )
@@ -274,11 +274,11 @@ class ClaudeAgent:
             _record(sb, Path(cfg.record_dir), stage, iteration, result, policy, cfg.run_id)
         return result
 
-    def _protected_for(self, sb: Sandbox) -> Sequence[str]:
+    def _protected_for(self, sb: Sandbox, stage: str) -> Sequence[str]:
         if self._protected is not None:
             return self._protected
         try:
-            return load_target_contract(sb).protected
+            return protected_for(load_target_contract(sb), stage)
         except ValueError:
             return ()
 

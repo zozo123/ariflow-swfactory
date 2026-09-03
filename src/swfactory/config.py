@@ -117,6 +117,18 @@ class TargetContract(BaseModel):
         )
 
 
+def protected_for(contract: TargetContract, stage: str) -> list[str]:
+    """Paths the agent may not edit in ``stage``.
+
+    The playbook protects tests during *fix* tasks (fix the code, not the gate). Build must be
+    able to write tests, so the tests dir is dropped from the list for every stage but ``fix``.
+    """
+    if stage == "fix":
+        return list(contract.protected)
+    tests = contract.tests_dir.rstrip("/")
+    return [p for p in contract.protected if p.rstrip("/") != tests]
+
+
 def load_target_contract(sb: Sandbox) -> TargetContract:
     try:
         return TargetContract.parse(sb.read("factory.toml"))

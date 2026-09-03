@@ -31,7 +31,7 @@ from pydantic import BaseModel
 
 from swfactory import metrics as metrics_mod
 from swfactory.agent import POLICIES, Agent, Policy, render_prompt
-from swfactory.config import Config, TargetContract, load_target_contract
+from swfactory.config import Config, TargetContract, load_target_contract, protected_for
 from swfactory.models import (
     AgentResult,
     Approval,
@@ -254,8 +254,8 @@ def _policy(ctx: Ctx, stage: str) -> Policy:
     )
 
 
-def _protected(ctx: Ctx) -> str:
-    return ", ".join(_contract(ctx).protected)
+def _protected(ctx: Ctx, stage: str) -> str:
+    return ", ".join(protected_for(_contract(ctx), stage)) or "(none)"
 
 
 def commit(ctx: Ctx, *, stage: str, msg: str) -> str:
@@ -449,7 +449,7 @@ def plan(ctx: Ctx) -> StageResult:
         issue_id=ctx.issue.id,
         intent=ctx.sb.read(f"{ctx.art}/intent.md"),
         spec=_read_or(ctx, f"{ctx.art}/spec.md"),  # "(none)" when the line has no spec stage
-        protected=_protected(ctx),
+        protected=_protected(ctx, "plan"),
     )
     res = _agent(ctx, "plan", 1, prompt, Plan)
     p = Plan.model_validate(res.data)
@@ -489,7 +489,7 @@ def build_and_test(ctx: Ctx) -> StageResult:
             spec=spec_text,
             plan=plan_text,
             failures=failures,
-            protected=_protected(ctx),
+            protected=_protected(ctx, stage),
         )
         res = _agent(ctx, stage, i, prompt, BuildSummary)
         commit(ctx, stage=stage, msg=f"{stage}: {_summary_line(res, f'iteration {i}')}")
@@ -594,7 +594,7 @@ def review(ctx: Ctx) -> StageResult:
             issue_id=ctx.issue.id,
             plan=plan_text,
             failures="Review blockers:\n" + _format_findings(rv.blockers),
-            protected=_protected(ctx),
+            protected=_protected(ctx, "fix"),
         )
         fix_res = _agent(ctx, "fix", fixes, fix_prompt, BuildSummary)
         commit(ctx, stage="fix", msg=f"fix: {_summary_line(fix_res, 'address review blockers')}")

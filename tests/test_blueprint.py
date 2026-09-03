@@ -283,3 +283,12 @@ def test_crabbox_command_downloads_unless_in_place() -> None:
         cmd = stages.crabbox_command(provider, ".factory/junit.xml", "uv run pytest")
         assert "-download" not in cmd and "-artifact-glob" not in cmd
         assert f"-provider {provider} -junit .factory/junit.xml -ttl 45m" in cmd
+
+
+def test_protected_for_frees_tests_dir_outside_fix():
+    from swfactory.config import TargetContract, protected_for
+
+    c = TargetContract(test="uv run pytest", protected=["factory.toml", "tests/"])
+    assert protected_for(c, "build") == ["factory.toml"]
+    assert protected_for(c, "plan") == ["factory.toml"]
+    assert protected_for(c, "fix") == ["factory.toml", "tests/"]

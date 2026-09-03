@@ -244,7 +244,11 @@ def test_claude_run_write_stage_installs_guard_from_factory_toml() -> None:
     sb = FakeSandbox(
         {
             ".factory/agent.build.1.json": json.dumps(envelope),
-            "factory.toml": '[commands]\ntest = "uv run pytest"\n[paths]\nprotected = ["tests/"]\n',
+            "factory.toml": (
+                '[commands]\ntest = "uv run pytest"\n[paths]\n'
+                'protected = ["factory.toml", "tests/"]\n'
+            ),
+            ".factory/agent.fix.2.json": json.dumps(envelope),
         }
     )
     res = ClaudeAgent().run(
@@ -259,8 +263,21 @@ def test_claude_run_write_stage_installs_guard_from_factory_toml() -> None:
     )
     assert res.data == {"summary": "ok", "files_changed": []}  # fallback: result text is JSON
     settings = json.loads(sb.files[SETTINGS_DST])
-    assert settings["env"]["SWF_PROTECTED"] == "tests/"
+    # build may write tests (playbook: tests are protected during FIX tasks only)
+    assert settings["env"]["SWF_PROTECTED"] == "factory.toml"
     assert sb.files[GUARD_DST] == GUARD.read_text()
+    ClaudeAgent().run(
+        sb,
+        stage="fix",
+        iteration=2,
+        prompt="fix",
+        policy=POLICIES["fix"],
+        schema=BuildSummary,
+        cfg=_claude_cfg(),
+        issue_id="DEMO-1",
+    )
+    settings = json.loads(sb.files[SETTINGS_DST])
+    assert settings["env"]["SWF_PROTECTED"] == "factory.toml:tests/"
 
 
 def test_claude_run_extracts_fenced_json_when_structured_output_missing() -> None:
