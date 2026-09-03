@@ -842,7 +842,8 @@ def test_make_sandbox_docker(tmp_path, monkeypatch) -> None:
     scripted = make_sandbox(Config(issue="42", sandbox="docker"), "42")
     assert isinstance(scripted, DockerSandbox) and scripted.pass_env == ()
     assert scripted.image == "ghcr.io/zozo123/swfactory-sandbox:latest"
-    assert scripted.network == "bridge" and scripted.user is None
+    assert scripted.network == "bridge"
+    assert scripted.user == sandbox_mod.default_docker_user()  # host uid on Linux, None on macOS
 
 
 def test_config_docker_fields_and_validators() -> None:
