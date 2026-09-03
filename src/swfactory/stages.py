@@ -423,7 +423,10 @@ def setup(ctx: Ctx) -> StageResult:
     patterns = " ".join(shlex.quote(p) for p in NEVER_COMMITTED)
     _sh(
         ctx,
-        f"mkdir -p {info} && for p in {patterns}; do "
+        f"mkdir -p {info} && for p in {patterns} "
+        # + any non-regular dotfile at the root (srt on Linux binds shell/git rc stubs there)
+        "$(find . -maxdepth 1 -mindepth 1 -name '.*' ! -type f ! -type d ! -type l "
+        "-exec basename {} \\; 2>/dev/null); do "
         f'grep -qxF -- "$p" {info}/exclude 2>/dev/null || echo "$p" >> {info}/exclude; done',
     )
     # Identity travels as `git -c` (here and in commit()): srt forbids writes to .git/config.
