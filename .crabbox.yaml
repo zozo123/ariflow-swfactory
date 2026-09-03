@@ -1,9 +1,10 @@
 # crabbox: sync this dirty checkout to a leased box and run the test suite there.
-# Human inner loop: `crabbox run --provider islo -- uv run pytest`
-#   (add `-islo-gateway-profile swfactory` when provider=islo).
+# Human inner loop: `crabbox run --provider local-container -- uv run pytest`
+#   (or `--provider islo -islo-gateway-profile swfactory` with ISLO_API_KEY in your shell).
 # Factory wiring: SWF_TESTS=crabbox makes stages.run_tests wrap the target's test command in
-# `crabbox run -provider <SWF_CRABBOX_PROVIDER> -junit ... -artifact-glob ...` on the LOCAL
+# `crabbox run -provider <SWF_CRABBOX_PROVIDER> -junit ... -download <junit>=<junit>` on the LOCAL
 # sandbox only (never nested inside islo). Never -allow-env / -env-from-profile / -keep.
+# Jobs are maps ({command, shell}); a bare string does not parse (`crabbox doctor`).
 profile: swfactory
 class: small
 sync:
@@ -12,6 +13,7 @@ sync:
   exclude:
     - .venv
     - .factory
+    - .crabbox
     - airflow_home
     - __pycache__
     - ".env*"
@@ -19,5 +21,9 @@ env:
   allow:
     - CI
 jobs:
-  test: uv run pytest
-  demo: uv run swfactory demo
+  test:
+    command: uv run pytest
+    shell: true
+  demo:
+    command: uv run swfactory demo
+    shell: true

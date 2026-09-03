@@ -126,6 +126,7 @@ class StageResult(BaseModel):
     numbers: dict[str, float] = Field(default_factory=dict)
     cost_usd: float = 0.0
     duration_s: float = 0.0
+    preview: str = ""  # gate artifact head (intent.md / plan.md), shown by the ApprovalOperator
 
 
 class RunReport(BaseModel):

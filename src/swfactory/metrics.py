@@ -39,6 +39,7 @@ def write_run_metrics(ctx: Ctx, stages: list[StageResult], approvals: list[Appro
     data = {
         "run_id": ctx.cfg.run_id,
         "issue_id": ctx.issue.id,
+        "blueprint": ctx.cfg.blueprint,
         "agent": ctx.agent.kind,
         "sandbox": ctx.cfg.sandbox,
         "sandbox_name": ctx.sb.name,

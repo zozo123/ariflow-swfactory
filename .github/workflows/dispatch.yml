@@ -1,7 +1,11 @@
 name: dispatch-factory
 # A GitHub issue labeled `factory` enters the software factory: this workflow triggers the
-# Airflow `factory` DAG with conf {"issue": "<number>"}. The Airflow API URL/token live in the
-# repo secrets AIRFLOW_URL and AIRFLOW_TOKEN; when they are missing the run exits 0 with a notice.
+# Airflow DAG of the same-named blueprint with conf {"issues": ["<number>"]}.
+#   label `factory`        -> DAG `factory` (blueprints/default.toml)
+#   label `factory:<name>` -> DAG `<name>`  (blueprints/<name>.toml)
+# `factory:blocked` is a PR label written by deliver, never a dispatch. The Airflow API URL/token
+# live in the repo secrets AIRFLOW_URL and AIRFLOW_TOKEN; when they are missing the run exits 0
+# with a notice.
 on:
   issues:
     types: [labeled]
@@ -10,22 +14,26 @@ permissions:
   issues: read
 jobs:
   trigger:
-    if: github.event.label.name == 'factory'
+    if: >-
+      (github.event.label.name == 'factory' || startsWith(github.event.label.name, 'factory:'))
+      && github.event.label.name != 'factory:blocked'
     runs-on: ubuntu-latest
     env:
       AIRFLOW_URL: ${{ secrets.AIRFLOW_URL }}
       AIRFLOW_TOKEN: ${{ secrets.AIRFLOW_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
+      LABEL: ${{ github.event.label.name }}
     steps:
-      - name: Trigger the factory DAG
+      - name: Trigger the blueprint's DAG
         run: |
+          dag="${LABEL#factory:}"     # "factory" stays "factory"; "factory:<name>" -> "<name>"
           if [ -z "$AIRFLOW_URL" ] || [ -z "$AIRFLOW_TOKEN" ]; then
-            echo "::notice::AIRFLOW_URL / AIRFLOW_TOKEN secrets not set; skipping dispatch for issue #$ISSUE_NUMBER"
+            echo "::notice::AIRFLOW_URL / AIRFLOW_TOKEN secrets not set; skipping dispatch of issue #$ISSUE_NUMBER to DAG $dag"
             exit 0
           fi
-          payload=$(printf '{"logical_date": null, "conf": {"issue": "%s"}}' "$ISSUE_NUMBER")
+          payload=$(printf '{"logical_date": null, "conf": {"issues": ["%s"]}}' "$ISSUE_NUMBER")
           curl --fail-with-body --silent --show-error -X POST \
-            "${AIRFLOW_URL%/}/api/v2/dags/factory/dagRuns" \
+            "${AIRFLOW_URL%/}/api/v2/dags/${dag}/dagRuns" \
             -H "Authorization: Bearer $AIRFLOW_TOKEN" \
             -H "Content-Type: application/json" \
             --data "$payload"

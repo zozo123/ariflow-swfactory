@@ -3,10 +3,10 @@
 
 Reads the Claude Code PreToolUse payload ({"tool_name", "tool_input"}) on stdin.
 
-* Edit/Write/MultiEdit are denied when ``file_path`` matches a protected rule. Rules come
-  from ``SWF_PROTECTED`` (colon-separated globs or path prefixes, set by the factory from the
-  target's factory.toml) plus a fixed list (REVIEW.md, bands.yaml, .claude/, .github/,
-  factory.toml).
+* Edit/Write/MultiEdit/NotebookEdit are denied when ``file_path`` (``notebook_path`` for
+  NotebookEdit) matches a protected rule. Rules come from ``SWF_PROTECTED`` (colon-separated
+  globs or path prefixes, set by the factory from the target's factory.toml) plus a fixed list
+  (REVIEW.md, bands.yaml, .claude/, .github/, factory.toml).
 * Bash is denied when the command matches the factory denylist (push / PR / commit / egress):
   the factory commits and delivers, never the agent.
 
@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from fnmatch import fnmatch
 
 FIXED_PROTECTED = ("REVIEW.md", "bands.yaml", ".claude/", ".github/", "factory.toml")
-WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit"})
+WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
 BASH_DENY = re.compile(r"git push|gh pr|git commit|--amend|curl |wget ")
 LOG_PATH = ".factory/hooks.jsonl"
 
@@ -59,7 +59,7 @@ def path_matches(path: str, rule: str, cwd: str) -> bool:
 def decide(tool: str, tool_input: dict, cwd: str) -> tuple[str, str]:
     """Return (path_or_cmd, deny_reason); an empty reason means allow."""
     if tool in WRITE_TOOLS:
-        path = str(tool_input.get("file_path") or "")
+        path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
         for rule in protected_rules():
             if path_matches(path, rule, cwd):
                 return path, f"'{path}' is protected ({rule}). Fix the code, not the gate."

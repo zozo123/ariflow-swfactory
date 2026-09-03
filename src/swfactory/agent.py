@@ -36,6 +36,23 @@ GUARD_DENY = (
     "Bash(wget *)",
     "Read(.env*)",
 )
+# Native Claude Code path rules: the PRIMARY gate (checked before hooks, not bypassable by hook
+# output). The python hook below is defense-in-depth plus the audit log. Edit(...) rules cover
+# Edit/Write/MultiEdit/NotebookEdit; the Write(...) twins are belt-and-braces.
+GUARD_PATH_DENY = (
+    "Edit(REVIEW.md)",
+    "Edit(bands.yaml)",
+    "Edit(factory.toml)",
+    "Edit(.claude/**)",
+    "Edit(.github/**)",
+    "Read(.claude/hooks/**)",
+    "Write(REVIEW.md)",
+    "Write(bands.yaml)",
+    "Write(factory.toml)",
+    "Write(.claude/**)",
+    "Write(.github/**)",
+)
+GUARD_MATCHER = "Edit|Write|MultiEdit|NotebookEdit|Bash"
 _FIXTURE_EXTS = ("patch", "json", "md")
 _FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _DIFF_FILE_RE = re.compile(r"^diff --git a/\S+ b/(\S+)$", re.MULTILINE)
@@ -120,31 +137,45 @@ def render_prompt(stage: str, **vars: Any) -> str:
 # ---------------------------------------------------------------- guard
 
 
+def guard_deny_rules(protected: Sequence[str]) -> list[str]:
+    """``permissions.deny`` for a write stage: Bash/Read rules, fixed path rules, and per
+    protected glob ``g`` (trailing slash dropped) ``Edit(g)``, ``Edit(g/**)`` + Write twins."""
+    rules = [*GUARD_DENY, *GUARD_PATH_DENY]
+    for entry in protected:
+        g = entry.strip().rstrip("/")
+        if not g:
+            continue
+        rules += [f"Edit({g})", f"Edit({g}/**)", f"Write({g})", f"Write({g}/**)"]
+    return list(dict.fromkeys(rules))
+
+
 def install_guard(sb: Sandbox, protected: Sequence[str]) -> None:
     """Install the PreToolUse guard into the target checkout (idempotent).
 
-    Writes ``.claude/settings.local.json`` (hook wiring, ``permissions.deny`` mirror, and
-    ``SWF_PROTECTED`` in ``env``), copies ``swf_guard.py`` next to it, and lists both in
-    ``.git/info/exclude`` so they never appear in the delivered patch.
+    Writes ``.claude/settings.local.json`` (hook wiring, native ``permissions.deny`` path and
+    Bash rules, and ``SWF_PROTECTED`` in ``env``), copies ``swf_guard.py`` next to it, and lists
+    both in ``.git/info/exclude`` so they never appear in the delivered patch. The files are
+    written by the orchestrator BEFORE the in-sandbox probe: under srt ``.claude/`` is
+    kernel-read-only for the sandboxed shell, so the directory must already exist.
     """
     settings = {
         "hooks": {
             "PreToolUse": [
                 {
-                    "matcher": "Edit|Write|MultiEdit|Bash",
+                    "matcher": GUARD_MATCHER,
                     "hooks": [{"type": "command", "command": f"python3 {GUARD_DST}"}],
                 }
             ]
         },
-        "permissions": {"deny": list(GUARD_DENY)},
+        "permissions": {"deny": guard_deny_rules(protected)},
         "env": {"SWF_PROTECTED": ":".join(protected)},
     }
+    sb.write(SETTINGS_DST, json.dumps(settings, indent=2) + "\n")
+    sb.write(GUARD_DST, GUARD_SRC.read_text(encoding="utf-8"))
     probe = sb.run(
         'mkdir -p .claude/hooks && mkdir -p "$(git rev-parse --git-dir)/info" '
         "&& git rev-parse --show-cdup --show-prefix"
     )
-    sb.write(SETTINGS_DST, json.dumps(settings, indent=2) + "\n")
-    sb.write(GUARD_DST, GUARD_SRC.read_text(encoding="utf-8"))
     if not probe.ok:
         return  # not a git checkout: nothing to exclude
     cdup, prefix = (probe.stdout.splitlines() + ["", ""])[:2]

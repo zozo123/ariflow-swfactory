@@ -1,0 +1,52 @@
+# Hotfix line: a second DAG with zero Python. Same target as the default line, no spec stage
+# (the issue body is the spec), the intent gate resolves itself and the plan gate waits 4 hours.
+
+[blueprint]
+name = "hotfix"
+version = 1
+description = "Hotfix line: intent -> plan -> build+test -> review -> PR (no spec, short plan gate)"
+
+[trigger]
+kind = "manual"
+
+[[targets]]
+repo = "zozo123/ariflow-swfactory"
+dir = "demo/target"
+base_branch = "main"
+
+[stages]
+order = ["intent", "plan", "build_and_test", "review", "deliver"]
+
+[[gates]]
+after = "intent"
+artifact = "intent.md"
+timeout_h = 1
+auto = true                 # unattended: defaults to Approve, recorded actor "auto"
+
+[[gates]]
+after = "plan"
+artifact = "plan.md"
+timeout_h = 4
+
+[limits]
+max_build_iterations = 3
+max_review_fixes = 1
+max_turns = 40
+budget_usd_per_stage = 2.0
+budget_usd = 8.0
+stage_timeout_h = 3
+max_parallel_jobs = 4
+
+[review]
+policy = "REVIEW.md"
+nit_cap = 3
+
+[sandbox]
+kind = "islo"
+gateway_profile = "swfactory"
+environment = "swfactory"
+ttl_s = 86400               # 24 h: still > 4 h plan gate
+idle_s = 900
+
+[deliver]
+labels = ["factory", "agent-authored", "hotfix"]

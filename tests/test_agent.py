@@ -12,13 +12,17 @@ import pytest
 
 from swfactory import agent as agent_mod
 from swfactory.agent import (
+    GUARD_DENY,
     GUARD_DST,
+    GUARD_MATCHER,
+    GUARD_PATH_DENY,
     POLICIES,
     SETTINGS_DST,
     ClaudeAgent,
     FixtureMissing,
     Policy,
     ScriptedAgent,
+    guard_deny_rules,
     install_guard,
     make_agent,
     render_prompt,
@@ -373,11 +377,65 @@ def test_install_guard_is_idempotent_and_excludes_files() -> None:
     install_guard(sb, ["tests/", "factory.toml"])
     settings = json.loads(sb.files[SETTINGS_DST])
     assert settings["env"]["SWF_PROTECTED"] == "tests/:factory.toml"
-    assert settings["hooks"]["PreToolUse"][0]["matcher"] == "Edit|Write|MultiEdit|Bash"
+    assert settings["hooks"]["PreToolUse"][0]["matcher"] == GUARD_MATCHER
     assert "Bash(git push*)" in settings["permissions"]["deny"]
     exclude = sb.files[".git/info/exclude"].splitlines()
     assert exclude.count(SETTINGS_DST) == 1 and exclude.count(GUARD_DST) == 1
     assert exclude[0].startswith("# git ls-files")
+
+
+def test_install_guard_native_deny_rules_and_matcher() -> None:
+    sb = FakeSandbox()
+    install_guard(sb, ["tests/", "src/calc/", "bands.yaml"])
+    settings = json.loads(sb.files[SETTINGS_DST])
+    matcher = settings["hooks"]["PreToolUse"][0]["matcher"]
+    assert set(matcher.split("|")) == {"Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"}
+    hook = settings["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert hook == {"type": "command", "command": f"python3 {GUARD_DST}"}
+    deny = settings["permissions"]["deny"]
+    for rule in GUARD_DENY + GUARD_PATH_DENY:
+        assert rule in deny, rule
+    for rule in (
+        "Edit(REVIEW.md)",
+        "Edit(bands.yaml)",
+        "Edit(factory.toml)",
+        "Edit(.claude/**)",
+        "Edit(.github/**)",
+        "Read(.claude/hooks/**)",
+        "Write(REVIEW.md)",
+        "Write(bands.yaml)",
+        "Write(factory.toml)",
+        "Edit(tests)",
+        "Edit(tests/**)",
+        "Write(tests)",
+        "Write(tests/**)",
+        "Edit(src/calc)",
+        "Edit(src/calc/**)",
+    ):
+        assert rule in deny, rule
+    assert "Edit(tests/)" not in deny  # trailing slash normalised
+    assert len(deny) == len(set(deny))  # bands.yaml protected twice -> one rule
+    assert deny[: len(GUARD_DENY)] == list(GUARD_DENY)  # Bash rules keep their place
+    assert settings["env"]["SWF_PROTECTED"] == "tests/:src/calc/:bands.yaml"
+
+
+def test_guard_deny_rules_skip_empty_entries() -> None:
+    rules = guard_deny_rules(["", "/", " docs/ "])
+    assert rules[len(GUARD_DENY) + len(GUARD_PATH_DENY) :] == [
+        "Edit(docs)",
+        "Edit(docs/**)",
+        "Write(docs)",
+        "Write(docs/**)",
+    ]
+
+
+def test_install_guard_writes_files_before_probing_sandbox() -> None:
+    """Under srt `.claude/` is read-only for the sandboxed shell: files land first, via write()."""
+    sb = FakeSandbox()
+    install_guard(sb, [])
+    assert sb.runs and "mkdir -p .claude/hooks" in sb.runs[0]
+    assert SETTINGS_DST in sb.files and GUARD_DST in sb.files
+    assert sb.files[GUARD_DST] == GUARD.read_text()
 
 
 def test_install_guard_in_subdir_uses_repo_root_exclude() -> None:
@@ -574,3 +632,19 @@ def test_guard_bash_denylist(tmp_path: Path) -> None:
         _hook(tmp_path, {"tool_name": "Read", "tool_input": {"file_path": "tests/x"}}).returncode
         == 0
     )
+
+
+def test_guard_notebook_edit_uses_notebook_path(tmp_path: Path) -> None:
+    env = {"SWF_PROTECTED": "tests/"}
+    denied = _hook(
+        tmp_path,
+        {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "tests/nb.ipynb"}},
+        **env,
+    )
+    assert denied.returncode == 2 and "protected" in denied.stderr
+    allowed = _hook(
+        tmp_path,
+        {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "notebooks/nb.ipynb"}},
+        **env,
+    )
+    assert allowed.returncode == 0

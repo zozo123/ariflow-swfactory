@@ -1,13 +1,17 @@
-"""The SDLC stages. One linear ``PIPELINE`` drives both ``swfactory run`` and the Airflow DAG.
+"""The SDLC stages. ``STAGES`` (keyed by ``CANONICAL_ORDER``) is the registry a blueprint walks;
+``PIPELINE`` is the default blueprint's walk and drives ``swfactory run`` and the Airflow DAG.
 
 Every stage is a function ``Ctx -> StageResult`` that is idempotent: when its primary artifact
 already exists it returns ``status="skipped"``. Loops (build/fix, review/fix) live *inside* stage
 functions and are bounded by ``Config``. The agent never commits: stages commit with the bot
 identity and provenance trailers, and ``deliver`` hands the commits to the Scm as a patch stream.
+A blueprint (``Ctx.blueprint``) only changes the walk order and knobs (tool policy additions,
+nit cap, PR labels); with ``blueprint=None`` every stage behaves exactly as v1.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import getpass
 import json
@@ -19,14 +23,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import typer
 import yaml
 from pydantic import BaseModel
 
 from swfactory import metrics as metrics_mod
-from swfactory.agent import POLICIES, Agent, render_prompt
+from swfactory.agent import POLICIES, Agent, Policy, render_prompt
 from swfactory.config import Config, TargetContract, load_target_contract
 from swfactory.models import (
     AgentResult,
@@ -44,8 +48,19 @@ from swfactory.models import (
 from swfactory.sandbox import LocalSandbox, Sandbox
 from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
 
+if TYPE_CHECKING:
+    from swfactory.blueprint import Blueprint
+
 FACTORY_ROOT = Path(__file__).resolve().parents[2]
-NIT_CAP = 3  # REVIEW.md: at most 3 nits per review
+CANONICAL_ORDER: tuple[str, ...] = ("intent", "spec", "plan", "build_and_test", "review", "deliver")
+NIT_CAP = 3  # REVIEW.md: at most 3 nits per review (blueprint.review.nit_cap overrides)
+DEFAULT_LABELS: tuple[str, ...] = ("factory", "agent-authored")  # blueprint.labels overrides
+_GIT_BOT = f"git -c user.name={shlex.quote(BOT_NAME)} -c user.email={shlex.quote(BOT_EMAIL)}"
+PREVIEW_CHARS = 4000  # StageResult.preview: head of the gate artifact shown to the approver
+# crabbox providers that run in place: no file download step exists (or is needed) for junit.
+IN_PLACE_PROVIDERS = frozenset(
+    {"srt", "anthropic-sandbox-runtime", "docker-sandbox", "apple-machine"}
+)
 BUILT_MARKER = ".factory/built"
 BASE_FILE = ".factory/base"
 STARTED_FILE = ".factory/started"
@@ -69,6 +84,8 @@ class Ctx:
     scm: Scm
     issue: Issue
     run_dir: Path
+    blueprint: Blueprint | None = None  # None => v1 defaults (PIPELINE, NIT_CAP, DEFAULT_LABELS)
+    target: dict | None = None  # the job's {"repo", "dir", "base_branch"} (provenance only)
     contract: TargetContract | None = None  # loaded by setup(); lazily on demand otherwise
     stages: list[StageResult] = field(default_factory=list)  # accumulated by run_pipeline
     spent_usd: float = 0.0  # run-level cost guard
@@ -143,8 +160,24 @@ def _exclude(ctx: Ctx) -> str:
     return shlex.quote(f":!{ctx.art}")
 
 
-def _skipped(stage: str, artifacts: list[str], numbers: dict[str, float]) -> StageResult:
-    return StageResult(stage=stage, status="skipped", artifacts=artifacts, numbers=numbers)
+def _skipped(
+    stage: str, artifacts: list[str], numbers: dict[str, float], preview: str = ""
+) -> StageResult:
+    return StageResult(
+        stage=stage, status="skipped", artifacts=artifacts, numbers=numbers, preview=preview
+    )
+
+
+def _preview(text: str) -> str:
+    return text[:PREVIEW_CHARS]
+
+
+def _nit_cap(ctx: Ctx) -> int:
+    return ctx.blueprint.review.nit_cap if ctx.blueprint else NIT_CAP
+
+
+def _pipeline(ctx: Ctx) -> tuple[Stage | Gate, ...]:
+    return ctx.blueprint.pipeline() if ctx.blueprint else PIPELINE
 
 
 def _timed(fn: Stage) -> Stage:
@@ -176,7 +209,7 @@ def load_stage_results(ctx: Ctx) -> list[StageResult]:
             latest[rec.stage] = rec
     for rec in ctx.stages:
         latest[rec.stage] = rec
-    order = [s.__name__ for s in PIPELINE if not isinstance(s, Gate)]
+    order = CANONICAL_ORDER
     return sorted(latest.values(), key=lambda r: order.index(r.stage) if r.stage in order else -1)
 
 
@@ -189,7 +222,7 @@ def _agent(
         stage=stage,
         iteration=iteration,
         prompt=prompt,
-        policy=POLICIES[stage],
+        policy=_policy(ctx, stage),
         schema=schema,
         cfg=ctx.cfg,
         issue_id=ctx.issue.id,
@@ -208,6 +241,19 @@ def _agent(
     return res
 
 
+def _policy(ctx: Ctx, stage: str) -> Policy:
+    """``POLICIES[stage]`` plus the blueprint's additive override (extra allowed tools, model).
+    ``disallowed_tools`` and ``writes`` cannot be changed from a blueprint."""
+    policy = POLICIES[stage]
+    override = ctx.blueprint.policy.get(stage) if ctx.blueprint else None
+    if override is None:
+        return policy
+    extra = tuple(t for t in override.extra_allowed_tools if t not in policy.allowed_tools)
+    return dataclasses.replace(
+        policy, allowed_tools=policy.allowed_tools + extra, model=override.model or policy.model
+    )
+
+
 def _protected(ctx: Ctx) -> str:
     return ", ".join(_contract(ctx).protected)
 
@@ -220,7 +266,7 @@ def commit(ctx: Ctx, *, stage: str, msg: str) -> str:
         return _sh(ctx, "git rev-parse HEAD").strip()
     q = shlex.quote
     cmd = (
-        f"git -c user.name={q(BOT_NAME)} -c user.email={q(BOT_EMAIL)} -c commit.gpgsign=false "
+        f"{_GIT_BOT} -c commit.gpgsign=false "
         f"commit -q -m {q(msg)} "
         f"--trailer {q(f'Factory-Run={ctx.cfg.run_id}')} "
         f"--trailer {q(f'Factory-Stage={stage}')} "
@@ -236,11 +282,7 @@ def _run_tests(ctx: Ctx) -> tuple[TestResult, str]:
     contract = _contract(ctx)
     cmd = contract.test
     if ctx.cfg.tests == "crabbox":
-        cmd = (
-            f"crabbox run -provider {shlex.quote(ctx.cfg.crabbox_provider)} "
-            f"-junit {shlex.quote(contract.junit)} -artifact-glob {shlex.quote(contract.junit)} "
-            f"-ttl 45m -idle-timeout 15m -- {contract.test}"
-        )
+        cmd = crabbox_command(ctx.cfg.crabbox_provider, contract.junit, contract.test)
     ctx.sb.run(f"rm -f {shlex.quote(contract.junit)}")
     res = ctx.sb.run(cmd)
     output = (res.stdout[-6000:] + "\n" + res.stderr[-2000:]).strip()
@@ -249,6 +291,18 @@ def _run_tests(ctx: Ctx) -> tuple[TestResult, str]:
     except FileNotFoundError:
         return TestResult(exit_code=res.exit_code, junit_path=None), output
     return TestResult(**counts, exit_code=res.exit_code, junit_path=contract.junit), output
+
+
+def crabbox_command(provider: str, junit: str, test_cmd: str) -> str:
+    """``crabbox run`` wrapper for the target's test command. The junit file comes back through
+    ``-download <junit>=<junit>`` (never ``-artifact-glob``: SSH-lease only); in-place providers
+    (``IN_PLACE_PROVIDERS``) already leave it in the working tree, so no download is requested."""
+    q = shlex.quote
+    download = "" if provider in IN_PLACE_PROVIDERS else f"-download {q(f'{junit}={junit}')} "
+    return (
+        f"crabbox run -provider {q(provider)} -junit {q(junit)} {download}"
+        f"-ttl 45m -idle-timeout 15m -- {test_cmd}"
+    )
 
 
 def run_tests(ctx: Ctx) -> TestResult:
@@ -317,11 +371,10 @@ def setup(ctx: Ctx) -> StageResult:
         f"mkdir -p {info} && for p in {patterns}; do "
         f'grep -qxF -- "$p" {info}/exclude 2>/dev/null || echo "$p" >> {info}/exclude; done',
     )
-    _sh(ctx, f"git config user.name {shlex.quote(BOT_NAME)}")
-    _sh(ctx, f"git config user.email {shlex.quote(BOT_EMAIL)}")
+    # Identity travels as `git -c` (here and in commit()): srt forbids writes to .git/config.
     if not sb.run("git rev-parse --verify -q HEAD").ok:
         _sh(ctx, "git add -A")
-        _sh(ctx, "git -c commit.gpgsign=false commit -q --allow-empty -m baseline")
+        _sh(ctx, f"{_GIT_BOT} -c commit.gpgsign=false commit -q --allow-empty -m baseline")
     if not sb.exists(BASE_FILE):
         sb.write(BASE_FILE, _sh(ctx, "git rev-parse HEAD").strip() + "\n")
         sb.write(STARTED_FILE, _now() + "\n")
@@ -345,7 +398,7 @@ def intent(ctx: Ctx) -> StageResult:
     """No agent: the originator's words, verbatim, under a small front matter."""
     path = f"{ctx.art}/intent.md"
     if ctx.sb.exists(path):
-        return _skipped("intent", [path], {})
+        return _skipped("intent", [path], {}, preview=_preview(ctx.sb.read(path)))
     meta = {
         "id": ctx.issue.id,
         "title": ctx.issue.title,
@@ -354,8 +407,9 @@ def intent(ctx: Ctx) -> StageResult:
         "run_id": ctx.cfg.run_id,
     }
     front = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).rstrip()
-    ctx.sb.write(path, f"---\n{front}\n---\n{ctx.issue.body.rstrip()}\n")
-    return StageResult(stage="intent", artifacts=[path])
+    text = f"---\n{front}\n---\n{ctx.issue.body.rstrip()}\n"
+    ctx.sb.write(path, text)
+    return StageResult(stage="intent", artifacts=[path], preview=_preview(text))
 
 
 @_timed
@@ -379,20 +433,25 @@ def plan(ctx: Ctx) -> StageResult:
     """Agent (read-only) produces a typed Plan -> plan.json + rendered plan.md."""
     json_path, md_path = f"{ctx.art}/plan.json", f"{ctx.art}/plan.md"
     if ctx.sb.exists(json_path):
-        return _skipped("plan", [md_path, json_path], {})
+        preview = _preview(_read_or(ctx, md_path))
+        return _skipped("plan", [md_path, json_path], {}, preview=preview)
     prompt = render_prompt(
         "plan",
         issue_id=ctx.issue.id,
         intent=ctx.sb.read(f"{ctx.art}/intent.md"),
-        spec=ctx.sb.read(f"{ctx.art}/spec.md"),
+        spec=_read_or(ctx, f"{ctx.art}/spec.md"),  # "(none)" when the line has no spec stage
         protected=_protected(ctx),
     )
     res = _agent(ctx, "plan", 1, prompt, Plan)
     p = Plan.model_validate(res.data)
-    ctx.sb.write(md_path, p.to_markdown(ctx.issue.id))
+    md = p.to_markdown(ctx.issue.id)
+    ctx.sb.write(md_path, md)
     ctx.sb.write(json_path, _dumps(p.model_dump()))
     return StageResult(
-        stage="plan", artifacts=[md_path, json_path], numbers={"files": float(len(p.files))}
+        stage="plan",
+        artifacts=[md_path, json_path],
+        numbers={"files": float(len(p.files))},
+        preview=_preview(md),
     )
 
 
@@ -410,7 +469,7 @@ def build_and_test(ctx: Ctx) -> StageResult:
     if ctx.sb.exists(BUILT_MARKER):
         numbers = _read_json(ctx, BUILT_MARKER, {})
         return _skipped("build_and_test", [], numbers if isinstance(numbers, dict) else {})
-    spec_text = ctx.sb.read(f"{ctx.art}/spec.md")
+    spec_text = _read_or(ctx, f"{ctx.art}/spec.md")  # "(none)" when the line has no spec stage
     plan_text = ctx.sb.read(f"{ctx.art}/plan.md")
     failures = ""
     for i in range(1, ctx.cfg.max_build_iterations + 1):
@@ -501,7 +560,7 @@ def review(ctx: Ctx) -> StageResult:
         counts = {k: float(v) for k, v in _by_severity(rv.findings).items()}
         return _skipped("review", [path], {"blockers": counts["blocker"], **counts})
     base = ctx.sb.read(BASE_FILE).strip()
-    spec_text = ctx.sb.read(f"{ctx.art}/spec.md")
+    spec_text = _read_or(ctx, f"{ctx.art}/spec.md")  # "(none)" when the line has no spec stage
     plan_text = ctx.sb.read(f"{ctx.art}/plan.md")
     numbers: dict[str, float] = {}
     rv, dropped, fixes = Review(verdict="approve"), 0, 0
@@ -516,7 +575,7 @@ def review(ctx: Ctx) -> StageResult:
             diff=diff,
         )
         res = _agent(ctx, "review", k + 1, prompt, Review)
-        rv, dropped = cap_nits(Review.model_validate(res.data))
+        rv, dropped = cap_nits(Review.model_validate(res.data), _nit_cap(ctx))
         rv.findings.extend(_plan_fidelity(ctx, base))
         if not rv.blockers or k == ctx.cfg.max_review_fixes:
             break
@@ -598,7 +657,7 @@ def pr_body(
             continue
         note = ""
         if sev == "nit" and dropped_nits:
-            note = f", {dropped_nits} more dropped by the cap of {NIT_CAP}"
+            note = f", {dropped_nits} more dropped by the cap of {_nit_cap(ctx)}"
         lines.append(f"### {sev.capitalize()} ({len(group)}{note})")
         lines.extend(f"- `{f.file}:{f.line or '-'}` **{f.title}** — {f.detail}" for f in group)
     parts.append("\n".join(lines))
@@ -646,7 +705,8 @@ def deliver(ctx: Ctx) -> StageResult:
     data = data if isinstance(data, dict) else {}
     rv = Review.model_validate(data) if data else Review(verdict="approve")
     blocked = bool(rv.blockers)
-    labels = ["factory", "agent-authored"] + (["factory:blocked"] if blocked else [])
+    labels = list(ctx.blueprint.labels if ctx.blueprint else DEFAULT_LABELS)
+    labels += ["factory:blocked"] if blocked else []
     title = f"{ctx.issue.id}: {ctx.issue.title}"
     url = ctx.scm.publish(
         branch=ctx.branch,
@@ -669,6 +729,16 @@ def deliver(ctx: Ctx) -> StageResult:
     )
 
 
+STAGES: dict[str, Stage] = {
+    "intent": intent,
+    "spec": spec,
+    "plan": plan,
+    "build_and_test": build_and_test,
+    "review": review,
+    "deliver": deliver,
+}
+
+# The default blueprint's walk (blueprints/default.toml); ``Ctx.blueprint=None`` uses it.
 PIPELINE: tuple[Stage | Gate, ...] = (
     intent,
     Gate("intent", "intent.md"),
@@ -685,9 +755,10 @@ PIPELINE: tuple[Stage | Gate, ...] = (
 
 
 def run_pipeline(ctx: Ctx, approver: Approver) -> RunReport:
-    """CLI driver: walk ``PIPELINE``; gates go through ``approver``; a rejection stops the run."""
+    """CLI driver: walk the blueprint's pipeline (``PIPELINE`` without one); gates go through
+    ``approver``; a rejection stops the run."""
     approvals: list[Approval] = []
-    for item in PIPELINE:
+    for item in _pipeline(ctx):
         if isinstance(item, Gate):
             approval = approver(item, ctx)
             record_approval(ctx, approval)

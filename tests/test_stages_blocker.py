@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from swfactory.agent import ScriptedAgent
+from swfactory.blueprint import load
 from swfactory.cli import execute
-from swfactory.config import Config
 from swfactory.models import RunReport
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,17 +25,19 @@ def _isolated_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _run(tmp_path: Path, **overrides: object) -> tuple[RunReport, Path]:
-    cfg = Config(
-        issue="demo/issue.md",
+    bp = load("factory")
+    (job,) = bp.jobs({"issues": ["demo/issue.md"]})
+    cfg = bp.config(
+        job,
+        run_id="b10ck3r1",
         approve="auto",
         agent="scripted",
         sandbox="local",
         scm="local",
         workdir=str(tmp_path / "work"),
-        run_id="b10ck3r1",
         **overrides,
     )
-    report = execute(cfg, run_dir=tmp_path / "run", agent=ScriptedAgent(FIXTURES))
+    report = execute(cfg, run_dir=tmp_path / "run", agent=ScriptedAgent(FIXTURES), blueprint=bp)
     return report, tmp_path
 
 

@@ -16,3 +16,35 @@ jobs:
       - run: uv run pytest
       - name: e2e demo (scripted agent, local runner, local git remote)
         run: uv run swfactory demo
+
+  airflow-parity:
+    # One DAG per blueprints/*.toml mirrors the blueprint (parity), and the default line runs end
+    # to end through `dag.test()` with the gates marked success (smoke; HITL never resolves itself).
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - run: uv sync --group airflow
+      - run: uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py
+
+  srt-smoke:
+    # Anthropic Sandbox Runtime (bubblewrap on Linux) confining the scripted demo: no model, no
+    # ANTHROPIC key. srt is a beta research preview, so this job may not block merges yet.
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - name: Install bubblewrap + socat and allow unprivileged user namespaces (Ubuntu 24.04)
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Install Anthropic Sandbox Runtime
+        run: npm i -g @anthropic-ai/sandbox-runtime@0.0.75 && srt --version
+      - run: uv sync
+      - name: demo under srt (scripted agent, kernel-enforced write confinement)
+        run: uv run swfactory demo --sandbox srt

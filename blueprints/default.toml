@@ -1,0 +1,63 @@
+# Default SDLC line. One file = one Airflow DAG (dag_id = blueprint.name) = one `swfactory run
+# --blueprint` line. Parsed with stdlib tomllib at DAG parse time (shape only) and validated by
+# swfactory.blueprint.Blueprint (pydantic) in tasks, the CLI and tests.
+
+[blueprint]
+name = "factory"            # DAG id and CLI name; ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$ (islo-compatible id)
+version = 1                 # schema version
+description = "Default SDLC line: intent -> spec -> plan -> build+test -> review -> PR"
+
+[trigger]
+kind = "manual"             # manual | cron
+# cron = "0 6 * * 1"        # kind=cron -> DAG(schedule=cron)
+
+[[targets]]                 # >= 1; jobs per DAG run = len(conf.issues) x len(targets)
+repo = "zozo123/ariflow-swfactory"
+dir = "demo/target"         # "" = repo root
+base_branch = "main"
+
+[stages]
+order = ["intent", "spec", "plan", "build_and_test", "review", "deliver"]
+# must be a subsequence of CANONICAL_ORDER, first = intent, last = deliver; prompts render omitted
+# inputs as "(none)"
+
+[[gates]]
+after = "intent"            # must be in stages.order
+artifact = "intent.md"      # shown in the ApprovalOperator body (StageResult.preview, <= 4000 chars)
+timeout_h = 24              # ApprovalOperator response_timeout
+assigned = []               # -> assigned_users; empty = anyone
+auto = false                # true -> defaults="Approve" (recorded actor "auto"); unattended lines
+
+[[gates]]
+after = "plan"
+artifact = "plan.md"
+timeout_h = 24
+
+[limits]
+max_build_iterations = 3
+max_review_fixes = 1
+max_turns = 40
+budget_usd_per_stage = 2.0
+budget_usd = 8.0            # per JOB (issue x target), not per DAG run
+stage_timeout_h = 3         # execution_timeout of every stage task
+max_parallel_jobs = 4       # max_active_tis_per_dagrun on stage tasks == concurrent MicroVMs
+
+[policy.build]              # optional, per POLICIES key (spec|plan|build|fix|review|diagnose); ADDITIVE ONLY
+extra_allowed_tools = []    # e.g. ["Bash(npm test*)"] for a JS target
+# model = "claude-sonnet-4-5"
+# (disallowed_tools / permissions.deny cannot be touched from a blueprint)
+
+[review]
+policy = "REVIEW.md"        # path in the factory repo rendered into the review prompt (target's wins)
+nit_cap = 3
+
+[sandbox]
+kind = "islo"               # local | srt | islo   (SWF_SANDBOX env overrides for dev/smoke)
+gateway_profile = "swfactory"
+environment = "swfactory"
+ttl_s = 172800              # --delete-after; validator: > max(gates[].timeout_h) * 3600
+idle_s = 900                # --pause-after-idle
+# snapshot = "swf-golden-20260902"   # --snapshot warm start (islo only)
+
+[deliver]
+labels = ["factory", "agent-authored"]   # + factory:blocked is appended by deliver when blockers remain

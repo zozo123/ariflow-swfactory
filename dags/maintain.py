@@ -1,20 +1,40 @@
-"""Airflow DAG ``maintain``: nightly band check over committed run metrics + orphan sandbox sweep.
+"""Airflow DAG ``maintain``: band check over committed run metrics + orphan sandbox sweep.
 
-Detection is deterministic (``swfactory.maintain.detect``); the model is only invoked at the
-diagnose/propose tiers, read-only, inside an islo sandbox. ``swfactory`` is imported inside the
-callables so DAG parsing needs nothing but Airflow.
+Runs nightly (03:00 UTC) *and* whenever any blueprint's ``deliver`` task publishes its
+``swf.metrics.<blueprint>`` asset, so bands are checked right after every delivery. Detection is
+deterministic (``swfactory.maintain.detect``); the model is only invoked at the diagnose/propose
+tiers, read-only, inside a sandbox. ``swfactory`` is imported inside the callables so DAG parsing
+needs nothing but Airflow (blueprint names come from stdlib ``tomllib``).
 """
 
 from __future__ import annotations
 
 import os
+import tomllib
+from pathlib import Path
 from typing import Any
 
-from airflow.sdk import DAG, task
+from airflow.sdk import DAG, Asset, task
+from airflow.timetables.assets import AssetOrTimeSchedule
+from airflow.timetables.trigger import CronTriggerTimetable
+
+BLUEPRINTS_DIR = Path(__file__).resolve().parent.parent / "blueprints"
+NIGHTLY = CronTriggerTimetable("0 3 * * *", timezone="UTC")
+
+
+def _blueprint_names(root: Path = BLUEPRINTS_DIR) -> list[str]:
+    names = []
+    for path in sorted(root.glob("*.toml")):
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        names.append(data.get("blueprint", {}).get("name") or path.stem)
+    return names
+
+
+_assets = [Asset(name=f"swf.metrics.{n}") for n in _blueprint_names()]
 
 with DAG(
     dag_id="maintain",
-    schedule="@daily",
+    schedule=AssetOrTimeSchedule(timetable=NIGHTLY, assets=_assets) if _assets else NIGHTLY,
     catchup=False,
     tags=["swfactory"],
     doc_md=__doc__,

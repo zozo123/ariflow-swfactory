@@ -1,50 +1,63 @@
 # swfactory — institutional knowledge (keep under one page)
 
 ## What this is
-An AI-native software factory. Airflow 3 runs one linear pipeline with two human gates (intent,
-plan); Claude Code does stage work inside an islo MicroVM that holds no credentials; the
-orchestrator alone talks to GitHub (`git am` a format-patch stream, push, `gh pr create`); a human
-merges. `swfactory.stages.PIPELINE` drives both `swfactory run` and `dags/factory.py`.
+An AI-native software factory. A blueprint (`blueprints/<name>.toml`: stage order, gates, limits,
+targets, sandbox, labels) is one Airflow 3 DAG (`dags/blueprints.py`, jobs = issues x targets via
+dynamic task mapping) and one `swfactory run --blueprint <name>` line. Claude Code does stage work
+inside a sandbox that holds no GitHub credential (islo MicroVM in production, srt-confined dir on a
+dev box); the orchestrator alone talks to GitHub (`git am` a format-patch stream, push, `gh pr
+create`); a human merges. Stage semantics live in `stages.py`; a blueprint only picks the walk.
 
 ## Commands
-- `uv sync` — install. `uv run pytest` — 94 hermetic tests (fake subprocess, tmp git, no network).
+- `uv sync` — install. `uv run pytest` — 160 hermetic tests (fake subprocess, tmp git, no network).
 - `uv run ruff check . && uv run ruff format --check .` — lint (line length 100; E,F,I,B,UP,SIM).
-- `uv run swfactory demo` — scripted replay, local sandbox, local bare remote. No keys, ~5 s.
-  Add `--approve prompt` to answer the gates yourself; `--record demo/scripted` on a real run
-  rewrites the fixtures.
-- `uv run swfactory demo --real` — claude agent in an islo sandbox, real PR on the repo (needs
-  `islo login`, `GH_TOKEN`; see README bootstrap).
-- `uv run swfactory run --issue <n|path> [--agent] [--sandbox] [--scm] [--approve] [--tests]`.
-- `uv run swfactory metrics --root .` — aggregate `docs/factory/*/metrics.json`.
-- `uv run swfactory approve <dag_run_id> intent|plan [--reject]` — answer an Airflow HITL gate.
-- `uv sync --group airflow && uv run --group airflow pytest tests/test_dag_parity.py` — DAG parity.
-- Inner loop off-host: `crabbox run --provider islo -- uv run pytest`.
+- `uv run swfactory demo` — scripted replay, local sandbox, local bare remote. No keys, ~10 s.
+  `--sandbox srt` confines the same replay with the Anthropic Sandbox Runtime (needs `npx`).
+- `uv run swfactory run --blueprint hotfix --issue demo/issue.md --approve auto` — second line, scripted.
+- `uv run swfactory run --issue <n|path> --agent claude --sandbox srt --scm local|github --approve prompt`
+  — real agent, cloudless (Claude login or `ANTHROPIC_API_KEY` in your shell).
+- `uv run swfactory demo --real` — claude agent in an islo sandbox, real PR (needs `islo login`,
+  `GH_TOKEN`; README bootstrap + snapshot recipe).
+- `uv run swfactory approve <dag_run_id> intent|plan [--reject] [--blueprint <name>] [--map-index <job>]`.
+- `uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py` — 17 DAG tests.
+- `uv run airflow dags test factory --conf '{"issues":["demo/issue.md"]}' --mark-success-pattern 'job\.approve_.*'`
+  — `dags test` never resolves HITL gates; always mark them.
+- `uv run swfactory metrics --root .`, `uv run swfactory maintain --root .` — metrics / bands.
 
 ## Conventions
 - Python 3.12, `from __future__ import annotations`, type hints, docstrings on public functions.
-  Stdlib first (`subprocess`, `tomllib`, `statistics`, `xml.etree`). No Airflow import under `src/`.
-- Three protocols, two implementations each: `Sandbox` (local/islo), `Agent` (claude/scripted),
-  `Scm` (local/github). Stages are functions `Ctx -> StageResult` in `stages.py`; loops live inside
-  stage functions, never in the DAG.
+  Stdlib first (`subprocess`, `tomllib`, `statistics`, `xml.etree`). No Airflow import under `src/`;
+  `dags/*.py` import swfactory only inside task callables (parity test asserts it).
+- Protocols: `Sandbox` (local/srt/islo), `Agent` (claude/scripted), `Scm` (local/github). Stages are
+  functions `Ctx -> StageResult` registered in `STAGES`; loops live inside stage functions, never in
+  the DAG; task mapping fans out over jobs only (nested expansion is unsupported in Airflow 3.3.1).
+- Blueprints may only ADD allowed tools or set a model per stage; gates only after `intent`/`plan`;
+  `ttl_s > max gate timeout`. `SWF_*` env overrides blueprint values and CLI flags (env > init).
 - Artifacts are committed under `docs/factory/<issue>/` in the target by `swfactory-bot` with
   `Factory-Run`/`Factory-Stage`/`Agent` trailers. `.factory/` is uncommitted scratch.
 - Every stage is idempotent: artifact exists -> `status="skipped"`. Every loop is bounded by
   `Config`; exhaustion is `StageError(kind="policy")` or a `factory:blocked` PR, never a retry.
 - No `--env`/`--env-file` on islo argv, no tokens in the sandbox, `LocalSandbox` scrubs
-  `ANTHROPIC_*`/`GH_TOKEN`/`GITHUB_TOKEN`/`AWS_*`/`ISLO_API*`. `agent=claude` requires
-  `sandbox=islo` unless `--allow-local-agent` (dev only).
+  `ANTHROPIC_*`/`GH_TOKEN`/`GITHUB_TOKEN`/`AWS_*`/`ISLO_API*`; srt forwards only `ANTHROPIC_API_KEY`
+  and only for `agent=claude`. `agent=claude` requires `sandbox=islo|srt` unless `--allow-local-agent`.
+- Git identity travels as `git -c user.name=... -c user.email=...`, never `git config` (srt makes
+  `.git/config` read-only). Never `claude --bare` or `--dangerously-skip-permissions`.
 - Typed where machines consume it (`Plan`, `Review`, `BuildSummary`, `Diagnosis` via
   `--json-schema`); prose where humans do (intent.md, spec.md).
-- Never `claude --bare` or `--dangerously-skip-permissions`; hooks are the gate.
 
 ## Common mistakes
 - Editing `tests/`, `factory.toml`, `REVIEW.md`, `.claude/`, `.github/` during a build/fix stage:
-  `swf_guard.py` denies it on purpose. Fix the code, not the gate.
-- Running `git commit`, `git push`, `gh pr`, `curl`, `wget` from a Bash tool call in this repo:
-  the same guard runs here via `.claude/settings.json` and matches on substrings, so even a
-  heredoc containing those words is denied. Use the Write/Edit tools for file content.
+  the native `Edit(...)` deny rules in the sandbox's `.claude/settings.local.json` refuse it and
+  `swf_guard.py` logs it. Fix the code, not the gate. Never point the hook at anything but
+  `python3` — the islo image has python3 and nothing else (no pip, no uv).
+- Running `git commit`, `git push`, `gh pr`, `curl`, `wget` from a Bash tool call in a stage: denied
+  by substring, so even a heredoc containing those words is refused. Use Write/Edit for content.
+- Running a scripted replay against the blueprint's `[sandbox] kind = "islo"`: the CLI already
+  downgrades `agent=scripted` to `LocalSandbox` unless `--sandbox` is explicit; the DAG smoke path
+  uses `SWF_AGENT=scripted SWF_SANDBOX=local`.
 - Scripted fixtures are named `{stage}.{iteration}.{patch|json|md}`; iteration >= 2 of the build
   loop is stage `fix`, so the second patch is `fix.2.patch`, not `build.2.patch`.
-- `swfactory metrics`/`maintain` read committed `metrics.json`; scripted runs are excluded from
-  bands. A target without `factory.toml` is refused: the factory never guesses test commands.
-- `sandbox_ttl_s` must exceed `gate_timeout_h`; `tests=crabbox` only with `sandbox=local`.
+- crabbox: never `-artifact-glob` (use `-download`), default provider `local-container` (islo needs
+  the `ISLO_API_KEY` that `scrub_env` strips), `.crabbox.yaml` jobs are maps. `tests=crabbox` only
+  with `sandbox=local`. A target without `factory.toml` is refused: the factory never guesses.
+- No Rust, no `CrabboxSandbox`, no blueprint->islo line.toml compiler: see README "Design decisions".

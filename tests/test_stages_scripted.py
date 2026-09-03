@@ -1,4 +1,5 @@
-"""Full scripted run through the same code path as the CLI (``cli.execute``), all local."""
+"""Full scripted run through the same code path as the CLI (``cli.execute``), all local: the
+default blueprint (``factory``) builds the ``Config`` and drives the pipeline walk."""
 
 from __future__ import annotations
 
@@ -9,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from swfactory.blueprint import load
 from swfactory.cli import execute
-from swfactory.config import Config
 from swfactory.models import RunReport
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,21 +47,23 @@ def run(tmp_path_factory: pytest.TempPathFactory) -> tuple[RunReport, Path, dict
     """One full scripted run shared by the assertions below (~5 s: two real pytest runs)."""
     tmp = tmp_path_factory.mktemp("scripted")
     before = _tree_digest(TARGET)
-    cfg = Config(
-        issue="demo/issue.md",
+    bp = load("factory")
+    (job,) = bp.jobs({"issues": ["demo/issue.md"]})  # 1 issue x 1 target
+    cfg = bp.config(
+        job,
+        run_id=RUN_ID,
         approve="auto",
         agent="scripted",
         sandbox="local",
         scm="local",
         workdir=str(tmp / "work"),
         fixtures_dir="demo/scripted",
-        run_id=RUN_ID,
     )
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("GIT_CONFIG_GLOBAL", str(tmp / "empty-gitconfig"))
         mp.setenv("GIT_CONFIG_NOSYSTEM", "1")
         mp.chdir(ROOT)
-        report = execute(cfg, run_dir=tmp / "run")
+        report = execute(cfg, run_dir=tmp / "run", blueprint=bp)
     return report, tmp, before
 
 
@@ -105,6 +108,16 @@ def test_report_numbers(run) -> None:
     assert report.pr_url == f"file://{(_pr_path(run)).resolve()}"
 
 
+def test_gate_previews(run) -> None:
+    report, _, _ = run
+    by = {s.stage: s for s in report.stages}
+    intent, plan = by["intent"].preview, by["plan"].preview
+    assert intent.startswith("---\nid: DEMO-1\n") and "percent_change" in intent
+    assert plan.startswith("# Plan — DEMO-1\n") and "## Files" in plan
+    assert all(len(s.preview) <= 4000 for s in report.stages)
+    assert not any(by[s].preview for s in ("spec", "build_and_test", "review", "deliver"))
+
+
 def _pr_path(run) -> Path:
     return run[1] / "run" / "pr.md"
 
@@ -135,6 +148,7 @@ def test_metrics_and_approvals(run) -> None:
     assert metrics["iterations"] == 2 and metrics["first_pass_ci"] is False
     assert metrics["findings_by_severity"] == {"blocker": 0, "major": 1, "minor": 0, "nit": 3}
     assert metrics["approvers"] == ["auto", "auto"]
+    assert metrics["blueprint"] == "factory"
     assert set(metrics["stage_durations_s"]) == {
         "intent",
         "spec",
