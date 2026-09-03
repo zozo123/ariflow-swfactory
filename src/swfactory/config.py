@@ -45,7 +45,7 @@ class Config(BaseSettings):
     blueprint: str = "factory"  # blueprints/<name>.toml that produced this config
 
     # -- execution: which implementation of each seam runs
-    sandbox: Literal["local", "islo", "srt", "docker"] = "local"
+    sandbox: Literal["local", "islo", "srt", "docker", "toolset"] = "local"
     agent: Literal["claude", "scripted"] = "scripted"
     scm: Literal["local", "github"] = "local"
     approve: Literal["auto", "prompt"] = "prompt"
@@ -70,6 +70,10 @@ class Config(BaseSettings):
     sandbox_ttl_s: int = 172_800  # --delete-after; must exceed gate_timeout
     sandbox_idle_s: int = 900  # --pause-after-idle
     islo_snapshot: str | None = None  # --snapshot warm start (islo only)
+    # Airflow's own sandbox abstraction (provider common.ai): sbx ships released; islo,
+    # opensandbox and asciibox are pending upstream PRs (apache/airflow #71672/#71676/#71725).
+    toolset_backend: str = "sbx"
+    toolset_workdir: str = "/workspace/target"
     sandbox_owner: str | None = None  # SWF_SANDBOX_OWNER: only this creator's sandboxes may be rm'd
 
     # -- srt / docker sandboxes: egress allowlist, image, credential mode

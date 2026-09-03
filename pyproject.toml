@@ -37,8 +37,16 @@ swfactory = "swfactory.cli:app"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.12"]
-airflow = ["apache-airflow==3.3.1", "apache-airflow-providers-standard==1.18.0"]
-
+# Default: the latest Airflow RELEASE. `common-ai` ships Airflow's own sandbox toolset, so
+# `--sandbox toolset --backend sbx` works out of the box.
+airflow = [
+  "apache-airflow==3.3.1",
+  "apache-airflow-providers-standard==1.18.0",
+  "apache-airflow-providers-common-ai>=0.8.0",
+]
+# Bleeding edge: apache/airflow@main plus the pending islo sandbox backend (apache/airflow#71672)
+# is one script, not a locked group — locking a git dependency on the Airflow monorepo would clone
+# ~1 GB and pin a commit that is stale the next day. See scripts/airflow_main.sh and docs/design.md.
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -56,3 +64,4 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+

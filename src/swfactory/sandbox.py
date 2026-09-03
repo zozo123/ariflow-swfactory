@@ -22,6 +22,8 @@ No environment passthrough exists on this protocol, by design.
 
 from __future__ import annotations
 
+import contextlib
+import importlib
 import json
 import os
 import posixpath
@@ -670,6 +672,138 @@ def _factory_root() -> Path:
     return Path.cwd()
 
 
+# ---------------------------------------------------------------- upstream toolset backends
+
+TOOLSET_BACKENDS = {
+    # Airflow's own sandbox abstraction (provider apache-airflow-providers-common-ai).
+    # `sbx` ships in the released provider; the rest are pending upstream PRs on apache/airflow
+    # (islo #71672, opensandbox #71676, asciibox #71725) and resolve once those land or when the
+    # provider is installed from the PR branch.
+    "sbx": ("airflow.providers.common.ai.sandbox.sbx", "SbxSandboxBackend"),
+    "islo": ("airflow.providers.common.ai.sandbox.islo", "IsloSandboxBackend"),
+    "opensandbox": (
+        "airflow.providers.common.ai.sandbox.opensandbox",
+        "OpenSandboxSandboxBackend",
+    ),
+    "asciibox": ("airflow.providers.common.ai.sandbox.asciibox", "AsciiBoxSandboxBackend"),
+}
+TOOLSET_MAX_OUTPUT_BYTES = 1_000_000
+
+
+def load_toolset_backend(name: str, **kwargs: object):
+    """Import and construct one of Airflow's ``SandboxBackend`` implementations.
+
+    Kept lazy and by name so swfactory never imports Airflow at module scope (the DAG-parse rule)
+    and so an unreleased backend is a clear error rather than an import failure at startup.
+    """
+    try:
+        module_path, cls_name = TOOLSET_BACKENDS[name]
+    except KeyError:
+        raise StageError(
+            "sandbox", f"unknown toolset backend {name!r}; have {sorted(TOOLSET_BACKENDS)}"
+        ) from None
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError as e:
+        raise StageError(
+            "sandbox",
+            f"toolset backend {name!r} is unavailable: {e}. Install "
+            "apache-airflow-providers-common-ai (the islo/opensandbox/asciibox backends are still "
+            "upstream pull requests; install the provider from that branch to try them).",
+            retryable=False,
+        ) from e
+    return getattr(module, cls_name)(**kwargs)
+
+
+class ToolsetSandbox:
+    """swfactory's ``Sandbox`` over Airflow's ``SandboxBackend`` (provider ``common.ai``).
+
+    Airflow grew its own sandbox abstraction for agent tool-calling, and its shape is ours:
+    create/destroy, run a command, read and write files. Adapting it (rather than reimplementing
+    per vendor) means every backend the Airflow community ships — today ``sbx``, and the islo /
+    opensandbox / asciibox backends once their pull requests land — becomes a swfactory sandbox
+    for free, while the trust boundary is unchanged: the orchestrator still holds the credentials
+    and still applies the patch itself.
+    """
+
+    def __init__(
+        self,
+        backend,
+        *,
+        workdir: str,
+        name: str | None = None,
+        env: Mapping[str, str] | None = None,
+        block_network: bool = False,
+    ) -> None:
+        self.backend = backend
+        self.workdir = workdir.rstrip("/") or "/"
+        self.name = name or f"toolset:{type(backend).__name__}"
+        self.env = dict(env or {})
+        self.block_network = block_network
+        self.sandbox_id: str | None = None
+
+    def _spec(self):
+        from airflow.providers.common.ai.sandbox.base import SandboxSpec
+
+        return SandboxSpec(env=self.env, block_network=self.block_network)
+
+    def ensure(self) -> None:
+        """Create the sandbox once and make the working directory (idempotent per instance)."""
+        if self.sandbox_id is None:
+            self.sandbox_id = self.backend.create(spec=self._spec())
+        self.run(f"mkdir -p {shlex.quote(self.workdir)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
+
+    def _id(self) -> str:
+        if self.sandbox_id is None:
+            self.ensure()
+        assert self.sandbox_id is not None
+        return self.sandbox_id
+
+    def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
+        """Run ``cmd`` in the sandbox; the backend has no cwd, so it travels in the command."""
+        started = time.monotonic()
+        script = f"cd {shlex.quote(cwd or self.workdir)} && {cmd}"
+        res = self.backend.run_command(
+            self._id(), script, timeout=float(timeout_s), max_output_bytes=TOOLSET_MAX_OUTPUT_BYTES
+        )
+        return RunResult(
+            exit_code=res.exit_code,
+            stdout=res.stdout,
+            stderr=res.stderr,
+            duration_s=round(time.monotonic() - started, 3),
+            timed_out=bool(res.timed_out),
+        )
+
+    def _abs(self, path: str) -> str:
+        return path if path.startswith("/") else f"{self.workdir}/{path}"
+
+    def read(self, path: str) -> str:
+        try:
+            return self.backend.read_file(
+                self._id(), self._abs(path), max_bytes=TOOLSET_MAX_OUTPUT_BYTES
+            ).decode("utf-8")
+        except Exception as e:  # backends raise their own SandboxError for a missing path
+            raise FileNotFoundError(self._abs(path)) from e
+
+    def write(self, path: str, content: str) -> None:
+        abs_path = self._abs(path)
+        parent = abs_path.rsplit("/", 1)[0]
+        if parent:
+            self.run(f"mkdir -p {shlex.quote(parent)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
+        self.backend.write_file(self._id(), abs_path, content.encode("utf-8"))
+
+    def exists(self, path: str) -> bool:
+        return self.run(f"test -e {shlex.quote(self._abs(path))}", timeout_s=_CONTROL_TIMEOUT_S).ok
+
+    def close(self) -> None:
+        """Destroy the sandbox; best effort, the backend's own TTL is the backstop."""
+        if self.sandbox_id is None:
+            return
+        with contextlib.suppress(Exception):
+            self.backend.destroy(self.sandbox_id)
+        self.sandbox_id = None
+
+
 def make_sandbox(
     cfg: Config,
     issue_id: str,
@@ -692,6 +826,12 @@ def make_sandbox(
             allowed_domains=cfg.srt_allowed_domains,
             protected=protected,
             pass_env=claude_env,
+        )
+    if cfg.sandbox == "toolset":
+        return ToolsetSandbox(
+            load_toolset_backend(cfg.toolset_backend),
+            workdir=cfg.toolset_workdir,
+            env={k: os.environ[k] for k in claude_env if k in os.environ},
         )
     if cfg.sandbox == "docker":
         return DockerSandbox(

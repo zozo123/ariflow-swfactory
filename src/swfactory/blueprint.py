@@ -90,7 +90,7 @@ class ReviewSpec(BaseModel):
 class SandboxSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["local", "srt", "islo", "docker"] = "islo"
+    kind: Literal["local", "srt", "islo", "docker", "toolset"] = "islo"
     gateway_profile: str = "swfactory"
     environment: str = "swfactory"
     ttl_s: int = Field(default=172_800, ge=1)  # --delete-after

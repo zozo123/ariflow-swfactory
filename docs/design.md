@@ -124,6 +124,43 @@ bugs: `-artifact-glob` (SSH-lease providers only) -> `-download`; default provid
 so `crabbox doctor` parses it. Human inner loop:
 `crabbox run --provider local-container -- uv run pytest`.
 
+## Airflow's own sandbox abstraction (experimental)
+
+Airflow grew a `SandboxToolset` in the `common.ai` provider, whose `SandboxBackend` is the same
+shape as this factory's `Sandbox`: create and destroy, run a command, read and write files. Rather
+than reimplement per vendor, `ToolsetSandbox` adapts it, so every backend the Airflow community
+ships becomes a swfactory sandbox:
+
+```sh
+uv run swfactory run --issue 1 --sandbox toolset            # backend sbx (released provider)
+SWF_TOOLSET_BACKEND=islo uv run swfactory run --issue 1 --sandbox toolset
+```
+
+| backend | status |
+|---|---|
+| `sbx` (Docker Sandboxes) | ships in the released `apache-airflow-providers-common-ai` |
+| `islo` | pending upstream: [apache/airflow#71672](https://github.com/apache/airflow/pull/71672) |
+| `opensandbox` | pending upstream: [apache/airflow#71676](https://github.com/apache/airflow/pull/71676) |
+| `asciibox` | pending upstream: [apache/airflow#71725](https://github.com/apache/airflow/pull/71725) |
+
+A pending backend fails with a message naming its pull request, never an import crash. To run on
+Airflow's development head with the islo backend, one command:
+
+```sh
+./scripts/airflow_main.sh          # apache/airflow@main + common.ai from apache/airflow#71672
+./scripts/airflow_main.sh --pypi   # apache/airflow@main + the released provider (sbx only)
+uv sync --group airflow            # back to the pinned release
+```
+
+It is a script rather than a locked dependency group on purpose: locking a git dependency on the
+Airflow monorepo clones roughly a gigabyte and pins a commit that is stale the next day. The
+optional `airflow-main-sandbox-toolset` CI job runs the same overlay.
+
+The default stays `apache-airflow==3.3.1`, the latest release: production should not track a dev
+branch, and the `airflow-main` canary already tells us when main drifts. The trust boundary is
+unchanged either way — the orchestrator still holds the credentials and still applies the patch.
+
+
 ## Versioning and release
 
 The distribution (`pyproject.toml` `version`, the git tag `vX.Y.Z`, the CHANGELOG heading) follows

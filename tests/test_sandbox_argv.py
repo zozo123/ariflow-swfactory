@@ -885,3 +885,94 @@ def test_default_docker_user_is_host_uid_on_linux(monkeypatch) -> None:
     assert sandbox_mod.default_docker_user() == f"{os.getuid()}:{os.getgid()}"
     monkeypatch.setattr(sandbox_mod.sys, "platform", "darwin")
     assert sandbox_mod.default_docker_user() is None
+
+
+# ------------------------------------------------- ToolsetSandbox (Airflow common.ai provider)
+
+
+class FakeBackend:
+    """Stand-in for Airflow's SandboxBackend: records calls, no Airflow, no network."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+        self.files: dict[str, bytes] = {}
+        self.destroyed: list[str] = []
+        self.rc = 0
+
+    def create(self, *, spec=None):
+        self.calls.append(("create", spec))
+        return "sbx-1"
+
+    def run_command(self, sandbox, command, *, timeout, max_output_bytes):
+        self.calls.append(("run", sandbox, command, timeout, max_output_bytes))
+
+        class R:
+            exit_code = self.rc
+            stdout = "out"
+            stderr = ""
+            timed_out = False
+
+        return R()
+
+    def read_file(self, sandbox, path, *, max_bytes):
+        self.calls.append(("read", sandbox, path))
+        if path not in self.files:
+            raise RuntimeError("no such file")
+        return self.files[path]
+
+    def write_file(self, sandbox, path, content):
+        self.calls.append(("write", sandbox, path))
+        self.files[path] = content
+
+    def destroy(self, sandbox):
+        self.destroyed.append(sandbox)
+
+
+def _toolset(**kw):
+    be = FakeBackend()
+    return be, sandbox_mod.ToolsetSandbox(be, workdir="/workspace/target", **kw)
+
+
+def test_toolset_creates_once_and_carries_cwd_in_the_command() -> None:
+    be, sb = _toolset()
+    sb.ensure()
+    sb.ensure()  # idempotent: one create, the mkdir may repeat
+    assert [c for c in be.calls if c[0] == "create"] == [("create", be.calls[0][1])]
+    res = sb.run("uv run pytest", cwd="/workspace/target/demo")
+    assert res.exit_code == 0 and res.stdout == "out"
+    run_cmds = [c[2] for c in be.calls if c[0] == "run"]
+    assert "cd /workspace/target/demo && uv run pytest" in run_cmds
+
+
+def test_toolset_read_write_exists_and_close() -> None:
+    be, sb = _toolset()
+    sb.write("docs/factory/1/spec.md", "hello")
+    assert be.files["/workspace/target/docs/factory/1/spec.md"] == b"hello"
+    assert sb.read("docs/factory/1/spec.md") == "hello"
+    with pytest.raises(FileNotFoundError):
+        sb.read("missing.md")
+    assert sb.exists("anything") is True  # fake backend returns rc 0
+    sb.close()
+    assert be.destroyed == ["sbx-1"]
+    sb.close()  # second close is a no-op, never raises
+
+
+def test_toolset_backend_registry_and_clear_error_for_pending_prs() -> None:
+    assert set(sandbox_mod.TOOLSET_BACKENDS) == {"sbx", "islo", "opensandbox", "asciibox"}
+    with pytest.raises(StageError) as e:
+        sandbox_mod.load_toolset_backend("nope")
+    assert "unknown toolset backend" in str(e.value)
+
+
+def test_make_sandbox_toolset(monkeypatch) -> None:
+    seen = {}
+
+    def fake_load(name, **kw):
+        seen["name"] = name
+        return FakeBackend()
+
+    monkeypatch.setattr(sandbox_mod, "load_toolset_backend", fake_load)
+    cfg = Config(issue="42", sandbox="toolset", toolset_backend="sbx")
+    sb = make_sandbox(cfg, "42")
+    assert isinstance(sb, sandbox_mod.ToolsetSandbox)
+    assert seen["name"] == "sbx" and sb.workdir == cfg.toolset_workdir

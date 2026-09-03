@@ -23,6 +23,9 @@ in `stages.py`. Details: README + docs/*.md.
 - `deploy/islo/bootstrap.sh` (gateway, environment, snapshot, knowledge) then `deploy.sh`
   (orchestrator sandbox + webhooks) — docs/islo.md.
 
+- `./scripts/airflow_main.sh` — put the checkout on apache/airflow@main plus the pending islo
+  sandbox backend; `uv sync --group airflow` returns to the pinned release.
+
 ## Conventions
 - Python 3.12, `from __future__ import annotations`, type hints, docstrings that say WHY. Stdlib
   first (`subprocess`, `tomllib`, `statistics`, `xml.etree`). No Airflow import under `src/`;

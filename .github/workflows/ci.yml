@@ -84,3 +84,31 @@ jobs:
             "apache-airflow-providers-standard @ git+https://github.com/apache/airflow.git@main#subdirectory=providers/standard"
           uv run --no-sync python -c "import airflow; print('airflow', airflow.__version__)"
       - run: uv run --no-sync pytest tests/test_dag_parity.py tests/test_dag_smoke.py
+
+  # Experimental: Airflow's own sandbox abstraction (provider common.ai) as a swfactory Sandbox,
+  # built against apache/airflow@main plus the pending islo backend PR (apache/airflow#71672).
+  # Optional by design: it tracks a dev branch and an unmerged pull request.
+  airflow-main-sandbox-toolset:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - run: uv sync
+      - name: Install Airflow main + the common.ai provider from the islo backend PR branch
+        run: |
+          uv pip install \
+            "apache-airflow-core @ git+https://github.com/apache/airflow.git@main#subdirectory=airflow-core" \
+            "apache-airflow-task-sdk @ git+https://github.com/apache/airflow.git@main#subdirectory=task-sdk" \
+            "apache-airflow-providers-standard @ git+https://github.com/apache/airflow.git@main#subdirectory=providers/standard" \
+            "apache-airflow-providers-common-ai @ git+https://github.com/zozo123/airflow.git@agent/add-islo-sandbox-backend#subdirectory=providers/common/ai"
+          uv run --no-sync python -c "import airflow; print('airflow', airflow.__version__)"
+      - name: The islo backend resolves through swfactory's adapter
+        run: |
+          uv run --no-sync python -c "
+          from swfactory.sandbox import load_toolset_backend, TOOLSET_BACKENDS
+          print('backends:', sorted(TOOLSET_BACKENDS))
+          print('islo ->', type(load_toolset_backend('islo')).__name__)
+          print('sbx  ->', type(load_toolset_backend('sbx')).__name__)"
+      - run: uv run --no-sync pytest tests/test_sandbox_argv.py tests/test_dag_parity.py
