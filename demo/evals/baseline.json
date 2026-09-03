@@ -1,0 +1,41 @@
+{
+  "passed": 7,
+  "total": 7,
+  "evals": {
+    "EVAL-AVERAGE": {
+      "slug": "01-average",
+      "passed": true,
+      "failures": []
+    },
+    "EVAL-FINITE": {
+      "slug": "02-finite-inputs",
+      "passed": true,
+      "failures": []
+    },
+    "EVAL-CONTRACT": {
+      "slug": "03-api-contract",
+      "passed": true,
+      "failures": []
+    },
+    "EVAL-ROUNDING": {
+      "slug": "04-underspecified-rounding",
+      "passed": true,
+      "failures": []
+    },
+    "EVAL-MEDIAN": {
+      "slug": "05-blocked-missing-tests",
+      "passed": true,
+      "failures": []
+    },
+    "EVAL-DRAWDOWN": {
+      "slug": "06-build-loop-sign",
+      "passed": true,
+      "failures": []
+    },
+    "EVAL-VARIANCE": {
+      "slug": "07-review-fix-validation",
+      "passed": true,
+      "failures": []
+    }
+  }
+}

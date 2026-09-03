@@ -1,0 +1,11 @@
+# scripted fixture for EVAL-DRAWDOWN — see docs/evals.md (regenerate with `run --record`)
+diff --git a/src/calc/core.py b/src/calc/core.py
+index fab444d..ed1baa7 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -24,4 +24,4 @@ def drawdown(peak: float, trough: float) -> float:
+     """
+     if peak == 0:
+         raise ValueError("peak must be non-zero")
+-    return (trough - peak) / peak
++    return (peak - trough) / peak

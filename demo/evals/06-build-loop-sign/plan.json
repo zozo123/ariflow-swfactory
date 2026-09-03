@@ -1,0 +1,21 @@
+{
+  "files": [
+    "tests/test_drawdown.py",
+    "src/calc/core.py",
+    "src/calc/__init__.py"
+  ],
+  "steps": [
+    "Add tests/test_drawdown.py covering R2-R4 before touching the implementation",
+    "Implement drawdown(peak, trough) in src/calc/core.py",
+    "Export drawdown from src/calc/__init__.py and add it to __all__",
+    "Run the target test command (factory.toml [commands].test) until green"
+  ],
+  "tests": [
+    "R2: test_decline_is_positive \u2014 drawdown(100, 75) == 0.25",
+    "R3: test_zero_peak_raises \u2014 drawdown(0, 10) raises ValueError",
+    "R4: test_gain_is_negative \u2014 drawdown(100, 125) == -0.25"
+  ],
+  "risks": [
+    "Sign convention inverted ((trough - peak) / peak); test_decline_is_positive and test_gain_is_negative catch it in both directions"
+  ]
+}

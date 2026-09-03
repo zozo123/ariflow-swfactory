@@ -1,0 +1,12 @@
+{
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "nit",
+      "file": "tests/test_contract.py",
+      "line": 1,
+      "title": "Phrase matching is case sensitive",
+      "detail": "Lower-casing `__doc__` before the assertion would survive a capitalisation edit; the phrases are mid-sentence today."
+    }
+  ]
+}

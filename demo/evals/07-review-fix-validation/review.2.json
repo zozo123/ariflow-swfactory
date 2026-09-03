@@ -1,0 +1,12 @@
+{
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "nit",
+      "file": "tests/test_variance.py",
+      "line": 1,
+      "title": "The empty-input guard is still untested",
+      "detail": "The fix stage cannot write tests/ (denyWrite for `fix`), so R4 stays unproven until a follow-up build adds the assertion."
+    }
+  ]
+}

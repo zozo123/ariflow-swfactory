@@ -18,8 +18,10 @@ jobs:
         run: uv run swfactory demo
 
   airflow-parity:
-    # One DAG per blueprints/*.toml mirrors the blueprint (parity), and the default line runs end
-    # to end through `dag.test()` with the gates marked success (smoke; HITL never resolves itself).
+    # One DAG per blueprints/*.toml mirrors the blueprint (parity), the default line runs end to
+    # end through `dag.test()` with the gates marked success (smoke; HITL never resolves itself),
+    # and the stress line runs 2 issues x 2 targets to prove the mapped jobs never collide.
+    # Named explicitly because the `test` job has no airflow group, so these three skip there.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -27,7 +29,9 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with: { python-version: "3.12" }
       - run: uv sync --group airflow
-      - run: uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py
+      - run: >-
+          uv run --group airflow pytest
+          tests/test_dag_parity.py tests/test_dag_smoke.py tests/test_dag_stress.py
 
   srt-smoke:
     # Anthropic Sandbox Runtime (bubblewrap on Linux) confining the scripted demo: no model, no

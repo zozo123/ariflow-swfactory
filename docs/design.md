@@ -124,6 +124,32 @@ bugs: `-artifact-glob` (SSH-lease providers only) -> `-download`; default provid
 so `crabbox doctor` parses it. Human inner loop:
 `crabbox run --provider local-container -- uv run pytest`.
 
+## Versioning and release
+
+The distribution (`pyproject.toml` `version`, the git tag `vX.Y.Z`, the CHANGELOG heading) follows
+[semver](https://semver.org/spec/v2.0.0.html) over the surface a *user of the factory* depends on:
+the blueprint schema, the `SWF_*` / `Config` knobs, the `Sandbox` / `Agent` / `Scm` protocols, the
+CLI verbs and their flags, and the shape of the committed artifact chain (`plan.json`,
+`review.json`, `approvals.json`, `metrics.json`). A **breaking change** is therefore concrete: an
+existing `blueprints/*.toml` no longer loads, a `SWF_*` env var or `Config` field is removed or
+changes meaning, or a protocol method is added, removed or re-signatured so a third-party
+`Sandbox`/`Agent`/`Scm` stops satisfying it. Adding a stage function, a sandbox kind, a CLI flag or
+an optional blueprint key is a minor release; a fix that keeps every one of those intact is a patch.
+
+`[blueprint] version` inside a blueprint file is a **separate, independent** integer: it versions
+the TOML schema, not the package, and moves only when a blueprint written for an older schema can
+no longer be read. `swfactory 1.0.0` reads `version = 1`; the two numbers are not expected to
+track each other, and neither implies the other's compatibility.
+
+Airflow's own pin (`apache-airflow==3.3.1`) is a dependency, not part of the public surface —
+moving it is a minor release unless a DAG a user has triggered stops working, which it would be.
+
+Releasing is a tag push: bump `version`, write the CHANGELOG section, tag `vX.Y.Z`, push the tag.
+`.github/workflows/release.yml` refuses a tag that does not match `pyproject.toml` or has no
+CHANGELOG section, then runs lint, the hermetic suite, the scripted demo and the DAG tests before
+`uv build` and `gh release create` with the wheel, the sdist and that CHANGELOG section as the body.
+See [CONTRIBUTING.md](../CONTRIBUTING.md#release) for the exact commands.
+
 ## Design decisions
 
 - Blueprints are data in the **factory** repo, never in the target: gates, budgets and tool policy
@@ -181,3 +207,34 @@ so `crabbox doctor` parses it. Human inner loop:
   `__pycache__` entry. Real agent edits practically never hit this; the scripted fixtures avoid it.
 - Airflow retries and `tasks clear` are safe only as long as `.factory/<run_id>/` survives on the
   worker — that directory is the run's memory (stage log, budget, sandbox identity).
+
+## Stress test
+
+`blueprints/stress.toml` is a third line whose only purpose is to prove the spine under fan-out:
+the default stage order, both gates `auto = true` (the unattended backstop), `max_parallel_jobs =
+2`, and **two** targets — `demo/target` plus `demo/target-b`, a copy the harness materialises into
+the run's cwd rather than a byte-identical second copy committed to the repo (the recorded patches
+carry blob hashes, so a second target has to *be* that copy). With `demo/issue2.md` (DEMO-2, whose
+acceptance criteria the existing `demo/scripted` fixtures already satisfy) one run is 2 issues x 2
+targets = **4 mapped jobs and no new fixtures**: fixtures are keyed by stage, and every job seeds
+its own workdir.
+
+```sh
+uv run --group airflow pytest tests/test_dag_stress.py    # dag.test(), gates marked success
+scripts/stress_airflow.sh                                 # live standalone, gates answered as admin
+```
+
+`tests/test_dag_stress.py` asserts, per `map_index`, that a job owns its run id, run dir, workdir,
+bare remote, `pr.md`, `approvals.json` and `metrics.json` (`blueprint == "stress"`), that no
+workdir holds another job's `docs/factory/<issue>/`, that `fan_out` returned exactly
+`Blueprint.jobs(conf)`, and that `max_active_tis_per_dagrun` on the stage tasks is the blueprint's
+`max_parallel_jobs`. `scripts/stress_airflow.sh` boots `airflow standalone` in a throwaway
+`AIRFLOW_HOME` on a free port, unpauses the DAG (new DAGs start paused), triggers it over REST,
+answers all 8 gates with `swfactory approve <run> <gate> --map-index <i>`, prints a per-job table
+and exits non-zero on any failed task — the half `dag.test()` cannot show, since it only marks a
+HITL task success: the committed actor is `auto` under `dag.test()` and `admin` under the script.
+One live-only caveat the script encodes: a gate is only answered once its task instance has been
+`awaiting_input` since the previous poll. Answering in the sub-second window between the operator
+creating the HITL detail and the task parking makes the scheduler see a stale executor event
+("finished with state success, but the task instance's state attribute is queued") and fail the
+gate — a race a human cannot hit and a polling script hits about once per dozen gates.

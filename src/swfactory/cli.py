@@ -396,13 +396,32 @@ def herd(
         Path()
     ),
     refresh_s: Annotated[float, typer.Option(help="auto-refresh interval")] = 5.0,
+    once: Annotated[
+        bool, typer.Option("--once", help="print one snapshot and exit, no TUI (CI, scripts)")
+    ] = False,
+    json_out: Annotated[
+        bool, typer.Option("--json", help="machine-readable snapshot (implies --once)")
+    ] = False,
+    approve_all: Annotated[
+        bool,
+        typer.Option(
+            "--approve-all",
+            help="answer every pending gate of the configured blueprints, then exit (no TUI)",
+        ),
+    ] = False,
+    reject: Annotated[
+        bool, typer.Option("--reject", help="with --approve-all: reject every pending gate")
+    ] = False,
 ) -> None:
-    """Control room TUI: pending gates (approve/reject), runs, PRs, own sandboxes, metrics."""
+    """Control room: pending gates (approve/reject), runs and their jobs, PRs, own sandboxes,
+    metrics. A TUI by default; `--once [--json]` prints one snapshot and `--approve-all
+    [--reject]` answers every pending gate, both over the same clients. Exit 1 if a gate answer
+    failed."""
     from swfactory.blueprint import load
-    from swfactory.herd import make_app
+    from swfactory.herd import main as herd_main
 
     target_repo = repo or load("factory").targets[0].repo
-    make_app(
+    code = herd_main(
         airflow_url=airflow_url,
         repo=target_repo,
         owner=owner,
@@ -411,7 +430,13 @@ def herd(
         password=password,
         metrics_root=str(metrics_root),
         refresh_s=refresh_s,
-    ).run()
+        once=once,
+        json_out=json_out,
+        approve_all_gates=approve_all,
+        reject=reject,
+        out=typer.echo,
+    )
+    raise typer.Exit(code)
 
 
 if __name__ == "__main__":  # pragma: no cover

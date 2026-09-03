@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import typer
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from swfactory import metrics as metrics_mod
 from swfactory.agent import POLICIES, Agent, Policy, render_prompt
@@ -184,8 +184,19 @@ def _read_or(ctx: Ctx, path: str, default: str = "") -> str:
 
 
 def _read_json(ctx: Ctx, path: str, default: object) -> object:
+    """A JSON artifact from the sandbox, or ``default`` when it is absent, empty or not JSON.
+
+    The sandbox is agent-writable (``Bash(uv run *)`` is arbitrary code by design), so a forged or
+    truncated artifact must degrade to the default instead of raising a bare ``JSONDecodeError``
+    out of a stage: every caller already type-checks what comes back.
+    """
     text = _read_or(ctx, path)
-    return json.loads(text) if text.strip() else default
+    if not text.strip():
+        return default
+    try:
+        return json.loads(text)
+    except ValueError:
+        return default
 
 
 def _dumps(obj: object) -> str:
@@ -351,7 +362,10 @@ def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
     output = (res.stdout[-6000:] + "\n" + res.stderr[-2000:]).strip()
     try:
         counts = _parse_junit(ctx.sb.read(contract.junit))
-    except FileNotFoundError:
+    except (FileNotFoundError, ET.ParseError, ValueError):
+        # A killed or timed-out test process leaves a truncated junit file, and a target may use
+        # a writer with unexpected attributes. Report "no counts" with the real exit code so the
+        # bounded loop still reacts, instead of raising a bare XML/int error out of the stage.
         return TestResult(exit_code=res.exit_code, junit_path=None), output
     return TestResult(**counts, exit_code=res.exit_code, junit_path=contract.junit), output
 
@@ -838,9 +852,18 @@ def deliver(ctx: Ctx) -> StageResult:
     prefix = _sh(ctx, "git rev-parse --show-prefix").strip()
     data = _read_json(ctx, f"{ctx.art}/review.json", {})
     data = data if isinstance(data, dict) else {}
-    rv = Review.model_validate(data) if data else Review(verdict="approve")
+    try:
+        rv = Review.model_validate(data) if data else Review(verdict="approve")
+    except ValidationError:  # forged/garbled review.json: the log below still carries the verdict
+        rv, data = Review(verdict="approve"), {}
+    # review.json renders the findings, but the blocker COUNT falls back to the orchestrator's
+    # stage log: that file is agent-writable and, when deliver runs as a later Airflow task on a
+    # recycled sandbox, may be gone — neither may turn a review the log recorded as blocked into
+    # a clean PR.
+    logged = next((s for s in stages if s.stage == "review"), None)
+    blockers = len(rv.blockers) or int(logged.numbers.get("blockers", 0) if logged else 0)
     rejected = any(a.decision == "reject" for a in approvals)
-    blocked = rejected or bool(rv.blockers)
+    blocked = rejected or bool(blockers)
     labels = list(ctx.blueprint.labels if ctx.blueprint else DEFAULT_LABELS)
     if rejected:
         labels.append("factory:rejected")
@@ -867,7 +890,7 @@ def deliver(ctx: Ctx) -> StageResult:
         status="blocked" if blocked else "ok",
         artifacts=[url],
         numbers={
-            "blockers": float(len(rv.blockers)),
+            "blockers": float(blockers),
             "commits": float(commits),
             "rejected": float(rejected),
             "denied_tool_calls": float(denied),

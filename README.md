@@ -41,7 +41,7 @@ doubles as the end-to-end test. Overview and diagrams: the
 
 ```sh
 uv sync
-uv run pytest            # 340 tests, hermetic: fake subprocess, tmp git repos, no network
+uv run pytest            # 434 tests, hermetic: fake subprocess, tmp git repos, no network
 uv run swfactory demo    # scripted replay of a recorded run on demo/target
 ```
 
@@ -67,10 +67,12 @@ cost usd               0.0000
 ```
 
 Use `--approve prompt` to answer the two gates yourself. Exit code is 1 if any job is blocked or
-its tests did not pass. Two lines ship: `blueprints/default.toml` (DAG id and CLI name `factory`)
-and `blueprints/hotfix.toml` (no `spec` stage, self-approving intent gate, extra `hotfix` label) —
-zero Python between them. One issue applied to N `[[targets]]` is N jobs, each with its own
-sandbox, PR and approvals; `SWF_*` env vars override blueprint values and CLI flags alike.
+its tests did not pass. Three lines ship: `blueprints/default.toml` (DAG id and CLI name
+`factory`), `blueprints/hotfix.toml` (no `spec` stage, self-approving intent gate, extra `hotfix`
+label) and `blueprints/stress.toml` (two targets, `max_parallel_jobs = 2`, the fan-out harness
+behind `scripts/stress_airflow.sh`) — zero Python between them. One issue applied to N
+`[[targets]]` is N jobs, each with its own sandbox, PR and approvals; `SWF_*` env vars override
+blueprint values and CLI flags alike.
 
 ```sh
 uv run swfactory run --blueprint hotfix --issue demo/issue.md --approve auto     # scripted, local
@@ -116,10 +118,12 @@ skip, and `deliver` still publishes a `[REJECTED]` PR labeled `factory:rejected`
 | `swfactory run --blueprint <name> --issue <n\|path> ...` | run one line over issues x targets: `--agent claude\|scripted`, `--sandbox local\|srt\|docker\|islo`, `--scm local\|github`, `--approve auto\|prompt`, `--record <dir>` |
 | `swfactory demo [--real] [--sandbox srt\|docker]` | the default line on `demo/issue.md`: keyless scripted replay, or `--real` = claude in an islo sandbox against a real repo |
 | `swfactory doctor [--json] [--blueprint <name>]` | preflight the real path: islo/gh/claude/srt CLIs, `islo login` + tool integrations, gateway profile, environment, snapshot, `gh auth` + repo, blueprint, `factory.toml`; exit 1 on a required red row, each with its `fix:` |
-| `swfactory herd [--airflow-url ...] [--owner ...]` | control-room TUI: pending gates (approve/reject), runs, factory PRs, your own sandboxes, metrics ([docs/herd.md](docs/herd.md)) |
+| `swfactory herd [--airflow-url ...] [--owner ...]` | control-room TUI: pending gates (approve/reject), runs and their jobs, factory PRs, your own sandboxes, metrics; `t` triggers any blueprint ([docs/herd.md](docs/herd.md)) |
+| `swfactory herd --once [--json]` / `--approve-all [--reject]` | the same clients headless: one snapshot (per-job rows, gates, PRs, sandboxes, metrics) for CI, or answer every pending gate; exit 1 if an answer failed |
 | `swfactory webhook serve [--port 8081] [--airflow-url ...]` | GitHub issue/comment receiver on the orchestrator -> `POST /api/v2/dags/<name>/dagRuns`; `GET /healthz` |
 | `swfactory webhook route <event> <payload.json>` | dry run: print the DAG run a payload would trigger, exit 1 if it would be ignored |
 | `swfactory metrics --root <dir>` | summarise committed runs: first-pass rate, mean iterations, p50 cycle, findings, cost |
+| `python -m swfactory.evals [--suite demo/evals] [--agent claude] [--update-baseline]` | run the eval suite — issues with a machine-checkable expected outcome — and fail on any regression against `demo/evals/baseline.json` ([docs/evals.md](docs/evals.md)) |
 | `swfactory maintain --root <dir> [--sweep-ttl-s N]` | band check per `bands.yaml` (log / diagnose / propose) + orphan `swf-*` sandbox sweep |
 | `swfactory approve <dag_run_id> intent\|plan [--reject]` | answer a running DAG's gate through the Airflow HITL API (`--blueprint`, `--map-index`) |
 
@@ -166,17 +170,21 @@ means re-recording them (`--record demo/scripted`) in the same PR.
 **Live human gate (real Airflow API):** `airflow standalone` + `POST /api/v2/dags/factory/dagRuns`,
 then `swfactory approve <run> intent` / `plan` as user `admin`: all 14 tasks succeeded and the
 committed `approvals.json` records actor `admin` for both gates, from Airflow's HITL
-`responded_by_user`.
+`responded_by_user`. `scripts/stress_airflow.sh` is that run under fan-out: `stress.toml` over 2
+issues x 2 targets, **53/53 task instances green** and 8 gates answered as `admin`, each of the 4
+jobs with its own run id, workdir, remote and chain. `swfactory herd --approve-all` answers the
+same gates through the TUI's own clients.
 
-CI (`.github/workflows/`): `test` (ruff + pytest + demo), `airflow-parity` (DAG parity + smoke),
-`srt-smoke`, `docker-smoke`, optional `airflow-main` (upstream canary); `evals.yml` runs the real
-agent weekly — `real-demo` under srt and `evals-islo` in an islo MicroVM with no Anthropic key on
-the runner, both asserting on the same `report.json`.
+CI (`.github/workflows/`): `test` (ruff + pytest + demo), `airflow-parity` (parity + smoke + stress),
+`srt-smoke`, `docker-smoke`, optional `airflow-main` (upstream canary); `evals.yml` gates every
+change to CLAUDE.md, a prompt, a blueprint or `.claude/**` on the keyless `eval-suite`, and runs
+the real agent weekly — `real-demo` under srt, `evals-islo` in an islo MicroVM with no key on the
+runner.
 
 ## Layout
 
 ```
-blueprints/*.toml            default.toml = the `factory` line; hotfix.toml = a second line
+blueprints/*.toml            default.toml = the `factory` line; hotfix.toml, stress.toml = two more
 src/swfactory/blueprint.py   Blueprint models, load/loads/resolve, pipeline(), jobs(conf), config(job)
 src/swfactory/config.py      Config (SWF_* env > init), TargetContract from factory.toml
 src/swfactory/runtime.py     the one (blueprint, job, run id) -> Ctx assembly, CLI and DAG alike
@@ -192,6 +200,7 @@ src/swfactory/herd.py        the Textual TUI over control.py (presentation only)
 src/swfactory/doctor.py      read-only preflight checks with a `fix:` per row
 src/swfactory/webhook.py     stdlib GitHub -> Airflow receiver (route is pure and unit-tested)
 src/swfactory/cli.py         typer app: the nine verbs in the CLI table above
+src/swfactory/evals.py       eval suite over demo/evals/**: load_suite, check, score, baseline_diff
 src/swfactory/prompts/*.md   spec, plan, build, fix, review, diagnose templates
 dags/blueprints.py           one mapped-task-group DAG per blueprint (GateOperator, record_<stage>)
 dags/maintain.py             nightly + after every delivery (AssetOrTimeSchedule) band check + sweep
@@ -201,7 +210,9 @@ REVIEW.md  bands.yaml        review policy; maintain tiers
 islo.yaml  .crabbox.yaml     agent sandbox setup (uv only); crabbox test-wrapper profile
 deploy/islo/                 bootstrap.sh, deploy.sh, knowledge.sh, orchestrator/ (docs/islo.md)
 deploy/docker/               compose.yml + Dockerfiles for the local stack (docs/docker.md)
-demo/                        issue.md (DEMO-1), target/ (`calc` + factory.toml), scripted/ fixtures
+demo/                        issue.md (DEMO-1), issue2.md (DEMO-2), target/, scripted/ fixtures
+scripts/stress_airflow.sh    live `airflow standalone`: stress.toml over 2 issues x 2 targets, 8
+                             gates answered as `admin` through the HITL API (docs/design.md)
 tests/                       hermetic; test_dag_*.py need the airflow group
 .github/workflows/           ci, dispatch (issue label -> Airflow), evals
 ```

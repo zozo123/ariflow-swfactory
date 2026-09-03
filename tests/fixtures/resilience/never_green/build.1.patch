@@ -1,0 +1,15 @@
+# resilience fixture: a build whose suite can never pass (exhausts max_build_iterations).
+diff --git a/tests/test_never_green.py b/tests/test_never_green.py
+new file mode 100644
+index 0000000..72691ae
+--- /dev/null
++++ b/tests/test_never_green.py
+@@ -0,0 +1,8 @@
++"""Injected failure: the factory cannot make this suite pass.
++
++Used by tests/test_resilience.py to exhaust ``max_build_iterations``.
++"""
++
++
++def test_percent_change_cannot_be_satisfied() -> None:
++    assert 1 == 2, "injected failure: no fix fixture can make this pass"

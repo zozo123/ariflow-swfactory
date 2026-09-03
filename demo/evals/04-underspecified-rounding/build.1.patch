@@ -1,0 +1,59 @@
+# scripted fixture for EVAL-ROUNDING — see docs/evals.md (regenerate with `run --record`)
+diff --git a/src/calc/__init__.py b/src/calc/__init__.py
+index d78b989..25b9c8c 100644
+--- a/src/calc/__init__.py
++++ b/src/calc/__init__.py
+@@ -1,5 +1,5 @@
+ """calc: tiny finance helpers (demo target for the software factory)."""
+ 
+-from calc.core import compound, simple_interest
++from calc.core import compound, round_fraction, simple_interest
+ 
+-__all__ = ["compound", "simple_interest"]
++__all__ = ["compound", "round_fraction", "simple_interest"]
+diff --git a/src/calc/core.py b/src/calc/core.py
+index 57e73fc..6baaf34 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -14,3 +14,14 @@ def compound(principal: float, rate: float, years: int, periods_per_year: int =
+         raise ValueError("invalid arguments")
+     n = periods_per_year
+     return principal * (1 + rate / n) ** (n * years)
++
++
++def round_fraction(value: float, places: int = 2) -> float:
++    """Return ``value`` rounded to ``places`` decimals, still a fraction (0.2534 -> 0.25).
++
++    Uses Python's ``round``, i.e. banker's rounding: 0.125 rounds to 0.12, not 0.13. The
++    default of 2 places is an assumption — see the open questions in this issue's spec.
++    """
++    if places < 0:
++        raise ValueError("places must be non-negative")
++    return round(value, places)
+diff --git a/tests/test_round_fraction.py b/tests/test_round_fraction.py
+new file mode 100644
+index 0000000..c3217e3
+--- /dev/null
++++ b/tests/test_round_fraction.py
+@@ -0,0 +1,21 @@
++import pytest
++
++import calc
++from calc import round_fraction
++
++
++def test_exported():
++    assert "round_fraction" in calc.__all__
++
++
++def test_rounds_to_two_places():
++    assert round_fraction(0.25348712456) == pytest.approx(0.25)
++
++
++def test_places_argument():
++    assert round_fraction(0.25348712456, 3) == pytest.approx(0.253)
++
++
++def test_negative_places_rejected():
++    with pytest.raises(ValueError):
++        round_fraction(0.25, -1)

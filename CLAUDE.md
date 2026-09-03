@@ -16,6 +16,8 @@ in `stages.py`. Details: README + docs/*.md.
   — real agent, cloudless. `--blueprint hotfix --issue demo/issue.md --approve auto` = second line.
 - `uv run swfactory approve <dag_run_id> intent|plan [--reject] [--map-index <j>]`; `doctor
   [--json]` (exit 1 per red row, with a `fix:`); `metrics|maintain --root .`; `herd`; `webhook`.
+- `uv run python -m swfactory.evals [--only <slug>] [--update-baseline]` — the eval suite in
+  `demo/evals/**` scored against its `baseline.json`; a regression fails CI (docs/evals.md).
 - `uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py` — DAG tests;
   `airflow dags test` never resolves HITL gates (add `--mark-success-pattern 'job\.approve_.*'`).
 - `deploy/islo/bootstrap.sh` (gateway, environment, snapshot, knowledge) then `deploy.sh`

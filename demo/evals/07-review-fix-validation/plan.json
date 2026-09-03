@@ -1,0 +1,21 @@
+{
+  "files": [
+    "tests/test_variance.py",
+    "src/calc/core.py",
+    "src/calc/__init__.py"
+  ],
+  "steps": [
+    "Add tests/test_variance.py covering R2-R3 before touching the implementation",
+    "Implement variance(values) in src/calc/core.py (population, \u00f7 n)",
+    "Export variance from src/calc/__init__.py and add it to __all__",
+    "Run the target test command (factory.toml [commands].test) until green"
+  ],
+  "tests": [
+    "R2: test_population_not_sample \u2014 variance([1, 2, 3]) == 2 / 3",
+    "R3: test_all_equal_is_zero \u2014 variance([2, 2, 2]) == 0.0"
+  ],
+  "risks": [
+    "Dividing by n-1 (sample variance) would pass a loose test; R2 uses the exact population value",
+    "R4 (empty input) has no test in this plan and must not be forgotten"
+  ]
+}

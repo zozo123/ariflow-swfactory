@@ -1,0 +1,13 @@
+# scripted fixture for EVAL-MEDIAN — see docs/evals.md (regenerate with `run --record`)
+diff --git a/src/calc/core.py b/src/calc/core.py
+index 07c4eae..f8f89c8 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -21,6 +21,7 @@ def median(values: Sequence[float]) -> float:
+     """Return the middle value of ``values`` (the mean of the two middle ones when even).
+ 
+     Sorts a copy, so the caller's sequence is untouched. Raises ``ValueError`` when empty.
++    ``median([1, 2, 3, 4])`` is ``2.5``.
+     """
+     items = sorted(values)
+     if not items:

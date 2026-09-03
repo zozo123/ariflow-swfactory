@@ -1,0 +1,80 @@
+# Stress line: the default stage order, fanned out. A THIRD DAG with zero Python, whose only job
+# is to prove the spine under load — that two jobs of one DAG run never share a workdir, a run
+# dir, a bare remote, an approvals file or a sandbox name.
+#
+# Not a shipping line, and deliberately not a second recording:
+#   * both gates are `auto = true`, so an unattended run finishes on its own (the ApprovalOperator
+#     falls back to Approve once `timeout_h` elapses — 1 h, the schema minimum). The fast path is
+#     still a real answer: scripts/stress_airflow.sh answers both gates of every job through the
+#     HITL API, so `approvals.json` records a human actor instead of "auto".
+#   * `max_parallel_jobs = 2` caps the mapped stage tasks at two concurrent jobs
+#     (`max_active_tis_per_dagrun`), so fan-out is throttled rather than unbounded.
+#   * `sandbox.kind = "local"` because no real agent runs here: the scripted replay of
+#     `demo/scripted` is the point. `Config` refuses `agent=claude` with `sandbox=local`, which
+#     is the guard that keeps this line a harness.
+#
+# Two targets, one recording. The `demo/scripted` fixtures are keyed by STAGE, not by target or
+# issue, and every job gets its own workdir under its own `.factory/<run_id>/`, so any target with
+# the `calc` package shape replays the same recorded patches independently. Rather than commit a
+# byte-identical copy of `demo/target` (the patches carry blob hashes, so a "second" target would
+# have to be that copy), the second target dir is MATERIALISED BY THE HARNESS: both
+# `tests/test_dag_stress.py` and `scripts/stress_airflow.sh` copy `demo/target` to
+# `<cwd>/demo/target-b` before triggering, and `stages.seed_local_workdir` resolves a target dir
+# against the worker's cwd before the factory checkout. Triggering this DAG by hand from a cwd
+# without `demo/target-b` fails the second job's `build_and_test` — use the script.
+
+[blueprint]
+name = "stress"
+version = 1
+description = "Stress line: the default order over 2 targets, self-approving gates, 2 at a time"
+
+[trigger]
+kind = "manual"
+
+[[targets]]
+repo = "zozo123/ariflow-swfactory"
+dir = "demo/target"
+base_branch = "main"
+
+[[targets]]                 # materialised copy of demo/target; see the header
+repo = "zozo123/ariflow-swfactory"
+dir = "demo/target-b"
+base_branch = "main"
+
+[stages]
+order = ["intent", "spec", "plan", "build_and_test", "review", "deliver"]   # == default.toml
+
+[[gates]]
+after = "intent"
+artifact = "intent.md"
+timeout_h = 1               # schema minimum; the backstop, not the fast path
+assigned = []
+auto = true
+
+[[gates]]
+after = "plan"
+artifact = "plan.md"
+timeout_h = 1
+assigned = []
+auto = true
+
+[limits]
+max_build_iterations = 3
+max_review_fixes = 1
+max_turns = 40
+budget_usd_per_stage = 2.0
+budget_usd = 8.0            # per JOB; the scripted agent spends 0
+stage_timeout_h = 1
+max_parallel_jobs = 2       # max_active_tis_per_dagrun on every stage task
+
+[review]
+policy = "REVIEW.md"
+nit_cap = 3
+
+[sandbox]
+kind = "local"              # harness only: no real agent, hence no MicroVM
+ttl_s = 7200                # validator: > max(gates[].timeout_h) * 3600 = 3600
+idle_s = 900
+
+[deliver]
+labels = ["factory", "agent-authored", "stress"]

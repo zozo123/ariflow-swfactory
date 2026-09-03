@@ -1,0 +1,42 @@
+# scripted fixture for EVAL-MEDIAN — see docs/evals.md (regenerate with `run --record`)
+diff --git a/src/calc/__init__.py b/src/calc/__init__.py
+index d78b989..8bce0c6 100644
+--- a/src/calc/__init__.py
++++ b/src/calc/__init__.py
+@@ -1,5 +1,5 @@
+ """calc: tiny finance helpers (demo target for the software factory)."""
+ 
+-from calc.core import compound, simple_interest
++from calc.core import compound, median, simple_interest
+ 
+-__all__ = ["compound", "simple_interest"]
++__all__ = ["compound", "median", "simple_interest"]
+diff --git a/src/calc/core.py b/src/calc/core.py
+index 57e73fc..07c4eae 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -1,5 +1,6 @@
+ """Core interest calculations."""
+ 
++from collections.abc import Sequence
+ 
+ def simple_interest(principal: float, rate: float, years: float) -> float:
+     """Return principal * rate * years. Rate is a fraction (0.05 == 5%)."""
+@@ -14,3 +15,17 @@ def compound(principal: float, rate: float, years: int, periods_per_year: int =
+         raise ValueError("invalid arguments")
+     n = periods_per_year
+     return principal * (1 + rate / n) ** (n * years)
++
++
++def median(values: Sequence[float]) -> float:
++    """Return the middle value of ``values`` (the mean of the two middle ones when even).
++
++    Sorts a copy, so the caller's sequence is untouched. Raises ``ValueError`` when empty.
++    """
++    items = sorted(values)
++    if not items:
++        raise ValueError("values must not be empty")
++    mid = len(items) // 2
++    if len(items) % 2:
++        return items[mid]
++    return (items[mid - 1] + items[mid]) / 2
