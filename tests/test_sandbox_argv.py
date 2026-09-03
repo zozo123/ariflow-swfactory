@@ -512,10 +512,12 @@ def test_srt_env_is_scrubbed_and_pass_env_is_explicit(tmp_path, monkeypatch) -> 
     monkeypatch.setenv("ISLO_API_KEY", "islo_secret")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws_secret")
     monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("UV_CACHE_DIR", "/runner-temp/setup-uv-cache")
     seen = _fake_srt(monkeypatch)
 
     _srt(tmp_path).run("true")
     env = seen["kwargs"]["env"]
+    assert env["UV_CACHE_DIR"] == str((tmp_path / "work" / ".factory" / "uv-cache").resolve())
     assert "ANTHROPIC_API_KEY" not in env and "ANTHROPIC_BASE_URL" not in env
     for k in ("GH_TOKEN", "ISLO_API_KEY", "AWS_SECRET_ACCESS_KEY"):
         assert k not in env

@@ -317,9 +317,16 @@ class SrtSandbox(LocalSandbox):
         return [*_srt_bin(), "-s", str(self.settings_path), "-c", script]
 
     def env(self) -> dict[str, str]:
-        """Scrubbed host env plus the ``pass_env`` allowlist (only keys present on the host)."""
+        """Scrubbed host env plus explicit credentials and a sandbox-writable uv cache.
+
+        GitHub's setup-uv exports ``UV_CACHE_DIR`` under ``$RUNNER_TEMP``. That path is outside
+        the SRT write allowlist, so forwarding it makes ``uv sync`` fail read-only. Always pin uv
+        to the sandbox-owned cache under ``.factory/uv-cache`` while preserving the exact credential
+        allowlist.
+        """
         env = scrub_env(os.environ)
         env.update({k: os.environ[k] for k in self.pass_env if k in os.environ})
+        env["UV_CACHE_DIR"] = str(self.root / ".factory" / "uv-cache")
         return env
 
     def ensure(self) -> None:

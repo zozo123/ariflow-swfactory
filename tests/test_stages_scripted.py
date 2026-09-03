@@ -122,8 +122,25 @@ def test_rerun_with_same_run_dir_skips_every_stage_but_deliver(run, tmp_path: Pa
     """Idempotency comes from the orchestrator's log: a second walk of the same run (on a copy of
     its workdir + run dir) re-publishes the chain without a single agent call or test run."""
     report, tmp, _ = run
-    for name in ("work", "run"):
-        shutil.copytree(tmp / name, tmp_path / name, ignore=shutil.ignore_patterns(".venv"))
+    shutil.copytree(tmp / "work", tmp_path / "work", ignore=shutil.ignore_patterns(".venv"))
+    # A bare Git repository is a live database, not an ordinary directory tree. Clone it rather
+    # than recursively copying object files, which can race Git's internal repack/maintenance.
+    shutil.copytree(
+        tmp / "run",
+        tmp_path / "run",
+        ignore=shutil.ignore_patterns(".venv", "remote.git"),
+    )
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "--quiet",
+            "--mirror",
+            str(tmp / "run" / "remote.git"),
+            str(tmp_path / "run" / "remote.git"),
+        ],
+        check=True,
+    )
     bp = load("factory")
     (job,) = bp.jobs({"issues": ["demo/issue.md"]})
     cfg = bp.config(

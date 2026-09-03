@@ -338,6 +338,11 @@ class LocalGitScm:
         if not (self.remote_dir / "HEAD").exists():
             self.remote_dir.parent.mkdir(parents=True, exist_ok=True)
             _run(["git", "init", "--quiet", "--bare", str(self.remote_dir)], None)
+        # A local demo/test may inspect or snapshot this bare remote immediately after publish.
+        # Disable Git's asynchronous auto-maintenance so loose objects cannot be repacked out from
+        # under that reader; explicit maintenance remains possible when an operator wants it.
+        _run(["git", "config", "gc.auto", "0"], self.remote_dir)
+        _run(["git", "config", "maintenance.auto", "false"], self.remote_dir)
         _run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], self.remote_dir)
         if self._has_refs():
             return
