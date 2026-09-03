@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -360,7 +361,12 @@ def _fake_srt(monkeypatch, rc: int = 0):
 
 def test_srt_settings_written_with_workdir_and_protected(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(sandbox_mod.Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    for _p in sandbox_mod.SRT_DENY_READ:
+        (tmp_path / "home" / _p).mkdir(parents=True, exist_ok=True)
     sb = _srt(tmp_path, protected=("tests/", "src/**/*.py", "factory.toml", "*.lock"))
+    for _d in (".claude", ".github", "tests", "src"):
+        (tmp_path / "work" / _d).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "work" / "factory.toml").touch()
     _fake_srt(monkeypatch)
     sb.ensure()
     assert sb.name == "srt:work"
@@ -399,6 +405,9 @@ def test_srt_set_protected_rewrites_settings_and_run_resyncs_stale_file(
     monkeypatch.setattr(sandbox_mod.Path, "home", classmethod(lambda cls: tmp_path / "home"))
     seen = _fake_srt(monkeypatch)
     sb = _srt(tmp_path)
+    for _d in (".claude", ".github", "tests", "src"):
+        (tmp_path / "work" / _d).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "work" / "factory.toml").touch()
     sb.ensure()
     work = str((tmp_path / "work").resolve())
     deny = lambda: json.loads(sb.settings_path.read_text())["filesystem"]["denyWrite"]  # noqa: E731
@@ -582,6 +591,7 @@ def test_make_sandbox_srt(tmp_path, monkeypatch) -> None:
     assert sb.workdir == str((tmp_path / ".factory/work").resolve())
     assert sb.pass_env == ("ANTHROPIC_API_KEY",)  # agent=claude needs the real key
     assert sb.protected == ("tests/",)
+    Path(sb.workdir, "tests").mkdir(parents=True, exist_ok=True)
     assert f"{sb.workdir}/tests" in sb.settings()["filesystem"]["denyWrite"]
     assert "example.org" in sb.settings()["network"]["allowedDomains"]
     scripted = make_sandbox(Config(issue="42", sandbox="srt"), "42")
@@ -843,3 +853,32 @@ def test_config_docker_fields_and_validators() -> None:
         Config(issue="42", sandbox="docker", docker_credentials="keychain")
     with pytest.raises(ValueError, match="crabbox"):
         Config(issue="42", sandbox="docker", tests="crabbox")
+
+
+def test_srt_denies_only_existing_paths(tmp_path, monkeypatch) -> None:
+    """bubblewrap (Linux) refuses deny rules for paths that do not exist yet."""
+    sb = sandbox_mod.SrtSandbox(tmp_path, allowed_domains=(), protected=("tests/",))
+    deny = sb.settings()["filesystem"]["denyWrite"]
+    assert str(tmp_path / ".claude") not in deny and str(tmp_path / "tests") not in deny
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / "tests").mkdir()
+    deny = sb.settings()["filesystem"]["denyWrite"]
+    assert str(tmp_path / ".claude") in deny and str(tmp_path / "tests") in deny
+
+
+def test_docker_custom_uid_gets_tmp_home_and_no_cache_volume(tmp_path) -> None:
+    sb = sandbox_mod.DockerSandbox(tmp_path, image="img", user="1001:1001")
+    argv = sb.argv("uv run pytest")
+    assert "--user" in argv and "1001:1001" in argv
+    assert f"HOME={sandbox_mod.DOCKER_TMP_HOME}" in argv
+    assert not any(a.startswith(sandbox_mod.DOCKER_CACHE_VOLUME) for a in argv)
+    assert argv[-1].startswith('mkdir -p "$HOME" && uv run pytest')
+    root_sb = sandbox_mod.DockerSandbox(tmp_path, image="img", user="root")
+    assert "HOME=" not in " ".join(root_sb.argv("true"))
+
+
+def test_default_docker_user_is_host_uid_on_linux(monkeypatch) -> None:
+    monkeypatch.setattr(sandbox_mod.sys, "platform", "linux")
+    assert sandbox_mod.default_docker_user() == f"{os.getuid()}:{os.getgid()}"
+    monkeypatch.setattr(sandbox_mod.sys, "platform", "darwin")
+    assert sandbox_mod.default_docker_user() is None

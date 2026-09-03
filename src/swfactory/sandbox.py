@@ -28,6 +28,7 @@ import posixpath
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -69,6 +70,7 @@ _GLOB_CHARS = frozenset("*?[")
 DOCKER_HOME = "/home/swf"
 DOCKER_CREDENTIAL_FILES = (".claude", ".claude.json")
 DOCKER_CACHE_VOLUME = "swfactory-sandbox-cache"
+DOCKER_TMP_HOME = "/tmp/swf-home"  # $HOME for arbitrary host uids (bind-mounted files stay yours)
 # Bind-mounted files keep the host uid; the container user usually differs, so git must not
 # refuse the checkout as "dubious ownership" (not a secret; travels as -e K=V).
 DOCKER_GIT_ENV = (
@@ -267,10 +269,11 @@ class SrtSandbox(LocalSandbox):
         allow_write += [str(home / p) for p in SRT_ALLOW_WRITE_HOME]
         allow_write += list(SRT_ALLOW_WRITE_ABS)
         allow_write += [str(home / p) for p in SRT_ALLOW_WRITE_OPTIONAL if (home / p).exists()]
-        deny_write = [str(self.root / d) for d in SRT_FIXED_DENY_WRITE]
+        # bubblewrap (Linux) can only deny paths that exist; Seatbelt (macOS) does not care.
+        deny_write = [str(self.root / d) for d in SRT_FIXED_DENY_WRITE if (self.root / d).exists()]
         for glob in self.protected:
             prefix = _literal_prefix(glob)
-            if prefix:
+            if prefix and (self.root / prefix).exists():
                 deny_write.append(str(self.root / prefix))
         return {
             "network": {
@@ -278,7 +281,7 @@ class SrtSandbox(LocalSandbox):
                 "deniedDomains": [],
             },
             "filesystem": {
-                "denyRead": [str(home / p) for p in SRT_DENY_READ],
+                "denyRead": [str(home / p) for p in SRT_DENY_READ if (home / p).exists()],
                 "allowWrite": _dedupe(allow_write),
                 "denyWrite": _dedupe(deny_write),
             },
@@ -336,6 +339,8 @@ class SrtSandbox(LocalSandbox):
                 raise StageError("sandbox", f"git init failed in {self.root}: {res.stderr.strip()}")
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
+        if not self._settings_current():  # settings() reflects paths that appeared since
+            self.write_settings()
         """Run ``cmd`` under srt; the command's exit code propagates through srt."""
         if not self._settings_current():
             self.write_settings()
@@ -391,6 +396,10 @@ class DockerSandbox(LocalSandbox):
         by ``config.protected_for``); the next ``run()`` mounts them ``:ro``."""
         self.protected = tuple(globs)
 
+    def _custom_uid(self) -> bool:
+        """True when running as a uid other than the image user (root or the baked-in ``swf``)."""
+        return bool(self.user) and self.user.split(":")[0] not in ("root", "0", "swf", "1000")
+
     def mounts(self) -> list[str]:
         """``-v`` pairs: workdir rw at its own path, fixed + protected prefixes ro (only those that
         exist: docker would create a missing source as a root-owned dir), the cache volume, and
@@ -402,7 +411,8 @@ class DockerSandbox(LocalSandbox):
             path = self.root / rel
             if path.exists():
                 mounts += ["-v", f"{path}:{path}:ro"]
-        mounts += ["-v", f"{DOCKER_CACHE_VOLUME}:{self.home}/.cache"]
+        if not self._custom_uid():
+            mounts += ["-v", f"{DOCKER_CACHE_VOLUME}:{self.home}/.cache"]
         if self.credentials == "host":
             host_home = Path.home()
             for rel in DOCKER_CREDENTIAL_FILES:
@@ -419,6 +429,16 @@ class DockerSandbox(LocalSandbox):
         argv += ["-w", cwd or self.workdir, "--network", self.network]
         if self.user:
             argv += ["--user", self.user]
+        if self._custom_uid():
+            # An arbitrary host uid has no home in the image: give it one under /tmp (1777).
+            argv += [
+                "-e",
+                f"HOME={DOCKER_TMP_HOME}",
+                "-e",
+                f"UV_CACHE_DIR={DOCKER_TMP_HOME}/.cache/uv",
+            ]
+            argv += ["-e", f"npm_config_cache={DOCKER_TMP_HOME}/.npm"]
+            cmd = f'mkdir -p "$HOME" && {cmd}'
         for k, v in DOCKER_GIT_ENV:
             argv += ["-e", f"{k}={v}"]
         for k in self.pass_env:
@@ -447,6 +467,14 @@ class DockerSandbox(LocalSandbox):
         return _run_subprocess(
             self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s
         )
+
+
+def default_docker_user() -> str | None:
+    """On Linux run the container as the host uid:gid so bind-mounted files stay writable by the
+    host user (Docker Desktop on macOS maps ownership itself, so ``None`` = the image user)."""
+    if sys.platform.startswith("linux") and hasattr(os, "getuid"):
+        return f"{os.getuid()}:{os.getgid()}"
+    return None
 
 
 def _srt_bin() -> list[str]:
@@ -669,7 +697,7 @@ def make_sandbox(
             credentials=cfg.docker_credentials,
             protected=protected,
             network=cfg.docker_network,
-            user=cfg.docker_user,
+            user=cfg.docker_user or default_docker_user(),
         )
     return IsloSandbox(
         cfg.sandbox_name(issue_id, repo),

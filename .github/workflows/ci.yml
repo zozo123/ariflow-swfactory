@@ -60,4 +60,4 @@ jobs:
         with: { python-version: "3.12" }
       - run: uv sync
       - run: docker build -t swfactory-sandbox:local -f deploy/docker/sandbox.Dockerfile .
-      - run: SWF_DOCKER_IMAGE=swfactory-sandbox:local SWF_DOCKER_USER=root uv run swfactory demo --sandbox docker
+      - run: SWF_DOCKER_IMAGE=swfactory-sandbox:local uv run swfactory demo --sandbox docker

@@ -433,6 +433,7 @@ def test_agent_call_tightens_srt_deny_write_per_stage(tmp_path: Path) -> None:
 
     work = tmp_path / "work"
     work.mkdir()
+    (work / "tests").mkdir()
     shutil.copy(TARGET / "factory.toml", work / "factory.toml")
     sb = SrtSandbox(work, allowed_domains=(), protected=("factory.toml",))
     seen: list[tuple[str, tuple[str, ...]]] = []
