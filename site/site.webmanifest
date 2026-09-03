@@ -1,0 +1,16 @@
+{
+  "name": "swfactory",
+  "short_name": "swfactory",
+  "description": "Airflow-native software delivery with isolated AI agents and human gates.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#070a12",
+  "theme_color": "#070a12",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

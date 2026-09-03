@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="swfactory turns GitHub issues into tested, reviewed pull requests with Airflow 3 orchestration, human gates, isolated AI agents, and an auditable artifact chain."
+    />
+    <meta name="theme-color" content="#070a12" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="swfactory — Issues in. Audited pull requests out." />
+    <meta
+      property="og:description"
+      content="An AI-native software factory orchestrated by Apache Airflow 3."
+    />
+    <meta property="og:url" content="https://zozo123.github.io/ariflow-swfactory/" />
+    <meta property="og:image" content="https://zozo123.github.io/ariflow-swfactory/social-card.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="canonical" href="https://zozo123.github.io/ariflow-swfactory/" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="site.webmanifest" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <title>swfactory — Airflow-native software delivery</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareSourceCode",
+        "name": "swfactory",
+        "codeRepository": "https://github.com/zozo123/ariflow-swfactory",
+        "programmingLanguage": "Python",
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "description": "AI-native software factory orchestrated by Apache Airflow 3"
+      }
+    </script>
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <header class="nav-wrap">
+      <nav class="nav-island" aria-label="Primary navigation">
+        <a class="brand" href="#top" aria-label="swfactory home">
+          <span class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
+          <span>swfactory</span>
+        </a>
+        <div class="desktop-nav">
+          <a href="#pipeline">Pipeline</a>
+          <a href="#security">Security</a>
+          <a href="#blueprints">Blueprints</a>
+          <a href="#quickstart">Quickstart</a>
+        </div>
+        <a
+          class="nav-github"
+          href="https://github.com/zozo123/ariflow-swfactory"
+          target="_blank"
+          rel="noreferrer"
+        >
+          GitHub
+          <span aria-hidden="true">↗</span>
+        </a>
+        <button
+          class="menu-toggle"
+          type="button"
+          aria-controls="mobile-menu"
+          aria-expanded="false"
+          aria-label="Open navigation"
+        >
+          <span></span><span></span>
+        </button>
+      </nav>
+    </header>
+
+    <div id="mobile-menu" class="mobile-menu" aria-hidden="true">
+      <div class="mobile-menu-inner">
+        <p class="menu-label">Navigate</p>
+        <a href="#pipeline">Pipeline <span>01</span></a>
+        <a href="#security">Security <span>02</span></a>
+        <a href="#blueprints">Blueprints <span>03</span></a>
+        <a href="#quickstart">Quickstart <span>04</span></a>
+        <a href="https://github.com/zozo123/ariflow-swfactory">View on GitHub <span>↗</span></a>
+      </div>
+    </div>
+
+    <main id="main-content">
+      <section id="top" class="hero shell">
+        <div class="hero-copy reveal">
+          <div class="eyebrow">
+            <span class="pulse-dot"></span>
+            Built on Apache Airflow 3.3.1
+          </div>
+          <h1>Issues in.<br /><span>Audited PRs out.</span></h1>
+          <p class="hero-lede">
+            A software factory where Airflow orchestrates isolated AI agents, humans hold the gates,
+            and every decision ships with receipts.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#quickstart">
+              Run the factory
+              <span class="button-icon" aria-hidden="true">↓</span>
+            </a>
+            <a
+              class="button button-quiet"
+              href="https://github.com/zozo123/ariflow-swfactory"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Explore source
+              <span class="button-icon" aria-hidden="true">↗</span>
+            </a>
+          </div>
+          <div class="proof-row" aria-label="Project attributes">
+            <span><i aria-hidden="true"></i> Apache-2.0</span>
+            <span><i aria-hidden="true"></i> Python 3.12</span>
+            <span><i aria-hidden="true"></i> Keyless demo</span>
+          </div>
+        </div>
+
+        <div class="machine-shell reveal reveal-delay" aria-label="Animated factory run preview">
+          <div class="machine-card">
+            <div class="machine-head">
+              <div>
+                <span class="machine-kicker">LIVE BLUEPRINT</span>
+                <strong>factory / DEMO-1</strong>
+              </div>
+              <span class="run-chip"><i></i> Running</span>
+            </div>
+            <div class="pipeline-visual" aria-hidden="true">
+              <div class="pipeline-track"><span class="pipeline-beam"></span></div>
+              <div class="stage-node is-complete">
+                <span>01</span>
+                <strong>Intent</strong>
+                <small>approved</small>
+              </div>
+              <div class="stage-node is-complete">
+                <span>02</span>
+                <strong>Plan</strong>
+                <small>approved</small>
+              </div>
+              <div class="stage-node is-active">
+                <span>03</span>
+                <strong>Build</strong>
+                <small>iteration 2</small>
+              </div>
+              <div class="stage-node">
+                <span>04</span>
+                <strong>Review</strong>
+                <small>queued</small>
+              </div>
+              <div class="stage-node">
+                <span>05</span>
+                <strong>Deliver</strong>
+                <small>queued</small>
+              </div>
+            </div>
+            <div class="machine-console">
+              <div class="console-line">
+                <span class="console-time">12:08:41</span>
+                <span class="console-kind">GATE</span>
+                <span>plan approved by human</span>
+              </div>
+              <div class="console-line">
+                <span class="console-time">12:08:44</span>
+                <span class="console-kind accent">AGENT</span>
+                <span class="machine-stage">running build in isolated sandbox</span>
+              </div>
+              <div class="console-line muted">
+                <span class="console-time">12:08:45</span>
+                <span class="console-kind">POLICY</span>
+                <span>GitHub credentials unavailable</span>
+              </div>
+            </div>
+            <div class="machine-foot">
+              <span>RUN <strong>D9945539</strong></span>
+              <span>COST <strong>$0.0000</strong></span>
+              <span>TESTS <strong class="success">PASS</strong></span>
+            </div>
+          </div>
+        </div>
+
+        <a class="scroll-cue" href="#pipeline" aria-label="Scroll to pipeline">
+          <span>See the line</span>
+          <i aria-hidden="true"></i>
+        </a>
+      </section>
+
+      <section id="pipeline" class="section shell">
+        <div class="section-heading reveal">
+          <div class="eyebrow">One issue. One governed line.</div>
+          <h2>Autonomy with<br />a paper trail.</h2>
+          <p>
+            The model does the creative work. Deterministic code controls the permissions, budgets,
+            gates, tests, and delivery.
+          </p>
+        </div>
+
+        <div class="bento-grid">
+          <div class="bezel bento-wide reveal">
+            <article class="card pipeline-card">
+              <div class="card-index">01 — 06</div>
+              <h3>Every stage earns the next.</h3>
+              <div class="stage-list">
+                <div><span>01</span><strong>Intent</strong><small>verbatim issue + scope</small></div>
+                <div><span>02</span><strong>Spec</strong><small>read-only agent</small></div>
+                <div><span>03</span><strong>Plan</strong><small>typed JSON + human gate</small></div>
+                <div><span>04</span><strong>Build</strong><small>bounded fix loop + tests</small></div>
+                <div><span>05</span><strong>Review</strong><small>findings + policy fixes</small></div>
+                <div><span>06</span><strong>Deliver</strong><small>validated patch + PR</small></div>
+              </div>
+            </article>
+          </div>
+
+          <div class="bezel bento-tall reveal reveal-delay">
+            <article class="card receipt-card">
+              <div class="card-index">AUDIT CHAIN</div>
+              <div class="receipt-icon" aria-hidden="true">
+                <svg viewBox="0 0 48 48" role="img">
+                  <path d="M14 7h20v34l-5-3-5 3-5-3-5 3V7Z" />
+                  <path d="M19 16h10M19 22h10M19 28h7" />
+                </svg>
+              </div>
+              <h3>Receipts, committed.</h3>
+              <p>
+                Intent, spec, plan, approvals, review, metrics, and agent logs travel with the pull
+                request—not in a disappearing chat.
+              </p>
+              <div class="file-stack" aria-label="Factory artifact files">
+                <span>intent.md <i>01</i></span>
+                <span>plan.json <i>02</i></span>
+                <span>approvals.json <i>03</i></span>
+                <span>review.json <i>04</i></span>
+                <span>metrics.json <i>05</i></span>
+              </div>
+            </article>
+          </div>
+
+          <div class="bezel bento-small reveal">
+            <article class="card metric-card">
+              <div class="card-index">BOUNDED BY CODE</div>
+              <strong class="metric-value">0</strong>
+              <p>GitHub tokens inside the agent sandbox.</p>
+              <div class="metric-rule"><span></span></div>
+            </article>
+          </div>
+
+          <div class="bezel bento-small reveal reveal-delay">
+            <article class="card gate-card">
+              <div class="card-index">HUMAN IN THE LOOP</div>
+              <div class="gate-switch" aria-hidden="true"><span></span></div>
+              <h3>Approve the why<br />and the how.</h3>
+              <p>Intent and plan gates stop work before expensive or risky execution.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="security" class="section security-section">
+        <div class="shell">
+          <div class="section-heading security-heading reveal">
+            <div class="eyebrow">Structural security</div>
+            <h2>Credentials never<br />cross the line.</h2>
+            <p>
+              Security is topology, not a prompt. Model-generated code runs away from the system
+              that can publish it.
+            </p>
+          </div>
+
+          <div class="boundary-shell reveal">
+            <div class="boundary-card">
+              <div class="boundary-zone orchestrator-zone">
+                <div class="zone-head">
+                  <span class="zone-number">TRUSTED / 01</span>
+                  <span class="zone-chip">Orchestrator</span>
+                </div>
+                <h3>Airflow controls the run.</h3>
+                <ul>
+                  <li><span></span>Owns GitHub delivery</li>
+                  <li><span></span>Validates every patch path</li>
+                  <li><span></span>Scans for secret-shaped values</li>
+                  <li><span></span>Records gates and budgets</li>
+                </ul>
+                <div class="token token-github">GH_TOKEN <i>present</i></div>
+                <div class="token token-model">MODEL KEY <i>absent</i></div>
+              </div>
+
+              <div class="boundary-line" aria-label="Hard trust boundary">
+                <span>FORMAT-PATCH ONLY</span>
+                <i></i>
+                <strong>HARD TRUST BOUNDARY</strong>
+                <i></i>
+                <span>DENY BY DEFAULT</span>
+              </div>
+
+              <div class="boundary-zone agent-zone">
+                <div class="zone-head">
+                  <span class="zone-number">UNTRUSTED / 02</span>
+                  <span class="zone-chip">Agent sandbox</span>
+                </div>
+                <h3>The agent builds in isolation.</h3>
+                <ul>
+                  <li><span></span>Stage-scoped tools only</li>
+                  <li><span></span>Protected tests and policy files</li>
+                  <li><span></span>Bounded turns, time, and spend</li>
+                  <li><span></span>No push or PR capability</li>
+                </ul>
+                <div class="token token-model">MODEL KEY <i>phantom</i></div>
+                <div class="token token-github">GH_TOKEN <i>absent</i></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="sandbox-row reveal">
+            <div><span>islo</span><strong>Production MicroVM</strong><small>deny-by-default egress</small></div>
+            <div><span>SRT</span><strong>Developer isolation</strong><small>OS-level confinement</small></div>
+            <div><span>Docker</span><strong>Local stack</strong><small>container per command</small></div>
+            <div><span>Local</span><strong>Keyless replay</strong><small>hermetic scripted demo</small></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="blueprints" class="section shell blueprint-section">
+        <div class="blueprint-copy reveal">
+          <div class="eyebrow">Factory as code</div>
+          <h2>Change the line,<br />not the engine.</h2>
+          <p>
+            A TOML blueprint defines stages, human gates, limits, sandbox policy, targets, and PR
+            labels. The same file becomes an Airflow DAG and a CLI command.
+          </p>
+          <ul class="check-list">
+            <li><span>✓</span> Dynamic task mapping across issues and targets</li>
+            <li><span>✓</span> Typed plans, reviews, and run reports</li>
+            <li><span>✓</span> Retry-safe, idempotent delivery</li>
+          </ul>
+        </div>
+
+        <div class="code-bezel reveal reveal-delay">
+          <div class="code-card">
+            <div class="code-head">
+              <span><i></i><i></i><i></i></span>
+              <strong>blueprints/default.toml</strong>
+              <button
+                type="button"
+                class="copy-button"
+                data-copy="blueprint-code"
+                aria-label="Copy blueprint example"
+              >
+                Copy
+              </button>
+            </div>
+            <pre id="blueprint-code"><code><span class="syntax-section">[blueprint]</span>
+<span class="syntax-key">name</span> = <span class="syntax-string">"factory"</span>
+
+<span class="syntax-section">[stages]</span>
+<span class="syntax-key">order</span> = [
+  <span class="syntax-string">"intent"</span>, <span class="syntax-string">"spec"</span>, <span class="syntax-string">"plan"</span>,
+  <span class="syntax-string">"build_and_test"</span>, <span class="syntax-string">"review"</span>, <span class="syntax-string">"deliver"</span>,
+]
+
+<span class="syntax-section">[[gates]]</span>
+<span class="syntax-key">after</span> = <span class="syntax-string">"plan"</span>
+<span class="syntax-key">timeout_h</span> = <span class="syntax-number">24</span>
+
+<span class="syntax-section">[limits]</span>
+<span class="syntax-key">max_build_iterations</span> = <span class="syntax-number">3</span>
+<span class="syntax-key">budget_usd</span> = <span class="syntax-number">25.0</span>
+
+<span class="syntax-section">[sandbox]</span>
+<span class="syntax-key">kind</span> = <span class="syntax-string">"islo"</span></code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="quickstart" class="section quickstart-section">
+        <div class="shell quickstart-grid">
+          <div class="quickstart-copy reveal">
+            <div class="eyebrow">No keys. No network. About ten seconds.</div>
+            <h2>See the whole<br />factory run.</h2>
+            <p>
+              The recorded agent replay executes every production stage, loops through a failed
+              build, fixes it, reviews the result, and publishes to a local bare Git remote.
+            </p>
+          </div>
+
+          <div class="terminal-bezel reveal reveal-delay">
+            <div class="terminal-card">
+              <div class="terminal-head">
+                <span>KEYLESS / LOCAL / SCRIPTED</span>
+                <button
+                  type="button"
+                  class="copy-button"
+                  data-copy="quickstart-code"
+                  aria-label="Copy quickstart commands"
+                >
+                  Copy
+                </button>
+              </div>
+              <pre id="quickstart-code"><code><span class="prompt">$</span> git clone https://github.com/zozo123/ariflow-swfactory.git
+<span class="prompt">$</span> cd ariflow-swfactory
+<span class="prompt">$</span> uv sync
+<span class="prompt">$</span> uv run swfactory demo
+
+<span class="dim">intent</span>           <span class="pass">ok</span>
+<span class="dim">spec</span>             <span class="pass">ok</span>
+<span class="dim">plan</span>             <span class="pass">ok</span>
+<span class="dim">build_and_test</span>   <span class="pass">ok</span>  iterations=2 tests_passed=1
+<span class="dim">review</span>           <span class="pass">ok</span>  blockers=0
+<span class="dim">deliver</span>          <span class="pass">ok</span>  commits=3</code></pre>
+              <div class="terminal-foot"><span>tests passed</span><strong>TRUE</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="closing shell reveal">
+        <div class="closing-inner">
+          <div>
+            <div class="eyebrow">Open source / Apache-2.0</div>
+            <h2>Build with agents.<br /><span>Ship with control.</span></h2>
+          </div>
+          <a
+            class="button button-primary button-large"
+            href="https://github.com/zozo123/ariflow-swfactory"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open the repository
+            <span class="button-icon" aria-hidden="true">↗</span>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer shell">
+      <a class="brand footer-brand" href="#top">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span>swfactory</span>
+      </a>
+      <p>Airflow-native software delivery with a hard trust boundary.</p>
+      <div class="footer-links">
+        <a href="https://github.com/zozo123/ariflow-swfactory/blob/main/README.md">Docs</a>
+        <a href="https://github.com/zozo123/ariflow-swfactory/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/zozo123/ariflow-swfactory/blob/main/LICENSE">License</a>
+      </div>
+      <span class="copyright">© <span id="year">2026</span> swfactory</span>
+    </footer>
+  </body>
+</html>

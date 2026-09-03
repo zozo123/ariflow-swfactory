@@ -10,6 +10,7 @@ All notable changes to this project will be documented here. The format follows
 
 - Project contribution and security policies.
 - Complete Apache-2.0 license text and Python package discovery metadata.
+- Responsive GitHub Pages product site with accessibility, SEO, and deployment checks.
 
 ### Fixed
 
