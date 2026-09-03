@@ -1,0 +1,113 @@
+{
+  "api_error_status": null,
+  "duration_api_ms": 57753,
+  "duration_ms": 82600,
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "fast_mode_state": "off",
+  "is_error": false,
+  "iteration": 1,
+  "modelUsage": {
+    "claude-fable-5-1": {
+      "cacheCreationInputTokens": 22674,
+      "cacheReadInputTokens": 208233,
+      "canonicalModel": "claude-fable-5-1",
+      "contextWindow": 1000000,
+      "costBasis": "list",
+      "costUSD": 0.66497825,
+      "inputTokens": 1354,
+      "maxOutputTokens": 64000,
+      "outputTokens": 2918,
+      "provider": "firstParty",
+      "thinkingTokens": 77,
+      "webSearchRequests": 0
+    }
+  },
+  "num_turns": 14,
+  "permission_denials": [
+    {
+      "tool_input": {
+        "command": "uv run --group dev pytest --junitxml=.factory/junit.xml 2>&1 | tail -5; echo \"--- lint ---\"; uv run --group dev python -m compileall -q src; echo \"lint exit: $?\"; echo \"--- status ---\"; git status --short",
+        "description": "Run pytest, lint, and show git status"
+      },
+      "tool_name": "Bash",
+      "tool_use_id": "toolu_018BQku5t71xSQfY5TkDkUmZ"
+    }
+  ],
+  "queued_turn_count": 0,
+  "session_id": "6cd2b725-c32a-45e6-9cef-b9f1f8b258f0",
+  "stage": "build",
+  "stop_reason": "tool_use",
+  "structured_output": {
+    "files_changed": [
+      "src/calc/core.py",
+      "src/calc/__init__.py",
+      "tests/test_core.py"
+    ],
+    "summary": "Added `percent_change(old, new)` to `src/calc/core.py` as a pure function returning `(new - old) / old` with a docstring stating the result is a fraction (0.25 == +25 %), that negative results mean a fall, that negative `old` is accepted with the sign following the raw formula, and that `old == 0` raises `ValueError`; the zero check uses `==` so it catches `0`, `0.0` and `-0.0`. Exported the name from `src/calc/__init__.py` by extending the import line and adding it to `__all__` in alphabetical order. Appended eleven tests to `tests/test_core.py` covering rise, fall, no change, parametrized zero-old rejection, negative old, new == 0, float return type, `__all__` membership and the docstring; the existing three tests were left untouched. Tests were written first and confirmed red (ImportError on collection), then the implementation turned them green: `uv run --group dev pytest --junitxml=.factory/junit.xml` ends with `14 passed`, and `uv run --group dev python -m compileall -q src` exits 0. No changes to factory.toml or pyproject.toml, nothing committed."
+  },
+  "subagent_stats": {
+    "by_type": {},
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "system": 0,
+      "user": 0
+    },
+    "max_depth": 0,
+    "refused": {
+      "budget": 0,
+      "concurrency_limit": 0,
+      "depth_limit": 0
+    },
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "spawned": 0,
+    "spawned_by_subagents": 0,
+    "started_in_background": 0
+  },
+  "subtype": "success",
+  "terminal_reason": "completed",
+  "time_to_request_ms": 1180,
+  "total_cost_usd": 0.66497825,
+  "ttft_ms": 5717,
+  "ttft_stream_ms": 4889,
+  "type": "result",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 22674,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 22674,
+    "cache_read_input_tokens": 208233,
+    "inference_geo": "not_available",
+    "input_tokens": 1354,
+    "iterations": [
+      {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 614,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 614,
+        "cache_read_input_tokens": 34607,
+        "input_tokens": 85,
+        "output_tokens": 537,
+        "type": "message"
+      }
+    ],
+    "output_tokens": 2918,
+    "output_tokens_details": {
+      "thinking_tokens": 77
+    },
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+  },
+  "uuid": "d819ff00-ea92-4daa-a93b-6a4cfbbaf979"
+}

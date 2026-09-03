@@ -1,0 +1,14 @@
+[
+  {
+    "gate": "intent",
+    "decision": "approve",
+    "actor": "auto",
+    "at": "2026-09-03T01:20:11.557795Z"
+  },
+  {
+    "gate": "plan",
+    "decision": "approve",
+    "actor": "auto",
+    "at": "2026-09-03T01:21:43.173037Z"
+  }
+]
