@@ -1,0 +1,96 @@
+{
+  "api_error_status": null,
+  "duration_api_ms": 38468,
+  "duration_ms": 46059,
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "fast_mode_state": "off",
+  "is_error": false,
+  "iteration": 1,
+  "modelUsage": {
+    "claude-fable-5-1": {
+      "cacheCreationInputTokens": 16781,
+      "cacheReadInputTokens": 65741,
+      "canonicalModel": "claude-fable-5-1",
+      "contextWindow": 1000000,
+      "costBasis": "list",
+      "costUSD": 0.45524275000000003,
+      "inputTokens": 924,
+      "maxOutputTokens": 64000,
+      "outputTokens": 2267,
+      "provider": "firstParty",
+      "thinkingTokens": 29,
+      "webSearchRequests": 0
+    }
+  },
+  "num_turns": 7,
+  "permission_denials": [],
+  "queued_turn_count": 0,
+  "session_id": "cf8062fa-ab3b-469f-96bd-ebf185c141e6",
+  "stage": "spec",
+  "stop_reason": "end_turn",
+  "subagent_stats": {
+    "by_type": {},
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "system": 0,
+      "user": 0
+    },
+    "max_depth": 0,
+    "refused": {
+      "budget": 0,
+      "concurrency_limit": 0,
+      "depth_limit": 0
+    },
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "spawned": 0,
+    "spawned_by_subagents": 0,
+    "started_in_background": 0
+  },
+  "subtype": "success",
+  "terminal_reason": "completed",
+  "time_to_request_ms": 1219,
+  "total_cost_usd": 0.45524275000000003,
+  "ttft_ms": 5407,
+  "ttft_stream_ms": 4494,
+  "type": "result",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 14194,
+      "ephemeral_5m_input_tokens": 2587
+    },
+    "cache_creation_input_tokens": 16781,
+    "cache_read_input_tokens": 65741,
+    "inference_geo": "not_available",
+    "input_tokens": 924,
+    "iterations": [
+      {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 2374
+        },
+        "cache_creation_input_tokens": 2374,
+        "cache_read_input_tokens": 26787,
+        "input_tokens": 80,
+        "output_tokens": 1643,
+        "type": "message"
+      }
+    ],
+    "output_tokens": 2267,
+    "output_tokens_details": {
+      "thinking_tokens": 29
+    },
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+  },
+  "uuid": "459745b4-a7c6-4b83-b7cf-77719b12df36"
+}

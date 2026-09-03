@@ -1,0 +1,133 @@
+{
+  "api_error_status": null,
+  "duration_api_ms": 30486,
+  "duration_ms": 38286,
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "fast_mode_state": "off",
+  "is_error": false,
+  "iteration": 1,
+  "modelUsage": {
+    "claude-fable-5-1": {
+      "cacheCreationInputTokens": 29329,
+      "cacheReadInputTokens": 28467,
+      "canonicalModel": "claude-fable-5-1",
+      "contextWindow": 1000000,
+      "costBasis": "list",
+      "costUSD": 0.69939675,
+      "inputTokens": 840,
+      "maxOutputTokens": 64000,
+      "outputTokens": 1946,
+      "provider": "firstParty",
+      "thinkingTokens": 28,
+      "webSearchRequests": 0
+    }
+  },
+  "num_turns": 3,
+  "permission_denials": [],
+  "queued_turn_count": 0,
+  "session_id": "594fb739-73e6-4e64-9679-20874ce479dd",
+  "stage": "plan",
+  "stop_reason": "tool_use",
+  "structured_output": {
+    "files": [
+      "tests/test_core.py",
+      "src/calc/core.py",
+      "src/calc/__init__.py"
+    ],
+    "risks": [
+      "Float equality: results like 0.25 and -0.25 are exact in binary but others may not be; all numeric assertions use pytest.approx as the existing tests do, so no false failures.",
+      "Zero check: `old == 0` catches both int 0 and float 0.0 (and -0.0); tests R4 and R5 cover both literal forms so a stricter `is` or type-based check would be caught.",
+      "Negative baseline sign convention: the literal formula flips sign for old < 0 (R6). This is a recorded assumption from the spec's open questions; a test pins the behaviour so any later switch to abs(old) is a visible, deliberate change.",
+      "Breaking existing API: only additive changes to core.py and __init__.py; existing tests remain byte-identical and are run before and after implementation to prove R11.",
+      "Protected paths: tests/test_core.py is edited only in the build stage (new tests are part of the deliverable); no changes to factory.toml, and no test edits during any fix iteration, per the factory's deny rules.",
+      "Scope creep: no handling of inf/nan, no rounding, no percent scaling, no extra parameters; the implementation is one guard plus one return line, matching the spec's API section exactly."
+    ],
+    "steps": [
+      "Append percent_change tests to tests/test_core.py: import percent_change from calc alongside compound and simple_interest; add success-path tests (R1, R2, R3, R6, R7, R8) using pytest.approx, ValueError tests (R4, R5) using pytest.raises, an export test (R9) asserting 'percent_change' in calc.__all__, a docstring test (R10) asserting the docstring is non-empty and contains 'fraction', and leave the three existing tests unmodified (R11).",
+      "Run `uv run --group dev pytest` and confirm the new tests fail with ImportError/AttributeError while the three existing tests still pass (R11, R12).",
+      "Implement percent_change(old: float, new: float) -> float in src/calc/core.py after compound(): one-line docstring stating the result is a fraction (0.25 == +25%), guard `if old == 0: raise ValueError(\"old must be non-zero\")`, then `return (new - old) / old` with no abs() and no other validation (R1-R8, R10).",
+      "Export percent_change from src/calc/__init__.py: extend the import from calc.core and set __all__ = [\"compound\", \"percent_change\", \"simple_interest\"], keeping the list alphabetically sorted (R9, R11).",
+      "Run `uv run --group dev pytest` and confirm output ends with `passed` with all old and new tests green (R11, R12); run `uv run --group dev python -m compileall -q src` to confirm the lint command passes.",
+      "Docs: verify the module docstring of core.py still reads correctly (\"Core interest calculations.\") and that the percent_change docstring mentions fraction semantics; no other documentation files exist in the target, so no further docs changes."
+    ],
+    "tests": [
+      "R1: test_percent_change_rise \u2014 percent_change(100, 125) == pytest.approx(0.25)",
+      "R2: test_percent_change_fall \u2014 percent_change(200, 150) == pytest.approx(-0.25)",
+      "R3: test_percent_change_no_change \u2014 percent_change(50, 50) == pytest.approx(0.0)",
+      "R4: test_percent_change_zero_old_rejected \u2014 pytest.raises(ValueError) for percent_change(0, 10)",
+      "R5: test_percent_change_zero_old_zero_new_rejected \u2014 pytest.raises(ValueError) for percent_change(0.0, 0.0)",
+      "R6: test_percent_change_negative_baseline \u2014 percent_change(-100, -50) == pytest.approx(0.5)",
+      "R7: test_percent_change_total_loss \u2014 percent_change(100, 0) == pytest.approx(-1.0)",
+      "R8: test_percent_change_int_inputs_return_float \u2014 result = percent_change(4, 5); isinstance(result, float) and result == pytest.approx(0.25)",
+      "R9: test_percent_change_exported \u2014 'percent_change' in calc.__all__ and `from calc import percent_change` at module top succeeds",
+      "R10: test_percent_change_docstring \u2014 percent_change.__doc__ is a non-empty str containing 'fraction'",
+      "R11: existing test_simple_interest, test_compound_annual, test_negative_rejected remain unmodified and pass; additionally assert calc.__all__ still contains 'compound' and 'simple_interest'",
+      "R12: full `uv run --group dev pytest` run ends with `passed` (at least two new percent_change tests: one success path, one ValueError path)"
+    ]
+  },
+  "subagent_stats": {
+    "by_type": {},
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "system": 0,
+      "user": 0
+    },
+    "max_depth": 0,
+    "refused": {
+      "budget": 0,
+      "concurrency_limit": 0,
+      "depth_limit": 0
+    },
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "spawned": 0,
+    "spawned_by_subagents": 0,
+    "started_in_background": 0
+  },
+  "subtype": "success",
+  "terminal_reason": "completed",
+  "time_to_request_ms": 1206,
+  "total_cost_usd": 0.69939675,
+  "ttft_ms": 5141,
+  "ttft_stream_ms": 4282,
+  "type": "result",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 29329,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 29329,
+    "cache_read_input_tokens": 28467,
+    "inference_geo": "not_available",
+    "input_tokens": 840,
+    "iterations": [
+      {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 862,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 862,
+        "cache_read_input_tokens": 28467,
+        "input_tokens": 838,
+        "output_tokens": 1702,
+        "type": "message"
+      }
+    ],
+    "output_tokens": 1946,
+    "output_tokens_details": {
+      "thinking_tokens": 28
+    },
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+  },
+  "uuid": "aa21307e-7553-43db-8f33-1e4072f9b83b"
+}

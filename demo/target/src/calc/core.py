@@ -14,3 +14,10 @@ def compound(principal: float, rate: float, years: int, periods_per_year: int = 
         raise ValueError("invalid arguments")
     n = periods_per_year
     return principal * (1 + rate / n) ** (n * years)
+
+
+def percent_change(old: float, new: float) -> float:
+    """Return (new - old) / old, the relative change as a fraction (0.25 == +25%)."""
+    if old == 0:
+        raise ValueError("old must be non-zero")
+    return (new - old) / old
