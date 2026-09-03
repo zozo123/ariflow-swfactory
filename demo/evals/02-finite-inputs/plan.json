@@ -1,0 +1,22 @@
+{
+  "files": [
+    "tests/test_finite.py",
+    "src/calc/core.py"
+  ],
+  "steps": [
+    "Add tests/test_finite.py covering R1-R4 before touching the implementation",
+    "Add a private _require_finite(**values) helper in src/calc/core.py",
+    "Call it first in simple_interest and compound, before the sign checks (R5)",
+    "Run the target test command (factory.toml [commands].test) until green"
+  ],
+  "tests": [
+    "R1: test_nan_principal_rejected \u2014 simple_interest(nan, 0.05, 2) raises ValueError",
+    "R2: test_inf_rate_rejected \u2014 compound(1000, inf, 2) raises ValueError",
+    "R3: test_message_names_argument \u2014 the message contains 'principal'",
+    "R4: test_finite_path_unchanged \u2014 simple_interest(1000, 0.05, 2) == 100.0"
+  ],
+  "risks": [
+    "Ordering: a guard placed after the sign checks would never fire for nan",
+    "Nothing new is exported, so `__init__.py` stays untouched"
+  ]
+}

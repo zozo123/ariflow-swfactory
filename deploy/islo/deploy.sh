@@ -12,7 +12,7 @@
 #     allow: github.com api.github.com pypi.org files.pythonhosted.org astral.sh islo.dev
 #            releases.islo.dev and the islo API host (the orchestrator creates agent sandboxes)
 #   islo environment create --name swfactory-orchestrator --secret ISLO_API_KEY=<islo api-key create>
-#   the agent-side `swfactory` gateway profile + environment from the README (unchanged)
+#   the agent-side `swfactory` gateway profile + environment from docs/islo.md (unchanged)
 #
 # Env: SWF_REPO (owner/name, default zozo123/ariflow-swfactory), SWF_BRANCH (main),
 #      GITHUB_WEBHOOK_SECRET (required; reuse the same secret on redeploy), SWF_SANDBOX_OWNER (defaults

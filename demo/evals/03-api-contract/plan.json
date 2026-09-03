@@ -1,0 +1,20 @@
+{
+  "files": [
+    "tests/test_contract.py",
+    "src/calc/core.py"
+  ],
+  "steps": [
+    "Add tests/test_contract.py asserting the three phrases R1-R3 in __doc__",
+    "Rewrite both docstrings in src/calc/core.py to state what is returned",
+    "Run the target test command (factory.toml [commands].test) until green"
+  ],
+  "tests": [
+    "R1: test_simple_interest_returns_interest_only \u2014 '__doc__' says interest only",
+    "R2: test_compound_returns_final_amount \u2014 '__doc__' says final amount",
+    "R3: test_rate_is_documented_as_a_fraction \u2014 both docstrings say 'fraction'"
+  ],
+  "risks": [
+    "Over-tight docstring assertions; the tests match phrases, not sentences",
+    "No behaviour change, so the risk of regression is limited to the docs themselves"
+  ]
+}

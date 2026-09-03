@@ -12,6 +12,7 @@ import json
 import subprocess
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -24,10 +25,15 @@ from swfactory.control import (
     Gate,
     GitHubClient,
     IsloClient,
+    JobRow,
     MetricsSource,
     Run,
     Sandbox,
+    TaskState,
+    collapsed_job,
     collect,
+    group_jobs,
+    job_state,
     summarize_checks,
 )
 
@@ -237,13 +243,14 @@ def test_airflow_respond_patches_hitl_details_with_chosen_option() -> None:
     assert len(opener.requests) == 2  # the refused call never reached the wire
 
 
-def test_airflow_trigger_and_stop_and_open_url() -> None:
+def test_airflow_trigger_and_stop_and_run_url() -> None:
     opener = FakeOpener(
         {
             ("POST", "/api/v2/dags/factory/dagRuns"): {
                 "dag_run_id": "manual__x",
                 "state": "queued",
             },
+            ("POST", "/api/v2/dags/hotfix/dagRuns"): {"dag_run_id": "manual__h"},
             ("PATCH", f"/api/v2/dags/factory/dagRuns/{RUN_SEG}"): {"state": "failed"},
         }
     )
@@ -251,15 +258,146 @@ def test_airflow_trigger_and_stop_and_open_url() -> None:
 
     assert af.trigger("factory", ["42", " 43 ", ""]) == "manual__x"
     assert opener.last.get_method() == "POST"
+    assert opener.last.full_url == f"{AF}/api/v2/dags/factory/dagRuns"
     assert opener.body() == {"logical_date": None, "conf": {"issues": ["42", "43"]}}
     with pytest.raises(ValueError, match="at least one issue"):
         af.trigger("factory", ["", "  "])
 
+    # The blueprint the operator picked decides the dag id: same call, other line.
+    assert af.trigger("hotfix", ["7"]) == "manual__h"
+    assert opener.last.full_url == f"{AF}/api/v2/dags/hotfix/dagRuns"
+    assert opener.body() == {"logical_date": None, "conf": {"issues": ["7"]}}
+
     assert af.stop_run("factory", RUN_ID) == {"state": "failed"}
     assert opener.last.get_method() == "PATCH" and opener.body() == {"state": "failed"}
 
-    run = Run("factory", RUN_ID, "running", None, None)
-    assert af.open_url(run) == f"{AF}/dags/factory/runs/{RUN_SEG}"
+    assert af.run_url("factory", RUN_ID) == f"{AF}/dags/factory/runs/{RUN_SEG}"
+
+
+# ---------------------------------------------------------------- per-job rows
+
+TI_PATH = f"/api/v2/dags/factory/dagRuns/{RUN_SEG}/taskInstances?limit=500"
+XCOM_PATH = (
+    f"/api/v2/dags/factory/dagRuns/{RUN_SEG}/taskInstances/fan_out"
+    "/xcomEntries/return_value?map_index=-1"
+)
+TWO_JOBS = [  # verbatim shape of fan_out's return value (Blueprint.jobs)
+    {"issue": "42", "repo": "o/r", "dir": "", "base_branch": "main", "job_idx": 0},
+    {"issue": "demo/issue.md", "repo": "o/r", "dir": "", "base_branch": "main", "job_idx": 1},
+]
+TWO_JOB_TIS = {
+    "task_instances": [
+        {"task_id": "fan_out", "map_index": -1, "state": "success"},
+        {"task_id": "job.setup", "map_index": 0, "state": "success"},
+        {"task_id": "job.intent", "map_index": 0, "state": "success"},
+        {"task_id": "job.approve_intent", "map_index": 0, "state": "deferred"},
+        {"task_id": "job.setup", "map_index": 1, "state": "success"},
+        {"task_id": "job.intent", "map_index": 1, "state": "failed"},
+        {"task_id": "job.deliver", "map_index": 1, "state": None},
+    ]
+}
+
+
+def test_job_rows_group_by_map_index_and_name_the_issue_from_fan_out_xcom() -> None:
+    opener = FakeOpener(
+        {
+            ("GET", TI_PATH): TWO_JOB_TIS,
+            # /api/v2 hands the XCom back as the serialized JSON string it holds in the DB.
+            ("GET", XCOM_PATH): {"key": "return_value", "value": json.dumps(TWO_JOBS)},
+        }
+    )
+    af = AirflowClient(AF, token="tok", opener=opener)
+
+    rows = af.job_rows("factory", RUN_ID)
+    assert [(r.map_index, r.issue, r.state) for r in rows] == [
+        (0, "42", "running"),  # deferred at its gate
+        (1, "demo/issue.md", "failed"),
+    ]
+    assert all(r.dag_id == "factory" and r.run_id == RUN_ID and r.mapped for r in rows)
+    # ``fan_out`` itself is not a job: it is dropped once mapped tasks exist.
+    assert [t.task_id for t in rows[0].tasks] == ["job.setup", "job.intent", "job.approve_intent"]
+    assert [r.get_method() for r in opener.requests] == ["GET", "GET"]
+
+
+def test_job_rows_without_xcom_fall_back_to_conf_then_to_dash() -> None:
+    opener = FakeOpener({("GET", TI_PATH): TWO_JOB_TIS})  # no XCom entry -> 404
+    af = AirflowClient(AF, token="tok", opener=opener)
+
+    with pytest.raises(ControlError, match="HTTP 404"):
+        af.fan_out_jobs("factory", RUN_ID)  # the client itself is honest about the miss
+
+    plain = af.job_rows("factory", RUN_ID)  # job_rows degrades instead of failing
+    assert [(r.map_index, r.issue) for r in plain] == [(0, "-"), (1, "-")]
+
+    # One issue x N targets means every job carries that issue: exact without the XCom.
+    one = af.job_rows("factory", RUN_ID, fallback_issues=["42"])
+    assert [(r.map_index, r.issue) for r in one] == [(0, "42"), (1, "42")]
+    # Two issues and the mapping is ambiguous without fan_out: say so rather than guess.
+    many = af.job_rows("factory", RUN_ID, fallback_issues=["42", "43"])
+    assert [r.issue for r in many] == ["-", "-"]
+
+
+def test_job_rows_before_fan_out_and_with_junk_xcom() -> None:
+    tis = {"task_instances": [{"task_id": "fan_out", "map_index": -1, "state": "running"}]}
+    opener = FakeOpener({("GET", TI_PATH): tis, ("GET", XCOM_PATH): {"value": "not json at all"}})
+    af = AirflowClient(AF, token="tok", opener=opener)
+
+    rows = af.job_rows("factory", RUN_ID, fallback_issues=["42"])
+    assert [(r.map_index, r.issue, r.state) for r in rows] == [(-1, "42", "running")]
+    assert not rows[0].mapped  # a placeholder row, not "job -1"
+    assert af.fan_out_jobs("factory", RUN_ID) == []  # unparseable XCom is no issue list
+
+    already_list = AirflowClient(
+        AF, opener=FakeOpener({("GET", XCOM_PATH): {"value": [*TWO_JOBS, "junk"]}})
+    )
+    assert already_list.fan_out_jobs("factory", RUN_ID) == TWO_JOBS  # non-dict entries dropped
+
+    empty = AirflowClient(AF, opener=FakeOpener({("GET", TI_PATH): {"task_instances": []}}))
+    assert empty.job_rows("factory", RUN_ID) == []
+
+
+def test_job_state_and_group_jobs_are_pure() -> None:
+    def ts(task_id: str, state: str | None, idx: int = 0) -> TaskState:
+        return TaskState(task_id=task_id, map_index=idx, state=state)
+
+    assert job_state([]) == "queued"
+    assert job_state([ts("job.setup", None), ts("job.intent", None)]) == "queued"
+    assert job_state([ts("job.setup", "success"), ts("job.intent", None)]) == "running"
+    assert job_state([ts("job.setup", "success"), ts("job.intent", "running")]) == "running"
+    assert job_state([ts("job.intent", "upstream_failed"), ts("job.spec", "running")]) == "failed"
+    assert job_state([ts("job.setup", "success"), ts("job.deliver", "success")]) == "success"
+    assert job_state([ts("job.spec", "skipped"), ts("job.plan", "skipped")]) == "skipped"
+    # A rejected gate skips the work stages but deliver still publishes: that is a success.
+    assert job_state([ts("job.spec", "skipped"), ts("job.deliver", "success")]) == "success"
+
+    rows = group_jobs("factory", "r1", [ts("job.setup", "success", 2), ts("job.setup", None, 0)])
+    assert [r.map_index for r in rows] == [0, 2]  # ascending, gaps kept as they come
+    assert group_jobs("factory", "r1", []) == []
+
+    run = Run("factory", "r1", "success", None, None, {"issues": ["42", "43"]})
+    collapsed = collapsed_job(run)
+    assert (collapsed.map_index, collapsed.issue, collapsed.state) == (-1, "42, 43", "success")
+    assert collapsed_job(Run("f", "r", "queued", None, None)).issue == "-"
+
+
+def test_a_job_parked_on_a_human_gate_counts_as_active() -> None:
+    """``awaiting_input`` is how Airflow 3.3 parks a HITL task, so it must roll up as in-flight.
+
+    Regression for a live-only bug: with that state missing from ``ACTIVE_TASK_STATES`` a job
+    waiting on a gate had no active task, so both the state roll-up and the herd frontier fell
+    back to its last *finished* task and the Runs tab named ``intent`` — never the gate the
+    operator has to answer.
+    """
+    from swfactory.control import ACTIVE_TASK_STATES
+
+    assert {"awaiting_input", "deferred"} <= ACTIVE_TASK_STATES
+    parked = [
+        TaskState("job.setup", 0, "success"),
+        TaskState("job.intent", 0, "success"),
+        TaskState("job.approve_intent", 0, "awaiting_input"),
+        TaskState("job.deliver", 0, None),
+    ]
+    assert job_state(parked) == "running"
 
 
 def test_airflow_username_password_mints_token_once() -> None:
@@ -452,13 +590,15 @@ class _Airflow:
     def list_runs(self, dag_id: str, limit: int = 20) -> list[Run]:
         self._maybe("list_runs")
         return [
-            Run(dag_id, "r-running", "running", None, None),
-            Run(dag_id, "r-done", "success", None, None),
+            Run(dag_id, "r-running", "running", None, None, {"issues": ["42"]}),
+            Run(dag_id, "r-done", "success", None, None, {"issues": ["43"]}),
         ]
 
-    def task_states(self, dag_id: str, run_id: str) -> list:
-        self._maybe(f"task_states:{run_id}")
-        return []
+    def job_rows(
+        self, dag_id: str, run_id: str, *, fallback_issues: Sequence[str] = ()
+    ) -> list[JobRow]:
+        self._maybe(f"job_rows:{run_id}")
+        return [JobRow(dag_id, run_id, 0, next(iter(fallback_issues), "-"), "running")]
 
     def pending_gates(self) -> list[Gate]:
         self._maybe("pending_gates")
@@ -485,20 +625,40 @@ class _Metrics:
         raise OSError("no checkout")
 
 
-def test_collect_reads_every_source_and_fetches_tasks_only_for_active_runs() -> None:
+def test_collect_reads_every_source_and_hands_each_run_its_jobs() -> None:
     af = _Airflow()
     now = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
     snap = collect(af, _GitHub(), _Islo(), None, now=lambda: now)
     assert snap.collected_at == now and snap.errors == {}
     assert [r.run_id for r in snap.runs] == ["r-running", "r-done"]
-    assert af.calls == ["list_dags", "list_runs", "task_states:r-running", "pending_gates"]
+    assert af.calls == [
+        "list_dags",
+        "list_runs",
+        "job_rows:r-running",
+        "job_rows:r-done",
+        "pending_gates",
+    ]
+    # ``conf`` rides along as the issue fallback, so a row names its issue even without XCom.
+    assert [(j.run_id, j.map_index, j.issue) for j in snap.jobs] == [
+        ("r-running", 0, "42"),
+        ("r-done", 0, "43"),
+    ]
     assert len(snap.gates) == 1 and snap.prs == ["pr"]
     assert [s.name for s in snap.sandboxes] == ["swf-42-abcd1234"]
     assert snap.metrics == {}
 
     explicit = _Airflow()
     collect(explicit, None, None, None, dag_ids=["hotfix"], runs_per_dag=5)
-    assert explicit.calls[:2] == ["list_runs", "task_states:r-running"]  # no list_dags call
+    assert explicit.calls[:2] == ["list_runs", "job_rows:r-running"]  # no list_dags call
+
+
+def test_collect_bounds_job_reads_and_collapses_the_rest() -> None:
+    """``jobs_per_dag`` caps the poll: older finished runs collapse to one row, never vanish."""
+    af = _Airflow()
+    snap = collect(af, None, None, None, jobs_per_dag=0)
+    assert af.calls == ["list_dags", "list_runs", "job_rows:r-running", "pending_gates"]
+    done = next(r for r in snap.runs if r.run_id == "r-done")
+    assert [(j.map_index, j.issue, j.state) for j in done.jobs] == [(-1, "43", "success")]
 
 
 def test_collect_degrades_per_source() -> None:
@@ -511,9 +671,11 @@ def test_collect_degrades_per_source() -> None:
     assert snap.errors["github"] == "gh: not logged in"
     assert "no checkout" in snap.errors["metrics"]
 
-    partial = collect(_Airflow(fail={"task_states:r-running"}), None, None, None)
+    partial = collect(_Airflow(fail={"job_rows:r-running"}), None, None, None)
     assert [r.run_id for r in partial.runs] == ["r-running", "r-done"]  # runs kept
     assert set(partial.errors) == {"airflow:factory/r-running"}
+    broken = next(r for r in partial.runs if r.run_id == "r-running")
+    assert [(j.map_index, j.state) for j in broken.jobs] == [(-1, "running")]  # collapsed row
     assert len(partial.gates) == 1
 
     assert collect(None, None, None, None).errors == {}

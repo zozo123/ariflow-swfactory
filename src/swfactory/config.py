@@ -17,6 +17,9 @@ if TYPE_CHECKING:
 
 SRT_DEFAULT_DOMAINS = ("api.anthropic.com", "pypi.org", "files.pythonhosted.org", "astral.sh")
 DOCKER_DEFAULT_IMAGE = "ghcr.io/zozo123/swfactory-sandbox:latest"
+# This checkout's root: where REVIEW.md, the guard hook and the stage skill live. Defined once
+# here so every module that reads those files agrees on one root.
+FACTORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Config(BaseSettings):
@@ -34,38 +37,50 @@ class Config(BaseSettings):
         """SWF_* env vars override values a blueprint passes at init (dev/smoke escape hatch)."""
         return (env_settings, init_settings, dotenv_settings, file_secret_settings)
 
+    # -- target: which issue, which repo, which subtree
     issue: str  # issue number, or path to a front-matter .md (demo)
     repo: str = "zozo123/ariflow-swfactory"  # owner/name of the TARGET repo
     target_dir: str = "demo/target"  # subdir the factory operates on ("" = repo root)
     base_branch: str = "main"
     blueprint: str = "factory"  # blueprints/<name>.toml that produced this config
+
+    # -- execution: which implementation of each seam runs
     sandbox: Literal["local", "islo", "srt", "docker"] = "local"
     agent: Literal["claude", "scripted"] = "scripted"
     scm: Literal["local", "github"] = "local"
     approve: Literal["auto", "prompt"] = "prompt"
     tests: Literal["sandbox", "crabbox"] = "sandbox"  # where the test command executes
     crabbox_provider: str = "local-container"  # islo needs ISLO_API_KEY, which scrub_env strips
+
+    # -- limits: loop bounds and cost ceilings (stages enforce them, not the prompts)
     max_build_iterations: int = 3
     max_review_fixes: int = 1
     max_turns: int = 40  # per agent invocation
     max_budget_usd_per_stage: float = 2.0
     max_budget_usd: float = 8.0  # run ceiling
+
+    # -- gates and scheduling: read by the DAG factory
+    gate_timeout_h: int = 24  # ApprovalOperator response_timeout
+    stage_timeout_h: int = 3  # execution_timeout of every stage task
+    max_parallel_jobs: int = 4  # concurrent (issue x target) jobs == concurrent sandboxes
+
+    # -- islo sandbox: gateway/environment identity and MicroVM lifecycle
     gateway_profile: str = "swfactory"
     islo_environment: str = "swfactory"
     sandbox_ttl_s: int = 172_800  # --delete-after; must exceed gate_timeout
     sandbox_idle_s: int = 900  # --pause-after-idle
-    gate_timeout_h: int = 24  # ApprovalOperator response_timeout
-    stage_timeout_h: int = 3  # execution_timeout of every stage task
-    max_parallel_jobs: int = 4  # concurrent (issue x target) jobs == concurrent sandboxes
     islo_snapshot: str | None = None  # --snapshot warm start (islo only)
     sandbox_owner: str | None = None  # SWF_SANDBOX_OWNER: only this creator's sandboxes may be rm'd
+
+    # -- srt / docker sandboxes: egress allowlist, image, credential mode
     srt_allowed_domains: list[str] = Field(default_factory=lambda: list(SRT_DEFAULT_DOMAINS))
-    # docker: image every run() executes in (sibling `docker run` over the bind-mounted workdir)
-    docker_image: str = DOCKER_DEFAULT_IMAGE
+    docker_image: str = DOCKER_DEFAULT_IMAGE  # image every run() executes in (bind-mounted workdir)
     # env => pass ANTHROPIC_API_KEY (agent=claude); host => bind-mount ~/.claude + ~/.claude.json
     docker_credentials: Literal["env", "host"] = "env"
     docker_network: str = "bridge"  # `--network` of every sandbox container ("none" = no egress)
     docker_user: str | None = None  # `--user` override (uid[:gid]); None = the image's user
+
+    # -- demo, recording and dev escape hatches
     fixtures_dir: str = "demo/scripted"
     workdir: str = ".factory/work"  # LocalSandbox root
     run_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:8])

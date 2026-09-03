@@ -13,6 +13,12 @@ Only three writes exist, all explicit and narrow:
 * :meth:`IsloClient.remove` — ``islo rm`` of a sandbox this factory named **and** this owner
   created. Anything else raises :class:`PermissionError` (teammates' sandboxes are never touched).
 
+The addressable unit is the **job**, not the run: ``dags/blueprints.py`` expands the ``job`` task
+group over ``fan_out`` (issues x targets), so a gate, a sandbox and a PR all belong to one
+``(run_id, map_index)`` pair. :class:`JobRow` is that unit and :meth:`AirflowClient.job_rows`
+builds it from one ``taskInstances`` read plus ``fan_out``'s XCom (absent XCom = a ``-`` issue,
+never an error).
+
 Route and payload shapes were checked against the installed Airflow 3.3.1
 ``airflow.api_fastapi`` package; the UI path against the bundled ``airflow/ui`` router.
 """
@@ -42,8 +48,24 @@ GATE_REJECT = "Reject"
 ACTIVE_RUN_STATES = frozenset({"queued", "running"})
 DEFAULT_TIMEOUT_S = 15.0
 _SUBPROCESS_TIMEOUT_S = 120
+FAN_OUT_TASK_ID = "fan_out"  # dags/blueprints.py: the task whose XCom lists the jobs
+XCOM_RETURN_KEY = "return_value"
+NO_ISSUE = "-"  # a job row whose issue cannot be known yet (no fan_out XCom)
+# Airflow task-instance states, split the three ways every roll-up needs. One definition:
+# ``swfactory.herd`` imports these instead of keeping its own copy.
+#
+# ``awaiting_input`` is the state Airflow 3.3 parks a HITL task in (older builds used
+# ``deferred``, kept here for them). It has to count as ACTIVE or the frontier of a job waiting
+# on a gate falls back to its last finished task, and the Runs tab shows ``intent`` instead of
+# ``approve_intent`` for exactly the jobs an operator has to act on — observed on a live
+# standalone, where four jobs sat in ``awaiting_input`` while every row still read ``intent``.
+ACTIVE_TASK_STATES = frozenset(
+    {"running", "queued", "scheduled", "deferred", "restarting", "awaiting_input"}
+    | {"up_for_retry", "up_for_reschedule"}
+)
+FAILED_TASK_STATES = frozenset({"failed", "upstream_failed"})
+FINAL_TASK_STATES = FAILED_TASK_STATES | frozenset({"success", "skipped", "removed"})
 
-_CREATED_KEYS = ("created_at", "createdAt", "created-at", "created")
 _CHECK_PASS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 _CHECK_FAIL = frozenset(
     {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"}
@@ -64,6 +86,26 @@ class TaskState:
     state: str | None
 
 
+@dataclass(frozen=True)
+class JobRow:
+    """One mapped job of a DAG run — the unit a gate, a sandbox and a PR belong to.
+
+    ``map_index`` is ``-1`` only before ``fan_out`` has produced the job list (or for a run whose
+    task instances were not fetched): there is no job index yet, not a job numbered -1.
+    """
+
+    dag_id: str
+    run_id: str
+    map_index: int
+    issue: str = NO_ISSUE
+    state: str = "queued"
+    tasks: list[TaskState] = field(default_factory=list)
+
+    @property
+    def mapped(self) -> bool:
+        return self.map_index >= 0
+
+
 @dataclass
 class Run:
     dag_id: str
@@ -72,7 +114,7 @@ class Run:
     start: datetime | None
     end: datetime | None
     conf: dict = field(default_factory=dict)
-    tasks: list[TaskState] = field(default_factory=list)
+    jobs: list[JobRow] = field(default_factory=list)
 
     @property
     def active(self) -> bool:
@@ -142,6 +184,91 @@ class Snapshot:
     metrics: dict = field(default_factory=dict)
     errors: dict[str, str] = field(default_factory=dict)  # source -> failure text
 
+    @property
+    def jobs(self) -> list[JobRow]:
+        """Every run's job rows, flattened in run order (what the Runs table shows)."""
+        return [job for run in self.runs for job in run.jobs]
+
+
+# ---------------------------------------------------------------- job grouping (pure)
+
+
+def job_state(tasks: Sequence[TaskState]) -> str:
+    """Roll one job's task states up into a single word for the Runs table.
+
+    Any failure wins (that is what the operator must see), then anything in flight; a job whose
+    tasks all still have a ``None`` state has not started, and one that is entirely skipped is
+    reported as such (a rejected gate skips the work stages).
+    """
+    states = [t.state or "none" for t in tasks]
+    if not states:
+        return "queued"
+    if any(s in FAILED_TASK_STATES for s in states):
+        return "failed"
+    if any(s in ACTIVE_TASK_STATES for s in states):
+        return "running"
+    unfinished = [s for s in states if s not in FINAL_TASK_STATES]
+    if unfinished:
+        return "running" if len(unfinished) < len(states) else "queued"
+    return "skipped" if all(s == "skipped" for s in states) else "success"
+
+
+def group_jobs(
+    dag_id: str,
+    run_id: str,
+    tasks: Sequence[TaskState],
+    fan_out: Sequence[dict] = (),
+    *,
+    fallback_issues: Sequence[str] = (),
+) -> list[JobRow]:
+    """Task instances of one run -> one :class:`JobRow` per ``map_index``, ascending.
+
+    ``fan_out`` is the job list from the ``fan_out`` XCom (``[{"issue": ..., "repo": ...}, ...]``)
+    and names each row's issue. Unmapped tasks (``fan_out`` itself, ``map_index == -1``) are
+    dropped once any mapped task exists, so a fanned-out run shows exactly its jobs and a run
+    still fanning out shows one placeholder row instead of nothing.
+    """
+    by_index: dict[int, list[TaskState]] = {}
+    for t in tasks:
+        idx = -1 if t.map_index is None else int(t.map_index)
+        by_index.setdefault(idx, []).append(t)
+    mapped = sorted(i for i in by_index if i >= 0)
+    return [
+        JobRow(
+            dag_id=dag_id,
+            run_id=run_id,
+            map_index=idx,
+            issue=_issue_of(idx, fan_out, fallback_issues),
+            state=job_state(by_index[idx]),
+            tasks=by_index[idx],
+        )
+        for idx in (mapped or sorted(by_index))
+    ]
+
+
+def _issue_of(idx: int, fan_out: Sequence[dict], fallback: Sequence[str]) -> str:
+    """The issue of job ``idx``: from the XCom, else from ``conf`` when that is unambiguous.
+
+    Jobs are issues x targets, so a run carrying exactly one issue gives every job that issue —
+    exact without the XCom. More than one issue and the mapping needs ``fan_out``: say ``-``.
+    """
+    if 0 <= idx < len(fan_out):
+        issue = (fan_out[idx] or {}).get("issue")
+        if issue:
+            return str(issue)
+    return str(fallback[0]) if len(fallback) == 1 else NO_ISSUE
+
+
+def collapsed_job(run: Run) -> JobRow:
+    """The single row that stands for a run whose task instances were not fetched."""
+    return JobRow(
+        dag_id=run.dag_id,
+        run_id=run.run_id,
+        map_index=-1,
+        issue=", ".join(run.issues) or NO_ISSUE,
+        state=run.state,
+    )
+
 
 # ---------------------------------------------------------------- transports
 
@@ -178,26 +305,6 @@ def _json(text: str, what: str) -> Any:
         return json.loads(text or "null")
     except ValueError as e:
         raise ControlError(f"{what} returned non-JSON: {text[:200]!r}") from e
-
-
-def _parse_ts(value: Any) -> datetime | None:
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return datetime.fromtimestamp(float(value), tz=UTC)
-    if isinstance(value, str) and value:
-        try:
-            ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
-    return None
-
-
-def _first_ts(scope: dict, keys: Sequence[str]) -> datetime | None:
-    for key in keys:
-        ts = _parse_ts(scope.get(key))
-        if ts is not None:
-            return ts
-    return None
 
 
 def _seg(value: str | int) -> str:
@@ -322,6 +429,41 @@ class AirflowClient:
             for ti in (data or {}).get("task_instances", [])
         ]
 
+    def fan_out_jobs(self, dag_id: str, run_id: str) -> list[dict]:
+        """``fan_out``'s ``return_value`` XCom: the job list, index = ``map_index``.
+
+        Raises :class:`ControlError` when the entry is missing (a run that has not fanned out
+        yet answers 404) — :meth:`job_rows` treats that as "issue unknown", never as a failure.
+        """
+        data = self._api(
+            "GET",
+            f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}"
+            f"/taskInstances/{_seg(FAN_OUT_TASK_ID)}/xcomEntries/{XCOM_RETURN_KEY}",
+            query={"map_index": -1},
+        )
+        value = (data or {}).get("value")
+        if isinstance(value, str):  # /api/v2 hands back the DB's serialized JSON as a string
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return []
+        return [v for v in value if isinstance(v, dict)] if isinstance(value, list) else []
+
+    def job_rows(
+        self, dag_id: str, run_id: str, *, fallback_issues: Sequence[str] = ()
+    ) -> list[JobRow]:
+        """One row per job of ``run_id``: task instances grouped by ``map_index``, issue named.
+
+        Two bounded reads: ``taskInstances`` (the states) and ``fan_out``'s XCom (the issues).
+        A missing or unreadable XCom degrades to ``fallback_issues`` / ``-``.
+        """
+        tasks = self.task_states(dag_id, run_id)
+        try:
+            fan_out = self.fan_out_jobs(dag_id, run_id)
+        except ControlError:
+            fan_out = []
+        return group_jobs(dag_id, run_id, tasks, fan_out, fallback_issues=fallback_issues)
+
     def pending_gates(self) -> list[Gate]:
         """Unanswered HITL gates across all DAGs (``GET /dags/~/dagRuns/~/hitlDetails``)."""
         data = self._api(
@@ -367,9 +509,13 @@ class AirflowClient:
 
     # -- links
 
-    def open_url(self, run: Run) -> str:
-        """Airflow UI page of ``run`` (router: ``dags/:dagId/runs/:runId``)."""
-        return f"{self.url}/dags/{_seg(run.dag_id)}/runs/{_seg(run.run_id)}"
+    def run_url(self, dag_id: str, run_id: str) -> str:
+        """Airflow UI page of one run (router: ``dags/:dagId/runs/:runId``).
+
+        Takes the ids, not a :class:`Run`, so a run that was just triggered (and is not in any
+        snapshot yet) can be linked straight away.
+        """
+        return f"{self.url}/dags/{_seg(dag_id)}/runs/{_seg(run_id)}"
 
 
 def _run_from(d: dict) -> Run:
@@ -378,8 +524,8 @@ def _run_from(d: dict) -> Run:
         dag_id=str(d.get("dag_id", "")),
         run_id=str(d.get("dag_run_id") or d.get("run_id") or ""),
         state=str(d.get("state") or "unknown"),
-        start=_parse_ts(d.get("start_date")),
-        end=_parse_ts(d.get("end_date")),
+        start=_metrics.parse_ts(d.get("start_date")),
+        end=_metrics.parse_ts(d.get("end_date")),
         conf=conf if isinstance(conf, dict) else {},
     )
 
@@ -393,7 +539,7 @@ def _gate_from(h: dict) -> Gate:
         map_index=int(ti.get("map_index", h.get("map_index", -1))),
         subject=str(h.get("subject") or ""),
         body=str(h.get("body") or ""),
-        created_at=_parse_ts(h.get("created_at")),
+        created_at=_metrics.parse_ts(h.get("created_at")),
         options=[str(o) for o in h.get("options") or []],
     )
 
@@ -508,7 +654,7 @@ class IsloClient:
                 name=str(item.get("name") or ""),
                 status=str(item.get("status") or ""),
                 created_by=str(item.get("created_by") or ""),
-                created_at=_first_ts(item, _CREATED_KEYS),
+                created_at=_metrics.first_timestamp(item, _metrics.CREATED_KEYS),
             )
             for item in owned_sandboxes(self.listing(), self.owner)
         ]
@@ -552,7 +698,9 @@ class MetricsSource:
 class RunSource(Protocol):
     def list_dags(self, tag: str = ...) -> list[str]: ...
     def list_runs(self, dag_id: str, limit: int = ...) -> list[Run]: ...
-    def task_states(self, dag_id: str, run_id: str) -> list[TaskState]: ...
+    def job_rows(
+        self, dag_id: str, run_id: str, *, fallback_issues: Sequence[str] = ...
+    ) -> list[JobRow]: ...
     def pending_gates(self) -> list[Gate]: ...
 
 
@@ -576,13 +724,16 @@ def collect(
     *,
     dag_ids: Sequence[str] | None = None,
     runs_per_dag: int = 20,
+    jobs_per_dag: int = 5,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> Snapshot:
     """One consistent picture of the factory; a failing source fills ``errors`` and nothing else.
 
-    ``dag_ids=None`` asks Airflow for every ``swfactory``-tagged DAG. Task states are fetched
-    only for active runs (queued/running) to keep the poll cheap; the UI asks
-    :meth:`AirflowClient.task_states` on demand for the rest. A ``None`` client is skipped.
+    ``dag_ids=None`` asks Airflow for every ``swfactory``-tagged DAG. Per-job rows cost two
+    reads per run, so they are fetched for every active run plus the ``jobs_per_dag`` newest
+    runs of each DAG — the ones an operator acts on. Every other run (and every run whose read
+    failed) still contributes exactly one :func:`collapsed_job` row, so the table never lies by
+    omission. A ``None`` client is skipped.
     """
     snap = Snapshot(collected_at=now())
     if airflow is not None:
@@ -592,13 +743,20 @@ def collect(
                 snap.runs.extend(airflow.list_runs(dag_id, runs_per_dag))
         except Exception as e:  # noqa: BLE001 - per-source degradation is the contract
             snap.errors["airflow"] = str(e)
+        position: dict[str, int] = {}
         for run in snap.runs:
-            if not run.active:
+            pos = position.get(run.dag_id, 0)
+            position[run.dag_id] = pos + 1
+            if not (run.active or pos < jobs_per_dag):
+                run.jobs = [collapsed_job(run)]
                 continue
             try:
-                run.tasks = airflow.task_states(run.dag_id, run.run_id)
+                run.jobs = airflow.job_rows(run.dag_id, run.run_id, fallback_issues=run.issues) or [
+                    collapsed_job(run)
+                ]
             except Exception as e:  # noqa: BLE001
                 snap.errors[f"airflow:{run.dag_id}/{run.run_id}"] = str(e)
+                run.jobs = [collapsed_job(run)]
         try:
             snap.gates = airflow.pending_gates()
         except Exception as e:  # noqa: BLE001

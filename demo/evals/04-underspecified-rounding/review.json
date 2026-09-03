@@ -1,0 +1,19 @@
+{
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "src/calc/core.py",
+      "line": 20,
+      "title": "Open questions are not visible from the code",
+      "detail": "spec.md records four open questions; a one-line docstring pointer to docs/factory/EVAL-ROUNDING/spec.md would keep them findable when the report team asks why the default is 2 places."
+    },
+    {
+      "severity": "nit",
+      "file": "tests/test_round_fraction.py",
+      "line": 1,
+      "title": "No banker's-rounding case",
+      "detail": "`round_fraction(0.125, 2) == 0.12` would pin R4's documented behaviour, which is the surprising half of it."
+    }
+  ]
+}

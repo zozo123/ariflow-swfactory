@@ -1,14 +1,14 @@
 """``swfactory`` command line: run, demo, metrics, approve, maintain. Thin wiring only.
 
-``run``/``demo`` build one ``Config`` per job from a blueprint (``Blueprint.config``) and then apply
-the flags the user actually passed; ``SWF_*`` env vars win over both (``Config`` orders env before
-init). Jobs (issues x targets) run sequentially, each in its own run dir and workdir.
+``run``/``demo`` turn each job (issue x target) into a ``Ctx`` with ``swfactory.runtime``, exactly
+as the Airflow tasks do, and walk the blueprint's pipeline over it. Jobs run sequentially, each in
+its own run dir and workdir. The flags the user passed are the ``overrides``; ``SWF_*`` env vars
+win over them (see ``runtime.job_config``).
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 import urllib.error
 import urllib.request
 import uuid
@@ -19,44 +19,32 @@ import typer
 
 from swfactory import blueprint as blueprint_mod
 from swfactory import metrics as metrics_mod
-from swfactory.agent import Agent, make_agent
+from swfactory.agent import Agent
 from swfactory.blueprint import Blueprint
-from swfactory.config import Config, protected_globs
+from swfactory.config import Config
 from swfactory.models import RunReport, StageError
-from swfactory.sandbox import HOST_SANDBOXES, make_sandbox
+from swfactory.runtime import build_ctx, ctx_for, job_run_dir
 from swfactory.scm import make_scm
-from swfactory.stages import (
-    Approver,
-    Ctx,
-    cli_approver,
-    run_pipeline,
-    seed_local_workdir,
-    setup,
-)
+from swfactory.stages import Approver, Ctx, cli_approver, run_pipeline, setup
 
 app = typer.Typer(help="AI-native software factory.", no_args_is_help=True, add_completion=False)
 
-FACTORY_ROOT = Path(__file__).resolve().parents[2]
-COPY_IGNORE = shutil.ignore_patterns(
-    ".venv", ".factory", ".git", "__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache"
-)
 SCRIPTED_BANNER = "SCRIPTED REPLAY — agent=scripted, no model calls"
 
 
 # ---------------------------------------------------------------- wiring shared by run/demo
 
 
-def _locate(rel: str) -> str:
-    """Resolve a repo-relative path against cwd, then against the factory checkout."""
-    if Path(rel).exists():
-        return rel
-    alt = FACTORY_ROOT / rel
-    return str(alt) if alt.exists() else rel
-
-
-def _seed_workdir(workdir: Path, target_dir: str) -> None:
-    """Delegates to stages.seed_local_workdir (kept so demo/run seed before scm.fetch_issue)."""
-    seed_local_workdir(workdir, target_dir if Path(target_dir).is_dir() else _locate(target_dir))
+def run_ctx(ctx: Ctx, approver: Approver = cli_approver) -> RunReport:
+    """``setup`` then the blueprint's pipeline walk; the report also lands in
+    ``<run_dir>/report.json``."""
+    result = setup(ctx)
+    print(f"{'setup':<16} {result.status:<8} {result.duration_s:6.1f}s  sandbox={ctx.sb.name}")
+    report = run_pipeline(ctx, approver)
+    (ctx.run_dir / "report.json").write_text(
+        report.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    return report
 
 
 def execute(
@@ -67,39 +55,15 @@ def execute(
     agent: Agent | None = None,
     blueprint: Blueprint | None = None,
 ) -> RunReport:
-    """Build the context for ``cfg`` and run the whole pipeline. Used by ``run``, ``demo``, tests.
+    """Run the whole pipeline for an already-built ``Config`` (tests and fixtures build one).
 
-    ``agent`` overrides ``make_agent(cfg)`` (tests inject a ScriptedAgent with extra fixture dirs).
-    ``blueprint`` defaults to ``load(cfg.blueprint)``; its ``pipeline()`` is the walk order.
-    The ``RunReport`` is also written to ``<run_dir>/report.json``.
+    ``agent`` overrides ``make_agent(cfg)``; ``blueprint`` defaults to ``load(cfg.blueprint)`` and
+    its ``pipeline()`` is the walk order. ``run``/``demo`` go through ``_run_jobs`` instead, which
+    derives the config from the (blueprint, job) pair.
     """
     bp = blueprint if blueprint is not None else blueprint_mod.load(cfg.blueprint)
-    run_dir = (Path(run_dir) if run_dir is not None else Path(".factory") / cfg.run_id).resolve()
-    run_dir.mkdir(parents=True, exist_ok=True)
-    base_repo: Path | None = None
-    protected: list[str] = []
-    if cfg.sandbox in HOST_SANDBOXES:
-        base_repo = Path(cfg.workdir).resolve()
-        _seed_workdir(base_repo, cfg.target_dir)
-        protected = protected_globs(base_repo)  # build-level: srt denyWrite from the first command
-    scm = make_scm(cfg, run_dir, base_repo=base_repo, base_ref=cfg.base_branch)
-    issue = scm.fetch_issue(_locate(cfg.issue) if not cfg.issue.strip().isdigit() else cfg.issue)
-    sb = make_sandbox(cfg, issue.id, protected=protected)
-    ctx = Ctx(
-        cfg=cfg,
-        sb=sb,
-        agent=agent or make_agent(cfg),
-        scm=scm,
-        issue=issue,
-        run_dir=run_dir,
-        blueprint=bp,
-        target={"repo": cfg.repo, "dir": cfg.target_dir, "base_branch": cfg.base_branch},
-    )
-    result = setup(ctx)
-    print(f"{'setup':<16} {result.status:<8} {result.duration_s:6.1f}s  sandbox={sb.name}")
-    report = run_pipeline(ctx, approver)
-    (run_dir / "report.json").write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
-    return report
+    ctx = ctx_for(cfg, blueprint=bp, run_dir=run_dir or job_run_dir(cfg), agent=agent)
+    return run_ctx(ctx, approver)
 
 
 def _load_blueprint(name_or_path: str) -> Blueprint:
@@ -110,23 +74,12 @@ def _load_blueprint(name_or_path: str) -> Blueprint:
         raise typer.Exit(2) from e
 
 
-def _job_config(bp: Blueprint, job: dict, run_id: str, overrides: dict[str, Any]) -> Config:
-    """``Blueprint.config`` for one job. A blueprint's ``[sandbox]`` describes where the REAL
-    agent runs; a scripted replay never needs a MicroVM, so without an explicit ``--sandbox`` it
-    runs in ``LocalSandbox`` (as v1's ``run`` did). ``SWF_SANDBOX`` in the env still wins."""
-    cfg = bp.config(job, run_id=run_id, **overrides)
-    if cfg.agent == "scripted" and overrides.get("sandbox") is None and cfg.sandbox != "local":
-        cfg = bp.config(job, run_id=run_id, **{**overrides, "sandbox": "local"})
-    return cfg
-
-
 def _run_jobs(
     bp: Blueprint, issues: list[str], overrides: dict[str, Any], *, targets: list[str] | None = None
 ) -> None:
     """Run every (issue x target) job of ``bp`` in sequence. ``overrides`` are the CLI flags the
-    user passed (``None`` = not passed). Each job's report is printed as a table and written by
-    ``execute`` to ``.factory/<run_id>/report.json``. Exit 1 if any job blocks, fails its tests or
-    errors."""
+    user passed (``None`` = not passed). Each job's report is printed as a table and written to
+    ``.factory/<run_id>/report.json``. Exit 1 if any job blocks, fails its tests or errors."""
     run_id = overrides.pop("run_id", None) or uuid.uuid4().hex[:8]
     try:
         jobs = bp.jobs({"issues": issues, **({"targets": targets} if targets else {})})
@@ -135,21 +88,19 @@ def _run_jobs(
         raise typer.Exit(2) from e
     failed = False
     for job in jobs:
-        job_run_id = run_id if len(jobs) == 1 else f"{run_id}-{job['job_idx']}"
-        try:
-            cfg = _job_config(bp, job, job_run_id, overrides)
-        except ValueError as e:
-            typer.echo(f"config error: {e}", err=True)
-            raise typer.Exit(2) from e
-        if cfg.sandbox in HOST_SANDBOXES:
-            cfg = cfg.model_copy(update={"workdir": str(Path(".factory") / cfg.run_id / "work")})
         if len(jobs) > 1:
             where = f"{job['repo']}/{job['dir']}".rstrip("/")
             typer.echo(f"\n=== job {job['job_idx'] + 1}/{len(jobs)}: {job['issue']} -> {where}")
-        if cfg.agent == "scripted":
-            typer.echo(f"{SCRIPTED_BANNER}; fixtures: {cfg.fixtures_dir}")
+        job_run_id = run_id if len(jobs) == 1 else f"{run_id}-{job['job_idx']}"
         try:
-            report = execute(cfg, blueprint=bp)
+            ctx = build_ctx(bp, job, run_id=job_run_id, overrides=overrides)
+        except ValueError as e:
+            typer.echo(f"config error: {e}", err=True)
+            raise typer.Exit(2) from e
+        if ctx.cfg.agent == "scripted":
+            typer.echo(f"{SCRIPTED_BANNER}; fixtures: {ctx.cfg.fixtures_dir}")
+        try:
+            report = run_ctx(ctx)
         except StageError as e:
             typer.echo(f"stage failed: {e}", err=True)
             failed = True
@@ -237,7 +188,6 @@ def demo(
         _load_blueprint(blueprint_mod.DEFAULT_BLUEPRINT),
         ["demo/issue.md"],
         {
-            "fixtures_dir": _locate("demo/scripted"),
             **preset,
             **{
                 k: v
@@ -308,10 +258,6 @@ def approve(
     except urllib.error.URLError as e:
         typer.echo(f"cannot reach {airflow_url}: {e.reason}", err=True)
         raise typer.Exit(1) from e
-
-
-if __name__ == "__main__":  # pragma: no cover
-    app()
 
 
 @app.command()
@@ -450,13 +396,32 @@ def herd(
         Path()
     ),
     refresh_s: Annotated[float, typer.Option(help="auto-refresh interval")] = 5.0,
+    once: Annotated[
+        bool, typer.Option("--once", help="print one snapshot and exit, no TUI (CI, scripts)")
+    ] = False,
+    json_out: Annotated[
+        bool, typer.Option("--json", help="machine-readable snapshot (implies --once)")
+    ] = False,
+    approve_all: Annotated[
+        bool,
+        typer.Option(
+            "--approve-all",
+            help="answer every pending gate of the configured blueprints, then exit (no TUI)",
+        ),
+    ] = False,
+    reject: Annotated[
+        bool, typer.Option("--reject", help="with --approve-all: reject every pending gate")
+    ] = False,
 ) -> None:
-    """Control room TUI: pending gates (approve/reject), runs, PRs, own sandboxes, metrics."""
+    """Control room: pending gates (approve/reject), runs and their jobs, PRs, own sandboxes,
+    metrics. A TUI by default; `--once [--json]` prints one snapshot and `--approve-all
+    [--reject]` answers every pending gate, both over the same clients. Exit 1 if a gate answer
+    failed."""
     from swfactory.blueprint import load
-    from swfactory.herd import make_app
+    from swfactory.herd import main as herd_main
 
     target_repo = repo or load("factory").targets[0].repo
-    make_app(
+    code = herd_main(
         airflow_url=airflow_url,
         repo=target_repo,
         owner=owner,
@@ -465,4 +430,14 @@ def herd(
         password=password,
         metrics_root=str(metrics_root),
         refresh_s=refresh_s,
-    ).run()
+        once=once,
+        json_out=json_out,
+        approve_all_gates=approve_all,
+        reject=reject,
+        out=typer.echo,
+    )
+    raise typer.Exit(code)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    app()

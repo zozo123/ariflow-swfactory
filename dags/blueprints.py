@@ -28,7 +28,6 @@ refusal and its actor are committed and published exactly like an approval.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import tomllib
 from datetime import timedelta
@@ -66,90 +65,27 @@ def read_shape(path: Path) -> dict[str, Any]:
     }
 
 
-def blueprint_names(root: Path = BLUEPRINTS_DIR) -> list[str]:
-    """Blueprint names in ``root`` (used by ``maintain`` for its asset triggers)."""
-    return [read_shape(p)["name"] for p in sorted(root.glob("*.toml"))]
-
-
 # ---------------------------------------------------------------- runtime wiring (swfactory)
 
 
 def run_id_for(dag_run_id: str, job_idx: int) -> str:
-    """Stable 8-hex run id per (DAG run, job): same sandbox name on every task and retry. Pure;
-    ``tests/test_dag_smoke.py`` imports it to locate the run dir."""
-    return hashlib.sha1(f"{dag_run_id}#{job_idx}".encode()).hexdigest()[:8]
+    """Stable 8-hex run id per (DAG run, job): same sandbox name on every task and retry.
 
-
-def _locate(rel: str) -> str:
-    """Resolve a repo-relative path against cwd, then against the factory checkout (issue files
-    and fixture dirs; workers do not necessarily run from the factory root)."""
-    if Path(rel).is_absolute() or Path(rel).exists():
-        return rel
-    alt = FACTORY_ROOT / rel
-    return str(alt) if alt.exists() else rel
-
-
-def _config(name: str, job: dict[str, Any], dag_run_id: str):
-    """``Blueprint.config`` for this job (SWF_* env still wins), with per-run local paths."""
-    from swfactory.blueprint import load
-    from swfactory.sandbox import HOST_SANDBOXES
-
-    cfg = load(name).config(job, run_id=run_id_for(dag_run_id, int(job["job_idx"])))
-    run_dir = Path(".factory") / cfg.run_id
-    update: dict[str, Any] = {"fixtures_dir": _locate(cfg.fixtures_dir)}
-    if cfg.sandbox in HOST_SANDBOXES:  # one workdir per run, seeded by stages.setup()
-        update["workdir"] = str(run_dir / "work")
-    return cfg.model_copy(update=update), run_dir
-
-
-def _protected(cfg) -> list[str]:
-    """factory.toml ``protected`` globs of a seeded host workdir -> srt's kernel ``denyWrite``.
-
-    Same helper as the CLI (``config.protected_globs``): empty before ``setup`` seeds the workdir
-    (or for islo, which enforces nothing host-side); the tests dir is left writable at task
-    granularity (``build_and_test`` must add tests) and ``stages._agent`` tightens it for fix
-    calls with ``SrtSandbox.set_protected``.
+    ``swfactory.runtime.run_id_for``, imported inside the function so DAG parsing stays
+    swfactory-free; ``tests/test_dag_smoke.py`` calls it to locate the run dir.
     """
-    from swfactory.config import protected_globs
-    from swfactory.sandbox import HOST_SANDBOXES
+    from swfactory.runtime import run_id_for as _impl
 
-    if cfg.sandbox not in HOST_SANDBOXES:
-        return []
-    return protected_globs(Path(cfg.workdir))
+    return _impl(dag_run_id, job_idx)
 
 
 def _ctx(name: str, job: dict[str, Any], dag_run_id: str):
-    """Build the stage ``Ctx`` for one job (all swfactory imports live here)."""
-    import dataclasses
-
-    from swfactory.agent import make_agent
+    """The stage ``Ctx`` for one job — the same wiring ``swfactory run`` uses
+    (``swfactory.runtime.build_ctx``); all swfactory imports live inside the task callables."""
     from swfactory.blueprint import load
-    from swfactory.sandbox import HOST_SANDBOXES, make_sandbox
-    from swfactory.scm import make_scm
-    from swfactory.stages import Ctx
+    from swfactory.runtime import build_ctx
 
-    cfg, run_dir = _config(name, job, dag_run_id)
-    base_repo = Path(cfg.workdir) if cfg.sandbox in HOST_SANDBOXES else None
-    scm = make_scm(cfg, run_dir, base_repo=base_repo, base_ref=cfg.base_branch)
-    issue = scm.fetch_issue(_issue_ref(cfg.issue))
-    extras = {
-        "blueprint": load(name),
-        "target": {k: job[k] for k in ("repo", "dir", "base_branch")},
-    }
-    known = {f.name for f in dataclasses.fields(Ctx)}
-    return Ctx(  # contract is loaded lazily (setup() seeds the workdir first)
-        cfg=cfg,
-        sb=make_sandbox(cfg, issue.id, protected=_protected(cfg), repo=job["repo"]),
-        agent=make_agent(cfg),
-        scm=scm,
-        issue=issue,
-        run_dir=run_dir,
-        **{k: v for k, v in extras.items() if k in known},
-    )
-
-
-def _issue_ref(issue: str) -> str:
-    return issue if issue.strip().isdigit() else _locate(issue)
+    return build_ctx(load(name), job, run_id=run_id_for(dag_run_id, int(job["job_idx"])))
 
 
 def _actor(responded_by_user: Any) -> str:
@@ -160,10 +96,10 @@ def _actor(responded_by_user: Any) -> str:
 
 
 def _stage_fn(stage: str):
-    from swfactory import stages
+    """The stage callable for a name in ``stages.order`` (``Blueprint`` validated it)."""
+    from swfactory.stages import STAGES
 
-    registry = getattr(stages, "STAGES", None)
-    return registry[stage] if registry else getattr(stages, stage)
+    return STAGES[stage]
 
 
 # ---------------------------------------------------------------- tasks
@@ -278,12 +214,8 @@ def _metrics_task(name: str):
 def _teardown_task(name: str):
     @task(task_id="teardown", trigger_rule="all_done")
     def teardown(job: dict, **context: Any) -> None:
-        from swfactory.sandbox import make_sandbox
-        from swfactory.scm import make_scm
-
-        cfg, run_dir = _config(name, job, context["dag_run"].run_id)
-        issue = make_scm(cfg, run_dir).fetch_issue(_issue_ref(cfg.issue))
-        make_sandbox(cfg, issue.id, repo=job["repo"]).close()  # never ensure(): must not recreate
+        # `_ctx` never calls sb.ensure(), so closing here can only stop what setup() created.
+        _ctx(name, job, context["dag_run"].run_id).sb.close()
 
     return teardown
 

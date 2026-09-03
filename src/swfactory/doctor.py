@@ -30,13 +30,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from swfactory import blueprint as blueprint_mod
-from swfactory.config import Config, TargetContract
+from swfactory.config import FACTORY_ROOT, Config, TargetContract
+from swfactory.sandbox import SRT_NPM_PACKAGE
 
 Runner = Callable[[Sequence[str]], str]
 Which = Callable[[str], str | None]
 
-FACTORY_ROOT = Path(__file__).resolve().parents[2]
-SRT_NPM_PACKAGE = "@anthropic-ai/sandbox-runtime"
 # Hosts the deny-by-default gateway profile must allow for a factory run to work.
 GATEWAY_ALLOW_HOSTS = (
     "api.anthropic.com",
@@ -305,7 +304,7 @@ def _check_environment(runner: Runner, env: str) -> Check:
 
 def _check_snapshot(runner: Runner, snapshot: str) -> Check:
     fix = (
-        "bake it: SNAPSHOT=1 deploy/islo/bootstrap.sh (README 'Warm start'), "
+        "bake it: SNAPSHOT=1 deploy/islo/bootstrap.sh (docs/islo.md 'snapshot'), "
         "or unset [sandbox] snapshot"
     )
     out, err = _try(runner, ["islo", "snapshot", "ls", "--output", "json"])
@@ -373,7 +372,7 @@ def _check_blueprint(name: str) -> Check:
         bp = blueprint_mod.load(name)
     except (OSError, ValueError) as e:
         return Check(
-            "blueprint", False, str(e), f"fix blueprints/{name}.toml (see README 'Blueprints')"
+            "blueprint", False, str(e), f"fix blueprints/{name}.toml (docs/design.md 'Blueprints')"
         )
     return Check(
         "blueprint",

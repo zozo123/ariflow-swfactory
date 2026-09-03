@@ -1,15 +1,21 @@
 name: evals
-# Runs the REAL path on the demo issue whenever the factory's institutional knowledge changes,
-# weekly, and on demand (workflow_dispatch). Two jobs, same assertion on the RunReport the CLI
-# writes to .factory/<run>/report.json (tests passed, deliver:ok); local scm, so the PR is
+# Runs the eval suite whenever the factory's institutional knowledge changes, weekly, and on
+# demand (workflow_dispatch). Configuration steers the agent (the playbook's rule), so every file
+# that steers it is in the `paths` trigger below. Three jobs:
+#   eval-suite  demo/evals/**: the whole suite with the SCRIPTED agent in a local sandbox, gated
+#               on demo/evals/baseline.json. No secret, so it runs on forks and every PR that
+#               touches CLAUDE.md, a prompt, a blueprint or the suite itself (docs/evals.md).
+# The two below run the REAL path on demo/issue.md, with the same assertion on the RunReport the
+# CLI writes to .factory/<run>/report.json (tests passed, deliver:ok); local scm, so the PR is
 # printed, not opened:
 #   real-demo   claude agent confined by the Anthropic Sandbox Runtime (bubblewrap, ubuntu-24.04);
 #               needs the ANTHROPIC_API_KEY secret.
 #   evals-islo  the production path: claude agent in an islo MicroVM behind the deny-by-default
 #               `swfactory` gateway, Anthropic key reaches the VM only as a phantom token; the runner
 #               is the orchestrator and holds ISLO_API_KEY only. Needs the ISLO_API_KEY secret.
-# Each job is skipped with a notice when its secret is absent (forks), never failing for lack of
-# a key. Optional repo variable SWF_ISLO_SNAPSHOT warm-starts the MicroVM (README snapshot recipe).
+# Each KEYED job is skipped with a notice when its secret is absent (forks), never failing for
+# lack of a key; eval-suite always runs. Optional repo variable SWF_ISLO_SNAPSHOT warm-starts
+# the MicroVM (docs/islo.md snapshot).
 on:
   schedule:
     - cron: "0 6 * * 1"
@@ -22,8 +28,10 @@ on:
       - bands.yaml
       - .claude/**
       - blueprints/**
+      - demo/evals/**
       - src/swfactory/prompts/**
       - src/swfactory/agent.py
+      - src/swfactory/evals.py
       - src/swfactory/stages.py
       - .github/workflows/evals.yml
   pull_request:
@@ -33,8 +41,10 @@ on:
       - bands.yaml
       - .claude/**
       - blueprints/**
+      - demo/evals/**
       - src/swfactory/prompts/**
       - src/swfactory/agent.py
+      - src/swfactory/evals.py
       - src/swfactory/stages.py
       - .github/workflows/evals.yml
 permissions:
@@ -42,6 +52,33 @@ permissions:
 env:
   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 jobs:
+  # The gate the playbook asks for: a config change that drops the pass rate is caught here,
+  # before review. Keyless by construction — the scripted agent replays demo/evals/*/ fixtures,
+  # so nothing calls a model and nothing leaves the runner.
+  eval-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ANTHROPIC_API_KEY: ""   # proves the suite needs no key: overrides the workflow-level value
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - name: Install swfactory
+        run: uv sync
+      - name: Run the eval suite (scripted agent, local sandbox) and gate on the baseline
+        run: uv run python -m swfactory.evals --suite demo/evals
+      - name: Upload eval run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-suite-runs
+          path: |
+            .factory/evals/*/*/run/report.json
+            .factory/evals/*/*/run/pr.md
+            .factory/evals/*/*/run/stages.jsonl
+          if-no-files-found: ignore
+
   real-demo:
     runs-on: ubuntu-24.04
     timeout-minutes: 90

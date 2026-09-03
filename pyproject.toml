@@ -1,6 +1,6 @@
 [project]
 name = "swfactory"
-version = "0.1.0"
+version = "1.0.0"
 description = "AI-native software factory: Airflow 3 orchestrates Claude Code agents in islo sandboxes, tests on crabbox boxes, ships PRs through human gates."
 readme = "README.md"
 license = "Apache-2.0"
@@ -30,6 +30,7 @@ Homepage = "https://github.com/zozo123/ariflow-swfactory"
 Documentation = "https://zozo123.github.io/ariflow-swfactory/"
 Issues = "https://github.com/zozo123/ariflow-swfactory/issues"
 Repository = "https://github.com/zozo123/ariflow-swfactory.git"
+Changelog = "https://github.com/zozo123/ariflow-swfactory/blob/main/CHANGELOG.md"
 
 [project.scripts]
 swfactory = "swfactory.cli:app"

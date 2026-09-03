@@ -408,12 +408,13 @@ def test_execute_passes_the_targets_protected_globs_to_make_sandbox(
 ) -> None:
     """Host sandboxes: factory.toml is read from the seeded workdir before make_sandbox so srt can
     enforce `protected` at the kernel (denyWrite). Build-level: the tests dir stays writable
-    (build must add tests); `_agent` tightens it for fix calls."""
-    from swfactory import cli
+    (build must add tests); `_agent` tightens it for fix calls. Patched on ``runtime``, the one
+    module that assembles a Ctx for both the CLI and every DAG task."""
+    from swfactory import runtime
 
-    assert cli.protected_globs(TARGET) == ["factory.toml"]
-    assert cli.protected_globs(TARGET, "fix") == ["factory.toml", "tests/"]
-    assert cli.protected_globs(tmp_path) == []
+    assert runtime.protected_globs(TARGET) == ["factory.toml"]
+    assert runtime.protected_globs(TARGET, "fix") == ["factory.toml", "tests/"]
+    assert runtime.protected_globs(tmp_path) == []
     seen: dict[str, object] = {}
 
     class _Stop(Exception): ...
@@ -422,7 +423,7 @@ def test_execute_passes_the_targets_protected_globs_to_make_sandbox(
         seen.update(kw, issue_id=issue_id)
         raise _Stop
 
-    monkeypatch.setattr(cli, "make_sandbox", fake_make_sandbox)
+    monkeypatch.setattr(runtime, "make_sandbox", fake_make_sandbox)
     bp = load("factory")
     (job,) = bp.jobs({"issues": ["demo/issue.md"]})
     cfg = bp.config(
@@ -435,7 +436,12 @@ def test_execute_passes_the_targets_protected_globs_to_make_sandbox(
     )
     with pytest.raises(_Stop):
         execute(cfg, run_dir=tmp_path / "run", blueprint=bp)
-    assert seen == {"issue_id": "DEMO-1", "protected": ["factory.toml"]}
+    # repo travels too: it is what makes an islo sandbox name unique per (issue, target).
+    assert seen == {
+        "issue_id": "DEMO-1",
+        "protected": ["factory.toml"],
+        "repo": "zozo123/ariflow-swfactory",
+    }
 
 
 def test_agent_call_tightens_srt_deny_write_per_stage(tmp_path: Path) -> None:

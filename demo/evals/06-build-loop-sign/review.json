@@ -1,0 +1,12 @@
+{
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "nit",
+      "file": "src/calc/core.py",
+      "line": 20,
+      "title": "Docstring could name the opposite convention",
+      "detail": "One clause contrasting the positive-decline convention with the signed relative change would stop the next reader guessing."
+    }
+  ]
+}

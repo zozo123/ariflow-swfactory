@@ -1,0 +1,52 @@
+# scripted fixture for EVAL-CONTRACT — see docs/evals.md (regenerate with `run --record`)
+diff --git a/src/calc/core.py b/src/calc/core.py
+index 57e73fc..ee52cf9 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -2,14 +2,22 @@
+ 
+ 
+ def simple_interest(principal: float, rate: float, years: float) -> float:
+-    """Return principal * rate * years. Rate is a fraction (0.05 == 5%)."""
++    """Return the interest only, principal excluded: principal * rate * years.
++
++    ``rate`` is a fraction, not a percent (0.05 == 5%). Add ``principal`` back
++    yourself when you want the final amount; ``compound`` returns that directly.
++    """
+     if principal < 0 or rate < 0 or years < 0:
+         raise ValueError("principal, rate and years must be non-negative")
+     return principal * rate * years
+ 
+ 
+ def compound(principal: float, rate: float, years: int, periods_per_year: int = 1) -> float:
+-    """Return the final amount after compounding. Rate is a fraction."""
++    """Return the final amount, principal included, after compounding.
++
++    ``rate`` is a fraction, not a percent (0.05 == 5%). Subtract ``principal``
++    to get the interest earned.
++    """
+     if principal < 0 or rate < 0 or years < 0 or periods_per_year < 1:
+         raise ValueError("invalid arguments")
+     n = periods_per_year
+diff --git a/tests/test_contract.py b/tests/test_contract.py
+new file mode 100644
+index 0000000..4cda704
+--- /dev/null
++++ b/tests/test_contract.py
+@@ -0,0 +1,16 @@
++"""The documented return contract, pinned: dropping a clause must fail CI."""
++
++from calc import compound, simple_interest
++
++
++def test_simple_interest_returns_interest_only():
++    assert "interest only" in (simple_interest.__doc__ or "")
++
++
++def test_compound_returns_final_amount():
++    assert "final amount" in (compound.__doc__ or "")
++
++
++def test_rate_is_documented_as_a_fraction():
++    for fn in (simple_interest, compound):
++        assert "fraction" in (fn.__doc__ or ""), fn.__name__

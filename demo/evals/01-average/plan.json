@@ -1,0 +1,23 @@
+{
+  "files": [
+    "tests/test_average.py",
+    "src/calc/core.py",
+    "src/calc/__init__.py"
+  ],
+  "steps": [
+    "Add tests/test_average.py covering R1-R4 before touching the implementation",
+    "Implement average(values) in src/calc/core.py with math.fsum for stability",
+    "Export average from src/calc/__init__.py and add it to __all__",
+    "Run the target test command (factory.toml [commands].test) until green"
+  ],
+  "tests": [
+    "R1: test_exported \u2014 average is importable from calc and listed in __all__",
+    "R2: test_mean_of_three \u2014 average([1, 2, 3]) == 2.0",
+    "R3: test_negatives_allowed \u2014 average([-1, 1]) == 0.0",
+    "R4: test_empty_raises \u2014 average([]) raises ValueError"
+  ],
+  "risks": [
+    "Integer division surprises; the function returns a float via fsum",
+    "Float accumulation error on long inputs; fsum bounds it"
+  ]
+}

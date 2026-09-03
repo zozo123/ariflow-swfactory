@@ -1,0 +1,12 @@
+{
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "tests/test_finite.py",
+      "line": 1,
+      "title": "No case for a non-finite `years`",
+      "detail": "The helper covers every argument but the tests only prove `principal` and `rate`. One more assertion would pin R1 completely."
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+name: release
+# Publishing a release is a tag push and nothing else: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+# The job is a gate, not a build step that can improvise — it refuses the tag unless
+#   1. the tag matches `v<pyproject version>` (the tree is the source of truth, not the tag), and
+#   2. CHANGELOG.md has a `## [X.Y.Z]` section (that section IS the release body),
+# both checked before anything is built, so a mistyped or undocumented tag fails loudly and
+# leaves no half-made release behind. Re-running on an existing release also fails rather than
+# silently overwriting published artifacts; delete the release first if that is really the intent.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the version and extract its CHANGELOG section
+        id: notes
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1 ;;
+          esac
+
+          declared=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          if [ "$declared" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match pyproject version $declared; bump the version, commit, then re-tag"
+            exit 1
+          fi
+
+          # The CHANGELOG section between `## [X.Y.Z]` and the next `## [` heading.
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          notes="$RUNNER_TEMP/release-notes.md"
+          if [ ! -s "$notes" ] || ! grep -q '[^[:space:]]' "$notes"; then
+            echo "::error::CHANGELOG.md has no '## [$version]' section; write the release notes before tagging"
+            exit 1
+          fi
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "::error::release $GITHUB_REF_NAME already exists; delete it before re-running"
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Release body:"; cat "$notes"
+
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+
+      - run: uv sync
+
+      - name: Lint and the hermetic suite
+        run: |
+          uv run ruff check . && uv run ruff format --check .
+          uv run pytest
+
+      - name: e2e demo (scripted agent, local runner, local git remote)
+        run: uv run swfactory demo
+
+      - name: DAG parity and smoke (needs the airflow group)
+        run: |
+          uv sync --group airflow
+          uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py
+
+      - name: Build the wheel and sdist
+        run: |
+          uv build
+          ls -l dist/
+
+      - name: Create the GitHub Release
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "swfactory ${{ steps.notes.outputs.version }}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            dist/swfactory-${{ steps.notes.outputs.version }}-py3-none-any.whl \
+            dist/swfactory-${{ steps.notes.outputs.version }}.tar.gz

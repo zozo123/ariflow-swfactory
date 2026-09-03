@@ -1,0 +1,58 @@
+# scripted fixture for EVAL-VARIANCE — see docs/evals.md (regenerate with `run --record`)
+diff --git a/src/calc/__init__.py b/src/calc/__init__.py
+index d78b989..5c1437c 100644
+--- a/src/calc/__init__.py
++++ b/src/calc/__init__.py
+@@ -1,5 +1,5 @@
+ """calc: tiny finance helpers (demo target for the software factory)."""
+ 
+-from calc.core import compound, simple_interest
++from calc.core import compound, simple_interest, variance
+ 
+-__all__ = ["compound", "simple_interest"]
++__all__ = ["compound", "simple_interest", "variance"]
+diff --git a/src/calc/core.py b/src/calc/core.py
+index 57e73fc..ffdee40 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -1,5 +1,7 @@
+ """Core interest calculations."""
+ 
++from collections.abc import Sequence
++from math import fsum
+ 
+ def simple_interest(principal: float, rate: float, years: float) -> float:
+     """Return principal * rate * years. Rate is a fraction (0.05 == 5%)."""
+@@ -14,3 +16,10 @@ def compound(principal: float, rate: float, years: int, periods_per_year: int =
+         raise ValueError("invalid arguments")
+     n = periods_per_year
+     return principal * (1 + rate / n) ** (n * years)
++
++
++def variance(values: Sequence[float]) -> float:
++    """Return the POPULATION variance of ``values`` (divided by n, not n-1)."""
++    items = list(values)
++    mean = fsum(items) / len(items)
++    return fsum((x - mean) ** 2 for x in items) / len(items)
+diff --git a/tests/test_variance.py b/tests/test_variance.py
+new file mode 100644
+index 0000000..cd2dc50
+--- /dev/null
++++ b/tests/test_variance.py
+@@ -0,0 +1,16 @@
++import pytest
++
++import calc
++from calc import variance
++
++
++def test_exported():
++    assert "variance" in calc.__all__
++
++
++def test_population_not_sample():
++    assert variance([1, 2, 3]) == pytest.approx(2 / 3)
++
++
++def test_all_equal_is_zero():
++    assert variance([2, 2, 2]) == pytest.approx(0.0)

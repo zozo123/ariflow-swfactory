@@ -1,0 +1,68 @@
+# scripted fixture for EVAL-AVERAGE — see docs/evals.md (regenerate with `run --record`)
+diff --git a/src/calc/__init__.py b/src/calc/__init__.py
+index d78b989..5fac8fe 100644
+--- a/src/calc/__init__.py
++++ b/src/calc/__init__.py
+@@ -1,5 +1,5 @@
+ """calc: tiny finance helpers (demo target for the software factory)."""
+ 
+-from calc.core import compound, simple_interest
++from calc.core import average, compound, simple_interest
+ 
+-__all__ = ["compound", "simple_interest"]
++__all__ = ["average", "compound", "simple_interest"]
+diff --git a/src/calc/core.py b/src/calc/core.py
+index 57e73fc..bc5ce1d 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -1,5 +1,7 @@
+ """Core interest calculations."""
+ 
++from collections.abc import Sequence
++from math import fsum
+ 
+ def simple_interest(principal: float, rate: float, years: float) -> float:
+     """Return principal * rate * years. Rate is a fraction (0.05 == 5%)."""
+@@ -14,3 +16,15 @@ def compound(principal: float, rate: float, years: int, periods_per_year: int =
+         raise ValueError("invalid arguments")
+     n = periods_per_year
+     return principal * (1 + rate / n) ** (n * years)
++
++
++def average(values: Sequence[float]) -> float:
++    """Return the arithmetic mean of ``values``.
++
++    ``fsum`` keeps the accumulation stable for long inputs. Raises ``ValueError`` on an empty
++    sequence: the mean of nothing is undefined.
++    """
++    items = list(values)
++    if not items:
++        raise ValueError("values must not be empty")
++    return fsum(items) / len(items)
+diff --git a/tests/test_average.py b/tests/test_average.py
+new file mode 100644
+index 0000000..b893963
+--- /dev/null
++++ b/tests/test_average.py
+@@ -0,0 +1,21 @@
++import pytest
++
++import calc
++from calc import average
++
++
++def test_exported():
++    assert "average" in calc.__all__
++
++
++def test_mean_of_three():
++    assert average([1, 2, 3]) == pytest.approx(2.0)
++
++
++def test_negatives_allowed():
++    assert average([-1, 1]) == pytest.approx(0.0)
++
++
++def test_empty_raises():
++    with pytest.raises(ValueError):
++        average([])

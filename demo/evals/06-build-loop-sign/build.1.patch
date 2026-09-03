@@ -1,0 +1,59 @@
+# scripted fixture for EVAL-DRAWDOWN — see docs/evals.md (regenerate with `run --record`)
+diff --git a/src/calc/__init__.py b/src/calc/__init__.py
+index d78b989..28f043a 100644
+--- a/src/calc/__init__.py
++++ b/src/calc/__init__.py
+@@ -1,5 +1,5 @@
+ """calc: tiny finance helpers (demo target for the software factory)."""
+ 
+-from calc.core import compound, simple_interest
++from calc.core import compound, drawdown, simple_interest
+ 
+-__all__ = ["compound", "simple_interest"]
++__all__ = ["compound", "drawdown", "simple_interest"]
+diff --git a/src/calc/core.py b/src/calc/core.py
+index 57e73fc..fab444d 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -14,3 +14,14 @@ def compound(principal: float, rate: float, years: int, periods_per_year: int =
+         raise ValueError("invalid arguments")
+     n = periods_per_year
+     return principal * (1 + rate / n) ** (n * years)
++
++
++def drawdown(peak: float, trough: float) -> float:
++    """Return the decline from ``peak`` to ``trough`` as a fraction of the peak.
++
++    A decline is positive: ``drawdown(100, 75)`` is ``0.25``. Raises ``ValueError`` when
++    ``peak`` is zero — there is no decline from nothing.
++    """
++    if peak == 0:
++        raise ValueError("peak must be non-zero")
++    return (trough - peak) / peak
+diff --git a/tests/test_drawdown.py b/tests/test_drawdown.py
+new file mode 100644
+index 0000000..ef4d9bc
+--- /dev/null
++++ b/tests/test_drawdown.py
+@@ -0,0 +1,21 @@
++import pytest
++
++import calc
++from calc import drawdown
++
++
++def test_exported():
++    assert "drawdown" in calc.__all__
++
++
++def test_decline_is_positive():
++    assert drawdown(100, 75) == pytest.approx(0.25)
++
++
++def test_zero_peak_raises():
++    with pytest.raises(ValueError):
++        drawdown(0, 10)
++
++
++def test_gain_is_negative():
++    assert drawdown(100, 125) == pytest.approx(-0.25)

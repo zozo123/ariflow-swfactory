@@ -4,18 +4,24 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex" />
-    <meta name="theme-color" content="#070a12" />
+    <meta name="theme-color" content="#0d2740" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      rel="preload"
+      as="style"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+    />
+    <link
       rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
     />
     <link rel="stylesheet" href="styles.css" />
     <title>Run not found — swfactory</title>
   </head>
   <body class="error-page">
+    <div class="sheet-grid" aria-hidden="true"></div>
     <main>
       <div class="error-shell">
         <section class="error-card">
@@ -24,7 +30,10 @@
             <span>swfactory</span>
           </a>
           <div>
-            <div class="eyebrow">HTTP / 404</div>
+            <p class="eyebrow">
+              <span class="tick" aria-hidden="true"></span>
+              HTTP / <span class="num">404</span>
+            </p>
             <h1>That run<br /><span>doesn’t exist.</span></h1>
             <p>The path missed the blueprint. Return to the factory line and try again.</p>
           </div>

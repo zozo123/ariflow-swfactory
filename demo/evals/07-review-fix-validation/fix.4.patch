@@ -1,0 +1,19 @@
+# scripted fixture for EVAL-VARIANCE — see docs/evals.md (regenerate with `run --record`)
+diff --git a/src/calc/core.py b/src/calc/core.py
+index ffdee40..0a25cb7 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -19,7 +19,12 @@ def compound(principal: float, rate: float, years: int, periods_per_year: int =
+ 
+ 
+ def variance(values: Sequence[float]) -> float:
+-    """Return the POPULATION variance of ``values`` (divided by n, not n-1)."""
++    """Return the POPULATION variance of ``values`` (divided by n, not n-1).
++
++    Raises ``ValueError`` on an empty sequence: the spread of nothing is undefined.
++    """
+     items = list(values)
++    if not items:
++        raise ValueError("values must not be empty")
+     mean = fsum(items) / len(items)
+     return fsum((x - mean) ** 2 for x in items) / len(items)

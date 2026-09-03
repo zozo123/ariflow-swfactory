@@ -69,25 +69,5 @@ document.querySelectorAll(".copy-button").forEach((button) => {
   button.addEventListener("click", () => copyText(button));
 });
 
-const stageStatus = document.querySelector(".machine-stage");
-const statusMessages = [
-  "running build in isolated sandbox",
-  "executing hermetic test suite",
-  "recording signed-off artifacts",
-  "preparing read-only review",
-];
-
-if (stageStatus && !reducedMotion) {
-  let statusIndex = 0;
-  window.setInterval(() => {
-    stageStatus.classList.add("is-changing");
-    window.setTimeout(() => {
-      statusIndex = (statusIndex + 1) % statusMessages.length;
-      stageStatus.textContent = statusMessages[statusIndex];
-      stageStatus.classList.remove("is-changing");
-    }, 300);
-  }, 2600);
-}
-
 const year = document.getElementById("year");
 if (year) year.textContent = String(new Date().getFullYear());

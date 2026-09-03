@@ -1,0 +1,22 @@
+{
+  "files": [
+    "tests/test_median.py",
+    "src/calc/core.py",
+    "src/calc/__init__.py"
+  ],
+  "steps": [
+    "Add tests/test_median.py covering R1-R4 before touching the implementation",
+    "Implement median(values) in src/calc/core.py over a sorted copy",
+    "Export median from src/calc/__init__.py and add it to __all__",
+    "Run the target test command (factory.toml [commands].test) until green"
+  ],
+  "tests": [
+    "R1: test_exported \u2014 median is importable from calc and listed in __all__",
+    "R2: test_odd_length \u2014 median([3, 1, 2]) == 2",
+    "R3: test_even_length \u2014 median([1, 2, 3, 4]) == 2.5",
+    "R4: test_empty_raises \u2014 median([]) raises ValueError"
+  ],
+  "risks": [
+    "Sorting in place would mutate the caller's list; the implementation sorts a copy"
+  ]
+}

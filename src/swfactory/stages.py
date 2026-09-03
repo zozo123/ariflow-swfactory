@@ -37,11 +37,17 @@ from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import typer
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from swfactory import metrics as metrics_mod
 from swfactory.agent import POLICIES, Agent, Policy, render_prompt
-from swfactory.config import Config, TargetContract, load_target_contract, protected_for
+from swfactory.config import (
+    FACTORY_ROOT,
+    Config,
+    TargetContract,
+    load_target_contract,
+    protected_for,
+)
 from swfactory.models import (
     AgentResult,
     Approval,
@@ -61,7 +67,6 @@ from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
 if TYPE_CHECKING:
     from swfactory.blueprint import Blueprint
 
-FACTORY_ROOT = Path(__file__).resolve().parents[2]
 CANONICAL_ORDER: tuple[str, ...] = ("intent", "spec", "plan", "build_and_test", "review", "deliver")
 NIT_CAP = 3  # REVIEW.md: at most 3 nits per review (blueprint.review.nit_cap overrides)
 DEFAULT_LABELS: tuple[str, ...] = ("factory", "agent-authored")  # blueprint.labels overrides
@@ -77,8 +82,6 @@ STAGES_LOG = ".factory/stages.jsonl"  # sandbox COPY of the stage log (audit tra
 RUN_STAGES_LOG = "stages.jsonl"  # authoritative stage log: <run_dir>/stages.jsonl (orchestrator)
 HOOKS_LOG = ".factory/hooks.jsonl"  # swf_guard.py decisions, appended by the hook in the sandbox
 SEVERITIES: tuple[str, ...] = ("blocker", "major", "minor", "nit")
-# Scratch the factory never commits (added to .git/info/exclude by setup; the target may lack a
-# .gitignore, as the demo copy does).
 # `git add -A` that skips special files: the Anthropic Sandbox Runtime on Linux binds /dev/null
 # style stubs over shell/git rc names in the cwd, which git refuses to stage.
 GIT_ADD_ALL = (
@@ -87,8 +90,9 @@ GIT_ADD_ALL = (
     "| xargs -0 -r git add -- 2>/dev/null; git add -u -- . 2>/dev/null || true"
 )
 
-# Scratch the factory creates plus the shell-rc stubs the Anthropic Sandbox Runtime (Linux) binds
-# into the cwd as special files, which `git add -A` refuses to stage.
+# Scratch the factory never commits, added to .git/info/exclude by setup (the target may lack a
+# .gitignore, as the demo copy does), plus the shell-rc stubs the Anthropic Sandbox Runtime
+# (Linux) binds into the cwd as special files.
 NEVER_COMMITTED = (
     ".factory/",
     ".venv/",
@@ -120,7 +124,6 @@ class Ctx:
     issue: Issue
     run_dir: Path
     blueprint: Blueprint | None = None  # None => v1 defaults (PIPELINE, NIT_CAP, DEFAULT_LABELS)
-    target: dict | None = None  # the job's {"repo", "dir", "base_branch"} (provenance only)
     contract: TargetContract | None = None  # loaded by setup(); lazily on demand otherwise
     stages: list[StageResult] = field(default_factory=list)  # accumulated by run_pipeline
     spent_usd: float = 0.0  # run-level cost guard; seeded from <run_dir>/stages.jsonl by _agent
@@ -163,10 +166,6 @@ def _contract(ctx: Ctx) -> TargetContract:
     return ctx.contract
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
-
-
 def _sh(ctx: Ctx, cmd: str, *, timeout_s: int = 600) -> str:
     """Run a command that must succeed; stdout is returned, failure is a sandbox StageError."""
     res = ctx.sb.run(cmd, timeout_s=timeout_s)
@@ -185,8 +184,19 @@ def _read_or(ctx: Ctx, path: str, default: str = "") -> str:
 
 
 def _read_json(ctx: Ctx, path: str, default: object) -> object:
+    """A JSON artifact from the sandbox, or ``default`` when it is absent, empty or not JSON.
+
+    The sandbox is agent-writable (``Bash(uv run *)`` is arbitrary code by design), so a forged or
+    truncated artifact must degrade to the default instead of raising a bare ``JSONDecodeError``
+    out of a stage: every caller already type-checks what comes back.
+    """
     text = _read_or(ctx, path)
-    return json.loads(text) if text.strip() else default
+    if not text.strip():
+        return default
+    try:
+        return json.loads(text)
+    except ValueError:
+        return default
 
 
 def _dumps(obj: object) -> str:
@@ -217,10 +227,6 @@ def _done(ctx: Ctx, stage: str) -> StageResult | None:
     """The latest completed (non-skipped) record of ``stage`` in this run, if any."""
     recs = [r for r in _persisted(ctx) if r.stage == stage and r.status != "skipped"]
     return recs[-1] if recs else None
-
-
-def _preview(text: str) -> str:
-    return text[:PREVIEW_CHARS]
 
 
 def _nit_cap(ctx: Ctx) -> int:
@@ -261,7 +267,7 @@ def load_stage_results(ctx: Ctx) -> list[StageResult]:
         prev = latest.get(rec.stage)
         if prev is None or rec.status != "skipped" or prev.status == "skipped":
             latest[rec.stage] = rec
-    order = CANONICAL_ORDER
+    order = CANONICAL_ORDER  # unknown stages (a custom blueprint) sort first
     return sorted(latest.values(), key=lambda r: order.index(r.stage) if r.stage in order else -1)
 
 
@@ -344,8 +350,9 @@ def commit(ctx: Ctx, *, stage: str, msg: str) -> str:
     return _sh(ctx, "git rev-parse HEAD").strip()
 
 
-def _run_tests(ctx: Ctx) -> tuple[TestResult, str]:
-    """Run the target's test command; returns the parsed junit result and the output tail."""
+def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
+    """Run the target's test command (or the crabbox wrapper) in the sandbox; returns the parsed
+    junit result and the tail of its output (the failure text a fix prompt gets)."""
     contract = _contract(ctx)
     cmd = contract.test
     if ctx.cfg.tests == "crabbox":
@@ -355,7 +362,10 @@ def _run_tests(ctx: Ctx) -> tuple[TestResult, str]:
     output = (res.stdout[-6000:] + "\n" + res.stderr[-2000:]).strip()
     try:
         counts = _parse_junit(ctx.sb.read(contract.junit))
-    except FileNotFoundError:
+    except (FileNotFoundError, ET.ParseError, ValueError):
+        # A killed or timed-out test process leaves a truncated junit file, and a target may use
+        # a writer with unexpected attributes. Report "no counts" with the real exit code so the
+        # bounded loop still reacts, instead of raising a bare XML/int error out of the stage.
         return TestResult(exit_code=res.exit_code, junit_path=None), output
     return TestResult(**counts, exit_code=res.exit_code, junit_path=contract.junit), output
 
@@ -370,11 +380,6 @@ def crabbox_command(provider: str, junit: str, test_cmd: str) -> str:
         f"crabbox run -provider {q(provider)} -junit {q(junit)} {download}"
         f"-ttl 45m -idle-timeout 15m -- {test_cmd}"
     )
-
-
-def run_tests(ctx: Ctx) -> TestResult:
-    """Run the target's tests in the sandbox (or through the crabbox wrapper) and parse junit."""
-    return _run_tests(ctx)[0]
 
 
 def _parse_junit(xml_text: str) -> dict[str, int]:
@@ -405,7 +410,6 @@ def _test_numbers(tr: TestResult) -> dict[str, float]:
 # ---------------------------------------------------------------- stages
 
 
-FACTORY_ROOT = Path(__file__).resolve().parents[2]
 COPY_IGNORE = shutil.ignore_patterns(".venv", ".factory", ".git", "__pycache__", ".pytest_cache")
 
 
@@ -455,7 +459,7 @@ def setup(ctx: Ctx) -> StageResult:
         _sh(ctx, f"{_GIT_BOT} -c commit.gpgsign=false commit -q --allow-empty -m baseline")
     if not sb.exists(BASE_FILE):
         sb.write(BASE_FILE, _sh(ctx, "git rev-parse HEAD").strip() + "\n")
-        sb.write(STARTED_FILE, _now() + "\n")
+        sb.write(STARTED_FILE, datetime.now(UTC).isoformat(timespec="seconds") + "\n")
     q = shlex.quote(ctx.branch)
     if sb.run(f"git rev-parse --verify -q refs/heads/{q}").ok:
         _sh(ctx, f"git checkout -q {q}")
@@ -487,7 +491,7 @@ def intent(ctx: Ctx) -> StageResult:
     front = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).rstrip()
     text = f"---\n{front}\n---\n{ctx.issue.body.rstrip()}\n"
     ctx.sb.write(path, text)
-    return StageResult(stage="intent", artifacts=[path], preview=_preview(text))
+    return StageResult(stage="intent", artifacts=[path], preview=text[:PREVIEW_CHARS])
 
 
 def _document_only(text: str) -> str:
@@ -537,7 +541,7 @@ def plan(ctx: Ctx) -> StageResult:
         stage="plan",
         artifacts=[md_path, json_path],
         numbers={"files": float(len(p.files))},
-        preview=_preview(md),
+        preview=md[:PREVIEW_CHARS],
     )
 
 
@@ -569,7 +573,7 @@ def build_and_test(ctx: Ctx) -> StageResult:
         )
         res = _agent(ctx, stage, i, prompt, BuildSummary)
         commit(ctx, stage=stage, msg=f"{stage}: {_summary_line(res, f'iteration {i}')}")
-        tr, output = _run_tests(ctx)
+        tr, output = run_tests(ctx)
         if tr.ok:
             numbers = {
                 "iterations": float(i),
@@ -640,10 +644,6 @@ def _review_policy(ctx: Ctx) -> str:
     return text
 
 
-def _by_severity(findings: list[Finding]) -> dict[str, int]:
-    return {s: sum(1 for f in findings if f.severity == s) for s in SEVERITIES}
-
-
 def _format_findings(findings: list[Finding]) -> str:
     return "\n".join(
         f"- [{f.severity}] {f.file}:{f.line or '-'} {f.title} — {f.detail}" for f in findings
@@ -706,7 +706,7 @@ def review(ctx: Ctx) -> StageResult:
         iteration = ctx.cfg.max_build_iterations + fixes
         fix_res = _agent(ctx, "fix", iteration, fix_prompt, BuildSummary)
         commit(ctx, stage="fix", msg=f"fix: {_summary_line(fix_res, 'address review blockers')}")
-        tr, output = _run_tests(ctx)
+        tr, output = run_tests(ctx)
         numbers.update(_test_numbers(tr))
         tests_blocker = None if tr.ok else _tests_blocker(ctx, tr, output)
     record = {
@@ -716,7 +716,7 @@ def review(ctx: Ctx) -> StageResult:
         "fixes": fixes,
     }
     ctx.sb.write(path, _dumps(record))
-    counts = _by_severity(rv.findings)
+    counts = {s: sum(1 for f in rv.findings if f.severity == s) for s in SEVERITIES}
     numbers.update(
         {
             "blockers": float(counts["blocker"]),
@@ -852,9 +852,18 @@ def deliver(ctx: Ctx) -> StageResult:
     prefix = _sh(ctx, "git rev-parse --show-prefix").strip()
     data = _read_json(ctx, f"{ctx.art}/review.json", {})
     data = data if isinstance(data, dict) else {}
-    rv = Review.model_validate(data) if data else Review(verdict="approve")
+    try:
+        rv = Review.model_validate(data) if data else Review(verdict="approve")
+    except ValidationError:  # forged/garbled review.json: the log below still carries the verdict
+        rv, data = Review(verdict="approve"), {}
+    # review.json renders the findings, but the blocker COUNT falls back to the orchestrator's
+    # stage log: that file is agent-writable and, when deliver runs as a later Airflow task on a
+    # recycled sandbox, may be gone — neither may turn a review the log recorded as blocked into
+    # a clean PR.
+    logged = next((s for s in stages if s.stage == "review"), None)
+    blockers = len(rv.blockers) or int(logged.numbers.get("blockers", 0) if logged else 0)
     rejected = any(a.decision == "reject" for a in approvals)
-    blocked = rejected or bool(rv.blockers)
+    blocked = rejected or bool(blockers)
     labels = list(ctx.blueprint.labels if ctx.blueprint else DEFAULT_LABELS)
     if rejected:
         labels.append("factory:rejected")
@@ -881,7 +890,7 @@ def deliver(ctx: Ctx) -> StageResult:
         status="blocked" if blocked else "ok",
         artifacts=[url],
         numbers={
-            "blockers": float(len(rv.blockers)),
+            "blockers": float(blockers),
             "commits": float(commits),
             "rejected": float(rejected),
             "denied_tool_calls": float(denied),

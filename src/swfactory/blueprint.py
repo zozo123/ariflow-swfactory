@@ -15,12 +15,11 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from swfactory.agent import POLICIES
-from swfactory.config import Config
+from swfactory.config import FACTORY_ROOT, Config
 
 if TYPE_CHECKING:
     from swfactory.stages import Gate, Stage
 
-FACTORY_ROOT = Path(__file__).resolve().parents[2]
 BLUEPRINTS_DIR = FACTORY_ROOT / "blueprints"
 DEFAULT_BLUEPRINT = "factory"
 CANONICAL_ORDER: tuple[str, ...] = ("intent", "spec", "plan", "build_and_test", "review", "deliver")

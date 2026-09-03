@@ -1,0 +1,62 @@
+# scripted fixture for EVAL-FINITE — see docs/evals.md (regenerate with `run --record`)
+diff --git a/src/calc/core.py b/src/calc/core.py
+index 57e73fc..ab1d975 100644
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -1,8 +1,10 @@
+ """Core interest calculations."""
+ 
++from math import isfinite
+ 
+ def simple_interest(principal: float, rate: float, years: float) -> float:
+     """Return principal * rate * years. Rate is a fraction (0.05 == 5%)."""
++    _require_finite(principal=principal, rate=rate, years=years)
+     if principal < 0 or rate < 0 or years < 0:
+         raise ValueError("principal, rate and years must be non-negative")
+     return principal * rate * years
+@@ -10,7 +12,15 @@ def simple_interest(principal: float, rate: float, years: float) -> float:
+ 
+ def compound(principal: float, rate: float, years: int, periods_per_year: int = 1) -> float:
+     """Return the final amount after compounding. Rate is a fraction."""
++    _require_finite(principal=principal, rate=rate, years=years)
+     if principal < 0 or rate < 0 or years < 0 or periods_per_year < 1:
+         raise ValueError("invalid arguments")
+     n = periods_per_year
+     return principal * (1 + rate / n) ** (n * years)
++
++
++def _require_finite(**values: float) -> None:
++    """Reject nan/inf early: they pass every ``< 0`` check and poison totals silently."""
++    for name, value in values.items():
++        if not isfinite(value):
++            raise ValueError(f"{name} must be a finite number")
+diff --git a/tests/test_finite.py b/tests/test_finite.py
+new file mode 100644
+index 0000000..1ddacc5
+--- /dev/null
++++ b/tests/test_finite.py
+@@ -0,0 +1,24 @@
++import math
++
++import pytest
++
++from calc import compound, simple_interest
++
++
++def test_nan_principal_rejected():
++    with pytest.raises(ValueError):
++        simple_interest(math.nan, 0.05, 2)
++
++
++def test_inf_rate_rejected():
++    with pytest.raises(ValueError):
++        compound(1000, math.inf, 2)
++
++
++def test_message_names_argument():
++    with pytest.raises(ValueError, match="principal"):
++        simple_interest(math.nan, 0.05, 2)
++
++
++def test_finite_path_unchanged():
++    assert simple_interest(1000, 0.05, 2) == pytest.approx(100.0)

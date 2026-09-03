@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import json
 import statistics
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from swfactory.models import Approval, Review, StageResult
 
@@ -19,6 +20,10 @@ if TYPE_CHECKING:
 
 SEVERITIES: tuple[str, ...] = ("blocker", "major", "minor", "nit")
 _MAX_RUNS = 10_000  # bound for load_all
+# Keys a run may carry its end time under (writers of metrics.json have differed).
+_FINISHED_KEYS = ("finished", "finished_at", "end", "ended_at")
+# Same, for a creation stamp: `islo ls` and `gh` have each used a different spelling.
+CREATED_KEYS = ("created_at", "createdAt", "created-at", "created")
 
 
 def _iso(dt: datetime) -> str:
@@ -74,9 +79,55 @@ def _findings_by_severity(ctx: Ctx, review_numbers: dict[str, float]) -> dict[st
     return {s: sum(1 for f in rv.findings if f.severity == s) for s in SEVERITIES}
 
 
-def load_all(root: Path) -> list[dict]:
-    """Every ``**/docs/factory/*/metrics.json`` under ``root``, oldest first."""
-    runs: list[dict] = []
+def parse_ts(value: Any) -> datetime | None:
+    """A JSON timestamp (ISO 8601, ``Z`` accepted, or epoch seconds) as an aware datetime.
+
+    Metrics and ``islo ls`` listings both carry either shape; a naive stamp is read as UTC.
+    """
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return datetime.fromtimestamp(float(value), tz=UTC)
+    if isinstance(value, str) and value:
+        try:
+            ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+    return None
+
+
+def first_timestamp(scope: dict, keys: Sequence[str]) -> datetime | None:
+    """The first of ``keys`` in ``scope`` that parses as a timestamp (schemas differ by writer)."""
+    for key in keys:
+        ts = parse_ts(scope.get(key))
+        if ts is not None:
+            return ts
+    return None
+
+
+def _finished_epoch(run: dict, path: Path) -> float:
+    """When the run ended, for ordering: its own stamp if it has one, else the file mtime."""
+    for scope in (run, run.get("timestamps")):
+        if isinstance(scope, dict):
+            ts = first_timestamp(scope, _FINISHED_KEYS)
+            if ts is not None:
+                return ts.timestamp()
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def load_all(
+    root: Path, *, include_scripted: bool = True, newest_first: bool = False
+) -> list[dict]:
+    """Every ``**/docs/factory/*/metrics.json`` under ``root``, ordered by when the run finished.
+
+    The single reader of the committed metrics: ``swfactory metrics`` aggregates them all
+    oldest-first, ``maintain.load_runs`` takes the newest real runs (``include_scripted=False``
+    keeps demo replays out of the bands). Files that are unreadable, not JSON objects, or not run
+    metrics (no ``run_id``) are skipped rather than failing the caller.
+    """
+    runs: list[tuple[float, str, dict]] = []
     for i, path in enumerate(sorted(Path(root).glob("**/docs/factory/*/metrics.json"))):
         if i >= _MAX_RUNS:
             break
@@ -84,10 +135,13 @@ def load_all(root: Path) -> list[dict]:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if isinstance(data, dict) and "run_id" in data:
-            runs.append(data)
-    runs.sort(key=lambda r: str(r.get("finished", "")))
-    return runs
+        if not isinstance(data, dict) or "run_id" not in data:
+            continue
+        if not include_scripted and data.get("agent") == "scripted":
+            continue
+        runs.append((_finished_epoch(data, path), path.parent.name, data))
+    runs.sort(key=lambda r: r[:2], reverse=newest_first)
+    return [data for _, _, data in runs]
 
 
 def summarize(runs: list[dict]) -> dict:

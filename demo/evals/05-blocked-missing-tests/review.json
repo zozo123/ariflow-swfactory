@@ -1,0 +1,19 @@
+{
+  "verdict": "request_changes",
+  "findings": [
+    {
+      "severity": "blocker",
+      "file": "tests/test_median.py",
+      "line": null,
+      "title": "New public function has no tests",
+      "detail": "`median` is exported but tests/test_median.py was never written, so R2-R4 of the spec are unproven and the target's CLAUDE.md rule ('every public function needs a docstring and at least two tests') is broken. The suite is green only because nothing exercises the new code."
+    },
+    {
+      "severity": "minor",
+      "file": "src/calc/core.py",
+      "line": 20,
+      "title": "Empty check runs after the sort",
+      "detail": "Sorting an empty sequence is harmless but the guard reads better first, next to the other input validation in this module."
+    }
+  ]
+}

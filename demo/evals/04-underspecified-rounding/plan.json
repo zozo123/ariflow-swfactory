@@ -1,0 +1,23 @@
+{
+  "files": [
+    "tests/test_round_fraction.py",
+    "src/calc/core.py",
+    "src/calc/__init__.py"
+  ],
+  "steps": [
+    "Add tests/test_round_fraction.py covering R1-R4 before touching the code",
+    "Implement round_fraction(value, places=2) in src/calc/core.py",
+    "Export round_fraction from src/calc/__init__.py and add it to __all__",
+    "Run the target test command (factory.toml [commands].test) until green"
+  ],
+  "tests": [
+    "R1: test_exported \u2014 round_fraction is importable from calc and in __all__",
+    "R2: test_rounds_to_two_places \u2014 round_fraction(0.25348712) == 0.25",
+    "R3: test_places_argument \u2014 round_fraction(0.25348712, 3) == 0.253",
+    "R4: test_negative_places_rejected \u2014 places=-1 raises ValueError"
+  ],
+  "risks": [
+    "The issue is under-specified: see spec.md open questions. The scope is kept to rounding so a wider answer (percent strings, decimal) is still cheap to add",
+    "Banker's rounding surprises callers expecting ROUND_HALF_UP; documented in the docstring and raised as open question 3"
+  ]
+}

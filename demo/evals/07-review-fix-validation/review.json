@@ -1,0 +1,12 @@
+{
+  "verdict": "request_changes",
+  "findings": [
+    {
+      "severity": "blocker",
+      "file": "src/calc/core.py",
+      "line": 20,
+      "title": "Empty input raises ZeroDivisionError, not ValueError",
+      "detail": "Spec R4 and the target's CLAUDE.md require `ValueError` for invalid input, and every other function in this module does that. `variance([])` divides by len(items) == 0 and escapes as ZeroDivisionError, which no caller is catching."
+    }
+  ]
+}
