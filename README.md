@@ -67,10 +67,11 @@ cost usd               0.0000
 ```
 
 Use `--approve prompt` to answer the two gates yourself. Exit code is 1 if any job is blocked or
-its tests did not pass. Three lines ship: `blueprints/default.toml` (DAG id and CLI name
+its tests did not pass. Four lines ship: `blueprints/default.toml` (DAG id and CLI name
 `factory`), `blueprints/hotfix.toml` (no `spec` stage, self-approving intent gate, extra `hotfix`
-label) and `blueprints/stress.toml` (two targets, `max_parallel_jobs = 2`, the fan-out harness
-behind `scripts/stress_airflow.sh`) — zero Python between them. One issue applied to N
+label), `blueprints/stress.toml` (two targets, `max_parallel_jobs = 2`, the fan-out harness behind
+`scripts/stress_airflow.sh`) and `blueprints/toolset.toml` (the default order on Airflow's own
+`SandboxBackend`, via `--sandbox toolset`) — zero Python between them. One issue applied to N
 `[[targets]]` is N jobs, each with its own sandbox, PR and approvals; `SWF_*` env vars override
 blueprint values and CLI flags alike.
 
@@ -185,7 +186,7 @@ runner.
 ## Layout
 
 ```
-blueprints/*.toml            default.toml = the `factory` line; hotfix.toml, stress.toml = two more
+blueprints/*.toml            default.toml = the `factory` line; hotfix, stress, toolset = 3 more
 src/swfactory/blueprint.py   Blueprint models, load/loads/resolve, pipeline(), jobs(conf), config(job)
 src/swfactory/config.py      Config (SWF_* env > init), TargetContract from factory.toml
 src/swfactory/runtime.py     the one (blueprint, job, run id) -> Ctx assembly, CLI and DAG alike

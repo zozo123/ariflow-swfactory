@@ -160,6 +160,15 @@ The default stays `apache-airflow==3.3.1`, the latest release: production should
 branch, and the `airflow-main` canary already tells us when main drifts. The trust boundary is
 unchanged either way — the orchestrator still holds the credentials and still applies the patch.
 
+`blueprints/toolset.toml` is the line that exercises this, so the path is tested rather than only
+described: the default six-stage order over one target, `[sandbox] kind = "toolset"`, a
+self-approving intent gate (an experiment must finish unattended) and a two-hour plan gate,
+`max_parallel_jobs = 1` and modest budgets. Every blueprint test and the DAG parity suite
+enumerate `blueprints/*.toml`, so it is covered the moment the file exists. The backend stays a
+runtime knob (`SWF_TOOLSET_BACKEND`, default `sbx`) rather than a blueprint key, so one line runs
+against whichever `SandboxBackend` is installed. It is deliberately not the default: `factory`
+stays on islo.
+
 
 ### Proven on Airflow built from source
 
