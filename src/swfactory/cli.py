@@ -345,3 +345,92 @@ def maintain(
     if sweep_ttl_s:
         for name in maintain_mod.sweep_sandboxes(sweep_ttl_s, owner=owner):
             typer.echo(f"removed orphan sandbox {name}")
+
+
+# ---------------------------------------------------------------- webhook (orchestrator on islo)
+
+webhook_app = typer.Typer(
+    help="GitHub -> Airflow webhook receiver (runs inside the swf-orchestrator islo sandbox).",
+    no_args_is_help=True,
+)
+app.add_typer(webhook_app, name="webhook")
+
+
+@webhook_app.command("serve")
+def webhook_serve(
+    port: Annotated[int, typer.Option(help="listen port (islo delivers to it)")] = 8081,
+    airflow_url: Annotated[
+        str, typer.Option(envvar="AIRFLOW_URL", help="Airflow API base URL")
+    ] = "http://localhost:8080",
+    secret_env: Annotated[
+        str,
+        typer.Option(
+            help="env var holding the GitHub webhook secret; unset var = trust islo's upstream "
+            "HMAC check and skip local verification"
+        ),
+    ] = "SWF_WEBHOOK_SECRET",
+    host: Annotated[str, typer.Option(help="bind address")] = "0.0.0.0",
+) -> None:
+    """Serve POST /webhooks/github and GET /healthz; Airflow creds from AIRFLOW_TOKEN or
+    AIRFLOW_USER + AIRFLOW_PASSWORD."""
+    import os
+
+    from swfactory import webhook as webhook_mod
+
+    try:
+        provider = webhook_mod.token_provider_from_env(airflow_url)
+    except ValueError as e:
+        typer.echo(f"webhook: {e}", err=True)
+        raise typer.Exit(2) from e
+    webhook_mod.serve(
+        port,
+        airflow_url=airflow_url,
+        token_provider=provider,
+        secret=os.environ.get(secret_env) or None,
+        host=host,
+    )
+
+
+@webhook_app.command("route")
+def webhook_route(
+    event: Annotated[str, typer.Argument(help="X-GitHub-Event value: issues | issue_comment")],
+    payload: Annotated[Path, typer.Argument(help="path to the event payload JSON")],
+) -> None:
+    """Dry run: print the DAG run a payload would trigger (exit 1 when it would be ignored)."""
+    from swfactory import webhook as webhook_mod
+
+    try:
+        data = json.loads(payload.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        typer.echo(f"payload error: {e}", err=True)
+        raise typer.Exit(2) from e
+    trigger = webhook_mod.route(event, data if isinstance(data, dict) else {})
+    if trigger is None:
+        typer.echo(f"{event}: ignored")
+        raise typer.Exit(1)
+    typer.echo(
+        f"POST /api/v2/dags/{trigger.dag_id}/dagRuns {json.dumps(trigger.body(), sort_keys=True)}"
+    )
+
+
+@app.command()
+def doctor(
+    blueprint: Annotated[
+        str, typer.Option(help="blueprints/<name>.toml or a path whose sandbox/targets to check")
+    ] = blueprint_mod.DEFAULT_BLUEPRINT,
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable report")] = False,
+) -> None:
+    """Pre-flight the real path: islo auth + integrations, gateway profile, environment,
+    snapshot, gh auth + repo, claude, srt, blueprint, factory.toml. Exit 1 on any failure."""
+    from swfactory import doctor as doctor_mod
+
+    try:
+        bp = blueprint_mod.load(blueprint)
+        cfg = bp.config(bp.jobs({"issues": ["doctor"]})[0], run_id="doctor")
+    except (OSError, ValueError) as e:
+        # A broken blueprint is itself a finding: report it with Config defaults instead of dying.
+        typer.echo(f"blueprint error: {e}", err=True)
+        cfg = Config(issue="doctor", blueprint=blueprint)
+    checks = doctor_mod.run_doctor(cfg)
+    typer.echo(doctor_mod.to_json(checks) if json_out else doctor_mod.table(checks))
+    raise typer.Exit(doctor_mod.exit_code(checks))
