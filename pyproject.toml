@@ -38,7 +38,8 @@ swfactory = "swfactory.cli:app"
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.12"]
 # Default: the latest Airflow RELEASE. `common-ai` ships Airflow's own sandbox toolset, so
-# `--sandbox toolset --backend sbx` works out of the box.
+# `--sandbox toolset` works with the sbx backend (SWF_TOOLSET_BACKEND, default sbx) once the
+# `sbx` binary is on PATH; there is no --backend flag.
 airflow = [
   "apache-airflow==3.3.1",
   "apache-airflow-providers-standard==1.18.0",

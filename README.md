@@ -41,7 +41,7 @@ doubles as the end-to-end test. Overview and diagrams: the
 
 ```sh
 uv sync
-uv run pytest            # 434 tests, hermetic: fake subprocess, tmp git repos, no network
+uv run pytest            # 404 tests without the airflow group, 438 with it, hermetic: fake subprocess, tmp git repos, no network
 uv run swfactory demo    # scripted replay of a recorded run on demo/target
 ```
 
@@ -177,8 +177,9 @@ issues x 2 targets, **53/53 task instances green** and 8 gates answered as `admi
 jobs with its own run id, workdir, remote and chain. `swfactory herd --approve-all` answers the
 same gates through the TUI's own clients.
 
-CI (`.github/workflows/`): `test` (ruff + pytest + demo), `airflow-parity` (parity + smoke + stress),
-`srt-smoke`, `docker-smoke`, optional `airflow-main` (upstream canary); `evals.yml` gates every
+CI (`.github/workflows/`): `test` (ruff + pytest + demo) and `airflow-parity` (parity + smoke +
+stress) are the required checks. Advisory: `srt-smoke`, `docker-smoke`, `airflow-main` (upstream
+canary) and `airflow-main-sandbox-toolset`. `evals.yml` gates every
 change to CLAUDE.md, a prompt, a blueprint or `.claude/**` on the keyless `eval-suite`, and runs
 the real agent weekly — `real-demo` under srt, `evals-islo` in an islo MicroVM with no key on the
 runner.

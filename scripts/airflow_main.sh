@@ -6,32 +6,33 @@
 # (see [dependency-groups].airflow); this is the opt-in bleeding edge, and it changes nothing in
 # swfactory itself — `--sandbox toolset` already adapts whatever backend the provider exposes.
 #
-#   ./scripts/airflow_main.sh            # airflow main + common.ai from the islo backend PR
-#   ./scripts/airflow_main.sh --pypi     # airflow main + the released common.ai (sbx only)
-#   uv sync --group airflow              # back to the pinned release
+#   ./scripts/airflow_main.sh          # apache/airflow@main + common.ai from apache/airflow#71672
+#   ./scripts/airflow_main.sh --pypi   # apache/airflow@main + the released common.ai (sbx only)
+#   uv sync --group airflow            # back to the pinned release
 set -euo pipefail
 
-AIRFLOW_REF="${AIRFLOW_REF:-main}"
+AIRFLOW_REF="${AIRFLOW_REF:-main}"                       # apache/airflow, the real head
 AI_PROVIDER_REPO="${AI_PROVIDER_REPO:-https://github.com/zozo123/airflow.git}"
 AI_PROVIDER_REF="${AI_PROVIDER_REF:-agent/add-islo-sandbox-backend}"  # apache/airflow#71672
-# uv rejects two different git URLs for the same package, so every Airflow distribution comes
-# from ONE repo. The PR branch is apache/airflow@main plus the islo backend, so it serves both.
-if [ "${1:-}" = "--pypi" ]; then
-  SRC="git+https://github.com/apache/airflow.git@${AIRFLOW_REF}"
-  EXTRA=("apache-airflow-providers-common-ai")            # released provider: sbx only
-else
-  SRC="git+${AI_PROVIDER_REPO}@${AI_PROVIDER_REF}"
-  EXTRA=("apache-airflow-providers-common-ai @ ${SRC}#subdirectory=providers/common/ai")
-fi
+APACHE="git+https://github.com/apache/airflow.git@${AIRFLOW_REF}"
 
-uv sync --group airflow                       # baseline, then overlay the dev head
-pkgs=(
-  "apache-airflow-core @ ${SRC}#subdirectory=airflow-core"
-  "apache-airflow-task-sdk @ ${SRC}#subdirectory=task-sdk"
-  "apache-airflow-providers-standard @ ${SRC}#subdirectory=providers/standard"
-  "${EXTRA[@]}"
-)
-uv pip install "${pkgs[@]}"
+# Airflow core, the task SDK and the standard provider always come from apache/airflow HEAD, so
+# this really is the development head and not a fork snapshot (the islo PR branch is ~290 commits
+# behind main, which an earlier version of this script silently pinned).
+uv pip install \
+  "apache-airflow-core @ ${APACHE}#subdirectory=airflow-core" \
+  "apache-airflow-task-sdk @ ${APACHE}#subdirectory=task-sdk" \
+  "apache-airflow-providers-standard @ ${APACHE}#subdirectory=providers/standard"
+
+# The common.ai provider carries the sandbox toolset. The released wheel has `sbx` only; the PR
+# branch adds `islo`. It is installed with --no-deps on purpose: the fork's pyproject pins
+# apache-airflow to its own git URL, and uv refuses two different URLs for one package.
+if [ "${1:-}" = "--pypi" ]; then
+  uv pip install "apache-airflow-providers-common-ai"          # sbx only
+else
+  uv pip install --no-deps \
+    "apache-airflow-providers-common-ai @ git+${AI_PROVIDER_REPO}@${AI_PROVIDER_REF}#subdirectory=providers/common/ai"
+fi
 
 uv run --no-sync python - <<'PY'
 import airflow

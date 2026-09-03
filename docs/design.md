@@ -153,8 +153,10 @@ uv sync --group airflow            # back to the pinned release
 ```
 
 It is a script rather than a locked dependency group on purpose: locking a git dependency on the
-Airflow monorepo clones roughly a gigabyte and pins a commit that is stale the next day. The
-optional `airflow-main-sandbox-toolset` CI job runs the same overlay.
+Airflow monorepo clones roughly a gigabyte and pins a commit that is stale the next day. The optional `airflow-main-sandbox-toolset` CI job installs the same stack inline (it does not
+execute this script, so the two are kept in step by hand). Honest scope: that job imports the
+backends and runs unit tests; `ToolsetSandbox` itself is exercised against a fake backend, so no
+real `sbx` or islo sandbox has run through the adapter in CI.
 
 The default stays `apache-airflow==3.3.1`, the latest release: production should not track a dev
 branch, and the `airflow-main` canary already tells us when main drifts. The trust boundary is
