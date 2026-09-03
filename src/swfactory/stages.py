@@ -79,6 +79,14 @@ HOOKS_LOG = ".factory/hooks.jsonl"  # swf_guard.py decisions, appended by the ho
 SEVERITIES: tuple[str, ...] = ("blocker", "major", "minor", "nit")
 # Scratch the factory never commits (added to .git/info/exclude by setup; the target may lack a
 # .gitignore, as the demo copy does).
+# `git add -A` that skips special files: the Anthropic Sandbox Runtime on Linux binds /dev/null
+# style stubs over shell/git rc names in the cwd, which git refuses to stage.
+GIT_ADD_ALL = (
+    "git ls-files -z -o -m --exclude-standard | while IFS= read -r -d '' f; do "
+    '[ -f "$f" ] || [ -L "$f" ] || [ -d "$f" ] && printf "%s\\0" "$f"; done '
+    "| xargs -0 -r git add -- 2>/dev/null; git add -u -- . 2>/dev/null || true"
+)
+
 # Scratch the factory creates plus the shell-rc stubs the Anthropic Sandbox Runtime (Linux) binds
 # into the cwd as special files, which `git add -A` refuses to stage.
 NEVER_COMMITTED = (
@@ -320,7 +328,7 @@ def _protected(ctx: Ctx, stage: str) -> str:
 def commit(ctx: Ctx, *, stage: str, msg: str) -> str:
     """Commit everything under the target dir as the bot with provenance trailers (``.factory``
     is excluded by setup). Returns the HEAD sha; a no-op when there is nothing to commit."""
-    _sh(ctx, "git add -A")
+    _sh(ctx, GIT_ADD_ALL)
     if ctx.sb.run("git diff --cached --quiet").ok:
         return _sh(ctx, "git rev-parse HEAD").strip()
     q = shlex.quote
@@ -416,6 +424,23 @@ def seed_local_workdir(workdir: Path, target_dir: str) -> bool:
     return True
 
 
+def _seed_exclude(ctx: Ctx) -> None:
+    """Append NEVER_COMMITTED to ``.git/info/exclude`` through ``sb.write`` (host-side for local,
+    srt and docker; ``islo cp`` for islo) — never through a confined shell, which srt may deny
+    for anything under ``.git/``."""
+    git_dir = ctx.sb.run("git rev-parse --git-dir").stdout.strip() or ".git"
+    path = f"{git_dir}/info/exclude"
+    try:
+        current = ctx.sb.read(path)
+    except FileNotFoundError:
+        current = ""
+    have = set(current.splitlines())
+    missing = [p for p in NEVER_COMMITTED if p not in have]
+    if missing:
+        sep = "" if not current or current.endswith("\n") else "\n"
+        ctx.sb.write(path, current + sep + "\n".join(missing) + "\n")
+
+
 def setup(ctx: Ctx) -> StageResult:
     """Prepare the sandbox: repo, bot identity, baseline, work branch, deps, base sha, contract."""
     t0 = time.monotonic()
@@ -423,19 +448,10 @@ def setup(ctx: Ctx) -> StageResult:
     if isinstance(sb, LocalSandbox):
         seed_local_workdir(sb.root, ctx.cfg.target_dir)
     sb.ensure()
-    info = '"$(git rev-parse --git-dir)/info"'
-    patterns = " ".join(shlex.quote(p) for p in NEVER_COMMITTED)
-    _sh(
-        ctx,
-        f"mkdir -p {info} && for p in {patterns} "
-        # + any non-regular dotfile at the root (srt on Linux binds shell/git rc stubs there)
-        "$(find . -maxdepth 1 -mindepth 1 -name '.*' ! -type f ! -type d ! -type l "
-        "-exec basename {} \\; 2>/dev/null); do "
-        f'grep -qxF -- "$p" {info}/exclude 2>/dev/null || echo "$p" >> {info}/exclude; done',
-    )
+    _seed_exclude(ctx)
     # Identity travels as `git -c` (here and in commit()): srt forbids writes to .git/config.
     if not sb.run("git rev-parse --verify -q HEAD").ok:
-        _sh(ctx, "git add -A")
+        _sh(ctx, GIT_ADD_ALL)
         _sh(ctx, f"{_GIT_BOT} -c commit.gpgsign=false commit -q --allow-empty -m baseline")
     if not sb.exists(BASE_FILE):
         sb.write(BASE_FILE, _sh(ctx, "git rev-parse HEAD").strip() + "\n")
