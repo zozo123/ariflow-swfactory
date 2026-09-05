@@ -331,9 +331,7 @@ class _CostlyAgent:
         return AgentResult(agent="scripted", text="# spec\n", cost_usd=self.cost)
 
 
-def _unit_ctx(
-    tmp_path: Path, sb: _MemSandbox, agent=None, *, seed_artifacts: bool = True, **cfg
-):
+def _unit_ctx(tmp_path: Path, sb: _MemSandbox, agent=None, *, seed_artifacts: bool = True, **cfg):
     from swfactory.config import Config
     from swfactory.models import Issue
     from swfactory.stages import Ctx
@@ -385,9 +383,7 @@ def test_run_budget_is_seeded_from_the_orchestrator_log(tmp_path: Path) -> None:
     _log(tmp_path, {"stage": "intent"}, {"stage": "spec", "cost_usd": 7.5})
     agent = _CostlyAgent(1.0)
     contract = '[commands]\ntest = "pytest"\n[paths]\nsource = "src"\ntests = "tests"\n'
-    ctx = _unit_ctx(
-        tmp_path, _MemSandbox({"factory.toml": contract}), agent, max_budget_usd=8.0
-    )
+    ctx = _unit_ctx(tmp_path, _MemSandbox({"factory.toml": contract}), agent, max_budget_usd=8.0)
     with pytest.raises(StageError, match=r"run budget exceeded: 8.50 > 8.00"):
         _agent(ctx, "plan", 1, "prompt", None)
     assert agent.calls == 1 and ctx.budget_seeded and ctx.spent_usd == 8.5

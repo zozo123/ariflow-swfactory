@@ -16,9 +16,10 @@ preserving permissive 1.x behavior.
 
 ### Validation
 
-- The 2.0 changes were reviewed statically for source and documentation consistency in this
-  delivery. No tests, linters, builds, scripted demos, DAG runs, or live provider runs were
-  executed; the 1.1 results recorded below are historical evidence, not 2.0 certification.
+- The 2.0 changes were reviewed statically before tagging. The required version-tag workflow runs
+  lint, the hermetic suite, scripted e2e demo, Airflow parity and smoke, and the package build; it
+  publishes the release only after all gates pass. Live hosted-provider and Astronomer Blueprint
+  runs remain deployment validation, while the 1.1 results below are historical evidence.
 
 ### Added
 

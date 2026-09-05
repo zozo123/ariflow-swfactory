@@ -4,9 +4,10 @@ Reference for the parts the README only names: how a blueprint declares a line, 
 Airflow DAG does, how metrics and bands close the loop, and the decisions (and accepted risks)
 behind all of it.
 
-Validation status: the 2.0 rewrite in this delivery was audited statically. No tests, linters,
-builds, demos, DAG runs, or live provider runs were executed. Commands below define the validation
-surface; only the section explicitly labeled as prior 1.1 evidence records completed runs.
+Validation status: the 2.0 rewrite was audited statically before tagging. The version-tag workflow
+then gates publication on lint, the hermetic suite, scripted e2e demo, Airflow parity and smoke,
+and package build. Live hosted-provider runs remain deployment validation; the section explicitly
+labeled as prior 1.1 evidence records older compatibility runs.
 
 ## Scope and authority
 

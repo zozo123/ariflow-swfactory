@@ -82,9 +82,7 @@ def validate_git_ref(value: str, *, field: str = "base_branch") -> str:
     return value
 
 
-def normalize_relative_path(
-    value: str, *, field: str = "path", allow_empty: bool = False
-) -> str:
+def normalize_relative_path(value: str, *, field: str = "path", allow_empty: bool = False) -> str:
     """Normalize a portable POSIX relative path and reject traversal or platform ambiguity."""
 
     if not isinstance(value, str) or _CONTROL_RE.search(value):

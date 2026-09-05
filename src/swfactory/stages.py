@@ -254,8 +254,7 @@ def _persisted(ctx: Ctx) -> list[StageResult]:
     """
     try:
         return [
-            StageResult.model_validate(record)
-            for record in ctx.state.read_jsonl(RUN_STAGES_LOG)
+            StageResult.model_validate(record) for record in ctx.state.read_jsonl(RUN_STAGES_LOG)
         ]
     except (OSError, ValueError) as e:
         raise StageError("policy", f"run journal is corrupt: {e}") from e
@@ -416,9 +415,7 @@ def _assert_workspace_head(ctx: Ctx, phase: str) -> str:
     return actual
 
 
-def commit(
-    ctx: Ctx, *, stage: str, msg: str, paths: Sequence[str] | None = None
-) -> str:
+def commit(ctx: Ctx, *, stage: str, msg: str, paths: Sequence[str] | None = None) -> str:
     """Commit everything under the target dir as the bot with provenance trailers (``.factory``
     is excluded by setup). Returns the HEAD sha; a no-op when there is nothing to commit."""
     _assert_workspace_head(ctx, f"{stage} commit")
@@ -462,9 +459,7 @@ def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
     try:
         counts = _parse_junit(ctx.sb.read(contract.junit))
     except (FileNotFoundError, ET.ParseError, ValueError):
-        result = TestResult(
-            exit_code=res.exit_code or 1, junit_path=None, report_valid=False
-        )
+        result = TestResult(exit_code=res.exit_code or 1, junit_path=None, report_valid=False)
     else:
         result = TestResult(
             **counts,
@@ -657,9 +652,7 @@ def setup(ctx: Ctx) -> StageResult:
     if not ctx.state.has_control("base"):
         base = _workspace_head(ctx)
         ctx.state.write_control("base", base + "\n")
-        ctx.state.write_control(
-            "started", datetime.now(UTC).isoformat(timespec="seconds") + "\n"
-        )
+        ctx.state.write_control("started", datetime.now(UTC).isoformat(timespec="seconds") + "\n")
         _record_workspace_head(ctx, base)
     base = ctx.state.read_control("base").strip()
     base_commit = shlex.quote(f"{base}^{{commit}}")
@@ -678,8 +671,7 @@ def setup(ctx: Ctx) -> StageResult:
             else ""
         )
         progressed = any(
-            record.stage in {"build_and_test", "review", "deliver"}
-            for record in _persisted(ctx)
+            record.stage in {"build_and_test", "review", "deliver"} for record in _persisted(ctx)
         )
         if (recorded_head and recorded_head != base) or progressed:
             raise StageError(
@@ -997,9 +989,7 @@ def record_approval(ctx: Ctx, approval: Approval) -> None:
     if not isinstance(data, list):
         raise StageError("policy", "approvals.json must contain a JSON array")
     data = [
-        item
-        for item in data
-        if not isinstance(item, dict) or item.get("gate") != approval.gate
+        item for item in data if not isinstance(item, dict) or item.get("gate") != approval.gate
     ]
     data.append(approval.model_dump(mode="json"))
     ctx.write_artifact(path, _dumps(data))
@@ -1084,9 +1074,7 @@ def _copy_audit_logs(ctx: Ctx) -> None:
     log and the hook's decisions, which otherwise die with the sandbox."""
     run_log = ctx.state.root / RUN_STAGES_LOG
     if run_log.is_file():
-        ctx.write_artifact(
-            f"{ctx.art}/agent/stages.jsonl", run_log.read_text(encoding="utf-8")
-        )
+        ctx.write_artifact(f"{ctx.art}/agent/stages.jsonl", run_log.read_text(encoding="utf-8"))
     if ctx.sb.exists(HOOKS_LOG):
         ctx.write_artifact(f"{ctx.art}/agent/hooks.jsonl", ctx.sb.read(HOOKS_LOG))
 

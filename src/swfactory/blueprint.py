@@ -215,8 +215,7 @@ class Blueprint(BaseModel):
                 if tool.split("(", 1)[0] == "Bash"
                 or (
                     not POLICIES[stage].writes
-                    and tool.split("(", 1)[0]
-                    in {"Edit", "MultiEdit", "NotebookEdit", "Write"}
+                    and tool.split("(", 1)[0] in {"Edit", "MultiEdit", "NotebookEdit", "Write"}
                 )
             ]
             if unsafe:
@@ -308,9 +307,7 @@ class Blueprint(BaseModel):
             if not value:
                 continue
             issues.append(
-                value
-                if value.isdigit()
-                else normalize_relative_path(value, field="conf.issues")
+                value if value.isdigit() else normalize_relative_path(value, field="conf.issues")
             )
         issues = list(dict.fromkeys(issues))
         if not issues:

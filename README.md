@@ -206,9 +206,10 @@ npx skills add zozo123/ariflow-swfactory --skill airflow-software-factory
 
 ## Evidence and limits
 
-The 2.0 rewrite in this delivery received a static source and documentation audit only. No tests,
-linters, builds, demos, DAG runs, or live sandbox runs were executed. The two PRs below are 1.x
-operating evidence, not certification of the 2.0 implementation.
+The 2.0 rewrite received a static source and documentation audit before tagging. The version-tag
+workflow is the execution gate: lint, the hermetic suite, scripted e2e demo, Airflow parity and
+smoke, and package build must pass before GitHub publishes release artifacts. Its result is the
+2.0 release evidence; the two PRs below remain useful 1.x operating examples.
 
 - Historical [PR #2](https://github.com/zozo123/ariflow-swfactory/pull/2) is the honest failure
   path: the line published a labeled blocker instead of pretending success.

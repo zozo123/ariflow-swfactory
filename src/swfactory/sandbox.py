@@ -1101,9 +1101,7 @@ def make_sandbox(
             load_toolset_backend(cfg.toolset_backend),
             workdir=workdir,
             env={k: os.environ[k] for k in claude_env if k in os.environ},
-            allow_egress_to=_dedupe(
-                [*cfg.srt_allowed_domains, *SRT_CLAUDE_DOMAINS, "github.com"]
-            ),
+            allow_egress_to=_dedupe([*cfg.srt_allowed_domains, *SRT_CLAUDE_DOMAINS, "github.com"]),
             repo_root=repo_root,
             source=f"https://github.com/{cfg.repo}.git",
             base_branch=cfg.base_branch,

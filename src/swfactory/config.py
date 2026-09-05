@@ -27,9 +27,7 @@ if TYPE_CHECKING:
 
 SRT_DEFAULT_DOMAINS = ("api.anthropic.com", "pypi.org", "files.pythonhosted.org", "astral.sh")
 DOCKER_DEFAULT_IMAGE = "ghcr.io/zozo123/swfactory-sandbox:latest"
-IDENTITY_SETTINGS = frozenset(
-    {"issue", "repo", "target_dir", "base_branch", "run_id", "blueprint"}
-)
+IDENTITY_SETTINGS = frozenset({"issue", "repo", "target_dir", "base_branch", "run_id", "blueprint"})
 # Compatibility name used throughout the runtime. This is the checkout root in development and
 # the bundled asset root in an installed wheel.
 FACTORY_ROOT = ASSET_ROOT
@@ -52,12 +50,11 @@ class Config(BaseSettings):
         ``runtime.job_config`` reapplies issue/repository/run identity after settings load so an
         ambient worker environment cannot collapse separate mapped jobs onto one workspace.
         """
+
         def operational(source: PydanticBaseSettingsSource):
             def load() -> dict[str, object]:
                 return {
-                    key: value
-                    for key, value in source().items()
-                    if key not in IDENTITY_SETTINGS
+                    key: value for key, value in source().items() if key not in IDENTITY_SETTINGS
                 }
 
             return load

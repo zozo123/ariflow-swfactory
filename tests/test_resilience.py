@@ -416,9 +416,7 @@ def test_an_agent_that_hits_its_own_limit_stops_the_stage_and_keeps_the_raw_enve
     assert "result" not in kept  # the prose is dropped from the envelope; the envelope is not
     assert json.loads(ctx.state.read_artifact(f"{ART}/agent/spec.1.json")) == kept
     assert f"{ART}/spec.md" not in sb.files  # nothing half-written claims success
-    assert [(r["stage"], r["status"]) for r in stage_log(tmp_path)] == [
-        ("spec", "failed")
-    ]
+    assert [(r["stage"], r["status"]) for r in stage_log(tmp_path)] == [("spec", "failed")]
     assert ctx.spent_usd == cost  # a failed call still spends: it counts against the run ceiling
 
 
@@ -444,9 +442,7 @@ def test_structured_output_that_is_empty_or_malformed_is_an_agent_error(
     assert ei.value.kind == "agent" and subtype in str(ei.value)
     assert json.loads(sb.files[f"{ART}/agent/plan.1.json"])["subtype"] == subtype
     assert f"{ART}/plan.json" not in sb.files and f"{ART}/plan.md" not in sb.files
-    assert [(r["stage"], r["status"]) for r in stage_log(tmp_path)] == [
-        ("plan", "failed")
-    ]
+    assert [(r["stage"], r["status"]) for r in stage_log(tmp_path)] == [("plan", "failed")]
 
 
 def test_an_agent_that_claims_success_with_no_data_at_all_stops_the_stage(tmp_path: Path) -> None:
@@ -460,9 +456,7 @@ def test_an_agent_that_claims_success_with_no_data_at_all_stops_the_stage(tmp_pa
 
     assert ei.value.kind == "agent"
     assert f"{ART}/plan.json" not in sb.files
-    assert [(r["stage"], r["status"]) for r in stage_log(tmp_path)] == [
-        ("plan", "failed")
-    ]
+    assert [(r["stage"], r["status"]) for r in stage_log(tmp_path)] == [("plan", "failed")]
 
 
 def test_spec_refuses_an_empty_document_from_a_successful_agent(tmp_path: Path) -> None:
@@ -475,9 +469,7 @@ def test_spec_refuses_an_empty_document_from_a_successful_agent(tmp_path: Path) 
 
     assert ei.value.kind == "agent"
     assert f"{ART}/spec.md" not in sb.files
-    assert [(r["stage"], r["status"]) for r in stage_log(tmp_path)] == [
-        ("spec", "failed")
-    ]
+    assert [(r["stage"], r["status"]) for r in stage_log(tmp_path)] == [("spec", "failed")]
 
 
 # ================================================================ 3. budget ceilings
@@ -535,9 +527,7 @@ def test_the_per_stage_budget_is_enforced_by_the_agent_cli_and_returns_as_an_age
 
     assert ei.value.kind == "agent" and "error_max_budget_usd" in str(ei.value)
     assert ctx.spent_usd == 0.6  # below the run ceiling: the run-level guard stays quiet
-    assert [(r["stage"], r["status"]) for r in stage_log(tmp_path)] == [
-        ("spec", "failed")
-    ]
+    assert [(r["stage"], r["status"]) for r in stage_log(tmp_path)] == [("spec", "failed")]
 
 
 # ================================================================ 4. bounded loops
@@ -601,25 +591,28 @@ def deliver_sandbox(
     )
 
 
-APPROVED_REVIEW = json.dumps(
-    {"verdict": "approve", "findings": [], "dropped_nits": 0, "fixes": 0}
-) + "\n"
-BLOCKED_REVIEW = json.dumps(
-    {
-        "verdict": "request_changes",
-        "findings": [
-            {
-                "severity": "blocker",
-                "file": "src/calc/core.py",
-                "line": 1,
-                "title": "Unsafe result",
-                "detail": "The reviewed implementation cannot be delivered safely.",
-            }
-        ],
-        "dropped_nits": 0,
-        "fixes": 0,
-    }
-) + "\n"
+APPROVED_REVIEW = (
+    json.dumps({"verdict": "approve", "findings": [], "dropped_nits": 0, "fixes": 0}) + "\n"
+)
+BLOCKED_REVIEW = (
+    json.dumps(
+        {
+            "verdict": "request_changes",
+            "findings": [
+                {
+                    "severity": "blocker",
+                    "file": "src/calc/core.py",
+                    "line": 1,
+                    "title": "Unsafe result",
+                    "detail": "The reviewed implementation cannot be delivered safely.",
+                }
+            ],
+            "dropped_nits": 0,
+            "fixes": 0,
+        }
+    )
+    + "\n"
+)
 
 
 def delivery_ctx(
@@ -749,9 +742,7 @@ def test_a_corrupt_approvals_file_does_not_lose_the_gate_decision(tmp_path: Path
     """The approval is the one thing a human contributed: recording it must not depend on whatever
     the sandbox currently holds at ``approvals.json``."""
     intent_text = "---\nid: X-1\n---\nbody\n"
-    sb = FakeSandbox(
-        {f"{ART}/intent.md": intent_text, f"{ART}/approvals.json": "{not json"}
-    )
+    sb = FakeSandbox({f"{ART}/intent.md": intent_text, f"{ART}/approvals.json": "{not json"})
     ctx = ctx_on(tmp_path, sb, seed_artifacts=False)
     ctx.state.write_artifact(f"{ART}/intent.md", intent_text)
 
