@@ -8,12 +8,13 @@ GitHub (`git am` a format-patch stream, push, `gh pr create`); a human merges. S
 in `stages.py`. Details: README + docs/*.md.
 
 ## Commands
-- `uv sync`; `uv run pytest` — 340 hermetic tests (fake subprocess, tmp git repos, no network).
+- `uv sync`; `uv run pytest` — the hermetic suite (fake subprocess, tmp git repos, no network).
 - `uv run ruff check . && uv run ruff format --check .` — line length 100; E,F,I,B,UP,SIM.
 - `uv run swfactory demo [--sandbox srt|docker] [--real]` — scripted replay, no keys, ~10 s;
   `--real` runs claude in an islo sandbox and opens a real PR.
 - `uv run swfactory run --issue <n|path> --agent claude --sandbox srt --scm local|github`
-  — real agent, cloudless. `--blueprint hotfix --issue demo/issue.md --approve auto` = second line.
+  — direct CLI path without Airflow. `--blueprint hotfix --issue demo/issue.md --approve auto` =
+  second line.
 - `uv run swfactory approve <dag_run_id> intent|plan [--reject] [--map-index <j>]`; `doctor
   [--json]` (exit 1 per red row, with a `fix:`); `metrics|maintain --root .`; `herd`; `webhook`.
 - `uv run python -m swfactory.evals [--only <slug>] [--update-baseline]` — the eval suite in
@@ -25,22 +26,26 @@ in `stages.py`. Details: README + docs/*.md.
 
 - `./scripts/airflow_main.sh` — put the checkout on apache/airflow@main plus the pending islo
   sandbox backend; `uv sync --group airflow` returns to the pinned release.
+- `uv sync --group airflow --group astronomer-blueprint` — install the optional outer DAG
+  composer; `examples/astronomer-blueprint/` shows a `software_factory` step.
 
 ## Conventions
 - Python 3.12, `from __future__ import annotations`, type hints, docstrings that say WHY. Stdlib
   first (`subprocess`, `tomllib`, `statistics`, `xml.etree`). No Airflow import under `src/`;
   `dags/*.py` import swfactory only inside task callables (the parity test asserts it).
-- Protocols: `Sandbox` (local/srt/docker/islo), `Agent` (claude/scripted), `Scm` (local/github).
+- Protocols: `Sandbox` (local/srt/docker/islo/toolset), `Agent` (claude/scripted), `Scm`
+  (local/github).
   Stages are functions `Ctx -> StageResult` in `STAGES`; loops live inside stage functions, never in
   the DAG; task mapping fans out over jobs only (nested expansion is unsupported in Airflow 3.3.1).
 - `runtime.py` is the only place a `(blueprint, job, run id)` triple becomes a `Ctx`; the CLI and
   every Airflow task call it, so a retried task lands on the same run dir and sandbox.
 - Blueprints may only ADD allowed tools or set a model per stage; gates only after `intent`/`plan`;
-  `ttl_s > max gate timeout`. `SWF_*` env overrides blueprint values and CLI flags (env > init).
+  `ttl_s > max gate timeout`. Operational `SWF_*` settings override line defaults; issue, repo,
+  target, branch, run id, and line identity always come from the mapped job.
 - Artifacts are committed under `docs/factory/<issue>/` by `swfactory-bot` with `Factory-Run`/
   `Factory-Stage`/`Agent` trailers; `.factory/` is uncommitted orchestrator scratch.
 - Every stage is idempotent: a completed record in the orchestrator's log
-  `.factory/<run_id>/stages.jsonl` -> `status="skipped"`. The agent-writable sandbox is never
+  `.factory/<run_id>/state/stages.jsonl` -> `status="skipped"`. The agent-writable sandbox is never
   consulted for skips or the budget. Loops are `Config`-bounded; exhaustion is
   `StageError(kind="policy")` or a `factory:blocked` PR, never a retry.
 - `deliver` never skips: `validate_patch` (no `..`/absolute/`.git`/symlink; paths under the target
@@ -50,9 +55,13 @@ in `stages.py`. Details: README + docs/*.md.
 - Protected paths come from the target's `factory.toml`, re-applied per stage (srt kernel
   `denyWrite`, docker `:ro`): tests writable for `build`, denied for `fix`; `Edit(docs/factory/**)`
   and `Edit(.factory/**)` denied always.
+- Claude Code runs in restricted mode with an explicit tool inventory. Spec, plan, and review are
+  read-only; build and fix have file tools but no shell. The trusted orchestrator alone runs the
+  target's test command, Git, and delivery operations.
 - No `--env`/`--env-file` on islo argv, no tokens in a sandbox; `scrub_env` strips `ANTHROPIC_*`/
-  `GH_TOKEN`/`GITHUB_TOKEN`/`AWS_*`/`ISLO_API*`; srt and docker forward `ANTHROPIC_API_KEY` only
-  for `agent=claude`, which needs `sandbox=islo|srt|docker` unless `--allow-local-agent`.
+  `GH_TOKEN`/`GITHUB_TOKEN`/`AWS_*`/`ISLO_API*`; srt, docker and toolset forward
+  `ANTHROPIC_API_KEY` only for `agent=claude`, which needs `sandbox=islo|srt|docker|toolset` unless
+  `--allow-local-agent`.
 - Git identity travels as `git -c user.name=...`, never `git config` (srt makes `.git/config`
   read-only). Never `claude --bare`/`--dangerously-skip-permissions`. Typed where machines consume
   it (`Plan`, `Review`, `Diagnosis`), prose where humans do (intent.md, spec.md).
@@ -74,5 +83,6 @@ in `stages.py`. Details: README + docs/*.md.
 - crabbox: never `-artifact-glob` (use `-download`), default provider `local-container` (islo needs
   the `ISLO_API_KEY` that `scrub_env` strips), `.crabbox.yaml` jobs are maps; `tests=crabbox` only
   with `sandbox=local`. A target without `factory.toml` is refused: never guess.
-- No Rust, no `CrabboxSandbox`, no `SandboxExecutor`, no blueprint -> `line.toml` compiler, Docker
-  Sandboxes documented-not-wired: docs/design.md says why.
+- No Rust, no `CrabboxSandbox`, no `SandboxExecutor`, no blueprint -> `line.toml` compiler. The
+  Astronomer Blueprint bridge composes by triggering a governed child DAG; it never recompiles or
+  weakens the line. See docs/design.md.

@@ -1,0 +1,11 @@
+dag_id: product_change_train
+description: Compose a governed software change into a larger Airflow workflow.
+
+steps:
+  manufacture_change:
+    blueprint: software_factory
+    line: factory
+    issues:
+      - demo/issue.md
+    wait_for_completion: true
+    poke_interval_s: 60

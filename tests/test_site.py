@@ -91,28 +91,44 @@ def test_homepage_accessibility_and_discovery_contract() -> None:
 
 
 def test_sandbox_table_lists_the_toolset_profile_with_its_honest_limit() -> None:
-    """The page must not advertise `toolset` without its experimental caveat."""
+    """Native profiles and provider seams must state their actual integration boundary."""
     source, page = parse_page("index.html")
 
-    rows = re.findall(r'<span role="cell" class="mono">([a-z]+)</span>', source)
-    assert rows == ["local", "srt", "docker", "islo", "toolset"]
-    assert "experimental; sbx released, islo/opensandbox/asciibox are upstream PRs" in source
+    rows = re.findall(r'<span role="cell" class="mono">([^<]+)</span>', source)
+    assert rows == [
+        "local",
+        "srt",
+        "docker",
+        "islo",
+        "toolset",
+        "daytona",
+        "e2b",
+        "tensorlake",
+        "box / ascii",
+    ]
+    assert "policy support is backend-specific" in source
+    assert source.count("custom backend required") == 4
     assert "--sandbox toolset" in source
     assert "toolset_backend" in source
     assert "StageError" in source
     assert set(page.fragment_links) <= set(page.ids)
 
 
-def test_toolset_block_names_the_stack_it_was_proven_on() -> None:
-    """Adoption claims are only worth the versions and run counts behind them."""
+def test_toolset_block_states_the_boundary_without_fake_provider_claims() -> None:
     source, _ = parse_page("index.html")
 
-    assert "apache-airflow-providers-common-ai" in source
-    for version in ("0.8.0", "3.4.0", "1.4.0", "1.18.0", "0.7.0"):
-        assert f'<span class="num">{version}</span>' in source, version
-    assert "IsloSandboxBackend" in source
-    assert "31 passed" in source
-    assert "14/14 success" in source
+    assert "common-ai" in source and "SandboxBackend" in source
+    assert "package.module:Class" in source
+    assert "Unsupported isolation policy stops the line" in source
+    assert "SandboxToolset is the command boundary, not the agent loop" in source
+
+
+def test_astronomer_blueprint_bridge_is_visible_and_linked() -> None:
+    source, _ = parse_page("index.html")
+
+    assert "Astronomer Blueprint" in source
+    assert "software_factory" in source
+    assert "docs/astronomer-blueprint.md" in source
 
 
 def test_custom_not_found_page_is_self_contained() -> None:
@@ -141,6 +157,7 @@ def test_site_assets_and_interactions_are_resilient() -> None:
     assert re.search(r"<svg\b", (SITE / "favicon.svg").read_text())
     assert re.search(r"<svg\b", (SITE / "social-card.svg").read_text())
     assert (SITE / "social-card.png").stat().st_size > 10_000
+    assert (SITE / "factory-line.webp").stat().st_size > 100_000
 
 
 def test_pages_workflow_deploys_only_the_site_artifact() -> None:

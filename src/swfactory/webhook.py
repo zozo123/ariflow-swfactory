@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -46,6 +47,8 @@ STATUS_LABELS = frozenset({"factory:blocked", "factory:rejected"})
 # Same rule as ``Blueprint.name`` (= DAG id); anything else cannot be a blueprint.
 _NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$")
 _HTTP_TIMEOUT_S = 30
+MAX_BODY_BYTES = 1_048_576
+TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 Opener = Callable[..., Any]
 TokenProvider = Callable[[], str]
@@ -90,6 +93,9 @@ def route(event: str, payload: Mapping[str, Any]) -> Trigger | None:
         dag_id = _dag_from_label(name)
     elif event == "issue_comment" and action == "created":
         comment = payload.get("comment")
+        association = comment.get("author_association") if isinstance(comment, Mapping) else None
+        if association not in TRUSTED_ASSOCIATIONS:
+            return None
         body = comment.get("body") if isinstance(comment, Mapping) else None
         dag_id = _dag_from_comment(body)
     else:
@@ -160,18 +166,34 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect()).open
 
 
-def _safe_airflow_base(url: str) -> str:
-    """Require HTTPS, except for an explicitly loopback HTTP Airflow endpoint."""
+def _safe_airflow_base(url: str, env: Mapping[str, str] | None = None) -> str:
+    """Require HTTPS, except for loopback or an explicitly named internal HTTP host."""
+
+    env = os.environ if env is None else env
     parsed = urllib.parse.urlsplit(url)
     host = (parsed.hostname or "").lower()
-    loopback = host == "localhost" or host == "::1" or host.startswith("127.")
-    if parsed.username or parsed.password:
-        raise ValueError("Airflow URL must not contain credentials")
+    try:
+        loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+        _ = parsed.port
+    except ValueError:
+        loopback = False
+        if host:
+            try:
+                _ = parsed.port
+            except ValueError as error:
+                raise ValueError("Airflow URL has an invalid port") from error
+    allowed_http = {
+        item.strip().lower()
+        for item in env.get("SWF_AIRFLOW_HTTP_HOSTS", "").split(",")
+        if item.strip()
+    }
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Airflow URL must not contain credentials, query, or fragment")
     if parsed.scheme == "https" and host:
         return url.rstrip("/")
-    if parsed.scheme == "http" and loopback:
+    if parsed.scheme == "http" and (loopback or host in allowed_http):
         return url.rstrip("/")
-    raise ValueError("Airflow URL must use HTTPS; HTTP is allowed only for loopback")
+    raise ValueError("Airflow URL must use HTTPS; HTTP hosts require SWF_AIRFLOW_HTTP_HOSTS")
 
 
 def _post_json(
@@ -284,7 +306,14 @@ def make_handler(
             if self.path.split("?", 1)[0] != WEBHOOK_PATH:
                 self._reply(404, {"error": "not found"})
                 return
-            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                self._reply(400, {"error": "invalid Content-Length"})
+                return
+            if length < 0 or length > MAX_BODY_BYTES:
+                self._reply(413, {"error": "payload too large"})
+                return
             body = self.rfile.read(length) if length > 0 else b""
             delivery = self.headers.get("X-GitHub-Delivery", "-")
             event = self.headers.get("X-GitHub-Event", "")

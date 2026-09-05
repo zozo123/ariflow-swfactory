@@ -30,6 +30,22 @@ wheels = [
 ]
 
 [[package]]
+name = "airflow-blueprint"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "apache-airflow" },
+    { name = "click" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "rich" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/35/2a/1dbca281538fec183fc1a980d73f644201a1450c0a60ea24cbb9583fe77f/airflow_blueprint-0.4.0.tar.gz", hash = "sha256:1bf57e47392027a10785f7511e5c25bba21b35498171213e3ddefd85d5fa3c80", size = 240395, upload-time = "2026-07-20T17:22:49.837Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/63/477aa9cdf811090719e58d31d363ca706d7f85a1cc0d96597ed6b7ffa2af/airflow_blueprint-0.4.0-py3-none-any.whl", hash = "sha256:01bf1032ecce4758500bc2f6a62c6bdb0ab6a1a7624162c1ea3f6c2990fcfde3", size = 38628, upload-time = "2026-07-20T17:22:48.648Z" },
+]
+
+[[package]]
 name = "alembic"
 version = "1.19.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1748,7 +1764,7 @@ wheels = [
 
 [[package]]
 name = "swfactory"
-version = "1.1.0"
+version = "2.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -1763,6 +1779,9 @@ airflow = [
     { name = "apache-airflow" },
     { name = "apache-airflow-providers-common-ai" },
     { name = "apache-airflow-providers-standard" },
+]
+astronomer-blueprint = [
+    { name = "airflow-blueprint" },
 ]
 dev = [
     { name = "pytest" },
@@ -1784,6 +1803,7 @@ airflow = [
     { name = "apache-airflow-providers-common-ai", specifier = ">=0.8.0" },
     { name = "apache-airflow-providers-standard", specifier = "==1.18.0" },
 ]
+astronomer-blueprint = [{ name = "airflow-blueprint", specifier = "==0.4.0" }]
 dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.12" },

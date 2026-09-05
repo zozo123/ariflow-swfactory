@@ -43,7 +43,7 @@ stage_timeout_h = 3         # execution_timeout of every stage task
 max_parallel_jobs = 4       # max_active_tis_per_dagrun on stage tasks == concurrent MicroVMs
 
 [policy.build]              # optional, per POLICIES key (spec|plan|build|fix|review|diagnose); ADDITIVE ONLY
-extra_allowed_tools = []    # e.g. ["Bash(npm test*)"] for a JS target
+extra_allowed_tools = []    # shell access and read-only-stage write escalation are rejected
 # model = "claude-sonnet-4-5"
 # (disallowed_tools / permissions.deny cannot be touched from a blueprint)
 
@@ -52,7 +52,7 @@ policy = "REVIEW.md"        # path in the factory repo rendered into the review 
 nit_cap = 3
 
 [sandbox]
-kind = "islo"               # local | srt | islo   (SWF_SANDBOX env overrides for dev/smoke)
+kind = "islo"               # local | srt | docker | islo | toolset (SWF_SANDBOX overrides)
 gateway_profile = "swfactory"
 environment = "swfactory"
 ttl_s = 172800              # --delete-after; validator: > max(gates[].timeout_h) * 3600

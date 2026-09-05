@@ -53,15 +53,26 @@ if (observedSections.length && "IntersectionObserver" in window) {
 const menuButton = document.querySelector(".menu-toggle");
 const mobileMenu = document.querySelector("#mobile-menu");
 const mobileLinks = [...(mobileMenu?.querySelectorAll("a") ?? [])];
+let menuFocusTimer;
 
 function setMenu(open) {
   if (!menuButton || !mobileMenu) return;
+  if (menuFocusTimer !== undefined) {
+    window.clearTimeout(menuFocusTimer);
+    menuFocusTimer = undefined;
+  }
   menuButton.setAttribute("aria-expanded", String(open));
   menuButton.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
   mobileMenu.setAttribute("aria-hidden", String(!open));
+  mobileMenu.toggleAttribute("inert", !open);
   mobileMenu.classList.toggle("is-open", open);
   document.body.style.overflow = open ? "hidden" : "";
-  if (open) window.setTimeout(() => mobileLinks[0]?.focus(), reducedMotion ? 0 : 220);
+  if (open) {
+    menuFocusTimer = window.setTimeout(() => {
+      menuFocusTimer = undefined;
+      if (menuButton.getAttribute("aria-expanded") === "true") mobileLinks[0]?.focus();
+    }, reducedMotion ? 0 : 220);
+  }
 }
 
 menuButton?.addEventListener("click", () => {
@@ -82,6 +93,7 @@ window.matchMedia("(min-width: 941px)").addEventListener("change", (event) => {
 });
 
 const copyStatus = document.querySelector("#copy-status");
+const copyTimers = new WeakMap();
 
 async function copyText(button) {
   const target = document.getElementById(button.dataset.copy);
@@ -89,6 +101,8 @@ async function copyText(button) {
 
   const text = target.innerText;
   const original = button.textContent;
+  const currentTimer = copyTimers.get(button);
+  if (currentTimer !== undefined) window.clearTimeout(currentTimer);
   try {
     await navigator.clipboard.writeText(text);
     button.textContent = "Copied";
@@ -104,10 +118,12 @@ async function copyText(button) {
     if (copyStatus) copyStatus.textContent = "Code selected for copying";
   }
 
-  window.setTimeout(() => {
+  const timer = window.setTimeout(() => {
     button.textContent = original;
     button.classList.remove("is-copied");
+    copyTimers.delete(button);
   }, 1700);
+  copyTimers.set(button, timer);
 }
 
 document.querySelectorAll(".copy-button").forEach((button) => {

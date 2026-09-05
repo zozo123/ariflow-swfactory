@@ -106,7 +106,9 @@ def test_toolset_line_runs_the_default_order_on_airflows_own_sandbox(
     )
     sb = sandbox_mod.make_sandbox(cfg, "DEMO-1")
     assert isinstance(sb, sandbox_mod.ToolsetSandbox)
-    assert seen == ["sbx"] and sb.workdir == cfg.toolset_workdir
+    assert seen == ["sbx"]
+    assert sb.repo_root == cfg.toolset_workdir
+    assert sb.workdir == f"{cfg.toolset_workdir}/demo/target"
 
 
 def test_cli_approver_honours_gate_auto_without_prompting(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,6 +192,8 @@ def test_loads_rejects_unknown_section_and_bad_toml() -> None:
         ({"policy": {"deploy": {}}}, "unknown stages"),
         ({"policy": {"build": {"disallowed_tools": []}}}, "disallowed_tools"),
         ({"policy": {"build": {"writes": False}}}, "writes"),
+        ({"policy": {"build": {"extra_allowed_tools": ["Bash(npm test*)"]}}}, "shell"),
+        ({"policy": {"plan": {"extra_allowed_tools": ["Write"]}}}, "read-only"),
         ({"name": "-bad"}, "pattern"),
         ({"name": "x" * 64}, "pattern"),
         ({"targets": []}, "at least 1"),
@@ -204,10 +208,10 @@ def test_validation_errors(changes: dict[str, Any], match: str) -> None:
 
 def test_policy_override_via_toml_is_additive_only() -> None:
     text = DEFAULT_TOML.replace(
-        "extra_allowed_tools = []", 'extra_allowed_tools = ["Bash(npm test*)"]'
+        "extra_allowed_tools = []", 'extra_allowed_tools = ["NotebookEdit"]'
     )
     bp = loads(text)
-    assert bp.policy["build"].extra_allowed_tools == ["Bash(npm test*)"]
+    assert bp.policy["build"].extra_allowed_tools == ["NotebookEdit"]
     with pytest.raises(ValueError, match="disallowed_tools"):
         loads(text + "\n[policy.fix]\ndisallowed_tools = []\n")
 
@@ -306,11 +310,11 @@ def _ctx(bp: Blueprint | None) -> Ctx:
 
 def test_policy_override_is_applied_additively() -> None:
     bp = Blueprint.model_validate(
-        _data(policy={"build": {"extra_allowed_tools": ["Bash(npm test*)", "Read"], "model": "m1"}})
+        _data(policy={"build": {"extra_allowed_tools": ["NotebookEdit", "Read"], "model": "m1"}})
     )
     pol = stages._policy(_ctx(bp), "build")
     base = POLICIES["build"]
-    assert pol.allowed_tools == base.allowed_tools + ("Bash(npm test*)",)
+    assert pol.allowed_tools == base.allowed_tools + ("NotebookEdit",)
     assert pol.model == "m1" and pol.disallowed_tools == base.disallowed_tools and pol.writes
     assert stages._policy(_ctx(bp), "fix") is POLICIES["fix"]
     assert stages._policy(_ctx(None), "build") is base

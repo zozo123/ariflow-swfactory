@@ -15,6 +15,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from swfactory.config import FACTORY_ROOT, Config, protected_globs
+from swfactory.paths import (
+    normalize_relative_path,
+    validate_git_ref,
+    validate_repo,
+    validate_run_id,
+)
 from swfactory.sandbox import HOST_SANDBOXES, make_sandbox
 from swfactory.scm import make_scm
 from swfactory.stages import Ctx, seed_local_workdir
@@ -56,17 +62,32 @@ def job_config(
     root: Path | None = None,
 ) -> Config:
     """``Config`` for one job: blueprint, then ``overrides`` (CLI flags, ``None`` ignored), then
-    ``SWF_*`` env (``Config`` orders env before init), then this run's local paths.
+    operational ``SWF_*`` settings, then this run's explicit identity and local paths.
 
     A blueprint's ``[sandbox]`` says where the REAL agent runs; a scripted replay never needs a
     MicroVM, so without an explicit ``sandbox`` it falls back to ``local`` (``SWF_SANDBOX`` still
-    wins, as it wins over every init value). Host sandboxes get one workdir per run, under the run
-    dir, so concurrent jobs never share a checkout.
+    wins for operational settings). Host sandboxes get one workdir per run, under the run dir, so
+    concurrent jobs never share a checkout.
     """
     over = overrides or {}  # Blueprint.config drops the None entries (flags the user did not pass)
     cfg = bp.config(job, run_id=run_id, **over)
     if cfg.agent == "scripted" and over.get("sandbox") is None and cfg.sandbox != "local":
         cfg = bp.config(job, run_id=run_id, **{**over, "sandbox": "local"})
+    # A worker may carry SWF_ISSUE/SWF_REPO/SWF_TARGET_DIR/SWF_RUN_ID from an unrelated run.
+    # Identity belongs to the mapped job and always wins after operational settings are loaded.
+    identity: dict[str, Any] = {
+        "issue": str(job["issue"]),
+        "repo": validate_repo(str(job.get("repo", bp.targets[0].repo))),
+        "target_dir": normalize_relative_path(
+            str(job.get("dir", bp.targets[0].dir)), field="target_dir", allow_empty=True
+        ),
+        "base_branch": validate_git_ref(
+            str(job.get("base_branch", bp.targets[0].base_branch)), field="base_branch"
+        ),
+        "run_id": validate_run_id(run_id),
+        "blueprint": bp.name,
+    }
+    cfg = cfg.model_copy(update=identity)
     update: dict[str, Any] = {"fixtures_dir": locate(cfg.fixtures_dir)}
     if cfg.sandbox in HOST_SANDBOXES:
         update["workdir"] = str(job_run_dir(cfg, root) / "work")
@@ -111,7 +132,7 @@ def ctx_for(cfg: Config, *, blueprint: Blueprint, run_dir: Path, agent: Agent | 
     issue = scm.fetch_issue(cfg.issue if cfg.issue.strip().isdigit() else locate(cfg.issue))
     return Ctx(  # contract stays lazy: setup() seeds the workdir before reading factory.toml
         cfg=cfg,
-        sb=make_sandbox(cfg, issue.id, protected=protected, repo=cfg.repo),
+        sb=make_sandbox(cfg, issue.id, protected=protected, repo=cfg.repo, run_dir=run_dir),
         agent=agent or make_agent(cfg),
         scm=scm,
         issue=issue,

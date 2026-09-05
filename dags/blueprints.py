@@ -206,7 +206,7 @@ def _metrics_task(name: str):
 
         ctx = _ctx(name, job, context["dag_run"].run_id)
         path = f"{Config.artifacts_dir(ctx.issue.id)}/metrics.json"
-        return json.loads(ctx.sb.read(path)) if ctx.sb.exists(path) else {}
+        return json.loads(ctx.read_artifact(path)) if ctx.state.has_artifact(path) else {}
 
     return metrics
 

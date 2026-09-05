@@ -5,12 +5,10 @@
 #
 # `[sandbox] kind = "toolset"` selects `ToolsetSandbox`, the adapter over the `SandboxBackend` of
 # apache-airflow-providers-common-ai (create / destroy / run_command / read_file / write_file).
-# WHICH backend it adapts is a runtime knob, not a blueprint one — `Config.toolset_backend`
-# (`SWF_TOOLSET_BACKEND`, default `sbx`, the one that ships in the released provider) and
-# `Config.toolset_workdir`. Keeping it out of the schema is deliberate: the same line has to be
-# runnable against whichever backend the operator has installed, and islo / opensandbox /
-# asciibox are still upstream pull requests (apache/airflow #71672 / #71676 / #71725). A backend
-# that is not installed fails as a StageError naming its PR, never as an import crash.
+# WHICH backend it adapts is declared below as `[sandbox].backend` and `.workdir`; an operator can
+# still override them with `SWF_TOOLSET_BACKEND` / `SWF_TOOLSET_WORKDIR`. `sbx` ships in the
+# released provider; islo / opensandbox / asciibox remain upstream work. A backend that is not
+# installed fails as a StageError naming the missing integration, never as an import crash.
 #
 #   uv run swfactory run --blueprint toolset --issue demo/issue.md            # backend sbx
 #   SWF_TOOLSET_BACKEND=islo uv run swfactory run --blueprint toolset --issue 42 --agent claude
@@ -63,6 +61,8 @@ nit_cap = 3
 
 [sandbox]
 kind = "toolset"            # -> ToolsetSandbox(load_toolset_backend(cfg.toolset_backend))
+backend = "sbx"             # Airflow SandboxBackend name, or package.module:Class
+workdir = "/workspace/repo" # repository root exposed by that backend
 ttl_s = 10800               # 3 h; validator: > max(gates[].timeout_h) * 3600 = 7200
 idle_s = 600
 

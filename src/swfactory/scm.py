@@ -262,9 +262,9 @@ class LocalGitScm:
     """Bare git repo standing in for GitHub; the "PR" is a markdown file printed to stdout.
 
     ``base_repo``/``base_ref``: when given, the bare remote is seeded by pushing that ref of that
-    repo as ``main``. The factory passes the sandbox workdir and its recorded baseline (a branch
-    name or the sha stored at ``.factory/base``) so the format-patch stream applies on the very
-    history it was produced from. Without a host workdir (islo sandbox) ``seed_url``/``seed_ref``
+    repo as ``main``. The factory passes the sandbox workdir and its host-recorded baseline so the
+    format-patch stream applies on the very history it was produced from. Without a host workdir
+    (islo sandbox) ``seed_url``/``seed_ref``
     seed ``main`` by fetching that ref from the public clone url instead (read-only, no token).
     With neither, an orphan ``main`` with one empty commit is created, on which a patch whose
     first commit touches pre-existing files will not apply.

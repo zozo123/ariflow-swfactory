@@ -2,8 +2,8 @@
 
 Two implementations share one contract (``Agent``): ``ClaudeAgent`` runs ``claude -p`` in the
 sandbox and reads its JSON envelope back; ``ScriptedAgent`` replays recorded fixtures so the
-whole pipeline is testable without a model. Per-stage tool ``Policy`` and ``install_guard`` make
-the write stages deterministic-safe: the hook, not the prompt, is the gate.
+whole pipeline is testable without a model. Per-stage tool ``Policy``, native deny rules, and
+``install_guard`` make write stages deterministic-safe; enforcement, not the prompt, is the gate.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ValidationError
 
-from swfactory.config import FACTORY_ROOT, Config, load_target_contract, protected_for
+from swfactory.config import FACTORY_ROOT, Config
 from swfactory.models import AgentKind, AgentResult, StageError
 
 if TYPE_CHECKING:
@@ -26,12 +26,8 @@ if TYPE_CHECKING:
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 GUARD_SRC = FACTORY_ROOT / ".claude" / "hooks" / "swf_guard.py"
-GUARD_DST = ".claude/hooks/swf_guard.py"
-SETTINGS_DST = ".claude/settings.local.json"
-# The factory's stage skill (spec/plan shape, review contract): copied into every target so the
-# CLAUDE.md -> skills -> hooks layering holds when the agent's cwd is not this repo.
-SKILL_SRC = FACTORY_ROOT / ".claude" / "skills" / "swfactory"
-SKILL_DST = ".claude/skills/swfactory"
+GUARD_DST = ".factory/swf_guard.py"
+SETTINGS_DST = ".factory/claude-settings.json"
 GUARD_DENY = (
     "Bash(git push*)",
     "Bash(gh pr *)",
@@ -49,6 +45,7 @@ GUARD_PATH_DENY = (
     "Edit(REVIEW.md)",
     "Edit(bands.yaml)",
     "Edit(factory.toml)",
+    "Edit(.git/**)",
     "Edit(.claude/**)",
     "Edit(.github/**)",
     "Edit(docs/factory/**)",
@@ -57,6 +54,7 @@ GUARD_PATH_DENY = (
     "Write(REVIEW.md)",
     "Write(bands.yaml)",
     "Write(factory.toml)",
+    "Write(.git/**)",
     "Write(.claude/**)",
     "Write(.github/**)",
     "Write(docs/factory/**)",
@@ -76,7 +74,7 @@ class Policy:
     """Tool surface and limits for one stage's agent call."""
 
     allowed_tools: tuple[str, ...]
-    disallowed_tools: tuple[str, ...] = ("WebFetch", "WebSearch")
+    disallowed_tools: tuple[str, ...] = ("WebFetch", "WebSearch", "mcp__*")
     writes: bool = False  # True => install_guard() before the call
     timeout_s: int = 1800
     model: str | None = None
@@ -89,13 +87,11 @@ POLICIES: dict[str, Policy] = {
     "spec": Policy(READ_ONLY),
     "plan": Policy(READ_ONLY),
     "build": Policy(
-        READ_ONLY
-        + _WRITE_TOOLS
-        + ("Bash(uv run *)", "Bash(uv sync*)", "Bash(git diff*)", "Bash(git status*)"),
+        READ_ONLY + _WRITE_TOOLS,
         writes=True,
     ),
-    "fix": Policy(READ_ONLY + _WRITE_TOOLS + ("Bash(uv run *)", "Bash(git diff*)"), writes=True),
-    "review": Policy(READ_ONLY + ("Bash(git diff*)", "Bash(uv run pytest*)")),
+    "fix": Policy(READ_ONLY + _WRITE_TOOLS, writes=True),
+    "review": Policy(READ_ONLY),
     "diagnose": Policy(READ_ONLY + ("Bash(gh run view *)",)),
 }
 
@@ -126,6 +122,7 @@ class Agent(Protocol):
         schema: type[BaseModel] | None,
         cfg: Config,
         issue_id: str,
+        protected: Sequence[str] = (),
     ) -> AgentResult: ...
 
 
@@ -159,25 +156,12 @@ def guard_deny_rules(protected: Sequence[str]) -> list[str]:
     return list(dict.fromkeys(rules))
 
 
-def _target_protected(sb: Sandbox, stage: str) -> Sequence[str]:
-    """The target's ``protected`` globs, narrowed to ``stage``; ``()`` without a factory.toml —
-    the guard still installs its fixed rules, and ``stages.setup`` has already refused such a
-    target (it loads the same contract and raises), so no pipeline failure is being swallowed."""
-    try:
-        return protected_for(load_target_contract(sb), stage)
-    except ValueError:
-        return ()
-
-
 def install_guard(sb: Sandbox, protected: Sequence[str]) -> None:
-    """Install the PreToolUse guard into the target checkout (idempotent).
+    """Install the PreToolUse guard in factory scratch (idempotent).
 
-    Writes ``.claude/settings.local.json`` (hook wiring, native ``permissions.deny`` path and
-    Bash rules, and ``SWF_PROTECTED`` in ``env``), copies ``swf_guard.py`` next to it and the
-    factory's ``swfactory`` skill under ``.claude/skills/``, and lists all of them in
-    ``.git/info/exclude`` so they never appear in the delivered patch. The files are written by
-    the orchestrator BEFORE the in-sandbox probe: under srt ``.claude/`` is kernel-read-only for
-    the sandboxed shell, so the directory must already exist.
+    ``--restricted`` ignores repository settings; ``--settings`` loads this file explicitly.
+    Keeping both files below ignored ``.factory/`` avoids overwriting a target's own
+    ``.claude`` configuration.
     """
     settings = {
         "hooks": {
@@ -193,26 +177,6 @@ def install_guard(sb: Sandbox, protected: Sequence[str]) -> None:
     }
     sb.write(SETTINGS_DST, json.dumps(settings, indent=2) + "\n")
     sb.write(GUARD_DST, GUARD_SRC.read_text(encoding="utf-8"))
-    for src in sorted(p for p in SKILL_SRC.rglob("*") if p.is_file()):
-        sb.write(f"{SKILL_DST}/{src.relative_to(SKILL_SRC).as_posix()}", src.read_text("utf-8"))
-    probe = sb.run(
-        'mkdir -p .claude/hooks && mkdir -p "$(git rev-parse --git-dir)/info" '
-        "&& git rev-parse --show-cdup --show-prefix"
-    )
-    if not probe.ok:
-        return  # not a git checkout: nothing to exclude
-    cdup, prefix = (probe.stdout.splitlines() + ["", ""])[:2]
-    exclude_path = f"{cdup}.git/info/exclude"
-    try:
-        existing = sb.read(exclude_path)
-    except FileNotFoundError:
-        existing = ""
-    present = set(existing.splitlines())
-    wanted = (f"{prefix}{SETTINGS_DST}", f"{prefix}{GUARD_DST}", f"{prefix}{SKILL_DST}/")
-    missing = [p for p in wanted if p not in present]
-    if missing:
-        head = existing.rstrip("\n") + "\n" if existing.strip() else ""
-        sb.write(exclude_path, head + "\n".join(missing) + "\n")
 
 
 # ---------------------------------------------------------------- claude
@@ -237,8 +201,14 @@ class ClaudeAgent:
         parts = [
             f'claude -p "$(cat {q(prompt_path)})"',
             "--output-format json",
+            "--restricted",
             "--permission-mode acceptEdits",
+            "--permission-prompts none",
         ]
+        tool_names = sorted({tool.split("(", 1)[0] for tool in policy.allowed_tools})
+        parts.append(f"--tools {q(','.join(tool_names))}")
+        if policy.writes:
+            parts.append(f"--settings {q(SETTINGS_DST)}")
         if policy.allowed_tools:
             parts.append("--allowedTools " + " ".join(q(t) for t in policy.allowed_tools))
         if policy.disallowed_tools:
@@ -266,6 +236,7 @@ class ClaudeAgent:
         schema: type[BaseModel] | None,
         cfg: Config,
         issue_id: str,
+        protected: Sequence[str] = (),
     ) -> AgentResult:
         """Write the prompt, guard the checkout if needed, run claude, parse the envelope."""
         art = Config.artifacts_dir(issue_id)
@@ -274,11 +245,14 @@ class ClaudeAgent:
         sb.run(f"mkdir -p .factory {shlex.quote(art + '/agent')}")
         sb.write(prompt_path, prompt)
         if policy.writes:
-            install_guard(sb, _target_protected(sb, stage))
+            install_guard(sb, protected)
         cmd = self.argv(
             prompt_path=prompt_path, out_path=out_path, policy=policy, schema=schema, cfg=cfg
         )
-        res = sb.run(cmd, timeout_s=policy.timeout_s)
+        # This distinct path lets srt/docker scope a real model credential to Claude. Gateway/cell
+        # providers (islo/toolset) may provision authentication as a cell capability, but lifecycle
+        # and verification never receive orchestrator SCM credentials.
+        res = sb.run_agent(cmd, timeout_s=policy.timeout_s)
         try:
             raw = sb.read(out_path)
         except FileNotFoundError as e:
@@ -438,6 +412,7 @@ class ScriptedAgent:
         schema: type[BaseModel] | None,
         cfg: Config,
         issue_id: str,
+        protected: Sequence[str] = (),
     ) -> AgentResult:
         """Replay the fixture for (stage, iteration); cost and turns are always zero."""
         path = self.fixture(stage, iteration)

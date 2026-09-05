@@ -8,7 +8,8 @@ drives the line: answer a gate, trigger a blueprint, stop a run, remove your own
 It is built with [Textual](https://textual.textualize.io) on top of `swfactory.control`, which is
 the only code that talks to Airflow (`/api/v2`), GitHub (`gh`) and islo (`islo`). `herd` itself is
 presentation and key maps: it reads a `Snapshot` from a collector and mutates through an `Actions`
-object, so the whole screen — and both headless flags — are unit-tested with fakes and no network.
+object. Fake-based coverage for the screen and both headless flags lives in the repository and
+requires no network when executed.
 
 ```sh
 uv run swfactory herd                                   # the TUI
@@ -97,7 +98,7 @@ notification, never a crash.
 ## Headless drive mode (CI and scripts)
 
 Both flags reuse the same clients, collector and actions as the TUI — there is no second code
-path, which is the point: what CI exercises is what the keys do.
+path, so automated coverage and interactive keys exercise the same action layer.
 
 | Flag | Does | Exit code |
 | --- | --- | --- |
@@ -111,7 +112,7 @@ The JSON is one object with the keys `collected_at`, `runs` (each with its `jobs
 fills `errors` rather than the exit code — `--once` is a read and always exits 0, so a CI step can
 snapshot the factory without becoming a health check.
 
-`--approve-all` is what proves the action layer against a real Airflow: stand up `airflow
+`--approve-all` is the live check for the action layer against a real Airflow: stand up `airflow
 standalone`, trigger a run, then
 
 ```sh

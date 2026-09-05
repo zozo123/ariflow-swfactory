@@ -252,7 +252,7 @@ def test_each_job_owns_its_run_dir_and_workdir(stress: dict) -> None:
         assert [p.name for p in sorted((workdir / "docs" / "factory").iterdir())] == [issue_id]
         for artifact in CHAIN:
             assert (chain / artifact).is_file(), f"job {idx}: {artifact}"
-        assert (run_dir / "stages.jsonl").is_file()  # the orchestrator's own per-job stage log
+        assert (run_dir / "state" / "stages.jsonl").is_file()  # host-owned per-job journal
     assert len(seen) == len(jobs)
 
 

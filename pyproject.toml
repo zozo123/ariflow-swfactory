@@ -1,7 +1,7 @@
 [project]
 name = "swfactory"
-version = "1.1.0"
-description = "AI-native software factory: Airflow 3 orchestrates Claude Code agents in islo sandboxes, tests on crabbox boxes, ships PRs through human gates."
+version = "2.0.0"
+description = "AI-native software factory: Airflow 3 orchestrates Claude Code agents in isolated sandboxes and ships reviewed PRs through human gates."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12,<3.13"
@@ -45,6 +45,9 @@ airflow = [
   "apache-airflow-providers-standard==1.18.0",
   "apache-airflow-providers-common-ai>=0.8.0",
 ]
+# Optional outer composition layer. It discovers ``SoftwareFactory`` through the package entry
+# point and triggers the existing governed line DAG; it does not replace swfactory's policy.
+astronomer-blueprint = ["airflow-blueprint==0.4.0"]
 # Bleeding edge: apache/airflow@main plus the pending islo sandbox backend (apache/airflow#71672)
 # is one script, not a locked group — locking a git dependency on the Airflow monorepo would clone
 # ~1 GB and pin a commit that is stale the next day. See scripts/airflow_main.sh and docs/design.md.
@@ -54,6 +57,17 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/swfactory"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"blueprints" = "swfactory/_assets/blueprints"
+"demo" = "swfactory/_assets/demo"
+".claude/hooks" = "swfactory/_assets/.claude/hooks"
+"REVIEW.md" = "swfactory/_assets/REVIEW.md"
+"bands.yaml" = "swfactory/_assets/bands.yaml"
+"islo.yaml" = "swfactory/_assets/islo.yaml"
+
+[project.entry-points."airflow_blueprint.blueprints"]
+swfactory = "swfactory.astronomer_blueprint"
 
 [tool.ruff]
 line-length = 100
@@ -65,4 +79,3 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-

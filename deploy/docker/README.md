@@ -13,7 +13,8 @@ docker build -t swfactory-sandbox:local -f deploy/docker/sandbox.Dockerfile .
 docker compose -f deploy/docker/compose.yml up          # airflow :8080 + webhook receiver :8081
 docker compose -f deploy/docker/compose.yml exec airflow \
   cat /opt/airflow_home/simple_auth_manager_passwords.json.generated    # the admin password
-docker compose -f deploy/docker/compose.yml down [-v]   # -v also drops the DB, venv and password
+docker compose -f deploy/docker/compose.yml down
+# Add --volumes to also drop the DB, venv and generated password.
 
 # one-shot, no Airflow: the CLI on the host, one sandbox container per command
 uv run swfactory demo --sandbox docker

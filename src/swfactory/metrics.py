@@ -30,8 +30,14 @@ def _iso(dt: datetime) -> str:
     return dt.astimezone(UTC).isoformat(timespec="seconds")
 
 
-def write_run_metrics(ctx: Ctx, stages: list[StageResult], approvals: list[Approval]) -> dict:
-    """Assemble the run's metrics and write ``{art}/metrics.json`` into the sandbox."""
+def write_run_metrics(
+    ctx: Ctx,
+    stages: list[StageResult],
+    approvals: list[Approval],
+    *,
+    total_cost_usd: float | None = None,
+) -> dict:
+    """Assemble run metrics and persist them through the host-owned artifact store."""
     from swfactory.stages import denied_tool_calls  # runtime: stages imports this module
 
     by_stage = {s.stage: s for s in stages}
@@ -39,7 +45,7 @@ def write_run_metrics(ctx: Ctx, stages: list[StageResult], approvals: list[Appro
     review = by_stage.get("review", StageResult(stage="review")).numbers
     findings = _findings_by_severity(ctx, review)
     try:
-        started = ctx.sb.read(".factory/started").strip() or _iso(ctx.started_at)
+        started = ctx.state.read_control("started").strip() or _iso(ctx.started_at)
     except FileNotFoundError:
         started = _iso(ctx.started_at)
     tests = [s.numbers["tests_passed"] for s in stages if "tests_passed" in s.numbers]
@@ -63,17 +69,20 @@ def write_run_metrics(ctx: Ctx, stages: list[StageResult], approvals: list[Appro
         "blockers": findings["blocker"],
         "review_fixes": int(review.get("fixes", 0)),
         "denied_tool_calls": denied_tool_calls(ctx),
-        "total_cost_usd": round(sum(s.cost_usd for s in stages), 6),
+        "total_cost_usd": round(
+            sum(s.cost_usd for s in stages) if total_cost_usd is None else total_cost_usd,
+            6,
+        ),
         "approvers": [a.actor for a in approvals],
         "approvals": [a.model_dump(mode="json") for a in approvals],
     }
-    ctx.sb.write(f"{ctx.art}/metrics.json", json.dumps(data, indent=2) + "\n")
+    ctx.write_artifact(f"{ctx.art}/metrics.json", json.dumps(data, indent=2) + "\n")
     return data
 
 
 def _findings_by_severity(ctx: Ctx, review_numbers: dict[str, float]) -> dict[str, int]:
     try:
-        rv = Review.model_validate(json.loads(ctx.sb.read(f"{ctx.art}/review.json")))
+        rv = Review.model_validate(json.loads(ctx.read_artifact(f"{ctx.art}/review.json")))
     except (FileNotFoundError, ValueError):
         return {s: int(review_numbers.get(s, 0)) for s in SEVERITIES}
     return {s: sum(1 for f in rv.findings if f.severity == s) for s in SEVERITIES}

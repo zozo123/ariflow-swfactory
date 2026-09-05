@@ -21,7 +21,7 @@ from swfactory import blueprint as blueprint_mod
 from swfactory import metrics as metrics_mod
 from swfactory.agent import Agent
 from swfactory.blueprint import Blueprint
-from swfactory.config import Config
+from swfactory.config import FACTORY_ROOT, Config
 from swfactory.models import RunReport, StageError
 from swfactory.runtime import build_ctx, ctx_for, job_run_dir
 from swfactory.scm import make_scm
@@ -264,7 +264,9 @@ def approve(
 
 @app.command()
 def maintain(
-    bands: Annotated[Path, typer.Option(help="Response tiers (sigma bands).")] = Path("bands.yaml"),
+    bands: Annotated[Path, typer.Option(help="Response tiers (sigma bands).")] = (
+        FACTORY_ROOT / "bands.yaml"
+    ),
     root: Annotated[Path, typer.Option(help="Repo root with docs/factory/*/metrics.json")] = Path(),
     scm: Annotated[str, typer.Option(help="local|github")] = "local",
     sweep_ttl_s: Annotated[

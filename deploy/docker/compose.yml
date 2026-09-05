@@ -37,7 +37,7 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       AIRFLOW__API__PORT: "8080"
       AIRFLOW__API__HOST: 0.0.0.0
-      # factory knobs (SWF_* env > blueprint values; see src/swfactory/config.py)
+      # Operational factory knobs. Mapped job identity still wins over ambient SWF_* values.
       SWF_SANDBOX: docker
       SWF_AGENT: ${SWF_AGENT:-scripted}
       SWF_SCM: ${SWF_SCM:-local}
@@ -58,7 +58,7 @@ services:
       # ROOT-EQUIVALENT ON THE HOST: lets this container start sibling sandbox containers.
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/v2/monitor/health"]
       interval: 10s
@@ -76,13 +76,14 @@ services:
     environment:
       <<: *common-env
       AIRFLOW_URL: http://airflow:8080
+      SWF_AIRFLOW_HTTP_HOSTS: airflow
       AIRFLOW_USER: ${AIRFLOW_USER:-admin}
       AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-}
       AIRFLOW_TOKEN: ${AIRFLOW_TOKEN:-}
       SWF_WEBHOOK_SECRET: ${SWF_WEBHOOK_SECRET:-}
       SWF_WEBHOOK_PORT: "8081"
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     restart: unless-stopped
 
   # Build target only (`docker compose -f deploy/docker/compose.yml build sandbox-image`);

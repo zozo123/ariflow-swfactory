@@ -94,10 +94,13 @@ def test_artifact_chain_exists(run) -> None:
 
 
 def test_stage_log_lives_on_the_orchestrator_and_is_committed(run) -> None:
-    """<run_dir>/stages.jsonl is the authoritative record; deliver copies it (and the hook log,
-    absent for a scripted agent) into {art}/agent/ so the audit trail survives the sandbox."""
+    """<run_dir>/state/stages.jsonl is authoritative; deliver copies it (and the hook log, absent
+    for a scripted agent) into {art}/agent/ so the audit trail survives the sandbox."""
     report, tmp, _ = run
-    log = [json.loads(line) for line in (tmp / "run" / "stages.jsonl").read_text().splitlines()]
+    log = [
+        json.loads(line)
+        for line in (tmp / "run" / "state" / "stages.jsonl").read_text().splitlines()
+    ]
     assert [r["stage"] for r in log] == [
         "intent",
         "spec",
@@ -169,7 +172,8 @@ def test_rerun_with_same_run_dir_skips_every_stage_but_deliver(run, tmp_path: Pa
     assert again.tests_passed is True and again.total_cost_usd == 0.0
     assert again.pr_url == f"file://{(tmp_path / 'run' / 'pr.md').resolve()}"
     log = [
-        json.loads(line) for line in (tmp_path / "run" / "stages.jsonl").read_text().splitlines()
+        json.loads(line)
+        for line in (tmp_path / "run" / "state" / "stages.jsonl").read_text().splitlines()
     ]
     assert len(log) == 12 and [r["status"] for r in log[6:]] == ["skipped"] * 5 + ["ok"]
 
@@ -327,12 +331,14 @@ class _CostlyAgent:
         return AgentResult(agent="scripted", text="# spec\n", cost_usd=self.cost)
 
 
-def _unit_ctx(tmp_path: Path, sb: _MemSandbox, agent=None, **cfg):
+def _unit_ctx(
+    tmp_path: Path, sb: _MemSandbox, agent=None, *, seed_artifacts: bool = True, **cfg
+):
     from swfactory.config import Config
     from swfactory.models import Issue
     from swfactory.stages import Ctx
 
-    return Ctx(
+    ctx = Ctx(
         cfg=Config(issue="x", **cfg),
         sb=sb,
         agent=agent,
@@ -340,13 +346,19 @@ def _unit_ctx(tmp_path: Path, sb: _MemSandbox, agent=None, **cfg):
         issue=Issue(id="X-1", title="t", body="b"),
         run_dir=tmp_path / "run",
     )
+    if seed_artifacts:
+        for path, content in sb.files.items():
+            if path.startswith(f"{ctx.art}/"):
+                ctx.state.write_artifact(path, content)
+    return ctx
 
 
 def _log(tmp_path: Path, *records: dict) -> None:
     from swfactory.models import StageResult
 
-    (tmp_path / "run").mkdir(exist_ok=True)
-    (tmp_path / "run" / "stages.jsonl").write_text(
+    state = tmp_path / "run" / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "stages.jsonl").write_text(
         "".join(StageResult(**r).model_dump_json() + "\n" for r in records)
     )
 
@@ -356,9 +368,9 @@ def test_forged_sandbox_artifact_does_not_skip_a_stage(tmp_path: Path) -> None:
     from swfactory.stages import intent
 
     sb = _MemSandbox({"docs/factory/X-1/intent.md": "forged\n"})
-    result = intent(_unit_ctx(tmp_path, sb))
+    result = intent(_unit_ctx(tmp_path, sb, seed_artifacts=False))
     assert result.status == "ok" and sb.files["docs/factory/X-1/intent.md"].startswith("---\n")
-    assert (tmp_path / "run" / "stages.jsonl").read_text().count("\n") == 1
+    assert (tmp_path / "run" / "state" / "stages.jsonl").read_text().count("\n") == 1
     # ... and a logged completion skips even when the sandbox lost the artifact
     again = intent(_unit_ctx(tmp_path, _MemSandbox()))
     assert again.status == "skipped" and again.artifacts == ["docs/factory/X-1/intent.md"]
@@ -372,12 +384,20 @@ def test_run_budget_is_seeded_from_the_orchestrator_log(tmp_path: Path) -> None:
 
     _log(tmp_path, {"stage": "intent"}, {"stage": "spec", "cost_usd": 7.5})
     agent = _CostlyAgent(1.0)
-    ctx = _unit_ctx(tmp_path, _MemSandbox(), agent, max_budget_usd=8.0)
+    contract = '[commands]\ntest = "pytest"\n[paths]\nsource = "src"\ntests = "tests"\n'
+    ctx = _unit_ctx(
+        tmp_path, _MemSandbox({"factory.toml": contract}), agent, max_budget_usd=8.0
+    )
     with pytest.raises(StageError, match=r"run budget exceeded: 8.50 > 8.00"):
         _agent(ctx, "plan", 1, "prompt", None)
     assert agent.calls == 1 and ctx.budget_seeded and ctx.spent_usd == 8.5
     assert seed_budget(ctx) == 8.5  # idempotent: seeded once per process
-    ok = _unit_ctx(tmp_path, _MemSandbox(), _CostlyAgent(0.4), max_budget_usd=8.0)
+    ok = _unit_ctx(
+        tmp_path,
+        _MemSandbox({"factory.toml": contract}),
+        _CostlyAgent(0.4),
+        max_budget_usd=8.0,
+    )
     assert _agent(ok, "plan", 1, "prompt", None).cost_usd == 0.4 and ok.spent_usd == 7.9
     assert [r.stage for r in load_stage_results(ok)] == ["intent", "spec"]
 
@@ -400,7 +420,7 @@ def test_plan_fidelity_reports_both_halves_of_pass_4(tmp_path: Path) -> None:
         ("minor", "README.md", "Plan fidelity: planned file not touched"),
         ("major", "tests/test_a.py", "Plan fidelity: planned file not touched"),
     ]
-    assert _plan_fidelity(_unit_ctx(tmp_path, _MemSandbox()), "base0000") == []
+    assert _plan_fidelity(_unit_ctx(tmp_path / "missing", _MemSandbox()), "base0000") == []
 
 
 def test_execute_passes_the_targets_protected_globs_to_make_sandbox(
@@ -441,6 +461,7 @@ def test_execute_passes_the_targets_protected_globs_to_make_sandbox(
         "issue_id": "DEMO-1",
         "protected": ["factory.toml"],
         "repo": "zozo123/ariflow-swfactory",
+        "run_dir": (tmp_path / "run").resolve(),
     }
 
 

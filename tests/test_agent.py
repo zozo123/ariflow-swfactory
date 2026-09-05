@@ -18,7 +18,6 @@ from swfactory.agent import (
     GUARD_PATH_DENY,
     POLICIES,
     SETTINGS_DST,
-    SKILL_DST,
     ClaudeAgent,
     FixtureMissing,
     Policy,
@@ -59,6 +58,9 @@ class FakeSandbox:
                 return res
         return RunResult(0, "", "", 0.0)
 
+    def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
+        return self.run(cmd, timeout_s=timeout_s)
+
     def read(self, path: str) -> str:
         if path not in self.files:
             raise FileNotFoundError(path)
@@ -88,6 +90,9 @@ class GitSandbox:
             ["bash", "-lc", cmd], cwd=cwd or self.workdir, capture_output=True, text=True
         )
         return RunResult(p.returncode, p.stdout, p.stderr, 0.0)
+
+    def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
+        return self.run(cmd, timeout_s=timeout_s)
 
     def read(self, path: str) -> str:
         return (Path(self.workdir) / path).read_text()
@@ -166,7 +171,10 @@ def test_claude_argv_has_required_flags_and_schema() -> None:
     assert cmd.startswith('claude -p "$(cat .factory/prompt.plan.1.md)"')
     for flag in (
         "--output-format json",
+        "--restricted",
         "--permission-mode acceptEdits",
+        "--permission-prompts none",
+        "--tools Glob,Grep,Read",
         "--allowedTools Read Grep Glob",
         "--disallowedTools WebFetch WebSearch",
         "--max-turns 7",
@@ -189,9 +197,12 @@ def test_claude_argv_without_schema_and_with_model() -> None:
     )
     assert "--json-schema" not in cmd
     assert "--model claude-sonnet-4-5" in cmd
-    assert "'Bash(uv run *)'" in ClaudeAgent().argv(
+    build_cmd = ClaudeAgent().argv(
         prompt_path="p", out_path="o", policy=POLICIES["build"], schema=None, cfg=_claude_cfg()
     )
+    assert "Bash" not in build_cmd
+    assert f"--settings {SETTINGS_DST}" in build_cmd
+    assert "--tools Edit,Glob,Grep,Read,Write" in build_cmd
 
 
 # ---------------------------------------------------------------- claude run
@@ -261,6 +272,7 @@ def test_claude_run_write_stage_installs_guard_from_factory_toml() -> None:
         schema=BuildSummary,
         cfg=_claude_cfg(),
         issue_id="DEMO-1",
+        protected=["factory.toml"],
     )
     assert res.data == {"summary": "ok", "files_changed": []}  # fallback: result text is JSON
     settings = json.loads(sb.files[SETTINGS_DST])
@@ -276,6 +288,7 @@ def test_claude_run_write_stage_installs_guard_from_factory_toml() -> None:
         schema=BuildSummary,
         cfg=_claude_cfg(),
         issue_id="DEMO-1",
+        protected=["factory.toml", "tests/"],
     )
     settings = json.loads(sb.files[SETTINGS_DST])
     assert settings["env"]["SWF_PROTECTED"] == "factory.toml:tests/"
@@ -388,18 +401,16 @@ def test_claude_run_records_fixtures(tmp_path: Path) -> None:
 # ---------------------------------------------------------------- install_guard
 
 
-def test_install_guard_is_idempotent_and_excludes_files() -> None:
-    sb = FakeSandbox({".git/info/exclude": "# git ls-files --others --exclude-from=...\n"})
-    sb.answers["rev-parse --show-cdup"] = RunResult(0, "\n\n", "", 0.0)
+def test_install_guard_is_idempotent_and_stays_in_factory_scratch() -> None:
+    sb = FakeSandbox({".claude/settings.local.json": "target-owned\n"})
     install_guard(sb, ["tests/", "factory.toml"])
     install_guard(sb, ["tests/", "factory.toml"])
     settings = json.loads(sb.files[SETTINGS_DST])
     assert settings["env"]["SWF_PROTECTED"] == "tests/:factory.toml"
     assert settings["hooks"]["PreToolUse"][0]["matcher"] == GUARD_MATCHER
     assert "Bash(git push*)" in settings["permissions"]["deny"]
-    exclude = sb.files[".git/info/exclude"].splitlines()
-    assert exclude.count(SETTINGS_DST) == 1 and exclude.count(GUARD_DST) == 1
-    assert exclude[0].startswith("# git ls-files")
+    assert sb.files[".claude/settings.local.json"] == "target-owned\n"
+    assert sb.runs == []
 
 
 def test_install_guard_native_deny_rules_and_matcher() -> None:
@@ -448,28 +459,23 @@ def test_guard_deny_rules_skip_empty_entries() -> None:
 
 
 def test_install_guard_writes_files_before_probing_sandbox() -> None:
-    """Under srt `.claude/` is read-only for the sandboxed shell: files land first, via write()."""
+    """Guard installation is host-side file I/O and never needs an in-sandbox shell probe."""
     sb = FakeSandbox()
     install_guard(sb, [])
-    assert sb.runs and "mkdir -p .claude/hooks" in sb.runs[0]
+    assert sb.runs == []
     assert SETTINGS_DST in sb.files and GUARD_DST in sb.files
     assert sb.files[GUARD_DST] == GUARD.read_text()
 
 
-def test_install_guard_in_subdir_uses_repo_root_exclude() -> None:
-    sb = FakeSandbox()
-    sb.answers["rev-parse --show-cdup"] = RunResult(0, "../../\ndemo/target/\n", "", 0.0)
+def test_install_guard_does_not_write_target_claude_or_git_metadata() -> None:
+    sb = FakeSandbox({".claude/CLAUDE.md": "keep me\n", ".git/info/exclude": "keep me\n"})
     install_guard(sb, [])
-    exclude = sb.files["../../.git/info/exclude"].splitlines()
-    assert exclude == [
-        f"demo/target/{SETTINGS_DST}",
-        f"demo/target/{GUARD_DST}",
-        f"demo/target/{SKILL_DST}/",
-    ]
+    assert sb.files[".claude/CLAUDE.md"] == "keep me\n"
+    assert sb.files[".git/info/exclude"] == "keep me\n"
 
 
-def test_install_guard_denies_artifact_forgery_and_ships_the_skill() -> None:
-    """The artifact chain and stage scratch are the orchestrator's; the skill reaches the target."""
+def test_install_guard_denies_artifact_forgery_without_copying_a_skill() -> None:
+    """The artifact chain and stage scratch are the orchestrator's; target config stays intact."""
     sb = FakeSandbox()
     install_guard(sb, ["tests/"])
     deny = json.loads(sb.files[SETTINGS_DST])["permissions"]["deny"]
@@ -480,9 +486,7 @@ def test_install_guard_denies_artifact_forgery_and_ships_the_skill() -> None:
         "Write(.factory/**)",
     ):
         assert rule in deny, rule
-    skill = REPO_ROOT / ".claude" / "skills" / "swfactory" / "SKILL.md"
-    assert sb.files[f"{SKILL_DST}/SKILL.md"] == skill.read_text("utf-8")
-    assert f"{SKILL_DST}/" in sb.files[".git/info/exclude"].splitlines()
+    assert all(not path.startswith(".claude/") for path in sb.files)
 
 
 # ---------------------------------------------------------------- scripted

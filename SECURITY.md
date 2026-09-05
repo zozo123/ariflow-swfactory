@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-swfactory is pre-1.0. Security fixes are applied to the latest commit on `main` and released in the
-next version. Older commits and development branches are not supported.
+Security fixes are applied to the latest tagged release and the latest commit on `main`, then
+shipped in the next release. Older releases, commits, and development branches are not supported.
 
 ## Reporting a vulnerability
 

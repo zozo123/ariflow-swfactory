@@ -2,12 +2,12 @@
 ``PIPELINE`` is the default blueprint's walk and drives ``swfactory run`` and the Airflow DAG.
 
 Every stage is a function ``Ctx -> StageResult`` that is idempotent: when the orchestrator's stage
-log (``<run_dir>/stages.jsonl``, written by ``_timed`` on the orchestrator's own filesystem)
+log (``<run_dir>/state/stages.jsonl``, written by ``_timed`` on the orchestrator filesystem)
 already holds a completed record for it, it returns ``status="skipped"``. Skip decisions never
-read the sandbox: the agent can write anything there (``docs/factory/**``, ``.factory/**``), so a
-forged artifact must not be able to skip a stage, and the run-level budget is seeded from the same
-log. Loops (build/fix, review/fix) live *inside* stage functions and are bounded by ``Config``.
-The agent never commits: stages commit with the bot identity and provenance trailers, and
+read the sandbox: generated code and the target's test command execute there, so a compromised
+checkout must not be able to skip a stage. The run-level budget is seeded from the same host log.
+Loops (build/fix, review/fix) live *inside* stage functions and are bounded by ``Config``. The
+agent never commits: stages commit with the bot identity and provenance trailers, and
 ``deliver`` hands the commits to the Scm as a patch stream. A blueprint (``Ctx.blueprint``) only
 changes the walk order and knobs (tool policy additions, nit cap, PR labels); with
 ``blueprint=None`` every stage behaves exactly as v1.
@@ -21,15 +21,17 @@ first review fix with the default of 3 build iterations) so no envelope or fixtu
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import functools
 import getpass
+import hashlib
 import json
 import shlex
 import shutil
 import time
 import xml.etree.ElementTree as ET
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -63,6 +65,7 @@ from swfactory.models import (
 )
 from swfactory.sandbox import LocalSandbox, Sandbox
 from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
+from swfactory.state import RunState
 
 if TYPE_CHECKING:
     from swfactory.blueprint import Blueprint
@@ -79,7 +82,7 @@ IN_PLACE_PROVIDERS = frozenset(
 BASE_FILE = ".factory/base"
 STARTED_FILE = ".factory/started"
 STAGES_LOG = ".factory/stages.jsonl"  # sandbox COPY of the stage log (audit trail, never trusted)
-RUN_STAGES_LOG = "stages.jsonl"  # authoritative stage log: <run_dir>/stages.jsonl (orchestrator)
+RUN_STAGES_LOG = "stages.jsonl"  # authoritative log: <run_dir>/state/stages.jsonl (orchestrator)
 HOOKS_LOG = ".factory/hooks.jsonl"  # swf_guard.py decisions, appended by the hook in the sandbox
 SEVERITIES: tuple[str, ...] = ("blocker", "major", "minor", "nit")
 # `git add -A` that skips special files: the Anthropic Sandbox Runtime on Linux binds /dev/null
@@ -126,7 +129,7 @@ class Ctx:
     blueprint: Blueprint | None = None  # None => v1 defaults (PIPELINE, NIT_CAP, DEFAULT_LABELS)
     contract: TargetContract | None = None  # loaded by setup(); lazily on demand otherwise
     stages: list[StageResult] = field(default_factory=list)  # accumulated by run_pipeline
-    spent_usd: float = 0.0  # run-level cost guard; seeded from <run_dir>/stages.jsonl by _agent
+    spent_usd: float = 0.0  # run guard; seeded from <run_dir>/state/stages.jsonl by _agent
     budget_seeded: bool = False  # spent_usd includes earlier tasks/processes of this run
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -139,6 +142,21 @@ class Ctx:
     def branch(self) -> str:
         """Branch the sandbox works on and the PR is opened from."""
         return f"factory/{self.issue.id}-{self.cfg.run_id}"
+
+    @property
+    def state(self) -> RunState:
+        """Orchestrator-owned state for this run; never writable by the agent."""
+
+        return RunState(self.run_dir)
+
+    def write_artifact(self, path: str, content: str) -> None:
+        """Persist an authoritative artifact, then mirror it into the delivery checkout."""
+
+        self.state.write_artifact(path, content)
+        self.sb.write(path, content)
+
+    def read_artifact(self, path: str) -> str:
+        return self.state.read_artifact(path)
 
 
 class Gate(NamedTuple):
@@ -159,10 +177,21 @@ Approver = Callable[[Gate, Ctx], Approval]
 
 def _contract(ctx: Ctx) -> TargetContract:
     if ctx.contract is None:
-        try:
-            ctx.contract = load_target_contract(ctx.sb)
-        except ValueError as e:
-            raise StageError("policy", str(e)) from e
+        if ctx.state.has_control("target-contract.json"):
+            try:
+                ctx.contract = TargetContract.model_validate_json(
+                    ctx.state.read_control("target-contract.json")
+                )
+            except (OSError, ValueError) as e:
+                raise StageError("policy", f"stored target contract is invalid: {e}") from e
+        else:
+            try:
+                ctx.contract = load_target_contract(ctx.sb)
+            except ValueError as e:
+                raise StageError("policy", str(e)) from e
+            ctx.state.write_control(
+                "target-contract.json", ctx.contract.model_dump_json(indent=2) + "\n"
+            )
     return ctx.contract
 
 
@@ -177,6 +206,11 @@ def _sh(ctx: Ctx, cmd: str, *, timeout_s: int = 600) -> str:
 
 
 def _read_or(ctx: Ctx, path: str, default: str = "") -> str:
+    if path.startswith(f"{ctx.art}/"):
+        try:
+            return ctx.read_artifact(path)
+        except FileNotFoundError:
+            return default
     try:
         return ctx.sb.read(path)
     except FileNotFoundError:
@@ -186,9 +220,9 @@ def _read_or(ctx: Ctx, path: str, default: str = "") -> str:
 def _read_json(ctx: Ctx, path: str, default: object) -> object:
     """A JSON artifact from the sandbox, or ``default`` when it is absent, empty or not JSON.
 
-    The sandbox is agent-writable (``Bash(uv run *)`` is arbitrary code by design), so a forged or
-    truncated artifact must degrade to the default instead of raising a bare ``JSONDecodeError``
-    out of a stage: every caller already type-checks what comes back.
+    The sandbox is untrusted provider state, so a forged or truncated artifact must degrade to the
+    default instead of raising a bare ``JSONDecodeError`` out of a stage: every caller already
+    type-checks what comes back.
     """
     text = _read_or(ctx, path)
     if not text.strip():
@@ -214,19 +248,24 @@ def _skipped(prior: StageResult) -> StageResult:
 
 
 def _persisted(ctx: Ctx) -> list[StageResult]:
-    """Every record of ``<run_dir>/stages.jsonl``, the orchestrator-side log ``_timed`` appends
-    to. This file is the ONLY evidence a stage may be skipped on: the sandbox is agent-writable."""
-    path = ctx.run_dir / RUN_STAGES_LOG
-    if not path.is_file():
-        return []
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return [StageResult.model_validate_json(line) for line in lines if line.strip()]
+    """Every record of ``<run_dir>/state/stages.jsonl``, the host log ``_timed`` appends to.
+
+    This file is the ONLY evidence a stage may be skipped on: the sandbox is agent-writable.
+    """
+    try:
+        return [
+            StageResult.model_validate(record)
+            for record in ctx.state.read_jsonl(RUN_STAGES_LOG)
+        ]
+    except (OSError, ValueError) as e:
+        raise StageError("policy", f"run journal is corrupt: {e}") from e
 
 
 def _done(ctx: Ctx, stage: str) -> StageResult | None:
     """The latest completed (non-skipped) record of ``stage`` in this run, if any."""
     recs = [r for r in _persisted(ctx) if r.stage == stage and r.status != "skipped"]
-    return recs[-1] if recs else None
+    latest = recs[-1] if recs else None
+    return latest if latest is not None and latest.status in {"ok", "blocked"} else None
 
 
 def _nit_cap(ctx: Ctx) -> int:
@@ -239,27 +278,45 @@ def _pipeline(ctx: Ctx) -> tuple[Stage | Gate, ...]:
 
 def _timed(fn: Stage) -> Stage:
     """Fill ``duration_s``/``cost_usd`` and persist the result: authoritatively to
-    ``<run_dir>/stages.jsonl`` on the orchestrator, plus a copy in the sandbox (``STAGES_LOG``)
-    that ``deliver`` carries into the committed artifact chain."""
+    ``<run_dir>/state/stages.jsonl`` on the orchestrator, plus a copy in the sandbox
+    (``STAGES_LOG``) that ``deliver`` carries into the committed artifact chain."""
 
     @functools.wraps(fn)
     def wrapper(ctx: Ctx) -> StageResult:
+        # Seed before taking the delta. On a fresh Airflow task, seeding inside the first agent
+        # call would otherwise attribute every earlier task's cost to this stage a second time.
+        seed_budget(ctx)
         t0, spent0 = time.monotonic(), ctx.spent_usd
-        result = fn(ctx)
+        try:
+            result = fn(ctx)
+        except Exception as error:
+            failed = StageResult(
+                stage=fn.__name__,
+                status="failed",
+                duration_s=round(time.monotonic() - t0, 3),
+                cost_usd=round(max(ctx.spent_usd - spent0, 0.0), 6),
+                error=str(error)[:2000],
+            )
+            _append_stage(ctx, failed)
+            raise
         result.duration_s = round(time.monotonic() - t0, 3)
         result.cost_usd = round(ctx.spent_usd - spent0, 6)
-        line = result.model_dump_json() + "\n"
-        ctx.run_dir.mkdir(parents=True, exist_ok=True)
-        with (ctx.run_dir / RUN_STAGES_LOG).open("a", encoding="utf-8") as fh:
-            fh.write(line)
-        ctx.sb.write(STAGES_LOG, _read_or(ctx, STAGES_LOG) + line)
+        _append_stage(ctx, result)
         return result
 
     return wrapper
 
 
+def _append_stage(ctx: Ctx, result: StageResult) -> None:
+    line = ctx.state.append_json(RUN_STAGES_LOG, result.model_dump(mode="json"))
+    # The host journal is authoritative. A dead cell must not turn completed work into a failure;
+    # delivery rebuilds its mirror when a cell is available again.
+    with contextlib.suppress(Exception):
+        ctx.sb.write(STAGES_LOG, _read_or(ctx, STAGES_LOG) + line)
+
+
 def load_stage_results(ctx: Ctx) -> list[StageResult]:
-    """Stage results of this run so far, from the orchestrator's ``<run_dir>/stages.jsonl``
+    """Stage results of this run so far, from ``<run_dir>/state/stages.jsonl``
     (DAG tasks are separate processes; in-process results are already in the log). Per stage
     the latest non-skipped record wins, in canonical order."""
     latest: dict[str, StageResult] = {}
@@ -273,7 +330,7 @@ def load_stage_results(ctx: Ctx) -> list[StageResult]:
 
 def seed_budget(ctx: Ctx) -> float:
     """Once per process: add what earlier tasks/processes of this run spent (every record in
-    ``<run_dir>/stages.jsonl``) to ``ctx.spent_usd`` so ``Config.max_budget_usd`` is a RUN
+    ``<run_dir>/state/stages.jsonl``) to ``ctx.spent_usd`` so ``Config.max_budget_usd`` is a RUN
     ceiling under the DAG too, not a per-task one. Returns the seeded total."""
     if not ctx.budget_seeded:
         ctx.spent_usd += sum(r.cost_usd for r in _persisted(ctx))
@@ -288,8 +345,9 @@ def _agent(
     Under srt the kernel ``denyWrite`` set follows the stage (``protected_for``): ``fix`` calls
     lose write access to the tests dir that ``build`` needed, matching the ``Edit(...)`` rules."""
     seed_budget(ctx)
+    protected = protected_for(_contract(ctx), stage)
     if hasattr(ctx.sb, "set_protected"):
-        ctx.sb.set_protected(protected_for(_contract(ctx), stage))
+        ctx.sb.set_protected(protected)
     res = ctx.agent.run(
         ctx.sb,
         stage=stage,
@@ -299,7 +357,11 @@ def _agent(
         schema=schema,
         cfg=ctx.cfg,
         issue_id=ctx.issue.id,
+        protected=protected,
     )
+    envelope = f"{ctx.art}/agent/{stage}.{iteration}.json"
+    if ctx.sb.exists(envelope):
+        ctx.state.write_artifact(envelope, ctx.sb.read(envelope))
     ctx.spent_usd += res.cost_usd
     if ctx.spent_usd > ctx.cfg.max_budget_usd:
         raise StageError(
@@ -331,12 +393,45 @@ def _protected(ctx: Ctx, stage: str) -> str:
     return ", ".join(protected_for(_contract(ctx), stage)) or "(none)"
 
 
-def commit(ctx: Ctx, *, stage: str, msg: str) -> str:
+def _workspace_head(ctx: Ctx) -> str:
+    return _sh(ctx, "git rev-parse HEAD").strip()
+
+
+def _record_workspace_head(ctx: Ctx, sha: str) -> None:
+    ctx.state.write_control("workspace-head", sha + "\n")
+
+
+def _assert_workspace_head(ctx: Ctx, phase: str) -> str:
+    """Refuse a resumed or hostile cell whose checked-out commit escaped host-owned state."""
+
+    if not ctx.state.has_control("workspace-head"):
+        raise StageError("policy", "run state has no workspace head; setup must complete first")
+    expected = ctx.state.read_control("workspace-head").strip()
+    actual = _workspace_head(ctx)
+    if actual != expected:
+        raise StageError(
+            "policy",
+            f"{phase} workspace drifted from recorded HEAD {expected} to {actual}",
+        )
+    return actual
+
+
+def commit(
+    ctx: Ctx, *, stage: str, msg: str, paths: Sequence[str] | None = None
+) -> str:
     """Commit everything under the target dir as the bot with provenance trailers (``.factory``
     is excluded by setup). Returns the HEAD sha; a no-op when there is nothing to commit."""
-    _sh(ctx, GIT_ADD_ALL)
+    _assert_workspace_head(ctx, f"{stage} commit")
+    if paths:
+        _sh(ctx, "git add -A -- " + " ".join(shlex.quote(path) for path in paths))
+    else:
+        _sh(ctx, GIT_ADD_ALL)
+        # Intent, gates and agent receipts are committed once by deliver, after the review stream.
+        _sh(ctx, f"git reset -q -- {shlex.quote(ctx.art)}")
     if ctx.sb.run("git diff --cached --quiet").ok:
-        return _sh(ctx, "git rev-parse HEAD").strip()
+        sha = _workspace_head(ctx)
+        _record_workspace_head(ctx, sha)
+        return sha
     q = shlex.quote
     cmd = (
         f"{_GIT_BOT} -c commit.gpgsign=false "
@@ -347,7 +442,9 @@ def commit(ctx: Ctx, *, stage: str, msg: str) -> str:
         f"--trailer {q('Co-Authored-By: Claude <noreply@anthropic.com>')}"
     )
     _sh(ctx, cmd)
-    return _sh(ctx, "git rev-parse HEAD").strip()
+    sha = _workspace_head(ctx)
+    _record_workspace_head(ctx, sha)
+    return sha
 
 
 def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
@@ -357,17 +454,27 @@ def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
     cmd = contract.test
     if ctx.cfg.tests == "crabbox":
         cmd = crabbox_command(ctx.cfg.crabbox_provider, contract.junit, contract.test)
-    ctx.sb.run(f"rm -f {shlex.quote(contract.junit)}")
+    removed = ctx.sb.run(f"rm -f {shlex.quote(contract.junit)}")
+    if not removed.ok:
+        raise StageError("sandbox", f"could not clear stale JUnit report: {removed.stderr[-800:]}")
     res = ctx.sb.run(cmd)
     output = (res.stdout[-6000:] + "\n" + res.stderr[-2000:]).strip()
     try:
         counts = _parse_junit(ctx.sb.read(contract.junit))
     except (FileNotFoundError, ET.ParseError, ValueError):
-        # A killed or timed-out test process leaves a truncated junit file, and a target may use
-        # a writer with unexpected attributes. Report "no counts" with the real exit code so the
-        # bounded loop still reacts, instead of raising a bare XML/int error out of the stage.
-        return TestResult(exit_code=res.exit_code, junit_path=None), output
-    return TestResult(**counts, exit_code=res.exit_code, junit_path=contract.junit), output
+        result = TestResult(
+            exit_code=res.exit_code or 1, junit_path=None, report_valid=False
+        )
+    else:
+        result = TestResult(
+            **counts,
+            exit_code=res.exit_code,
+            junit_path=contract.junit,
+            report_valid=True,
+        )
+    _assert_workspace_head(ctx, "verification")
+    _ensure_clean(ctx, "verification", allow_artifacts=True)
+    return result, output
 
 
 def crabbox_command(provider: str, junit: str, test_cmd: str) -> str:
@@ -384,19 +491,47 @@ def crabbox_command(provider: str, junit: str, test_cmd: str) -> str:
 
 def _parse_junit(xml_text: str) -> dict[str, int]:
     root = ET.fromstring(xml_text)
-    suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+
+    def local_name(element: ET.Element) -> str:
+        return element.tag.rsplit("}", 1)[-1]
+
+    if local_name(root) == "testsuite":
+        suites = [root]
+    elif local_name(root) == "testsuites":
+        # Count top-level aggregates once. ``iter`` double-counts nested suite totals.
+        suites = [element for element in root if local_name(element) == "testsuite"]
+    else:
+        suites = []
+    if not suites:
+        raise ValueError("JUnit report contains no testsuite")
     total = failed = errors = skipped = 0
     for s in suites:
         total += int(s.get("tests", 0))
         failed += int(s.get("failures", 0))
         errors += int(s.get("errors", 0))
         skipped += int(s.get("skipped", 0))
+    if total <= 0 or min(failed, errors, skipped) < 0:
+        raise ValueError("JUnit report contains invalid test counts")
+    if failed + errors + skipped > total:
+        raise ValueError("JUnit report result counts exceed its test count")
     return {
         "passed": max(total - failed - errors - skipped, 0),
         "failed": failed,
         "errors": errors,
         "skipped": skipped,
     }
+
+
+def _ensure_clean(ctx: Ctx, phase: str, *, allow_artifacts: bool = False) -> None:
+    """Refuse uncommitted workspace changes outside the trusted artifact chain."""
+
+    exclude = f" {_exclude(ctx)}" if allow_artifacts else ""
+    dirty = _sh(ctx, f"git status --porcelain=v1 --untracked-files=all -- .{exclude}").strip()
+    if dirty:
+        raise StageError(
+            "policy",
+            f"{phase} changed files outside the reviewed commit stream:\n{dirty[-2000:]}",
+        )
 
 
 def _test_numbers(tr: TestResult) -> dict[str, float]:
@@ -414,16 +549,23 @@ COPY_IGNORE = shutil.ignore_patterns(".venv", ".factory", ".git", "__pycache__",
 
 
 def seed_local_workdir(workdir: Path, target_dir: str) -> bool:
-    """Copy the target dir into an EMPTY local workdir (demo/CLI/DAG share this; never touches
-    the source tree). Returns True when a copy happened."""
+    """Copy a declared target into an empty host workdir, never into the source tree.
+
+    A root target is only meaningful when the command is launched from that target's checkout.
+    Missing sources fail before Git can manufacture an empty baseline that looks like the target.
+    """
     workdir.mkdir(parents=True, exist_ok=True)
-    if any(workdir.iterdir()) or not target_dir:
+    if any(workdir.iterdir()):
         return False
-    src = Path(target_dir)
-    if not src.is_dir():
+    src = Path.cwd() if not target_dir else Path(target_dir)
+    if target_dir and not src.is_dir():
         src = FACTORY_ROOT / target_dir
     if not src.is_dir():
-        return False
+        raise ValueError(f"target directory does not exist: {target_dir or src}")
+    if not target_dir and not (src / "factory.toml").is_file():
+        raise ValueError(
+            "a local root target must run from the target checkout containing factory.toml"
+        )
     shutil.copytree(src, workdir, ignore=COPY_IGNORE, dirs_exist_ok=True)
     return True
 
@@ -449,6 +591,61 @@ def setup(ctx: Ctx) -> StageResult:
     """Prepare the sandbox: repo, bot identity, baseline, work branch, deps, base sha, contract."""
     t0 = time.monotonic()
     sb = ctx.sb
+    policy = {
+        "config": {
+            name: getattr(ctx.cfg, name)
+            for name in (
+                "sandbox",
+                "agent",
+                "scm",
+                "approve",
+                "tests",
+                "crabbox_provider",
+                "max_build_iterations",
+                "max_review_fixes",
+                "max_turns",
+                "max_budget_usd_per_stage",
+                "max_budget_usd",
+                "gate_timeout_h",
+                "stage_timeout_h",
+                "max_parallel_jobs",
+                "gateway_profile",
+                "islo_environment",
+                "sandbox_ttl_s",
+                "sandbox_idle_s",
+                "islo_snapshot",
+                "toolset_backend",
+                "toolset_workdir",
+                "srt_allowed_domains",
+                "docker_image",
+                "docker_credentials",
+                "docker_network",
+                "docker_user",
+                "allow_local_agent",
+            )
+        },
+        "blueprint": ctx.blueprint.model_dump(mode="json") if ctx.blueprint else None,
+    }
+    policy_sha256 = hashlib.sha256(
+        json.dumps(policy, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    identity = _dumps(
+        {
+            "schema": 2,
+            "run_id": ctx.cfg.run_id,
+            "blueprint": ctx.cfg.blueprint,
+            "issue_id": ctx.issue.id,
+            "repo": ctx.cfg.repo,
+            "target_dir": ctx.cfg.target_dir,
+            "base_branch": ctx.cfg.base_branch,
+            "policy_sha256": policy_sha256,
+        }
+    )
+    if ctx.state.has_control("identity.json"):
+        if ctx.state.read_control("identity.json") != identity:
+            raise StageError("policy", "run id is already bound to a different job identity")
+    else:
+        ctx.state.write_control("identity.json", identity)
     if isinstance(sb, LocalSandbox):
         seed_local_workdir(sb.root, ctx.cfg.target_dir)
     sb.ensure()
@@ -457,14 +654,43 @@ def setup(ctx: Ctx) -> StageResult:
     if not sb.run("git rev-parse --verify -q HEAD").ok:
         _sh(ctx, GIT_ADD_ALL)
         _sh(ctx, f"{_GIT_BOT} -c commit.gpgsign=false commit -q --allow-empty -m baseline")
-    if not sb.exists(BASE_FILE):
-        sb.write(BASE_FILE, _sh(ctx, "git rev-parse HEAD").strip() + "\n")
-        sb.write(STARTED_FILE, datetime.now(UTC).isoformat(timespec="seconds") + "\n")
+    if not ctx.state.has_control("base"):
+        base = _workspace_head(ctx)
+        ctx.state.write_control("base", base + "\n")
+        ctx.state.write_control(
+            "started", datetime.now(UTC).isoformat(timespec="seconds") + "\n"
+        )
+        _record_workspace_head(ctx, base)
+    base = ctx.state.read_control("base").strip()
+    base_commit = shlex.quote(f"{base}^{{commit}}")
+    if not sb.run(f"git cat-file -e {base_commit}").ok:
+        raise StageError("policy", f"recorded base commit is unavailable: {base}")
+    sb.write(BASE_FILE, ctx.state.read_control("base"))
+    sb.write(STARTED_FILE, ctx.state.read_control("started"))
     q = shlex.quote(ctx.branch)
-    if sb.run(f"git rev-parse --verify -q refs/heads/{q}").ok:
+    branch_ref = shlex.quote(f"refs/heads/{ctx.branch}")
+    if sb.run(f"git rev-parse --verify -q {branch_ref}").ok:
         _sh(ctx, f"git checkout -q {q}")
     else:
-        _sh(ctx, f"git checkout -q -b {q}")
+        recorded_head = (
+            ctx.state.read_control("workspace-head").strip()
+            if ctx.state.has_control("workspace-head")
+            else ""
+        )
+        progressed = any(
+            record.stage in {"build_and_test", "review", "deliver"}
+            for record in _persisted(ctx)
+        )
+        if (recorded_head and recorded_head != base) or progressed:
+            raise StageError(
+                "policy",
+                "factory branch disappeared after work began; refusing to recreate lost work",
+            )
+        _sh(ctx, f"git checkout -q -b {q} {shlex.quote(base)}")
+        _record_workspace_head(ctx, base)
+    head = _assert_workspace_head(ctx, "setup")
+    if not sb.run(f"git merge-base --is-ancestor {shlex.quote(base)} {shlex.quote(head)}").ok:
+        raise StageError("policy", "recorded base is not an ancestor of the factory branch")
     if sb.exists("pyproject.toml"):
         res = sb.run("uv sync --group dev", timeout_s=1200)
         if not res.ok:
@@ -472,6 +698,7 @@ def setup(ctx: Ctx) -> StageResult:
                 "sandbox", f"uv sync failed: {res.stderr.strip()[-800:]}", retryable=True
             )
     _contract(ctx)
+    _review_policy(ctx)
     return StageResult(stage="setup", duration_s=round(time.monotonic() - t0, 3))
 
 
@@ -490,7 +717,7 @@ def intent(ctx: Ctx) -> StageResult:
     }
     front = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).rstrip()
     text = f"---\n{front}\n---\n{ctx.issue.body.rstrip()}\n"
-    ctx.sb.write(path, text)
+    ctx.write_artifact(path, text)
     return StageResult(stage="intent", artifacts=[path], preview=text[:PREVIEW_CHARS])
 
 
@@ -510,12 +737,12 @@ def spec(ctx: Ctx) -> StageResult:
     if prior := _done(ctx, "spec"):
         return _skipped(prior)
     prompt = render_prompt(
-        "spec", issue_id=ctx.issue.id, intent=ctx.sb.read(f"{ctx.art}/intent.md")
+        "spec", issue_id=ctx.issue.id, intent=ctx.read_artifact(f"{ctx.art}/intent.md")
     )
     res = _agent(ctx, "spec", 1, prompt, None)
     if not res.text.strip():
         raise StageError("agent", "spec returned empty text")
-    ctx.sb.write(path, _document_only(res.text) + "\n")
+    ctx.write_artifact(path, _document_only(res.text) + "\n")
     return StageResult(stage="spec", artifacts=[path])
 
 
@@ -528,20 +755,22 @@ def plan(ctx: Ctx) -> StageResult:
     prompt = render_prompt(
         "plan",
         issue_id=ctx.issue.id,
-        intent=ctx.sb.read(f"{ctx.art}/intent.md"),
+        intent=ctx.read_artifact(f"{ctx.art}/intent.md"),
         spec=_read_or(ctx, f"{ctx.art}/spec.md"),  # "(none)" when the line has no spec stage
         protected=_protected(ctx, "plan"),
     )
     res = _agent(ctx, "plan", 1, prompt, Plan)
     p = Plan.model_validate(res.data)
     md = p.to_markdown(ctx.issue.id)
-    ctx.sb.write(md_path, md)
-    ctx.sb.write(json_path, _dumps(p.model_dump()))
+    ctx.write_artifact(md_path, md)
+    ctx.write_artifact(json_path, _dumps(p.model_dump()))
+    gate = ctx.blueprint.gate_after("plan") if ctx.blueprint else None
+    preview = ctx.read_artifact(f"{ctx.art}/{gate.artifact}") if gate else md
     return StageResult(
         stage="plan",
         artifacts=[md_path, json_path],
         numbers={"files": float(len(p.files))},
-        preview=md[:PREVIEW_CHARS],
+        preview=preview[:PREVIEW_CHARS],
     )
 
 
@@ -559,7 +788,7 @@ def build_and_test(ctx: Ctx) -> StageResult:
     if prior := _done(ctx, "build_and_test"):
         return _skipped(prior)
     spec_text = _read_or(ctx, f"{ctx.art}/spec.md")  # "(none)" when the line has no spec stage
-    plan_text = ctx.sb.read(f"{ctx.art}/plan.md")
+    plan_text = ctx.read_artifact(f"{ctx.art}/plan.md")
     failures = ""
     for i in range(1, ctx.cfg.max_build_iterations + 1):
         stage = "build" if i == 1 else "fix"
@@ -638,9 +867,16 @@ def _plan_fidelity(ctx: Ctx, base: str) -> list[Finding]:
 
 
 def _review_policy(ctx: Ctx) -> str:
-    text = _read_or(ctx, "REVIEW.md")
+    if ctx.state.has_control("review-policy.md"):
+        return ctx.state.read_control("review-policy.md")
+    policy = ctx.blueprint.review.policy if ctx.blueprint else "REVIEW.md"
+    text = _read_or(ctx, policy)
     if not text.strip():
-        text = (FACTORY_ROOT / "REVIEW.md").read_text(encoding="utf-8")
+        packaged = FACTORY_ROOT / policy
+        if not packaged.is_file():
+            raise StageError("policy", f"review policy not found: {policy}")
+        text = packaged.read_text(encoding="utf-8")
+    ctx.state.write_control("review-policy.md", text)
     return text
 
 
@@ -672,9 +908,10 @@ def review(ctx: Ctx) -> StageResult:
     path = f"{ctx.art}/review.json"
     if prior := _done(ctx, "review"):
         return _skipped(prior)
-    base = ctx.sb.read(BASE_FILE).strip()
+    _assert_workspace_head(ctx, "review")
+    base = ctx.state.read_control("base").strip()
     spec_text = _read_or(ctx, f"{ctx.art}/spec.md")  # "(none)" when the line has no spec stage
-    plan_text = ctx.sb.read(f"{ctx.art}/plan.md")
+    plan_text = ctx.read_artifact(f"{ctx.art}/plan.md")
     numbers: dict[str, float] = {}
     rv, dropped, fixes = Review(verdict="approve"), 0, 0
     tests_blocker: Finding | None = None
@@ -715,7 +952,7 @@ def review(ctx: Ctx) -> StageResult:
         "dropped_nits": dropped,
         "fixes": fixes,
     }
-    ctx.sb.write(path, _dumps(record))
+    ctx.write_artifact(path, _dumps(record))
     counts = {s: sum(1 for f in rv.findings if f.severity == s) for s in SEVERITIES}
     numbers.update(
         {
@@ -732,17 +969,40 @@ def review(ctx: Ctx) -> StageResult:
 
 def _load_approvals(ctx: Ctx) -> list[Approval]:
     data = _read_json(ctx, f"{ctx.art}/approvals.json", [])
-    return [Approval.model_validate(a) for a in data] if isinstance(data, list) else []
+    if not isinstance(data, list):
+        raise StageError("policy", "approvals.json must contain a JSON array")
+    try:
+        return [Approval.model_validate(a) for a in data]
+    except ValidationError as e:
+        raise StageError("policy", f"approvals.json is invalid: {e}") from e
+
+
+def _gate_artifact(ctx: Ctx, gate_name: str) -> str:
+    gate = next(
+        (item for item in _pipeline(ctx) if isinstance(item, Gate) and item.name == gate_name),
+        None,
+    )
+    if gate is None:
+        raise StageError("policy", f"approval names unknown gate {gate_name!r}")
+    return f"{ctx.art}/{gate.artifact}"
 
 
 def record_approval(ctx: Ctx, approval: Approval) -> None:
     """Append one approval to ``{art}/approvals.json`` (committed by deliver)."""
     path = f"{ctx.art}/approvals.json"
+    artifact = _gate_artifact(ctx, approval.gate)
+    digest = hashlib.sha256(ctx.read_artifact(artifact).encode("utf-8")).hexdigest()
+    approval = approval.model_copy(update={"artifact_sha256": digest})
     data = _read_json(ctx, path, [])
     if not isinstance(data, list):
-        data = []
+        raise StageError("policy", "approvals.json must contain a JSON array")
+    data = [
+        item
+        for item in data
+        if not isinstance(item, dict) or item.get("gate") != approval.gate
+    ]
     data.append(approval.model_dump(mode="json"))
-    ctx.sb.write(path, _dumps(data))
+    ctx.write_artifact(path, _dumps(data))
 
 
 def _md_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -822,11 +1082,81 @@ def denied_tool_calls(ctx: Ctx) -> int:
 def _copy_audit_logs(ctx: Ctx) -> None:
     """Carry the audit logs into the committed chain (``{art}/agent/``): the orchestrator's stage
     log and the hook's decisions, which otherwise die with the sandbox."""
-    run_log = ctx.run_dir / RUN_STAGES_LOG
+    run_log = ctx.state.root / RUN_STAGES_LOG
     if run_log.is_file():
-        ctx.sb.write(f"{ctx.art}/agent/stages.jsonl", run_log.read_text(encoding="utf-8"))
+        ctx.write_artifact(
+            f"{ctx.art}/agent/stages.jsonl", run_log.read_text(encoding="utf-8")
+        )
     if ctx.sb.exists(HOOKS_LOG):
-        ctx.sb.write(f"{ctx.art}/agent/hooks.jsonl", ctx.sb.read(HOOKS_LOG))
+        ctx.write_artifact(f"{ctx.art}/agent/hooks.jsonl", ctx.sb.read(HOOKS_LOG))
+
+
+def _validate_approvals(ctx: Ctx, approvals: list[Approval]) -> tuple[bool, str | None]:
+    """Bind every required gate decision to the exact artifact that was shown."""
+
+    gates = [item for item in _pipeline(ctx) if isinstance(item, Gate)]
+    by_name: dict[str, Approval] = {}
+    for approval in approvals:
+        if approval.gate in by_name:
+            raise StageError("policy", f"duplicate approval for gate {approval.gate!r}")
+        by_name[approval.gate] = approval
+    known = {gate.name for gate in gates}
+    if unknown := sorted(set(by_name) - known):
+        raise StageError("policy", f"approvals name unknown gates: {unknown}")
+
+    processed: set[str] = set()
+    rejected_gate: str | None = None
+    for gate in gates:
+        approval = by_name.get(gate.name)
+        if approval is None:
+            raise StageError("policy", f"missing decision for required gate {gate.name!r}")
+        processed.add(gate.name)
+        artifact = f"{ctx.art}/{gate.artifact}"
+        try:
+            content = ctx.read_artifact(artifact)
+        except FileNotFoundError as e:
+            raise StageError("policy", f"approved artifact is missing: {artifact}") from e
+        expected = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if approval.artifact_sha256 != expected:
+            raise StageError("policy", f"approval for {gate.name} does not match its artifact")
+        if approval.decision == "reject":
+            rejected_gate = gate.name
+            break
+    if extra := sorted(set(by_name) - processed):
+        raise StageError("policy", f"approvals are out of sequence after rejection: {extra}")
+    return rejected_gate is not None, rejected_gate
+
+
+def _validated_review(
+    ctx: Ctx, required: list[str], completed: dict[str, StageResult]
+) -> tuple[Review, dict[str, object], int]:
+    """Load host-owned review evidence and fail closed on any inconsistency."""
+
+    data: dict[str, object] = {}
+    review = Review(verdict="approve")
+    logged = completed.get("review")
+    if "review" in required:
+        try:
+            parsed = json.loads(ctx.read_artifact(f"{ctx.art}/review.json"))
+            if not isinstance(parsed, dict):
+                raise ValueError("review record is not an object")
+            data = parsed
+            review = Review.model_validate(
+                {"verdict": parsed.get("verdict"), "findings": parsed.get("findings")}
+            )
+            dropped_nits = parsed.get("dropped_nits", 0)
+            if (
+                not isinstance(dropped_nits, int)
+                or isinstance(dropped_nits, bool)
+                or dropped_nits < 0
+            ):
+                raise ValueError("dropped_nits must be a non-negative integer")
+        except (FileNotFoundError, ValueError, ValidationError) as e:
+            raise StageError("policy", f"review evidence is invalid: {e}") from e
+    logged_blockers = int(logged.numbers.get("blockers", 0)) if logged else 0
+    if logged is not None and logged.status == "blocked":
+        logged_blockers = max(logged_blockers, 1)
+    return review, data, max(len(review.blockers), logged_blockers)
 
 
 @_timed
@@ -836,33 +1166,43 @@ def deliver(ctx: Ctx) -> StageResult:
     ``decision == "reject"`` in approvals.json) still publishes, as ``[REJECTED]`` +
     ``factory:rejected``, so the refusal and its actor land in git; blockers left by review
     publish as ``[BLOCKED]`` + ``factory:blocked``. Both return ``status="blocked"``."""
+    _assert_workspace_head(ctx, "delivery")
     approvals = _load_approvals(ctx)
-    if not ctx.sb.exists(f"{ctx.art}/approvals.json"):
-        ctx.sb.write(f"{ctx.art}/approvals.json", "[]\n")
+    if not ctx.state.has_artifact(f"{ctx.art}/approvals.json"):
+        ctx.write_artifact(f"{ctx.art}/approvals.json", "[]\n")
+    rejected, rejected_gate = _validate_approvals(ctx, approvals)
     stages = load_stage_results(ctx)
+    completed = {stage.stage: stage for stage in stages if stage.status in {"ok", "blocked"}}
+    order = list(ctx.blueprint.order) if ctx.blueprint else list(CANONICAL_ORDER)
+    required = order[: order.index(rejected_gate) + 1] if rejected_gate else order[:-1]
+    if missing := [stage for stage in required if stage not in completed]:
+        raise StageError("policy", f"delivery lacks completed stage evidence: {missing}")
+    rv, data, blockers = _validated_review(ctx, required, completed)
     denied = denied_tool_calls(ctx)
-    metrics_mod.write_run_metrics(ctx, stages, approvals)
+    metrics_mod.write_run_metrics(
+        ctx,
+        stages,
+        approvals,
+        total_cost_usd=sum(record.cost_usd for record in _persisted(ctx)),
+    )
     _copy_audit_logs(ctx)
-    commit(ctx, stage="deliver", msg=f"docs(factory): artifact chain for {ctx.issue.id}")
-    base = ctx.sb.read(BASE_FILE).strip()
+    cleared = ctx.sb.run(f"rm -rf -- {shlex.quote(ctx.art)}")
+    if not cleared.ok:
+        raise StageError("sandbox", f"could not rebuild artifact chain: {cleared.stderr[-800:]}")
+    ctx.state.mirror_all(ctx.sb)
+    _ensure_clean(ctx, "delivery", allow_artifacts=True)
+    commit(
+        ctx,
+        stage="deliver",
+        msg=f"docs(factory): artifact chain for {ctx.issue.id}",
+        paths=[ctx.art],
+    )
+    base = ctx.state.read_control("base").strip()
     patch = _sh(ctx, f"git format-patch --stdout {base}..HEAD")
     commits = int(_sh(ctx, f"git rev-list --count {base}..HEAD").strip() or 0)
     # Patch paths are repo-relative; the sandbox cwd may be a subdir of the checkout (islo) or
-    # the target copy itself (local/srt, prefix ""). Only that subtree (and docs/factory) may land.
+    # the target copy itself (local/srt, prefix ""). Only that target subtree may land.
     prefix = _sh(ctx, "git rev-parse --show-prefix").strip()
-    data = _read_json(ctx, f"{ctx.art}/review.json", {})
-    data = data if isinstance(data, dict) else {}
-    try:
-        rv = Review.model_validate(data) if data else Review(verdict="approve")
-    except ValidationError:  # forged/garbled review.json: the log below still carries the verdict
-        rv, data = Review(verdict="approve"), {}
-    # review.json renders the findings, but the blocker COUNT falls back to the orchestrator's
-    # stage log: that file is agent-writable and, when deliver runs as a later Airflow task on a
-    # recycled sandbox, may be gone — neither may turn a review the log recorded as blocked into
-    # a clean PR.
-    logged = next((s for s in stages if s.stage == "review"), None)
-    blockers = len(rv.blockers) or int(logged.numbers.get("blockers", 0) if logged else 0)
-    rejected = any(a.decision == "reject" for a in approvals)
     blocked = rejected or bool(blockers)
     labels = list(ctx.blueprint.labels if ctx.blueprint else DEFAULT_LABELS)
     if rejected:
@@ -883,7 +1223,7 @@ def deliver(ctx: Ctx) -> StageResult:
             stages=stages,
         ),
         labels=labels,
-        allowed_prefixes=[prefix, "docs/factory/"],
+        allowed_prefixes=[prefix],
     )
     return StageResult(
         stage="deliver",
@@ -965,7 +1305,7 @@ def build_report(ctx: Ctx, approvals: list[Approval]) -> RunReport:
         approvals=approvals,
         pr_url=pr_url,
         tests_passed=bool(tests) and tests[-1] == 1.0,
-        total_cost_usd=round(sum(s.cost_usd for s in stages), 6),
+        total_cost_usd=round(sum(s.cost_usd for s in _persisted(ctx)), 6),
     )
 
 
@@ -974,7 +1314,7 @@ def cli_approver(gate: Gate, ctx: Ctx) -> Approval:
     show the artifact and ask."""
     if gate.auto or ctx.cfg.approve == "auto":
         return Approval(gate=gate.name, decision="approve", actor="auto", at=datetime.now(UTC))
-    print(f"\n===== {gate.artifact} =====\n{ctx.sb.read(f'{ctx.art}/{gate.artifact}')}\n")
+    print(f"\n===== {gate.artifact} =====\n{ctx.read_artifact(f'{ctx.art}/{gate.artifact}')}\n")
     ok = typer.confirm(f"Approve gate '{gate.name}'?", default=False)
     return Approval(
         gate=gate.name,

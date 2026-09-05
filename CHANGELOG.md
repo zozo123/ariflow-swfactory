@@ -8,6 +8,74 @@ All notable changes to this project will be documented here. The format follows
 
 Nothing yet.
 
+## [2.0.0] - 2026-09-05
+
+The factory now treats every model, sandbox, identifier, and artifact as an explicit trust-boundary
+input. This release intentionally tightens configuration and adapter contracts rather than
+preserving permissive 1.x behavior.
+
+### Validation
+
+- The 2.0 changes were reviewed statically for source and documentation consistency in this
+  delivery. No tests, linters, builds, scripted demos, DAG runs, or live provider runs were
+  executed; the 1.1 results recorded below are historical evidence, not 2.0 certification.
+
+### Added
+
+- Atomic host-owned run state for identity, baseline, target contract, review policy, approvals,
+  review verdicts, sandbox handles, invocation costs, and stage journals. Delivery reconstructs
+  its audit artifacts from this state instead of trusting files in the agent checkout.
+- Strict, shared validation for external identifiers, GitHub repositories, Git refs, local paths,
+  and remote POSIX paths; boundary models reject unknown fields and invalid numeric values.
+- Reconnectable Airflow `SandboxBackend` cells with a persisted provider identity and handle,
+  concrete network and environment requirements, output limits, target checkout provisioning,
+  confined file access, timeout propagation, and custom `package.module:Class` adapters for
+  Daytona, E2B, Tensorlake, Box by ASCII, and future providers.
+- `airflow-software-factory`, a public installable agent skill with the line, evidence, failure,
+  and sandbox-provider contracts.
+- An optional Astronomer Blueprint integration. The registered `software_factory` template turns
+  an existing governed line into a deferrable composable step for DAG YAML and the Astro IDE while
+  retaining the child DAG's mapping, HITL gates, and authority boundary.
+- A new control-room site and repository visual system, including the generated factory-line hero,
+  provider fabric, operating model, trust topology, and concise onboarding path.
+
+### Changed
+
+- Claude Code runs in restricted mode with an explicit tool inventory and no permission prompts.
+  Spec, plan, and review are read-only. Build and fix may edit files but receive no shell; the
+  trusted stage runner owns verification, commits, and delivery.
+- Guard settings and the hook live below ignored `.factory/`. The factory no longer writes an
+  internal skill or exclusion rules into a target's `.claude/` tree.
+- Operational environment settings may override line defaults, but mapped job identity always
+  wins for issue, repo, target, branch, run id, and line name.
+- Factory assets resolve from either a source checkout or the installed wheel. Shipped blueprints,
+  demo fixtures, guard, policy, and deployment files are included in the distribution.
+- Blueprint shape, stage dependencies, gate artifacts, target contracts, review verdicts, and
+  additive tool overrides are fail-closed. Shell escalation and writes in read-only stages are
+  rejected during configuration.
+
+### Fixed
+
+- A zero exit status without fresh, non-empty, internally consistent JUnit is no longer green.
+- Verification cannot mutate source outside factory artifacts, and delivery refuses unreviewed
+  workspace dirt or broad `git add` behavior.
+- Failed agent calls retain their spend and journal entry, malformed trailing journal records are
+  handled safely, and sandbox-side copies cannot skip stages or forge approvals.
+- Root local targets no longer become convincing empty repositories: they must be launched from a
+  checkout containing `factory.toml`; missing target directories fail before Git initialization.
+- Webhook routing now constrains trusted forwarding hosts, parses loopback addresses correctly,
+  caps request bodies, and rejects credential-bearing or query-bearing Airflow URLs.
+- Credential scrubbing covers major provider families, exact secret variables, and conventional
+  secret-name suffixes.
+
+### Security
+
+- Approvals bind ordered gates to exact artifact digests. Delivery validates the required stage
+  sequence, approvals, host-recorded review, baseline, clean workspace, patch scope, symlink modes,
+  and secret scan before the first publication call.
+- Toolset backends must enforce requested network policy or reject creation; truncation, timeout,
+  and terminated cells can no longer masquerade as successful commands.
+
 ## [1.1.0] - 2026-09-03
 
 Airflow grew a sandbox abstraction of its own, and this release adopts it instead of competing with
@@ -36,8 +104,9 @@ changes, so this is a minor release.
   group on purpose: locking a git dependency on the Airflow monorepo clones roughly a gigabyte and
   pins a commit that is stale the next day.
 - [docs/design.md](docs/design.md) records the factory proven on Airflow built from source, not only
-  against the release: airflow 3.4.0 with task-sdk 1.4.0, providers-standard 1.17.0 and common-ai
-  0.7.0 from the islo backend PR branch, `islo` resolving to `IsloSandboxBackend`, 26 Airflow tests
+  against the release: airflow 3.4.0 with task-sdk 1.4.0 and providers-standard 1.18.0 from main,
+  plus common-ai 0.7.0 from the islo backend PR branch, `islo` resolving to
+  `IsloSandboxBackend`, 31 Airflow tests
   passing, and `airflow dags test factory --mark-success-pattern 'job\.approve_.*'` finishing all
   14 tasks `state=success`.
 
@@ -206,7 +275,8 @@ development snapshot that was never tagged or published.
 - Scripted keyless end-to-end replay and hermetic test suite.
 - GitHub delivery, issue dispatch, control room, maintenance bands, and webhook receiver.
 
-[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.0.0
 [1.1.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v1.1.0
 [1.0.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v1.0.0
 [0.1.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v0.1.0

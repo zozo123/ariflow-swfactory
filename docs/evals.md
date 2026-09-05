@@ -1,11 +1,10 @@
 # Evals — the factory's own regression suite
 
-`CLAUDE.md`, the stage prompts, `REVIEW.md`, `bands.yaml`, the `.claude/` skills and hooks and the
-blueprints are what steer the agent. The [AI-native SDLC
-playbook](https://claude.com/blog/the-ai-native-sdlc-playbook) asks for that configuration to get
-the regression testing code gets: *"20 to 50 real tasks from recent work with its
-expected/accepted outcome"*, run non-interactively whenever the configuration changes, with
-*"configuration changes gated on the results"*.
+`CLAUDE.md`, the stage prompts, `REVIEW.md`, `bands.yaml`, the `.claude/` knowledge and hook
+sources, and the blueprints steer the agent. The [AI-native SDLC
+playbook](https://claude.com/blog/the-ai-native-sdlc-playbook) argues that this configuration
+deserves the same regression discipline as code: collect 20–50 real tasks with accepted outcomes,
+run them non-interactively when the configuration changes, and gate those changes on the result.
 
 `demo/evals/` is that suite. Each eval is one real, tiny change to the `calc` demo target whose
 front matter states the expected outcome in machine-checkable fields. `swfactory.evals` runs the
@@ -30,7 +29,8 @@ Exit code 1 means a regression (or an unusable baseline). Runs land in
 no eval can resume another's stage log and score a pass it did not earn. `scm` is always `local`:
 an eval never opens a pull request.
 
-CI runs the suite keylessly in `.github/workflows/evals.yml` (`eval-suite`), whose `paths` trigger
+CI is configured to run the suite keylessly in `.github/workflows/evals.yml` (`eval-suite`), whose
+`paths` trigger
 lists every file that steers the agent — `CLAUDE.md`, `REVIEW.md`, `bands.yaml`, `.claude/**`,
 `src/swfactory/prompts/**`, `blueprints/**`, `demo/evals/**`. The keyed `real-demo` and
 `evals-islo` jobs (real agent, weekly) are unchanged.

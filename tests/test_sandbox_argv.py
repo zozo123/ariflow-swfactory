@@ -505,7 +505,7 @@ def test_srt_run_timeout_sets_timed_out(tmp_path, monkeypatch) -> None:
     assert res.timed_out is True and res.exit_code == sandbox_mod.TIMEOUT_EXIT_CODE
 
 
-def test_srt_env_is_scrubbed_and_pass_env_is_explicit(tmp_path, monkeypatch) -> None:
+def test_srt_credentials_are_scoped_to_agent_process(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://x")
     monkeypatch.setenv("GH_TOKEN", "ghp_secret")
@@ -523,9 +523,13 @@ def test_srt_env_is_scrubbed_and_pass_env_is_explicit(tmp_path, monkeypatch) -> 
         assert k not in env
     assert env["PATH"] == "/usr/bin"
 
-    _srt(tmp_path, pass_env=("ANTHROPIC_API_KEY",)).run("true")
+    credentialed = _srt(tmp_path, pass_env=("ANTHROPIC_API_KEY",))
+    credentialed.run("true")
+    assert "ANTHROPIC_API_KEY" not in seen["kwargs"]["env"]  # tests/lifecycle stay keyless
+
+    credentialed.run_agent("true")
     env = seen["kwargs"]["env"]
-    assert env["ANTHROPIC_API_KEY"] == "sk-ant-secret"  # the ONE allowed credential
+    assert env["ANTHROPIC_API_KEY"] == "sk-ant-secret"  # only the model process gets it
     assert "ANTHROPIC_BASE_URL" not in env  # pass_env is exact keys, not a prefix
     for k in ("GH_TOKEN", "ISLO_API_KEY", "AWS_SECRET_ACCESS_KEY"):
         assert k not in env
@@ -533,7 +537,7 @@ def test_srt_env_is_scrubbed_and_pass_env_is_explicit(tmp_path, monkeypatch) -> 
     assert "sk-ant-secret" not in joined and "ghp_secret" not in joined  # never in argv
 
     monkeypatch.delenv("ANTHROPIC_API_KEY")
-    _srt(tmp_path, pass_env=("ANTHROPIC_API_KEY",)).run("true")
+    _srt(tmp_path, pass_env=("ANTHROPIC_API_KEY",)).run_agent("true")
     assert "ANTHROPIC_API_KEY" not in seen["kwargs"]["env"]  # absent on host -> not invented
 
 
@@ -705,7 +709,9 @@ def test_docker_protected_prefixes_mounted_ro_only_when_present(tmp_path, monkey
     assert set(ro) == {f"{r}/.github:{r}/.github:ro", f"{r}/factory.toml:{r}/factory.toml:ro"}
 
 
-def test_docker_env_is_scrubbed_and_pass_env_is_by_name(tmp_path, monkeypatch) -> None:
+def test_docker_credentials_are_scoped_to_agent_process_and_passed_by_name(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://x")
     monkeypatch.setenv("GH_TOKEN", "ghp_secret")
@@ -723,9 +729,14 @@ def test_docker_env_is_scrubbed_and_pass_env_is_by_name(tmp_path, monkeypatch) -
     assert env["PATH"] == "/usr/bin" and env["DOCKER_HOST"] == "unix:///var/run/docker.sock"
     _assert_no_credentials(seen["argv"])  # no -e ANTHROPIC_* without pass_env
 
-    _docker(tmp_path, pass_env=("ANTHROPIC_API_KEY",)).run("true")
+    credentialed = _docker(tmp_path, pass_env=("ANTHROPIC_API_KEY",))
+    credentialed.run("true")
+    assert "ANTHROPIC_API_KEY" not in seen["kwargs"]["env"]
+    assert "ANTHROPIC_API_KEY" not in _e_flags(seen["argv"])
+
+    credentialed.run_agent("true")
     argv, env = seen["argv"], seen["kwargs"]["env"]
-    assert env["ANTHROPIC_API_KEY"] == "sk-ant-secret"  # the ONE allowed credential (CLI env)
+    assert env["ANTHROPIC_API_KEY"] == "sk-ant-secret"  # only the model container gets it
     assert "ANTHROPIC_BASE_URL" not in env
     assert "ANTHROPIC_API_KEY" in _e_flags(argv)  # by NAME: docker copies it from its env
     joined = " ".join(argv)
@@ -733,12 +744,12 @@ def test_docker_env_is_scrubbed_and_pass_env_is_by_name(tmp_path, monkeypatch) -
     assert "GH_TOKEN" not in joined
 
     monkeypatch.delenv("ANTHROPIC_API_KEY")
-    _docker(tmp_path, pass_env=("ANTHROPIC_API_KEY",)).run("true")
+    _docker(tmp_path, pass_env=("ANTHROPIC_API_KEY",)).run_agent("true")
     assert "ANTHROPIC_API_KEY" not in seen["kwargs"]["env"]  # absent on host -> not invented
     assert "ANTHROPIC_API_KEY" not in _e_flags(seen["argv"])
 
 
-def test_docker_credentials_host_mounts_claude_login_only_when_present(
+def test_docker_host_login_is_mounted_only_for_agent_process_when_present(
     tmp_path, monkeypatch
 ) -> None:
     home = tmp_path / "home"
@@ -747,14 +758,18 @@ def test_docker_credentials_host_mounts_claude_login_only_when_present(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
     seen = _fake_srt(monkeypatch)
 
-    _docker(tmp_path, credentials="host").run("true")
+    credentialed = _docker(tmp_path, credentials="host")
+    credentialed.run("true")
+    assert not any(str(home) in a for a in seen["argv"])  # target commands see no login
+
+    credentialed.run_agent("true")
     argv = seen["argv"]
     assert f"{home}/.claude:{DOCKER_HOME}/.claude" in argv  # rw: Claude writes its session there
     assert not any(a.endswith("/.claude.json") for a in argv)  # absent on host -> not mounted
     assert "ANTHROPIC_API_KEY" not in seen["kwargs"]["env"]  # host mode: pass_env empty
 
     (home / ".claude.json").write_text("{}")
-    _docker(tmp_path, credentials="host").run("true")
+    _docker(tmp_path, credentials="host").run_agent("true")
     assert f"{home}/.claude.json:{DOCKER_HOME}/.claude.json" in seen["argv"]
 
     _docker(tmp_path).run("true")  # env mode: nothing from $HOME crosses
@@ -975,7 +990,8 @@ def test_make_sandbox_toolset(monkeypatch) -> None:
     cfg = Config(issue="42", sandbox="toolset", toolset_backend="sbx")
     sb = make_sandbox(cfg, "42")
     assert isinstance(sb, sandbox_mod.ToolsetSandbox)
-    assert seen["name"] == "sbx" and sb.workdir == cfg.toolset_workdir
+    assert seen["name"] == "sbx" and sb.repo_root == cfg.toolset_workdir
+    assert sb.workdir == f"{cfg.toolset_workdir}/demo/target"
 
 
 def test_toolset_backend_names_match_the_upstream_prs() -> None:

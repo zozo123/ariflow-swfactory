@@ -4,15 +4,15 @@ Two tiers, both islo sandboxes, one trust boundary between them. Nothing that ca
 ever shares a VM with model-generated code, and nothing that can call Anthropic ever sees a GitHub
 token.
 
-| Tier | Runs | Credentials (all phantom: swapped by the gateway on egress) | Egress |
+| Tier | Runs | Credentials | Egress |
 | --- | --- | --- | --- |
-| **Orchestrator** — one sandbox, `swf-orchestrator` (trusted) | Airflow 3 (`airflow standalone`, UI `:8080`), `swfactory webhook serve --port 8081 --airflow-url http://localhost:8080`, and `deliver`: `git am` of the agent's format-patch stream, push `factory/*`, `gh pr create` | `GH_TOKEN` (`islo login --tool github`), `ISLO_API_KEY` to spawn agent VMs; **no** Anthropic key | `swfactory-orchestrator` gateway: github.com, api.github.com, releases.islo.dev, the islo API |
-| **Agents** — one MicroVM per (issue, target), `swf-<issue>-<run>` (untrusted) | clone of the target (`--source`), `claude -p` per stage, the target's tests, bot-authored commits | `ANTHROPIC_API_KEY` (`islo login --tool claude`); never a GitHub token, never `--env` | `swfactory` gateway, deny-by-default: api.anthropic.com, pypi.org, files.pythonhosted.org, astral.sh |
+| **Orchestrator** — one sandbox, `swf-orchestrator` (trusted) | Airflow 3 (`airflow standalone`, UI `:8080`), `swfactory webhook serve --port 8081 --airflow-url http://localhost:8080`, and `deliver`: `git am` of the agent's format-patch stream, push `factory/*`, `gh pr create` | gateway-injected `GH_TOKEN`; environment-injected `ISLO_API_KEY` to spawn agent VMs; **no** Anthropic key | `swfactory-orchestrator` gateway: github.com, api.github.com, releases.islo.dev, the islo API |
+| **Agents** — one MicroVM per (issue, target), `swf-<issue>-<run>` (untrusted) | clone of the target (`--source`), `claude -p` per stage, the target's tests, bot-authored commits | gateway-injected `ANTHROPIC_API_KEY`; never a GitHub token, never `--env` | `swfactory` gateway, deny-by-default: api.anthropic.com, github.com, api.github.com, pypi.org, files.pythonhosted.org, astral.sh |
 
 The orchestrator spawns agent VMs with the same `IsloSandbox.argv` the CLI uses (`--gateway-profile
 swfactory --environment swfactory --init minimal --delete-after --pause-after-idle --auto-resume
 on_activity`), reads artifacts out with `islo cp`, and applies the patch on its own side — the
-"agent never pushes" property is structural (README, "Artifact chain"), not a prompt. `islo cp`
+"agent never pushes" property is structural, not a prompt. `islo cp`
 does not resume a paused VM, so file transfers retry once after `islo resume`.
 
 ## Bootstrap order
@@ -22,6 +22,8 @@ islo login && islo login --tool github && islo login --tool claude   # once per 
 deploy/islo/bootstrap.sh    # one-time: agent gateway + environment, optional snapshot, doctor,
                             #   knowledge items. Idempotent: every step skips when its object exists
 export GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)  # generate once; store and reuse on redeploy
+# First provision the swfactory-orchestrator gateway and ISLO_API_KEY environment described in
+# deploy/islo/deploy.sh's prerequisite header.
 deploy/islo/deploy.sh       # orchestrator sandbox from deploy/islo/orchestrator/{islo.yaml,start.sh}:
                             #   its own gateway + environment (ISLO_API_KEY), Airflow + the receiver,
                             #   the islo incoming webhook and the GitHub hook; prints the shared UI URL
@@ -97,21 +99,22 @@ run. `dispatch.yml` (a GitHub Action posting to the Airflow API with the `AIRFLO
 
 `deploy/islo/knowledge.sh [owner/repo]` (called by bootstrap, safe to rerun) publishes `CLAUDE.md`
 and `REVIEW.md` as `rule` items and `.claude/skills/swfactory/SKILL.md` as a `skill`, tagged
-`swfactory` and linked to the repo (`islo knowledge get` -> `update`, else `create`). So
-`islo knowledge render --repo <owner/repo> --tag swfactory` gives every sandbox agent the same
-contract that `install_guard` ships into the target.
+`swfactory` and linked to the repo (`islo knowledge get` -> `update`, else `create`). The knowledge
+layer supplies operating context. Separately, `install_guard` writes only the factory-owned hook
+and restricted Claude settings below `.factory/`; it never overwrites the target's `.claude/` tree.
 
-## From your shell, and what CI proves
+## From your shell and scheduled validation
 
 `swfactory demo --real` (= `run --issue demo/issue.md --agent claude --sandbox islo --scm github
 --approve prompt`) is the same path from a laptop; add `--record demo/scripted` to rewrite the demo
 fixtures from real agent outputs. Agent VMs are created with `--auto-resume on_activity
 --pause-after-idle 900 --delete-after <ttl>`.
 
-The production pieces (`deploy/islo/*`, `swfactory doctor`, the receiver, knowledge items) are
-exercised by the `evals-islo` job in `.github/workflows/evals.yml`: it reruns the demo issue in an
-islo MicroVM weekly and whenever the institutional knowledge changes, with `ISLO_API_KEY` and no
-Anthropic key on the runner, asserting on the same `report.json` the CLI writes.
+The `evals-islo` job in `.github/workflows/evals.yml` is configured to exercise the production
+pieces (`deploy/islo/*`, `swfactory doctor`, the receiver, and knowledge items). It reruns the demo
+issue in an islo MicroVM weekly and whenever the institutional knowledge changes, with
+`ISLO_API_KEY` and no Anthropic key on the runner, and inspects the same `report.json` the CLI
+writes.
 
 Sandbox safety: every `islo rm` is preceded by a plain `islo ls` (own scope, never `--all`), the
 name must match the factory pattern `swf-<slug>-<run8>`, and `created_by` must equal
