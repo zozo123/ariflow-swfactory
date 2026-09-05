@@ -1,6 +1,6 @@
 [project]
 name = "swfactory"
-version = "2.0.0"
+version = "2.0.1"
 description = "AI-native software factory: Airflow 3 orchestrates Claude Code agents in isolated sandboxes and ships reviewed PRs through human gates."
 readme = "README.md"
 license = "Apache-2.0"

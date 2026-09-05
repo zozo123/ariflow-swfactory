@@ -8,6 +8,18 @@ All notable changes to this project will be documented here. The format follows
 
 Nothing yet.
 
+## [2.0.1] - 2026-09-06
+
+### Fixed
+
+- Linux Sandbox Runtime runs now ignore only its absent, mandatory auto-protected mount
+  placeholders. Real project dotfiles remain tracked, and the SRT scripted end-to-end lane passes.
+- Eval issues use safe factory-relative references, duplicate gate definitions fail before their
+  artifact details are inspected, and missing Toolset files preserve the sandbox protocol's
+  `FileNotFoundError` contract.
+- Airflow gate tests seed the authoritative host artifact chain and assert its approval digest,
+  matching production task isolation and retry behavior.
+
 ## [2.0.0] - 2026-09-05
 
 The factory now treats every model, sandbox, identifier, and artifact as an explicit trust-boundary
@@ -276,7 +288,8 @@ development snapshot that was never tagged or published.
 - Scripted keyless end-to-end replay and hermetic test suite.
 - GitHub delivery, issue dispatch, control room, maintenance bands, and webhook receiver.
 
-[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.0.1
 [2.0.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.0.0
 [1.1.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v1.1.0
 [1.0.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v1.0.0
