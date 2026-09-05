@@ -8,6 +8,7 @@ Runs only with the ``airflow`` dependency group:
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import json
 import os
@@ -345,6 +346,8 @@ def test_record_task_persists_rejection_then_skips_the_line(
 
     pytest.importorskip("swfactory")
     ctx = _ctx_on(tmp_path)
+    gate_artifact = f"{ctx.art}/{stage}.md"
+    ctx.write_artifact(gate_artifact, f"# {stage}\n")
     monkeypatch.setattr(blueprints_mod, "_ctx", lambda name, job, run_id: ctx)
     record = blueprints_mod._record_task("factory", stage).function
     dag_run = SimpleNamespace(run_id="manual__2026-09-02T03:00:00+00:00")
@@ -360,8 +363,9 @@ def test_record_task_persists_rejection_then_skips_the_line(
     assert [(a["gate"], a["decision"], a["actor"]) for a in approvals] == [
         (stage, "reject", "alice")
     ]
+    assert approvals[0]["artifact_sha256"] == hashlib.sha256(f"# {stage}\n".encode()).hexdigest()
 
-    # Approve (and a marked-success gate with no XCom) records and returns; nothing skipped.
+    # A later decision replaces the same gate entry, so task retries cannot duplicate approvals.
     out = record(
         {"job_idx": 0}, ti=_Ti({**rejected, "chosen_options": ["Approve"]}), dag_run=dag_run
     )
@@ -370,11 +374,8 @@ def test_record_task_persists_rejection_then_skips_the_line(
     out = record({"job_idx": 0}, ti=ti, dag_run=dag_run)
     assert (out["decision"], out["actor"]) == ("approve", "auto")
     assert ti.pulled == [(f"job.approve_{stage}", 0)]
-    assert [a["decision"] for a in json.loads((art / "approvals.json").read_text())] == [
-        "reject",
-        "approve",
-        "approve",
-    ]
+    saved = json.loads((art / "approvals.json").read_text())
+    assert [(a["decision"], a["actor"]) for a in saved] == [("approve", "auto")]
 
 
 def test_run_ids_are_hex8_and_stable(blueprints_mod) -> None:

@@ -980,7 +980,11 @@ def _gate_artifact(ctx: Ctx, gate_name: str) -> str:
 
 
 def record_approval(ctx: Ctx, approval: Approval) -> None:
-    """Append one approval to ``{art}/approvals.json`` (committed by deliver)."""
+    """Record the latest decision for one gate in ``approvals.json`` (committed by deliver).
+
+    Airflow may retry a record task, so one gate owns one entry rather than accumulating duplicate
+    decisions from task attempts.
+    """
     path = f"{ctx.art}/approvals.json"
     artifact = _gate_artifact(ctx, approval.gate)
     digest = hashlib.sha256(ctx.read_artifact(artifact).encode("utf-8")).hexdigest()
