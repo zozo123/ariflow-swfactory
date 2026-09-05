@@ -111,6 +111,10 @@ NEVER_COMMITTED = (
     ".zshrc",
     ".inputrc",
 )
+SPECIAL_DOTFILE_SCAN = (
+    "find . -maxdepth 1 -mindepth 1 -name '.*' "
+    "! -type f ! -type d ! -type l -exec basename {} \\; 2>/dev/null"
+)
 
 
 # ---------------------------------------------------------------- context
@@ -568,15 +572,30 @@ def seed_local_workdir(workdir: Path, target_dir: str) -> bool:
 def _seed_exclude(ctx: Ctx) -> None:
     """Append NEVER_COMMITTED to ``.git/info/exclude`` through ``sb.write`` (host-side for local,
     srt and docker; ``islo cp`` for islo) — never through a confined shell, which srt may deny
-    for anything under ``.git/``."""
+    for anything under ``.git/``.
+
+    Sandbox Runtime bind-mounts special placeholders over missing root dotfiles on Linux. Discover
+    only non-regular entries before any agent runs, then exclude their safe basenames. Regular
+    project files, directories and symlinks never enter this dynamic list.
+    """
     git_dir = ctx.sb.run("git rev-parse --git-dir").stdout.strip() or ".git"
     path = f"{git_dir}/info/exclude"
     try:
         current = ctx.sb.read(path)
     except FileNotFoundError:
         current = ""
+    scanned = ctx.sb.run(SPECIAL_DOTFILE_SCAN)
+    special = [
+        name
+        for name in scanned.stdout.splitlines()
+        if scanned.ok
+        and name.startswith(".")
+        and name not in {".", ".."}
+        and "/" not in name
+        and "\\" not in name
+    ]
     have = set(current.splitlines())
-    missing = [p for p in NEVER_COMMITTED if p not in have]
+    missing = [p for p in (*NEVER_COMMITTED, *special) if p not in have]
     if missing:
         sep = "" if not current or current.endswith("\n") else "\n"
         ctx.sb.write(path, current + sep + "\n".join(missing) + "\n")

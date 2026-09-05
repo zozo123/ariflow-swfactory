@@ -941,6 +941,26 @@ def test_a_second_run_of_a_stage_is_skipped_with_no_agent_call_no_test_and_no_co
 # ================================================================ 8. sandbox ownership
 
 
+def test_git_exclude_captures_only_safe_non_regular_runtime_dotfiles(tmp_path: Path) -> None:
+    """Linux SRT mounts missing protected dotfiles as special entries visible only in confinement.
+
+    They must not make verification dirty, while regular project files and unsafe scan output must
+    remain eligible for review.
+    """
+    from swfactory.stages import SPECIAL_DOTFILE_SCAN, _seed_exclude
+
+    sb = FakeSandbox(
+        results={
+            "git rev-parse --git-dir": out(".git\n"),
+            SPECIAL_DOTFILE_SCAN: out(".mcp.json\n.vscode\n../escape\nregular.txt\n"),
+        }
+    )
+    _seed_exclude(ctx_on(tmp_path, sb))
+    excluded = sb.files[".git/info/exclude"].splitlines()
+    assert ".mcp.json" in excluded and ".vscode" in excluded
+    assert "../escape" not in excluded and "regular.txt" not in excluded
+
+
 def test_owns_sandbox_refuses_a_deleted_entry_and_still_reads_a_wrapped_listing() -> None:
     """``islo ls`` shapes the close path must survive: an object wrapping the list, an entry that is
     already ``deleted`` (a second ``rm`` of a dead name), a missing creator while an owner is
