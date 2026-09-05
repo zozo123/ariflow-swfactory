@@ -63,7 +63,7 @@ from swfactory.models import (
     StageResult,
     TestResult,
 )
-from swfactory.sandbox import LocalSandbox, Sandbox
+from swfactory.sandbox import SRT_RUNTIME_PROTECTED, LocalSandbox, Sandbox, SrtSandbox
 from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
 from swfactory.state import RunState
 
@@ -94,8 +94,8 @@ GIT_ADD_ALL = (
 )
 
 # Scratch the factory never commits, added to .git/info/exclude by setup (the target may lack a
-# .gitignore, as the demo copy does), plus the shell-rc stubs the Anthropic Sandbox Runtime
-# (Linux) binds into the cwd as special files.
+# .gitignore, as the demo copy does). Sandbox Runtime's conditional placeholders are added by
+# ``_seed_exclude`` only when the corresponding project paths do not exist.
 NEVER_COMMITTED = (
     ".factory/",
     ".venv/",
@@ -103,13 +103,6 @@ NEVER_COMMITTED = (
     "*.pyc",
     ".pytest_cache/",
     ".ruff_cache/",
-    ".bash_profile",
-    ".bashrc",
-    ".profile",
-    ".gitconfig",
-    ".npmrc",
-    ".zshrc",
-    ".inputrc",
 )
 SPECIAL_DOTFILE_SCAN = (
     "find . -maxdepth 1 -mindepth 1 -name '.*' "
@@ -594,8 +587,10 @@ def _seed_exclude(ctx: Ctx) -> None:
         and "/" not in name
         and "\\" not in name
     ]
+    if isinstance(ctx.sb, SrtSandbox):
+        special.extend(path for path in SRT_RUNTIME_PROTECTED if not ctx.sb.exists(path))
     have = set(current.splitlines())
-    missing = [p for p in (*NEVER_COMMITTED, *special) if p not in have]
+    missing = [p for p in dict.fromkeys((*NEVER_COMMITTED, *special)) if p not in have]
     if missing:
         sep = "" if not current or current.endswith("\n") else "\n"
         ctx.sb.write(path, current + sep + "\n".join(missing) + "\n")

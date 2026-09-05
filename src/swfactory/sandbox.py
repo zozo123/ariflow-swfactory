@@ -67,6 +67,22 @@ SRT_ALLOW_WRITE_ABS = ("/tmp", "/private/tmp")
 SRT_ALLOW_WRITE_OPTIONAL = ("Library/Caches",)  # macOS only: added when the dir exists
 # Directories under the workdir the agent must never write, whatever factory.toml says.
 SRT_FIXED_DENY_WRITE = (".claude", ".github")
+# Sandbox Runtime's own mandatory auto-protected root paths. On Linux, missing paths are
+# represented by transient bind-mount placeholders inside confinement; the host checkout never
+# contains them. Existing project paths are left alone and remain tracked.
+SRT_RUNTIME_PROTECTED = (
+    ".bashrc",
+    ".bash_profile",
+    ".zshrc",
+    ".zprofile",
+    ".profile",
+    ".gitconfig",
+    ".gitmodules",
+    ".ripgreprc",
+    ".mcp.json",
+    ".vscode",
+    ".idea",
+)
 _GLOB_CHARS = frozenset("*?[")
 # docker: $HOME of the non-root user baked into deploy/docker/sandbox.Dockerfile, the host files
 # bind-mounted there for ``credentials="host"``, and the named volume that keeps uv/npm caches
@@ -312,7 +328,7 @@ class SrtSandbox(LocalSandbox):
     Claude Code itself needs, and credential stores under ``$HOME`` are unreadable. srt adds
     its own mandatory rules on top: no writes to ``.git/config`` or ``.git/hooks`` (so git
     identity must travel as ``git -c user.name=...``, never ``git config``), shell rc files,
-    ``.mcp.json``, ``.claude/commands``, ``.claude/agents``.
+    ``.mcp.json``, Git metadata, shell profiles and IDE configuration.
 
     Ordinary commands receive ``scrub_env(os.environ)``. Only ``run_agent`` adds the explicit
     ``pass_env`` allowlist (copied from the host only when present), so target verification cannot
