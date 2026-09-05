@@ -131,6 +131,9 @@ class FakeSandbox:
         matches = sorted((k for k in self.results if k in cmd), key=len, reverse=True)
         return self.results[matches[0]] if matches else OK
 
+    def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
+        return self.run(cmd, timeout_s=timeout_s)
+
     def read(self, path: str) -> str:
         if path not in self.files:
             raise FileNotFoundError(path)
@@ -957,7 +960,7 @@ def test_every_sandbox_name_the_factory_builds_is_one_the_sweep_would_also_remov
     pattern. They only agree because every name ``make_sandbox`` can build matches that pattern —
     asserted here so a change to ``sandbox_name`` cannot hand ``close`` a name the sweep refuses."""
     cfg = Config(issue="x", run_id="0123abcd")
-    jobs = (("DEMO-1", None), ("42", "zozo123/ariflow-swfactory"), ("a b/c!", "o/n"))
+    jobs = (("DEMO-1", None), ("42", "zozo123/ariflow-swfactory"), ("a.b-c_1", "o/n"))
     for issue_id, repo in jobs:
         assert SANDBOX_NAME_RE.match(cfg.sandbox_name(issue_id, repo)), (issue_id, repo)
     assert not SANDBOX_NAME_RE.match("prod-db")

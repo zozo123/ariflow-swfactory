@@ -248,21 +248,21 @@ class Blueprint(BaseModel):
             raise ValueError("stages.order needs 'build_and_test' before review")
 
     def _check_gates(self) -> None:
-        seen: set[str] = set()
+        after = [gate.after for gate in self.gates]
+        duplicate = next((stage for stage in after if after.count(stage) > 1), None)
+        if duplicate is not None:
+            raise ValueError(f"more than one gate after {duplicate!r}")
         stage_artifacts = {"intent": {"intent.md"}, "plan": {"plan.md", "plan.json"}}
         for g in self.gates:
             if g.after not in self.order:
                 raise ValueError(f"gate after {g.after!r} is not in stages.order {self.order}")
             if g.after not in GATE_STAGES:
                 raise ValueError(f"gates may only follow {list(GATE_STAGES)}, not {g.after!r}")
-            if g.after in seen:
-                raise ValueError(f"more than one gate after {g.after!r}")
             if g.artifact not in stage_artifacts[g.after]:
                 raise ValueError(
                     f"gate after {g.after!r} must show one of "
                     f"{sorted(stage_artifacts[g.after])}, not {g.artifact!r}"
                 )
-            seen.add(g.after)
 
     # ------------------------------------------------------------ derived
 

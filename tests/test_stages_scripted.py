@@ -429,7 +429,7 @@ def test_execute_passes_the_targets_protected_globs_to_make_sandbox(
     from swfactory import runtime
 
     assert runtime.protected_globs(TARGET) == ["factory.toml"]
-    assert runtime.protected_globs(TARGET, "fix") == ["factory.toml", "tests/"]
+    assert runtime.protected_globs(TARGET, "fix") == ["factory.toml", "tests"]
     assert runtime.protected_globs(tmp_path) == []
     seen: dict[str, object] = {}
 
@@ -494,6 +494,6 @@ def test_agent_call_tightens_srt_deny_write_per_stage(tmp_path: Path) -> None:
     )
     _agent(ctx, "build", 1, "p", None)
     _agent(ctx, "fix", 2, "p", None)
-    assert seen == [("build", ("factory.toml",)), ("fix", ("factory.toml", "tests/"))]
+    assert seen == [("build", ("factory.toml",)), ("fix", ("factory.toml", "tests"))]
     deny = json.loads(sb.settings_path.read_text())["filesystem"]["denyWrite"]
     assert str(work / "tests") in deny

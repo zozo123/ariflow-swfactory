@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from swfactory import blueprint as blueprint_mod
 from swfactory.blueprint import Blueprint
-from swfactory.config import Config, TargetContract
+from swfactory.config import FACTORY_ROOT, Config, TargetContract
 from swfactory.models import RunReport, StageError
 from swfactory.runtime import ctx_for, run_id_for
 from swfactory.stages import cli_approver, run_pipeline, setup
@@ -378,7 +378,13 @@ def run_one(
     suite's crash — a blown build loop or a missing fixture is exactly what we are measuring.
     """
     run_dir, workdir = run_root / "run", run_root / "work"
-    job = bp.jobs({"issues": [str(ev.issue_path)]})[0]  # the blueprint's first target
+    try:
+        issue_path = ev.issue_path.resolve().relative_to(FACTORY_ROOT.resolve()).as_posix()
+    except ValueError as e:
+        raise ValueError(
+            f"eval issue must live below the factory asset root: {ev.issue_path}"
+        ) from e
+    job = bp.jobs({"issues": [issue_path]})[0]  # the blueprint's first target
     cfg = bp.config(
         job,
         run_id=run_id or run_id_for(ev.id),

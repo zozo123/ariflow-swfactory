@@ -344,4 +344,4 @@ def test_protected_for_frees_tests_dir_outside_fix():
     c = TargetContract(test="uv run pytest", protected=["factory.toml", "tests/"])
     assert protected_for(c, "build") == ["factory.toml"]
     assert protected_for(c, "plan") == ["factory.toml"]
-    assert protected_for(c, "fix") == ["factory.toml", "tests/"]
+    assert protected_for(c, "fix") == ["factory.toml", "tests"]

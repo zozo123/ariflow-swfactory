@@ -103,15 +103,16 @@ def test_run_argv_uses_bash_lc_and_cd_workdir() -> None:
 
 
 def test_run_argv_cwd_override_is_quoted() -> None:
-    argv = _islo().argv("ls", cwd="/workspace/some dir")
-    assert argv[-1].startswith("cd '/workspace/some dir' && ls")
+    cwd = "/workspace/ariflow-swfactory/demo/target/some dir"
+    argv = _islo().argv("ls", cwd=cwd)
+    assert argv[-1].startswith(f"cd '{cwd}' && ls")
 
 
 def test_argv_never_carries_credentials_even_when_env_holds_them(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
     monkeypatch.setenv("GH_TOKEN", "ghp_secret")
     sb = _islo()
-    for argv in (sb.argv("true", create=True), sb.argv("echo hi"), sb.argv("ls", cwd="/x")):
+    for argv in (sb.argv("true", create=True), sb.argv("echo hi"), sb.argv("ls", cwd="x")):
         _assert_no_credentials(argv)
         assert "sk-ant-secret" not in " ".join(argv)
         assert "ghp_secret" not in " ".join(argv)
@@ -474,10 +475,10 @@ def test_srt_argv_prefers_srt_binary_else_npx(tmp_path, monkeypatch) -> None:
     assert argv[3] == "-c"
     assert argv[4] == f"cd {sb.workdir} && uv run pytest"
     monkeypatch.setattr(sandbox_mod.shutil, "which", lambda name: None)
-    argv = sb.argv("ls", cwd="/some dir")
+    argv = sb.argv("ls", cwd="some dir")
     assert argv[:3] == ["npx", "-y", "@anthropic-ai/sandbox-runtime"]
     assert argv[3:5] == ["-s", str(sb.settings_path)]
-    assert argv[-1] == "cd '/some dir' && ls"
+    assert argv[-1] == f"cd '{sb.workdir}/some dir' && ls"
     for a in argv:
         assert a not in FORBIDDEN_FLAGS
 
@@ -932,7 +933,7 @@ class FakeBackend:
     def read_file(self, sandbox, path, *, max_bytes):
         self.calls.append(("read", sandbox, path))
         if path not in self.files:
-            raise RuntimeError("no such file")
+            raise FileNotFoundError(path)
         return self.files[path]
 
     def write_file(self, sandbox, path, content):
@@ -1024,6 +1025,7 @@ def test_toolset_unavailable_backend_names_its_pull_request() -> None:
 def test_toolset_surfaces_truncation_and_termination() -> None:
     """Dropping these flags would let truncated output or a dead sandbox read as a clean result."""
     be, sb = _toolset()
+    sb.sandbox_id = "sbx-1"  # isolate result mapping from provisioning
 
     class R:
         exit_code = 0

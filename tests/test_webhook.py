@@ -37,9 +37,16 @@ def issue_payload(action: str, *, label: str | None = None, number: int = 42, pr
     return payload
 
 
-def comment_payload(body: str, *, action: str = "created", number: int = 7, pr: bool = False):
+def comment_payload(
+    body: str,
+    *,
+    action: str = "created",
+    number: int = 7,
+    pr: bool = False,
+    association: str | None = "MEMBER",
+):
     payload = issue_payload(action, number=number, pr=pr)
-    payload["comment"] = {"body": body}
+    payload["comment"] = {"body": body, "author_association": association}
     return payload
 
 
@@ -127,6 +134,8 @@ def sign(body: bytes, secret: str = SECRET) -> str:
         ("issue_comment", comment_payload(""), None),
         ("issue_comment", comment_payload("@factory run", action="edited"), None),
         ("issue_comment", comment_payload("@factory run", pr=True), None),
+        ("issue_comment", comment_payload("@factory run", association="NONE"), None),
+        ("issue_comment", comment_payload("@factory run", association=None), None),
         ("pull_request", {"action": "labeled", "number": 3, "label": {"name": "factory"}}, None),
         ("pull_request", issue_payload("labeled", label="factory"), None),
         ("ping", {"zen": "Keep it logically awesome."}, None),

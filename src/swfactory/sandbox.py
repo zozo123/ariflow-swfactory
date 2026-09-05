@@ -1038,6 +1038,8 @@ class ToolsetSandbox:
             return self.backend.read_file(
                 self._id(), abs_path, max_bytes=TOOLSET_MAX_OUTPUT_BYTES
             ).decode("utf-8")
+        except FileNotFoundError as e:
+            raise FileNotFoundError(abs_path) from e
         except Exception as e:
             raise StageError("sandbox", f"toolset could not read {abs_path}: {e}") from e
 

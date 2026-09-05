@@ -74,9 +74,10 @@ def route(event: str, payload: Mapping[str, Any]) -> Trigger | None:
 
     ``event`` is the ``X-GitHub-Event`` header value. Only ``issues`` (action ``labeled`` with
     a ``factory`` / ``factory:<name>`` label) and ``issue_comment`` (action ``created``, body
-    starting with ``@factory run [<name>]``) on real issues dispatch; comments and labels on pull
-    requests (``issue.pull_request`` present), ``pull_request`` events and malformed payloads
-    yield ``None``. Never raises on payload shape.
+    starting with ``@factory run [<name>]``) from a trusted repository association on real issues
+    dispatch. Comments and labels on pull requests (``issue.pull_request`` present), untrusted
+    comments, ``pull_request`` events and malformed payloads yield ``None``. Never raises on
+    payload shape.
     """
     if not isinstance(payload, Mapping):
         return None

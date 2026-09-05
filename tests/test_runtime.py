@@ -95,7 +95,12 @@ def test_build_ctx_for_a_host_sandbox_seeds_the_workdir_first(
     work = (tmp_path / ".factory" / "l0cal001" / "work").resolve()
     assert ctx.run_dir == work.parent and ctx.run_dir.is_dir()
     assert (work / "factory.toml").is_file() and (work / "src").is_dir()  # seeded from demo/target
-    assert seen == {"issue_id": "DEMO-1", "protected": ["factory.toml"], "repo": ctx.cfg.repo}
+    assert seen == {
+        "issue_id": "DEMO-1",
+        "protected": ["factory.toml"],
+        "repo": ctx.cfg.repo,
+        "run_dir": ctx.run_dir,
+    }
     assert isinstance(ctx.sb, LocalSandbox) and ctx.sb.root == work
     # the local "GitHub" is seeded from that same workdir, not from a public clone
     assert isinstance(ctx.scm, LocalGitScm)
