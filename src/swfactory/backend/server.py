@@ -1,7 +1,9 @@
 """HTTP transport for the stabilized factory backend.
 
 The server intentionally exposes only minimal unauthenticated liveness/readiness documents. Every
-control/read API containing factory state still requires the backend bearer token.
+control/read API containing factory state still requires the backend bearer token. Managed SCM
+publication accepts larger authenticated bodies because format-patch streams are intentionally sent
+to the backend that owns GitHub credentials.
 """
 
 from __future__ import annotations
@@ -18,10 +20,11 @@ from typing import Any
 
 from swfactory.control import ControlError
 
+from .scm_service import operation as scm_operation
 from .service import Factory, Refused
 
 PREFIX = "/v1"
-MAX_BODY = 64 * 1024
+MAX_BODY = 16 * 1024 * 1024
 
 
 def _json_default(value: Any) -> Any:
@@ -41,7 +44,7 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
 
         def setup(self) -> None:
             super().setup()
-            self.connection.settimeout(20)
+            self.connection.settimeout(30)
 
         def reply(self, status: int, payload: Any) -> None:
             data = json.dumps(payload, default=_json_default, allow_nan=False).encode()
@@ -111,6 +114,8 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                     status, payload = factory.compatibility(
                         self.command, self.path[len(mount) :], body
                     )
+                elif self.command == "POST" and self.path.startswith(PREFIX + "/scm/"):
+                    status, payload = 200, scm_operation(factory, self.path[len(PREFIX) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/"):
                     status, payload = 200, factory.operation(self.path[len(PREFIX) :], body)
                 else:
