@@ -35,6 +35,8 @@ def test_cell_identity_and_binding_are_deterministic(tmp_path: Path) -> None:
                 "cell_id": identity.stable_id(),
                 "cell_epoch": 1,
                 "cell_managed": True,
+                "cell_policy_digest": None,
+                "cell_generation": None,
             }
         ]
         assert store.history(cell["cell_id"])[0]["kind"] == "activated"
