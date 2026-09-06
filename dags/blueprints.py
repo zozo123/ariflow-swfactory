@@ -8,7 +8,9 @@ For every blueprint file this module emits ``DAG(dag_id=<blueprint.name>)``::
 ``fan_out`` turns ``dag_run.conf`` (``{"issues": [...]}``, ``{"issue": N}`` accepted) into jobs;
 a scheduled line falls back to its required ``trigger.issues``. The ``job`` task group is expanded
 over them, so one issue can be applied to N target repos with one addressable approval per (issue,
-target). Loops live inside the stage functions (``swfactory.stages``), never in the DAG.
+target). Backend-managed submissions additionally carry verified Factory Cell id/epoch bindings;
+direct legacy Airflow submissions derive the same cell id but are explicitly marked unmanaged.
+Loops live inside the stage functions (``swfactory.stages``), never in the DAG.
 
 Parse time reads the TOML *shape* only with stdlib ``tomllib`` (name, trigger, stage order, gates,
 limits); ``swfactory`` is imported only inside task callables so DAG parsing needs nothing but
@@ -245,8 +247,14 @@ def build_dag(shape: dict[str, Any]) -> DAG:
         @task(task_id="fan_out")
         def fan_out(**context: Any) -> list[dict]:
             from swfactory.blueprint import load
+            from swfactory.cell_runtime import bind_jobs
 
-            return load(name).jobs(context["dag_run"].conf or {})
+            conf = context["dag_run"].conf or {}
+            jobs = load(name).jobs(conf)
+            bindings = conf.get("_factory_cells")
+            if bindings is not None and not isinstance(bindings, list):
+                raise ValueError("_factory_cells must be an array")
+            return bind_jobs(jobs, bindings)
 
         @task_group(group_id=GROUP_ID)
         def job(job: dict) -> None:
