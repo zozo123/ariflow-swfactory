@@ -617,3 +617,225 @@ async fn the_snapshot_is_the_document_the_python_control_room_prints() {
     assert!(text.starts_with("collected "), "{text}");
     assert!(text.contains("run  factory/r1 running"), "{text}");
 }
+
+/// One run's gates: one parked and answerable, one still arming.
+///
+/// Both are needed in every batch test below, because the whole promise of `--all` is that it
+/// answers the first and reports the second rather than quietly doing either to both.
+async fn a_board_with_one_armed_gate(server: &MockServer) {
+    collection(
+        server,
+        "/api/v2/dags/~/dagRuns/~/hitlDetails",
+        "hitl_details",
+        vec![
+            hitl("r1", "job.approve_intent", 0),
+            hitl("r1", "job.approve_plan", 1),
+        ],
+    )
+    .await;
+    collection(
+        server,
+        "/api/v2/dags/factory/dagRuns/r1/taskInstances",
+        "task_instances",
+        vec![
+            task("job.approve_intent", 0, "awaiting_input"),
+            task("job.approve_plan", 1, "scheduled"),
+        ],
+    )
+    .await;
+}
+
+/// The gate-answering route, mounted so that a write can be counted — including to zero.
+async fn expect_writes(server: &MockServer, task_id: &str, map_index: i32, times: u64) {
+    Mock::given(method("PATCH"))
+        .and(path(format!(
+            "/api/v2/dags/factory/dagRuns/r1/taskInstances/{task_id}/{map_index}/hitlDetails"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"response_received": true})))
+        .expect(times)
+        .mount(server)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_selects_the_whole_batch_and_writes_nothing_at_all() {
+    // The proof is at the process boundary and structural: the write route is mounted with an
+    // expectation of zero, so a dry run that answered anything fails when the server is dropped.
+    let server = MockServer::start().await;
+    a_board_with_one_armed_gate(&server).await;
+    expect_writes(&server, "job.approve_intent", 0, 0).await;
+    expect_writes(&server, "job.approve_plan", 1, 0).await;
+    let home = home_for(&server.uri());
+
+    // No --yes: a dry run is a read, and needing a flag to say "show me" would defeat the point.
+    let out = run(&home, &["gates", "approve", "--all", "--dry-run", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let doc = document(&out);
+    assert_eq!(doc["summary"]["dry_run"], true);
+    assert_eq!(doc["summary"]["matched"], 2);
+    assert_eq!(doc["summary"]["planned"], 1);
+    assert_eq!(doc["summary"]["skipped"], 1);
+    assert_eq!(doc["summary"]["answered"], 0);
+    assert_eq!(doc["summary"]["truncated"], false);
+    let rows = doc["results"].as_array().expect("one result per gate");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["id"], "factory/r1#0:job.approve_intent");
+    assert_eq!(rows[0]["outcome"], "planned");
+    assert_eq!(rows[1]["outcome"], "skipped");
+    assert!(
+        rows[1]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("awaiting_input"),
+        "a skipped gate says why: {}",
+        rows[1]["detail"]
+    );
+
+    // The same filters narrow the dry run, and the summary echoes the filter that produced it.
+    let narrowed = run(
+        &home,
+        &[
+            "gates",
+            "approve",
+            "--all",
+            "--gate",
+            "intent",
+            "--dry-run",
+            "--json",
+        ],
+    );
+    assert_eq!(narrowed.status.code(), Some(0), "{narrowed:?}");
+    let doc = document(&narrowed);
+    assert_eq!(doc["summary"]["matched"], 1);
+    assert_eq!(doc["summary"]["planned"], 1);
+    assert_eq!(doc["summary"]["filter"], "--gate intent");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_with_no_terminal_to_ask_is_refused_rather_than_assumed() {
+    let server = MockServer::start().await;
+    a_board_with_one_armed_gate(&server).await;
+    expect_writes(&server, "job.approve_intent", 0, 0).await;
+    let home = home_for(&server.uri());
+
+    let out = run(&home, &["gates", "approve", "--all", "--json"]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let doc = document(&out);
+    assert_eq!(doc["error"]["kind"], "usage");
+    let message = doc["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("1 gate") && message.contains("filter:"),
+        "the refusal still shows the count and the filter that produced it: {message}"
+    );
+    assert!(
+        message.contains("no terminal"),
+        "and why it refused rather than assuming: {message}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_answers_every_ready_gate_and_reports_the_one_it_skipped() {
+    let server = MockServer::start().await;
+    a_board_with_one_armed_gate(&server).await;
+    expect_writes(&server, "job.approve_intent", 0, 1).await;
+    expect_writes(&server, "job.approve_plan", 1, 0).await;
+    let home = home_for(&server.uri());
+
+    let out = run(&home, &["gates", "approve", "--all", "--yes", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let doc = document(&out);
+    assert_eq!(doc["summary"]["answered"], 1);
+    assert_eq!(doc["summary"]["skipped"], 1);
+    assert_eq!(doc["summary"]["failed"], 0);
+    assert_eq!(doc["summary"]["decision"], "approve");
+    assert_eq!(doc["summary"]["chosen_option"], "Approve");
+    assert_eq!(doc["summary"]["exit_code"], 0);
+    let rows = doc["results"].as_array().expect("one result per gate");
+    assert_eq!(rows[0]["answered"], true);
+    assert_eq!(rows[0]["outcome"], "answered");
+    assert!(rows[0]["sightings"].as_u64().unwrap_or(0) >= 2);
+    assert_eq!(rows[1]["answered"], false);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_reports_a_lost_race_as_a_conflict_and_still_exits_zero() {
+    let server = MockServer::start().await;
+    a_board_with_one_armed_gate(&server).await;
+    fixed(
+        &server,
+        "PATCH",
+        "/api/v2/dags/factory/dagRuns/r1/taskInstances/job.approve_intent/0/hitlDetails",
+        409,
+        json!({"detail": "Human-in-the-loop detail has already been updated"}),
+    )
+    .await;
+    let home = home_for(&server.uri());
+
+    let out = run(
+        &home,
+        &[
+            "gates", "reject", "--all", "--gate", "intent", "--yes", "--json",
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "someone else answering first is a normal outcome in a shared control room: {out:?}"
+    );
+    let doc = document(&out);
+    assert_eq!(doc["summary"]["conflict"], 1);
+    assert_eq!(doc["summary"]["failed"], 0);
+    assert_eq!(doc["summary"]["decision"], "reject");
+    assert_eq!(doc["results"][0]["outcome"], "conflict");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_listing_narrowed_by_a_filter_is_the_batch_that_filter_would_answer() {
+    let server = MockServer::start().await;
+    a_board_with_one_armed_gate(&server).await;
+    let home = home_for(&server.uri());
+
+    let listed = run(&home, &["gates", "list", "--ready", "--json"]);
+    assert_eq!(listed.status.code(), Some(0), "{listed:?}");
+    let rows = document(&listed);
+    let rows = rows.as_array().expect("a bare array, as every listing is");
+    assert_eq!(rows.len(), 1, "only the parked gate is ready");
+    assert_eq!(rows[0]["id"], "factory/r1#0:job.approve_intent");
+
+    let planned = run(
+        &home,
+        &[
+            "gates",
+            "approve",
+            "--all",
+            "--ready",
+            "--dry-run",
+            "--json",
+        ],
+    );
+    let doc = document(&planned);
+    assert_eq!(doc["summary"]["matched"], 1);
+    assert_eq!(doc["results"][0]["id"], rows[0]["id"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gate_listing_cut_by_its_limit_says_so_without_changing_shape() {
+    let server = MockServer::start().await;
+    a_board_with_one_armed_gate(&server).await;
+    let home = home_for(&server.uri());
+
+    let out = run(&home, &["gates", "list", "--limit", "1", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let doc = document(&out);
+    assert_eq!(
+        doc.as_array().map(Vec::len),
+        Some(1),
+        "a truncated listing is still a bare array"
+    );
+    let warning = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        warning.contains("truncated"),
+        "the fact that rows were hidden goes to stderr, where it cannot break a pipeline: \
+         {warning}"
+    );
+}

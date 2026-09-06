@@ -458,3 +458,58 @@ fn the_binary_runs_at_all() {
         .expect("run");
     assert!(output.status.success());
 }
+
+#[test]
+fn a_batch_refusal_happens_before_anything_is_read_let_alone_written() {
+    // Every one of these is refused by the process itself: the address points at a closed port,
+    // so a refusal that needed a server would show up here as exit 5 instead of 2.
+    let home = connected(NOWHERE);
+    let cases: &[&[&str]] = &[
+        &["gates", "approve", "--all", "--force", "--yes"],
+        &["gates", "approve", "--all", "--yes", "factory/r1#0:plan"],
+        &["gates", "approve", "--all", "--yes", "--expect", "abc123"],
+        &[
+            "gates",
+            "approve",
+            "--dag",
+            "factory",
+            "factory/r1#0:plan",
+            "--yes",
+        ],
+        &["gates", "approve", "--dry-run", "factory/r1#0:plan"],
+        &["gates", "approve"],
+        &["gates", "reject", "--all", "--force", "--yes"],
+    ];
+    for case in cases {
+        let output = swf(&home)
+            .args(case.iter().copied())
+            .arg("--json")
+            .output()
+            .expect("run");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "swf {} should be a usage error: {}",
+            case.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let doc = document(&output.stdout);
+        assert_eq!(doc["error"]["kind"], "usage", "swf {}", case.join(" "));
+    }
+}
+
+#[test]
+fn the_bulk_answer_documents_the_dry_run_where_an_operator_will_look() {
+    let home = TempDir::new().expect("tempdir");
+    let output = swf(&home)
+        .args(["gates", "approve", "--help"])
+        .output()
+        .expect("run");
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("--dry-run"), "{help}");
+    assert!(help.contains("--all"), "{help}");
+    assert!(
+        help.contains("write nothing") || help.contains("writes nothing"),
+        "{help}"
+    );
+}

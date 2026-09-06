@@ -33,14 +33,17 @@ use swf_domain::doctor::Check;
 use swf_domain::evidence::DeliveryReport;
 use swf_domain::ids::{DeliveryId, GateId, IdError, JobId, RunRef};
 use swf_domain::metrics::{MetricsSummary, RunMetrics};
-use swf_domain::model::{Gate, JobRow, Run, SandboxRef, Snapshot};
+use swf_domain::model::{Gate, JobRow, Run, SandboxRef, Snapshot, SourceError, SOURCE_AIRFLOW};
 use swf_domain::sanitize::sanitize_line;
 use tokio_util::sync::CancellationToken;
 
 use crate::attention::Attention;
 use crate::context::{Context, ContextError};
 use crate::delivery::{Delivery, VerifyOpts};
-use crate::gates::{AnswerOpts, Decision, GateAnswer, GateList, GateReview, Sightings};
+use crate::gates::{
+    AnswerOpts, BatchReport, Decision, GateAnswer, GateFilter, GateList, GateReview, Selection,
+    Sightings,
+};
 use crate::logs::{LogOpts, LogStream};
 use crate::snapshot::{CollectOpts, Sources};
 use crate::stack::{StackAction, StackOpts, StackStatus};
@@ -237,6 +240,68 @@ impl From<IdError> for OpsError {
     }
 }
 
+/// Which mapped jobs an operator means.
+///
+/// It lives beside the operation rather than in the argument parser because the TUI's search box
+/// has to narrow the same rows by the same rules: a filter written in `clap` would be a filter one
+/// of the two faces of the product could not apply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JobFilter {
+    /// One DAG id. This one narrows the *read*: the other DAGs are never asked about.
+    pub dag: Option<String>,
+    /// The rolled-up job state, e.g. `failed` or `running`.
+    pub state: Option<String>,
+    /// The issue reference the job answers.
+    pub issue: Option<String>,
+    /// Only jobs that need a person: failed, or waiting on a gate.
+    pub attention: bool,
+    /// At most this many rows. A listing the limit cut says so (rule 3).
+    pub limit: Option<usize>,
+}
+
+impl JobFilter {
+    /// True when this row survives every field that was set.
+    pub fn matches(&self, job: &JobRow, waiting: &[JobId]) -> bool {
+        if self.attention
+            && !swf_domain::states::is_failed(&job.state)
+            && !waiting.contains(&job.id())
+        {
+            return false;
+        }
+        if let Some(state) = &self.state {
+            if !job.state.eq_ignore_ascii_case(state.trim()) {
+                return false;
+            }
+        }
+        if let Some(issue) = &self.issue {
+            if !job.issue.trim().eq_ignore_ascii_case(issue.trim()) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// The jobs one pass found, whether that is all of them, and what could not be read.
+#[derive(Debug, Clone, Default)]
+pub struct JobList {
+    /// The rows themselves.
+    pub jobs: Vec<JobRow>,
+    /// True when a page bound or the limit shortened the listing.
+    pub truncated: bool,
+    /// Per-source failures, so a short table is never mistaken for a quiet factory (rule 4).
+    pub errors: Vec<SourceError>,
+}
+
+/// The runs one listing found, and whether it is the whole listing.
+#[derive(Debug, Clone, Default)]
+pub struct RunList {
+    /// The rows themselves.
+    pub runs: Vec<Run>,
+    /// True when the read stopped at a page bound or at `--limit`.
+    pub truncated: bool,
+}
+
 /// Everything both interfaces can do, over one environment.
 pub struct Ops {
     context: Context,
@@ -245,7 +310,9 @@ pub struct Ops {
     sandboxes: Option<Arc<dyn Sandboxes>>,
     metrics: Option<Arc<dyn MetricsStore>>,
     commands: Arc<dyn CommandRunner>,
-    sightings: Sightings,
+    /// Shared rather than owned: a bulk answer runs its writes as tasks, and every one of them has
+    /// to count sightings into the same table the selection that preceded it wrote to.
+    sightings: Arc<Sightings>,
     collect: CollectOpts,
     stack: StackOpts,
 }
@@ -321,7 +388,7 @@ impl Ops {
                 sandboxes: None,
                 metrics: None,
                 commands: Arc::new(SystemRunner),
-                sightings: Sightings::default(),
+                sightings: Arc::new(Sightings::default()),
                 collect,
                 stack: StackOpts::default(),
             },
@@ -369,6 +436,13 @@ impl Ops {
     pub fn runs(&self) -> Result<&dyn Runs> {
         self.runs
             .as_deref()
+            .ok_or_else(|| OpsError::operational("no Airflow is configured for this context"))
+    }
+
+    /// The same adapter, shareable — what a bulk answer hands to each of its tasks.
+    pub fn runs_shared(&self) -> Result<Arc<dyn Runs>> {
+        self.runs
+            .clone()
             .ok_or_else(|| OpsError::operational("no Airflow is configured for this context"))
     }
 
@@ -445,13 +519,32 @@ impl Ops {
 
     /// Every gate awaiting an answer, readiness established.
     pub async fn gates(&self, cancel: &CancellationToken) -> Result<GateList> {
-        let listing = crate::gates::list(self.runs()?, cancel).await?;
-        for gate in listing.gates.iter().filter(|gate| gate.ready) {
+        self.gates_matching(&GateFilter::default(), cancel).await
+    }
+
+    /// The gates one filter selects, readiness established.
+    pub async fn gates_matching(
+        &self,
+        filter: &GateFilter,
+        cancel: &CancellationToken,
+    ) -> Result<GateList> {
+        Ok(self.gates_selection(filter, cancel).await?.into_list())
+    }
+
+    /// The same selection, keeping the facts a batch needs to explain what it skipped.
+    pub async fn gates_selection(
+        &self,
+        filter: &GateFilter,
+        cancel: &CancellationToken,
+    ) -> Result<Selection> {
+        let selection = crate::gates::select(self.runs()?, filter, cancel).await?;
+        for row in selection.rows.iter().filter(|row| row.gate.ready) {
             // Sighting a ready gate on a plain listing counts: it is what lets an operator who has
-            // been looking at the screen answer without waiting for a confirming poll.
-            self.sightings.record(&gate.id());
+            // been looking at the screen answer without waiting for a confirming poll — and what
+            // keeps a batch from paying a confirmation delay per gate for a set it just read.
+            self.sightings.record(&row.gate.id());
         }
-        Ok(listing)
+        Ok(selection)
     }
 
     /// The evidence for one gate, and the revision to hand back to [`Ops::gate_answer`].
@@ -472,6 +565,30 @@ impl Ops {
         cancel: &CancellationToken,
     ) -> Result<GateAnswer> {
         crate::gates::answer(self.runs()?, &self.sightings, id, decision, opts, cancel).await
+    }
+
+    /// Answer every gate in a selection, one outcome per gate.
+    ///
+    /// The selection is taken as an argument rather than re-read here because the caller has to be
+    /// able to show it — and be told to confirm it — between the read and the writes. A dry run is
+    /// simply this method never being called.
+    pub async fn gate_answer_all(
+        &self,
+        selection: &Selection,
+        decision: Decision,
+        filter: &GateFilter,
+        cancel: &CancellationToken,
+    ) -> Result<BatchReport> {
+        let runs = self.runs_shared()?;
+        Ok(crate::gates::answer_all(
+            runs,
+            Arc::clone(&self.sightings),
+            selection,
+            decision,
+            filter,
+            cancel,
+        )
+        .await)
     }
 
     /// One poll of one task attempt's log.
@@ -563,6 +680,70 @@ impl Ops {
         cancel: &CancellationToken,
     ) -> Result<Vec<Run>> {
         Ok(self.runs()?.list_runs(dag_id, limit, cancel).await?.rows)
+    }
+
+    /// The newest runs of one DAG, narrowed by state, saying whether that is all of them.
+    ///
+    /// `limit` bounds the *read* — it is how many runs of this DAG are asked for — and `state`
+    /// then narrows what was read. A read that came back full has to be reported as shortened:
+    /// Airflow's cursor mode returns no total, so "there are exactly this many" is a claim this
+    /// client cannot make, and quietly implying it is the bug this whole binary replaces.
+    pub async fn runs_matching(
+        &self,
+        dag_id: &str,
+        limit: usize,
+        state: Option<&str>,
+        cancel: &CancellationToken,
+    ) -> Result<RunList> {
+        let page = self.runs()?.list_runs(dag_id, limit, cancel).await?;
+        let read = page.rows.len();
+        let runs = match state {
+            None => page.rows,
+            Some(want) => page
+                .rows
+                .into_iter()
+                .filter(|run| run.state.eq_ignore_ascii_case(want.trim()))
+                .collect(),
+        };
+        Ok(RunList {
+            runs,
+            truncated: page.truncated || read >= limit,
+        })
+    }
+
+    /// Every mapped job the filter selects, out of one pass over the sources.
+    ///
+    /// Never fails, for the same reason [`Ops::snapshot`] does not: a dead `gh` must not turn a
+    /// jobs listing into an error, and the sources that did answer are still the answer.
+    pub async fn jobs_matching(&self, filter: &JobFilter, cancel: &CancellationToken) -> JobList {
+        let mut opts = self.collect.clone();
+        if let Some(dag) = &filter.dag {
+            // The one filter this API can push down: a DAG the operator excluded is a DAG whose
+            // runs — and whose two calls per run — are never fetched at all.
+            opts.dag_ids = Some(vec![dag.trim().to_string()]);
+        }
+        let snap = self.snapshot(&opts, cancel).await;
+        let waiting: Vec<JobId> = snap.gates.iter().map(Gate::job).collect();
+        let mut jobs: Vec<JobRow> = snap
+            .jobs()
+            .filter(|job| filter.matches(job, &waiting))
+            .cloned()
+            .collect();
+        let mut truncated = snap
+            .health
+            .get(SOURCE_AIRFLOW)
+            .is_some_and(|health| health.truncated);
+        if let Some(limit) = filter.limit {
+            if jobs.len() > limit {
+                jobs.truncate(limit);
+                truncated = true;
+            }
+        }
+        JobList {
+            jobs,
+            truncated,
+            errors: snap.errors,
+        }
     }
 
     /// The job rows of one run.

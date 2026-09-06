@@ -237,39 +237,62 @@ echo "run $DAG_ID/$RUN_ID"
 # cannot hit a sub-second window, a polling script can — so this readiness rule, not a sleep, is
 # what keeps the harness's speed from being mistaken for a factory bug.
 
-say "polling; answering every ready gate as admin through swf"
+say "polling; answering every ready gate as admin through swf (in batches)"
+#
+# One command per gate was the old shape of this loop, and it is the shape a factory outgrows: a
+# fan-out of 20 issues x 3 targets is 120 gates, each invocation paying for its own full collect.
+# `--all` with a filter answers the whole ready batch at once. It still has to poll, because gates
+# ripen in waves — every job's intent gate parks before any plan gate exists — so each pass answers
+# whatever is ready and comes back for the rest.
 STATE="queued"
 answered=0
 i=0
+dry_run_checked=""
 while [ $i -lt "$RUN_TIMEOUT_S" ]; do
   STATE="$("$SWF" runs inspect "$DAG_ID/$RUN_ID" --json | field state)"
   case "$STATE" in success | failed) break ;; esac
-  "$SWF" gates list --json >"$WORK/gates.json" || true
-  READY="$("$PY" - "$WORK/gates.json" "$DAG_ID" "$RUN_ID" <<'PY'
+
+  ready="$("$SWF" gates list --dag "$DAG_ID" --ready --json | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+  if [ "${ready:-0}" -gt 0 ]; then
+    # The first time there is anything to answer, prove the dry run is honest: it must name the
+    # same gates and answer none of them. A --dry-run that quietly writes is worse than no flag.
+    if [ -z "$dry_run_checked" ]; then
+      say "swf gates approve --all --dry-run (must touch nothing)"
+      "$SWF" gates approve --all --dag "$DAG_ID" --dry-run --json >"$WORK/dry-run.json" ||
+        fail "swf gates approve --dry-run"
+      "$PY" - "$WORK/dry-run.json" "$ready" <<'PYEOF' || fail "the dry run did not describe the ready batch"
 import json
 import sys
 
-gates, dag_id, run_id = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
-for g in gates:
-    if g["dag_id"] == dag_id and g["run_id"] == run_id and g.get("ready"):
-        print(g["id"])
-PY
-)"
-  while read -r gate_id; do
-    [ -n "${gate_id:-}" ] || continue
-    printf 'reviewing %s ... ' "$gate_id"
-    "$SWF" gates review "$gate_id" >"$WORK/review-$answered.txt" 2>&1 ||
-      fail "swf gates review $gate_id"
-    printf 'approving ... '
-    if "$SWF" gates approve "$gate_id" --yes >/dev/null 2>&1; then
-      echo "ok"
-      answered=$((answered + 1))
-    else
-      echo "refused (already answered?)"
+report = json.load(open(sys.argv[1]))
+expected = int(sys.argv[2])
+rows = report if isinstance(report, list) else report.get("gates", report.get("results", []))
+planned = [r for r in rows if r.get("outcome") == "planned"]
+wrote = [r for r in rows if r.get("outcome") == "answered"]
+print(f"  dry run: planned {len(planned)} gate(s), answered {len(wrote)}")
+sys.exit(0 if planned and not wrote else 1)
+PYEOF
+      still="$("$SWF" gates list --dag "$DAG_ID" --ready --json | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+      [ "$still" = "$ready" ] ||
+        fail "the dry run changed the world: $ready ready gates before, $still after"
+      echo "  the same $still gates are still waiting — the dry run wrote nothing"
+      dry_run_checked=1
     fi
-  done <<EOF
-$READY
-EOF
+
+    printf 'approving %s ready gate(s) in one call ... ' "$ready"
+    if "$SWF" gates approve --all --dag "$DAG_ID" --yes --json >"$WORK/bulk-$i.json" 2>"$WORK/bulk-$i.err"; then
+      got="$("$PY" -c '
+import json,sys
+rows = json.load(open(sys.argv[1]))
+rows = rows if isinstance(rows, list) else rows.get("gates", rows.get("results", []))
+print(len([r for r in rows if r.get("outcome") == "answered"]))' "$WORK/bulk-$i.json")"
+      answered=$((answered + got))
+      echo "answered $got (total $answered)"
+    else
+      echo "batch reported a failure"
+      sed 's/^/    /' "$WORK/bulk-$i.err" >&2
+    fi
+  fi
   sleep 3
   i=$((i + 3))
 done
