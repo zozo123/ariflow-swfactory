@@ -1,0 +1,66 @@
+name: finish-line-a11y
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'finish/managed-lifecycle-graphs' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: finish/managed-lifecycle-graphs
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - name: Add accessible names to factory demo controls
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("site/index.html")
+          source = path.read_text()
+          source = source.replace(
+              '<button type="button" data-factory-play>',
+              '<button type="button" data-factory-play aria-label="Play factory walkthrough">',
+          ).replace(
+              '<button type="button" data-factory-next>',
+              '<button type="button" data-factory-next aria-label="Show next factory station">',
+          ).replace(
+              '<button type="button" data-factory-reset>',
+              '<button type="button" data-factory-reset aria-label="Restart factory walkthrough">',
+          )
+
+          pattern = re.compile(r'<button type="button" data-factory-step="(\d+)"([^>]*)>([^<]+)</button>')
+          def label_station(match: re.Match[str]) -> str:
+              number, attrs, text = match.groups()
+              if 'aria-label=' in attrs:
+                  return match.group(0)
+              return (
+                  f'<button type="button" data-factory-step="{number}"{attrs} '
+                  f'aria-label="Show factory station: {text}">{text}</button>'
+              )
+
+          source = pattern.sub(label_station, source)
+          path.write_text(source)
+          PY
+      - run: uv sync
+      - run: uv run pytest tests/test_site.py
+      - run: git diff --check
+      - name: Commit accessibility contract fix
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add site/index.html
+          git commit -m 'Label factory demo controls for accessibility'
+          git push origin HEAD:finish/managed-lifecycle-graphs
