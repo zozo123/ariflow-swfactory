@@ -9,8 +9,9 @@ feature-specific SQLite helpers.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from swfactory.admission import Limits, Priority
 from swfactory.cleanup_receipt import CleanupReceipt, RepairLeaseStore

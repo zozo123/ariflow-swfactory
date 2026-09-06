@@ -13,9 +13,10 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 OutcomeStatus = Literal["committed", "definitely_absent", "ambiguous", "divergent", "refused"]
 OperationState = Literal["intent", "in_doubt", "reconciling", "committed", "exhausted", "refused"]
@@ -46,8 +47,10 @@ class OperationRef:
     key: str
 
     @classmethod
-    def build(cls, cell_id: str, epoch: int, kind: str, *parts: str) -> "OperationRef":
-        digest = hashlib.sha256("\0".join((cell_id, str(epoch), kind, *parts)).encode()).hexdigest()[:24]
+    def build(cls, cell_id: str, epoch: int, kind: str, *parts: str) -> OperationRef:
+        digest = hashlib.sha256(
+            "\0".join((cell_id, str(epoch), kind, *parts)).encode()
+        ).hexdigest()[:24]
         return cls(cell_id, epoch, kind, f"{kind}:{digest}")
 
 
@@ -101,7 +104,9 @@ class OperationJournal:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False)
+        self.db = sqlite3.connect(
+            path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False
+        )
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
@@ -164,7 +169,9 @@ class OperationJournal:
                     "UPDATE operations SET state='exhausted', updated_at=? WHERE operation_key=?",
                     (time.time(), ref.key),
                 )
-                raise RetryBudgetExhausted(f"{ref.key}: retry budget {budget.max_attempts} exhausted")
+                raise RetryBudgetExhausted(
+                    f"{ref.key}: retry budget {budget.max_attempts} exhausted"
+                )
             attempt = attempts + 1
             self.db.execute(
                 """UPDATE operations SET attempts=?, state='intent', last_error=NULL,
@@ -200,7 +207,9 @@ class OperationJournal:
                 (state, payload, time.time(), ref.key),
             )
 
-    def schedule_retry(self, ref: OperationRef, attempt: int, *, budget: RetryBudget | None = None) -> float:
+    def schedule_retry(
+        self, ref: OperationRef, attempt: int, *, budget: RetryBudget | None = None
+    ) -> float:
         budget = budget or budget_for(ref.kind)
         when = time.time() + budget.delay(attempt, ref.key)
         with self.lock, self.db:
@@ -223,7 +232,9 @@ class OperationJournal:
 
     def get(self, key: str) -> dict[str, Any]:
         with self.lock:
-            row = self.db.execute("SELECT * FROM operations WHERE operation_key=?", (key,)).fetchone()
+            row = self.db.execute(
+                "SELECT * FROM operations WHERE operation_key=?", (key,)
+            ).fetchone()
             if row is None:
                 raise KeyError(key)
             out = dict(row)

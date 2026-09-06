@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable, Literal
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass
+from typing import Any, Literal
 
 from swfactory.sandbox_capabilities import SandboxCapabilities, SandboxLineage
 
@@ -183,7 +184,9 @@ def islo_document(*, snapshot: bool = False, fork: bool = False) -> ProviderDocu
     )
 
 
-def provider_documents(*, islo_snapshot: bool = False, islo_fork: bool = False) -> tuple[ProviderDocument, ...]:
+def provider_documents(
+    *, islo_snapshot: bool = False, islo_fork: bool = False
+) -> tuple[ProviderDocument, ...]:
     return (
         local_document(),
         srt_document(),

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable
 
 
 class StalePolicy(str, Enum):
@@ -45,11 +45,7 @@ def coordinate(
         if peer.repo == job.repo and peer.target == job.target and peer.base_sha == job.base_sha
     ]
     overlaps = sorted(
-        {
-            path
-            for peer in peers
-            for path in job.touched_files.intersection(peer.touched_files)
-        }
+        {path for peer in peers for path in job.touched_files.intersection(peer.touched_files)}
     )
     stale = current_target_sha != job.observed_target_sha
 
@@ -64,15 +60,27 @@ def coordinate(
             )
         if policy == StalePolicy.REBASE:
             return CoordinationDecision(
-                "rebase", True, tuple(overlaps), True, "rebase requires complete policy verification"
+                "rebase",
+                True,
+                tuple(overlaps),
+                True,
+                "rebase requires complete policy verification",
             )
         if policy == StalePolicy.WARN:
             return CoordinationDecision(
-                "publish_stale", True, tuple(overlaps), False, "publish only with explicit stale evidence"
+                "publish_stale",
+                True,
+                tuple(overlaps),
+                False,
+                "publish only with explicit stale evidence",
             )
     if overlaps:
         return CoordinationDecision(
-            "review_overlap", False, tuple(overlaps), True, "overlap must not silently last-writer-win"
+            "review_overlap",
+            False,
+            tuple(overlaps),
+            True,
+            "overlap must not silently last-writer-win",
         )
     return CoordinationDecision("proceed", False, (), False, "disjoint and current")
 

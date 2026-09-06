@@ -7,8 +7,9 @@ redaction contract, and then delegates to the append-only evidence writer.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from swfactory.lifecycle_evidence import EvidenceWriter, TraceContext
 from swfactory.security_contract import CanonicalPolicy, MutationEnvelope, redact

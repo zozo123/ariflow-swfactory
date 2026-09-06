@@ -47,7 +47,9 @@ _RULES = (
     AuthorityRule(ResourceKind.CLEANUP, "python-backend", "cell_epoch", "cleanup receipt"),
     AuthorityRule(ResourceKind.ADMISSION, "python-backend", "work_id", "admission store"),
     AuthorityRule(ResourceKind.EVIDENCE, "python-backend", "cell_epoch", "evidence bundle"),
-    AuthorityRule(ResourceKind.GENERATION, "python-backend", "generation_id", "generation manifest"),
+    AuthorityRule(
+        ResourceKind.GENERATION, "python-backend", "generation_id", "generation manifest"
+    ),
 )
 
 
@@ -63,9 +65,7 @@ class MutationAuthority:
         if self.epoch < 1:
             raise AuthorityViolation("mutation epoch must be positive")
         if self.epoch != current_epoch:
-            raise AuthorityViolation(
-                f"stale epoch {self.epoch}; current epoch is {current_epoch}"
-            )
+            raise AuthorityViolation(f"stale epoch {self.epoch}; current epoch is {current_epoch}")
         owner = allowed_actor or rule_for(self.resource).owner
         if self.actor != owner:
             raise AuthorityViolation(

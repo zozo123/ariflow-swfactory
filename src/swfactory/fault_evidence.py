@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import random
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,14 @@ class FaultPlan:
 def generate(seed: int, *, steps: int, count: int, targets: Iterable[str]) -> FaultPlan:
     rng = random.Random(seed)
     targets = tuple(targets)
-    kinds = ("kill_backend", "freeze_worker", "sandbox_terminate", "api_429", "api_500", "stale_epoch")
+    kinds = (
+        "kill_backend",
+        "freeze_worker",
+        "sandbox_terminate",
+        "api_429",
+        "api_500",
+        "stale_epoch",
+    )
     faults = []
     for _ in range(max(0, count)):
         faults.append(
@@ -43,7 +50,9 @@ def generate(seed: int, *, steps: int, count: int, targets: Iterable[str]) -> Fa
     return FaultPlan(seed, tuple(sorted(faults, key=lambda f: (f.at_step, f.kind, f.target))))
 
 
-def write_evidence(root: Path, *, plan: FaultPlan, verdicts: dict, metrics: dict, timeline: list[dict]) -> Path:
+def write_evidence(
+    root: Path, *, plan: FaultPlan, verdicts: dict, metrics: dict, timeline: list[dict]
+) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     bundle = {
         "schema_version": 1,
@@ -57,7 +66,13 @@ def write_evidence(root: Path, *, plan: FaultPlan, verdicts: dict, metrics: dict
     return path
 
 
-def invariant_verdict(*, duplicate_mutations: int, stale_epoch_mutations: int, lost_evidence: int, cleanup_pending: int) -> dict[str, bool]:
+def invariant_verdict(
+    *,
+    duplicate_mutations: int,
+    stale_epoch_mutations: int,
+    lost_evidence: int,
+    cleanup_pending: int,
+) -> dict[str, bool]:
     return {
         "no_duplicate_mutation": duplicate_mutations == 0,
         "stale_epoch_rejected": stale_epoch_mutations == 0,

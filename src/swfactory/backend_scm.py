@@ -80,7 +80,9 @@ class BackendScm:
                 "title": title,
                 "body": body,
                 "labels": list(labels),
-                "allowed_prefixes": list(allowed_prefixes) if allowed_prefixes is not None else None,
+                "allowed_prefixes": list(allowed_prefixes)
+                if allowed_prefixes is not None
+                else None,
             },
             timeout=180,
         )
@@ -148,7 +150,11 @@ class BackendScm:
         except ValueError as error:
             raise StageError("scm", "factory backend SCM returned invalid JSON") from error
         if status >= 300:
-            detail = value.get("detail", f"HTTP {status}") if isinstance(value, dict) else f"HTTP {status}"
+            detail = (
+                value.get("detail", f"HTTP {status}")
+                if isinstance(value, dict)
+                else f"HTTP {status}"
+            )
             raise StageError(
                 "scm",
                 f"factory backend SCM refused operation: {detail}",

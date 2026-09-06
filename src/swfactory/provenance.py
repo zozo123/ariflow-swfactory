@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -42,12 +42,16 @@ def digest(path: Path) -> ArtifactDigest:
     return ArtifactDigest(str(path), hashlib.sha256(data).hexdigest(), len(data))
 
 
-def manifest(source_sha: str, builder: str, workflow: str, paths: Iterable[Path]) -> ReleaseProvenance:
+def manifest(
+    source_sha: str, builder: str, workflow: str, paths: Iterable[Path]
+) -> ReleaseProvenance:
     return ReleaseProvenance(source_sha, builder, workflow, tuple(digest(p) for p in paths))
 
 
 def write(path: Path, provenance: ReleaseProvenance) -> None:
-    path.write_text(json.dumps(provenance.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(provenance.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def verify(root: Path, provenance: ReleaseProvenance) -> tuple[bool, tuple[str, ...]]:

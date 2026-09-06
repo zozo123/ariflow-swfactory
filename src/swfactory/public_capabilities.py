@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 VALID_STATES = {"supported", "experimental", "not_tested", "not_supported", "non_blocking_ci"}
 
@@ -22,8 +23,15 @@ def validate_capability(row: dict[str, Any]) -> None:
 
 def validate_benchmark(row: dict[str, Any]) -> None:
     required = {
-        "name", "source_sha", "measured_at", "environment", "workload",
-        "samples", "methodology", "evidence", "value",
+        "name",
+        "source_sha",
+        "measured_at",
+        "environment",
+        "workload",
+        "samples",
+        "methodology",
+        "evidence",
+        "value",
     }
     missing = required - set(row)
     if missing:
@@ -32,7 +40,9 @@ def validate_benchmark(row: dict[str, Any]) -> None:
         raise ValueError("benchmark samples must be positive")
 
 
-def build_public_document(capabilities: Iterable[dict[str, Any]], benchmarks: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def build_public_document(
+    capabilities: Iterable[dict[str, Any]], benchmarks: Iterable[dict[str, Any]]
+) -> dict[str, Any]:
     capabilities = list(capabilities)
     benchmarks = list(benchmarks)
     for row in capabilities:

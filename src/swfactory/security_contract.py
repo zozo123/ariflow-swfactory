@@ -11,8 +11,9 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 POLICY_SCHEMA_VERSION = 1
 MUTATION_SCHEMA_VERSION = 1
@@ -49,7 +50,9 @@ class CanonicalPolicy:
             "schema_version": self.schema_version,
             "repo": self.repo.strip(),
             "target": self.target.strip(),
-            "protected_paths": sorted(set(path.strip() for path in self.protected_paths if path.strip())),
+            "protected_paths": sorted(
+                set(path.strip() for path in self.protected_paths if path.strip())
+            ),
             "allowed_domains": sorted(
                 set(domain.strip().lower() for domain in self.allowed_domains if domain.strip())
             ),
@@ -60,7 +63,9 @@ class CanonicalPolicy:
         }
 
     def digest(self) -> str:
-        payload = json.dumps(self.canonical_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False)
+        payload = json.dumps(
+            self.canonical_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
         return "policy:" + hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -191,9 +196,7 @@ def policy_digest_for_mapping(policy: Mapping[str, Any]) -> str:
         separators=(",", ":"),
         allow_nan=False,
     )
-    return "policy:" + hashlib.sha256(
-        f"v{POLICY_SCHEMA_VERSION}\0{payload}".encode()
-    ).hexdigest()
+    return "policy:" + hashlib.sha256(f"v{POLICY_SCHEMA_VERSION}\0{payload}".encode()).hexdigest()
 
 
 def _canonical_value(value: Any) -> Any:

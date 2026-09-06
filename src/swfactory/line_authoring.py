@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ class LineSpec:
             shape = f"{{{{{stage.name}}}}}" if stage.gate else f"[{stage.name}]"
             lines.append(f"  s{index}{shape}")
             if index:
-                lines.append(f"  s{index-1} --> s{index}")
+                lines.append(f"  s{index - 1} --> s{index}")
         return "\n".join(lines)
 
 
@@ -72,7 +72,9 @@ def preview_fanout(issues: Iterable[str], targets: Iterable[str]) -> dict:
     }
 
 
-def _risk_flags(old: dict[str, StageSpec], new: dict[str, StageSpec], removed: list[str]) -> list[str]:
+def _risk_flags(
+    old: dict[str, StageSpec], new: dict[str, StageSpec], removed: list[str]
+) -> list[str]:
     flags = [f"removed_stage:{name}" for name in removed]
     for name in set(old).intersection(new):
         if old[name].gate and not new[name].gate:

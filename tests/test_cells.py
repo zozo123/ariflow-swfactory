@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from swfactory.cell_runtime import bind_jobs, identity_for_job
-from swfactory.cells import CellBusy, CellStore, SCHEMA_VERSION, StaleEpoch
+from swfactory.cells import SCHEMA_VERSION, CellBusy, CellStore, StaleEpoch
 
 
 def _job(index: int = 0) -> dict[str, object]:

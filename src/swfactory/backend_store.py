@@ -11,7 +11,9 @@ from typing import Any, Protocol
 
 
 class BackendStore(Protocol):
-    def put_if_version(self, key: str, expected_version: int | None, value: dict[str, Any]) -> int: ...
+    def put_if_version(
+        self, key: str, expected_version: int | None, value: dict[str, Any]
+    ) -> int: ...
     def get(self, key: str) -> tuple[int, dict[str, Any]] | None: ...
     def pending(self, prefix: str) -> list[tuple[str, int, dict[str, Any]]]: ...
 
@@ -54,7 +56,9 @@ class SQLiteBackendStore:
         )
 
     def get(self, key: str) -> tuple[int, dict[str, Any]] | None:
-        row = self.db.execute("SELECT version,value_json FROM backend_state WHERE key=?", (key,)).fetchone()
+        row = self.db.execute(
+            "SELECT version,value_json FROM backend_state WHERE key=?", (key,)
+        ).fetchone()
         if row is None:
             return None
         return row["version"], json.loads(row["value_json"])
@@ -84,7 +88,9 @@ class SQLiteBackendStore:
     def acquire(self, key: str, owner: str, *, ttl_s: float = 30.0) -> Lease:
         now = time.time()
         with self.db:
-            row = self.db.execute("SELECT owner,epoch,expires_at FROM backend_leases WHERE key=?", (key,)).fetchone()
+            row = self.db.execute(
+                "SELECT owner,epoch,expires_at FROM backend_leases WHERE key=?", (key,)
+            ).fetchone()
             if row is not None and row["expires_at"] > now and row["owner"] != owner:
                 raise VersionConflict(f"lease busy: {key}")
             epoch = 1 if row is None else int(row["epoch"]) + 1

@@ -12,7 +12,9 @@ use swf_adapters::traits::DEFAULT_HTTP_TIMEOUT;
 use swf_app::context::ContextStore;
 use swf_app::ops::{OpsError, Result};
 use swf_app::OperatorOps;
-use swf_domain::operator::{BackendCapabilities, FleetSummary, OperationDebt, QueueEntry, QueueSnapshot};
+use swf_domain::operator::{
+    BackendCapabilities, FleetSummary, OperationDebt, QueueEntry, QueueSnapshot,
+};
 use swf_domain::sanitize::sanitize_line;
 use tokio_util::sync::CancellationToken;
 
@@ -55,7 +57,9 @@ enum QueueCmd {
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
-    Inspect { work_id: String },
+    Inspect {
+        work_id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -64,7 +68,9 @@ enum OperationCmd {
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
-    Inspect { operation_key: String },
+    Inspect {
+        operation_key: String,
+    },
 }
 
 pub fn recognizes(argv: &[String]) -> bool {

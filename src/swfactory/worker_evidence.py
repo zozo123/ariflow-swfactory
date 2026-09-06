@@ -59,8 +59,7 @@ class WorkerEvidenceSink:
                     "receipt": receipt,
                 }
                 handle.write(
-                    json.dumps(event, sort_keys=True, separators=(",", ":"), allow_nan=False)
-                    + "\n"
+                    json.dumps(event, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
                 )
             handle.flush()
             os.fsync(handle.fileno())

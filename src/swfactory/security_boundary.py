@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 _SECRET_KEYS = re.compile(r"(?i)(token|secret|password|authorization|cookie|private[_-]?key)")
 
@@ -20,15 +20,27 @@ class WorkPolicy:
 
     def digest(self) -> str:
         raw = "\0".join(
-            (self.repo, *sorted(self.allowed_paths), "--deny--", *sorted(self.denied_paths), "--hosts--", *sorted(self.allowed_hosts))
+            (
+                self.repo,
+                *sorted(self.allowed_paths),
+                "--deny--",
+                *sorted(self.denied_paths),
+                "--hosts--",
+                *sorted(self.allowed_hosts),
+            )
         ).encode()
         return hashlib.sha256(raw).hexdigest()
 
     def allows_path(self, path: str) -> bool:
         normalized = path.replace("\\", "/").lstrip("./")
-        if any(normalized == d or normalized.startswith(d.rstrip("/") + "/") for d in self.denied_paths):
+        if any(
+            normalized == d or normalized.startswith(d.rstrip("/") + "/") for d in self.denied_paths
+        ):
             return False
-        return any(normalized == a or normalized.startswith(a.rstrip("/") + "/") for a in self.allowed_paths)
+        return any(
+            normalized == a or normalized.startswith(a.rstrip("/") + "/")
+            for a in self.allowed_paths
+        )
 
 
 @dataclass(frozen=True)
@@ -42,7 +54,9 @@ class CredentialEnvelope:
         return self.audience == zone
 
 
-def sandbox_environment(credentials: Iterable[CredentialEnvelope], base: dict[str, str]) -> dict[str, str]:
+def sandbox_environment(
+    credentials: Iterable[CredentialEnvelope], base: dict[str, str]
+) -> dict[str, str]:
     """Return a sandbox env that excludes control-plane/publication credentials."""
     out = dict(base)
     for cred in credentials:
@@ -68,4 +82,9 @@ def redact(value):
 
 
 def mutation_identity(cell_id: str, epoch: int, policy: WorkPolicy) -> dict[str, str | int]:
-    return {"cell_id": cell_id, "epoch": epoch, "repo": policy.repo, "policy_digest": policy.digest()}
+    return {
+        "cell_id": cell_id,
+        "epoch": epoch,
+        "repo": policy.repo,
+        "policy_digest": policy.digest(),
+    }

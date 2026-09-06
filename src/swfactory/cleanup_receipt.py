@@ -44,7 +44,7 @@ class CleanupReceipt:
         requested_at: float,
         attempts: int = 1,
         detail: str = "",
-    ) -> "CleanupReceipt":
+    ) -> CleanupReceipt:
         if epoch < 1 or attempts < 1:
             raise ValueError("cleanup epoch/attempts must be positive")
         return cls(
@@ -86,7 +86,9 @@ class RepairLeaseStore:
 
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False)
+        self.db = sqlite3.connect(
+            path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False
+        )
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")

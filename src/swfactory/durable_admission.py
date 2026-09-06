@@ -10,9 +10,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from swfactory.admission import Limits, Priority
 
@@ -65,7 +65,9 @@ class DurableAdmission:
     def __init__(self, path: Path, limits: Limits = Limits()):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.limits = limits
-        self.db = sqlite3.connect(path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False)
+        self.db = sqlite3.connect(
+            path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False
+        )
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
@@ -207,7 +209,12 @@ class DurableAdmission:
         checks = (
             ("global", "", len(active), self.limits.global_active),
             ("repo", repo, sum(r["repo"] == repo for r in active), self.limits.per_repo_active),
-            ("actor", actor, sum(r["actor"] == actor for r in active), self.limits.per_actor_active),
+            (
+                "actor",
+                actor,
+                sum(r["actor"] == actor for r in active),
+                self.limits.per_actor_active,
+            ),
             (
                 "blueprint",
                 blueprint,
@@ -362,10 +369,16 @@ class DurableAdmission:
     def _next_sequence(self) -> int:
         with self.db:
             self.db.execute("UPDATE admission_meta SET value=value+1 WHERE key='sequence'")
-            return int(self.db.execute("SELECT value FROM admission_meta WHERE key='sequence'").fetchone()[0])
+            return int(
+                self.db.execute("SELECT value FROM admission_meta WHERE key='sequence'").fetchone()[
+                    0
+                ]
+            )
 
     def _row(self, work_id: str) -> sqlite3.Row | None:
-        return self.db.execute("SELECT * FROM admission_work WHERE work_id=?", (work_id,)).fetchone()
+        return self.db.execute(
+            "SELECT * FROM admission_work WHERE work_id=?", (work_id,)
+        ).fetchone()
 
     def _active_rows(self) -> list[sqlite3.Row]:
         return self.db.execute(
@@ -378,7 +391,11 @@ class DurableAdmission:
         ).fetchall()
 
     def _count(self, state: str) -> int:
-        return int(self.db.execute("SELECT count(*) FROM admission_work WHERE state=?", (state,)).fetchone()[0])
+        return int(
+            self.db.execute(
+                "SELECT count(*) FROM admission_work WHERE state=?", (state,)
+            ).fetchone()[0]
+        )
 
     def _any_other_candidate(self, work_id: str) -> bool:
         return bool(

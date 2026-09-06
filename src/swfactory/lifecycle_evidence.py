@@ -10,9 +10,10 @@ import hashlib
 import json
 import os
 import time
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from swfactory.security_boundary import redact
 
@@ -23,13 +24,15 @@ class TraceContext:
     span_id: str
 
     @classmethod
-    def for_cell(cls, cell_id: str, epoch: int, kind: str, identity: str = "") -> "TraceContext":
+    def for_cell(cls, cell_id: str, epoch: int, kind: str, identity: str = "") -> TraceContext:
         trace = hashlib.sha256(f"trace\0{cell_id}\0{epoch}".encode()).hexdigest()[:32]
         span = hashlib.sha256(f"span\0{trace}\0{kind}\0{identity}".encode()).hexdigest()[:16]
         return cls(trace, span)
 
-    def child(self, kind: str, identity: str = "") -> "TraceContext":
-        span = hashlib.sha256(f"span\0{self.trace_id}\0{self.span_id}\0{kind}\0{identity}".encode()).hexdigest()[:16]
+    def child(self, kind: str, identity: str = "") -> TraceContext:
+        span = hashlib.sha256(
+            f"span\0{self.trace_id}\0{self.span_id}\0{kind}\0{identity}".encode()
+        ).hexdigest()[:16]
         return TraceContext(self.trace_id, span)
 
 
@@ -185,7 +188,9 @@ class EvidenceWriter:
                 continue
             seen.add(key)
             data = path.read_bytes()
-            files.append({"path": str(path), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+            files.append(
+                {"path": str(path), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+            )
         manifest = {
             "schema_version": 1,
             "cell_id": cell_id,
@@ -238,7 +243,9 @@ class EvidenceWriter:
 
     @staticmethod
     def _append_jsonl(path: Path, value: Mapping[str, Any]) -> None:
-        payload = json.dumps(dict(value), sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+        payload = (
+            json.dumps(dict(value), sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+        )
         with path.open("a", encoding="utf-8") as handle:
             handle.write(payload)
             handle.flush()
@@ -260,9 +267,20 @@ ALLOWED_METRIC_LABELS = frozenset(
 def validate_metric_labels(labels: Mapping[str, str]) -> None:
     forbidden = set(labels) - ALLOWED_METRIC_LABELS
     if forbidden:
-        raise ValueError(f"high-cardinality/unknown metric labels are forbidden: {sorted(forbidden)}")
+        raise ValueError(
+            f"high-cardinality/unknown metric labels are forbidden: {sorted(forbidden)}"
+        )
     for key, value in labels.items():
         lower = value.lower()
-        if key in {"repo", "blueprint", "generation", "provider", "stage", "state", "kind", "result"}:
+        if key in {
+            "repo",
+            "blueprint",
+            "generation",
+            "provider",
+            "stage",
+            "state",
+            "kind",
+            "result",
+        }:
             if "cell_" in lower or "run_" in lower or len(value) > 128:
                 raise ValueError(f"metric label {key} appears high-cardinality")
