@@ -8,6 +8,17 @@ All notable changes to this project will be documented here. The format follows
 
 ### Added
 
+- Durable webhook intake with a persistent SQLite inbox, leased worker claims, bounded retries,
+  backoff and dead dispatch receipts. Accepted events survive receiver restarts and Airflow
+  outages; stable run IDs and verified conflict recovery preserve submission identity.
+- `swfactory webhook deliveries`, `inspect` and `retry` expose dispatch state and recover one
+  failed submission without creating a new run. `/readyz` reports intake readiness, queue counts
+  and pending age; inbox path, capacity and attempts have explicit CLI/environment settings.
+- Webhook admission validates source repositories against installed blueprints, restricts mapped
+  targets to the originating repository and records minimal provenance in Airflow configuration.
+  Docker and islo keep receipts beside Airflow's persistent state and can start intake before
+  the Airflow API is reachable when credentials are available. See [webhooks](docs/webhooks.md).
+
 - `swf`, a native operator binary, is now built and released alongside the Python package. One
   executable connects to a factory environment, submits governed work, lists runs and mapped jobs,
   reads a task attempt's log, reviews and answers approval gates, verifies deliveries, removes

@@ -22,6 +22,7 @@ from swfactory import metrics as metrics_mod
 from swfactory.agent import Agent
 from swfactory.blueprint import Blueprint
 from swfactory.config import FACTORY_ROOT, Config
+from swfactory.dispatch import DEFAULT_INBOX, DeliveryConflict, DeliveryInbox
 from swfactory.models import RunReport, StageError
 from swfactory.runtime import build_ctx, ctx_for, job_run_dir
 from swfactory.scm import make_scm
@@ -320,16 +321,30 @@ def webhook_serve(
         ),
     ] = "SWF_WEBHOOK_SECRET",
     host: Annotated[str, typer.Option(help="bind address")] = "0.0.0.0",
+    inbox: Annotated[
+        Path, typer.Option(envvar="SWF_WEBHOOK_INBOX", help="persistent webhook SQLite database")
+    ] = DEFAULT_INBOX,
+    max_pending: Annotated[
+        int,
+        typer.Option(min=1, envvar="SWF_WEBHOOK_MAX_PENDING", help="undispatched receipt limit"),
+    ] = 10_000,
+    max_attempts: Annotated[
+        int,
+        typer.Option(min=1, envvar="SWF_WEBHOOK_MAX_ATTEMPTS", help="dispatch attempts per cycle"),
+    ] = 12,
 ) -> None:
-    """Serve POST /webhooks/github and GET /healthz; Airflow creds from AIRFLOW_TOKEN or
-    AIRFLOW_USER + AIRFLOW_PASSWORD."""
+    """Persist signed work before replying, then dispatch with retries. GET /readyz reports intake
+    capacity. Airflow creds come from AIRFLOW_TOKEN or AIRFLOW_USER + AIRFLOW_PASSWORD."""
     import os
+    import sqlite3
 
     from swfactory import webhook as webhook_mod
 
     try:
         provider = webhook_mod.token_provider_from_env(airflow_url)
-    except ValueError as e:
+        queue = DeliveryInbox(inbox, max_pending=max_pending)
+        queue.bind(webhook_mod._safe_airflow_base(airflow_url))
+    except (ValueError, OSError, sqlite3.Error) as e:
         typer.echo(f"webhook: {e}", err=True)
         raise typer.Exit(2) from e
     webhook_mod.serve(
@@ -338,13 +353,112 @@ def webhook_serve(
         token_provider=provider,
         secret=os.environ.get(secret_env) or None,
         host=host,
+        inbox=queue,
+        max_attempts=max_attempts,
     )
+
+
+def _webhook_inbox(path: Path) -> DeliveryInbox:
+    """Operator reads must not create an empty database because a path was mistyped."""
+    import sqlite3
+
+    if not path.expanduser().is_file():
+        typer.echo(f"webhook inbox does not exist: {path}", err=True)
+        raise typer.Exit(3)
+    try:
+        return DeliveryInbox(path)
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        typer.echo(f"webhook inbox unavailable: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
+@webhook_app.command("deliveries")
+def webhook_deliveries(
+    inbox: Annotated[
+        Path, typer.Option(envvar="SWF_WEBHOOK_INBOX", help="receiver's SQLite database")
+    ] = DEFAULT_INBOX,
+    state: Annotated[
+        str | None, typer.Option(help="pending | dispatching | dispatched | dead")
+    ] = None,
+    limit: Annotated[int, typer.Option(min=1, max=1000)] = 50,
+    as_json: Annotated[bool, typer.Option("--json", help="one JSON document")] = False,
+) -> None:
+    """Inspect dispatch receipts; dispatched means Airflow accepted work, not that its run passed."""
+    import sqlite3
+
+    queue = _webhook_inbox(inbox)
+    try:
+        deliveries = queue.list(state=state, limit=limit)
+        summary = queue.summary()
+    except (ValueError, sqlite3.Error) as exc:
+        typer.echo(f"webhook: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    if as_json:
+        typer.echo(json.dumps({**summary, "deliveries": [d.public() for d in deliveries]}))
+        return
+    typer.echo("  ".join(f"{key}={value}" for key, value in summary["counts"].items()))
+    for delivery in deliveries:
+        typer.echo(
+            f"{delivery.delivery_id}  {delivery.state:<11}  {delivery.repository}  "
+            f"{delivery.dag_id}  attempts={delivery.attempts}/{delivery.total_attempts}  "
+            f"{delivery.last_error or delivery.dag_run_id}"
+        )
+
+
+@webhook_app.command("inspect")
+def webhook_inspect(
+    delivery_id: Annotated[str, typer.Argument(help="X-GitHub-Delivery identity")],
+    inbox: Annotated[
+        Path, typer.Option(envvar="SWF_WEBHOOK_INBOX", help="receiver's SQLite database")
+    ] = DEFAULT_INBOX,
+) -> None:
+    """Print one receipt and its frozen Airflow configuration as JSON."""
+    import sqlite3
+
+    try:
+        receipt = _webhook_inbox(inbox).get(delivery_id)
+    except KeyError as exc:
+        typer.echo("webhook delivery not found", err=True)
+        raise typer.Exit(3) from exc
+    except sqlite3.Error as exc:
+        typer.echo("webhook inbox unavailable", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(receipt.public(), indent=2))
+
+
+@webhook_app.command("retry")
+def webhook_retry(
+    delivery_id: Annotated[
+        str, typer.Argument(help="dead dispatch to requeue after repairing cause")
+    ],
+    inbox: Annotated[
+        Path, typer.Option(envvar="SWF_WEBHOOK_INBOX", help="receiver's SQLite database")
+    ] = DEFAULT_INBOX,
+) -> None:
+    """Requeue one dead delivery with the SAME run id. Does not rerun an existing Airflow job."""
+    import sqlite3
+
+    try:
+        receipt = _webhook_inbox(inbox).retry(delivery_id)
+    except KeyError as exc:
+        typer.echo("webhook delivery not found", err=True)
+        raise typer.Exit(3) from exc
+    except DeliveryConflict as exc:
+        typer.echo(f"webhook: {exc}", err=True)
+        raise typer.Exit(6) from exc
+    except sqlite3.Error as exc:
+        typer.echo("webhook inbox unavailable", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(receipt.public(), indent=2))
 
 
 @webhook_app.command("route")
 def webhook_route(
     event: Annotated[str, typer.Argument(help="X-GitHub-Event value: issues | issue_comment")],
     payload: Annotated[Path, typer.Argument(help="path to the event payload JSON")],
+    repository_check: Annotated[
+        bool, typer.Option(help="validate repository.full_name against the installed blueprint")
+    ] = False,
 ) -> None:
     """Dry run: print the DAG run a payload would trigger (exit 1 when it would be ignored)."""
     from swfactory import webhook as webhook_mod
@@ -358,6 +472,12 @@ def webhook_route(
     if trigger is None:
         typer.echo(f"{event}: ignored")
         raise typer.Exit(1)
+    if repository_check:
+        try:
+            trigger = webhook_mod.repository_trigger(trigger, webhook_mod._repository(data))
+        except (OSError, ValueError) as exc:
+            typer.echo(f"webhook route rejected: {exc}", err=True)
+            raise typer.Exit(2) from exc
     typer.echo(
         f"POST /api/v2/dags/{trigger.dag_id}/dagRuns {json.dumps(trigger.body(), sort_keys=True)}"
     )

@@ -367,9 +367,14 @@ lint, unit tests, the scripted end-to-end run, Airflow parity and smoke, and pac
 | `swfactory herd` | view runs, approvals, pull requests, and sandboxes |
 | `swfactory approve` | answer an Airflow approval gate |
 | `swfactory webhook serve` | route trusted GitHub events into Airflow |
+| `swfactory webhook deliveries / inspect / retry` | inspect durable dispatch receipts and recover failed submissions |
 | `swfactory metrics` | aggregate committed run evidence |
 | `swfactory maintain` | detect metric drift and sweep owned sandboxes |
 | `swf` | the same connect, submit, watch, approve, and verify operations as one native binary, plus `swf tui` ([docs/swf.md](docs/swf.md)) |
+
+Webhook intake persists accepted work before replying and retries Airflow submission in the
+background. Repository-bound routes and stable run IDs keep redelivery from creating unrelated
+jobs. See [durable webhook intake](docs/webhooks.md) for receipts, recovery, health and storage.
 
 ## Install the factory skill
 

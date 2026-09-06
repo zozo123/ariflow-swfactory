@@ -72,7 +72,7 @@ services:
     command: ["bash", "deploy/docker/webhook.sh"]
     depends_on:
       airflow:
-        condition: service_healthy
+        condition: service_started
     environment:
       <<: *common-env
       AIRFLOW_URL: http://airflow:8080
@@ -82,6 +82,9 @@ services:
       AIRFLOW_TOKEN: ${AIRFLOW_TOKEN:-}
       SWF_WEBHOOK_SECRET: ${SWF_WEBHOOK_SECRET:-}
       SWF_WEBHOOK_PORT: "8081"
+      SWF_WEBHOOK_INBOX: /opt/airflow_home/webhooks/inbox.sqlite3
+      SWF_WEBHOOK_MAX_PENDING: ${SWF_WEBHOOK_MAX_PENDING:-10000}
+      SWF_WEBHOOK_MAX_ATTEMPTS: ${SWF_WEBHOOK_MAX_ATTEMPTS:-12}
     ports:
       - "127.0.0.1:8081:8081"
     restart: unless-stopped

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Orchestrator entrypoint, run INSIDE the swf-orchestrator islo sandbox (see deploy.sh):
 #   airflow db migrate -> airflow standalone (background, API+UI on :8080) -> wait for
-#   /api/v2/monitor/health -> swfactory webhook serve --port 8081 (foreground).
+#   credentials ready -> swfactory webhook serve --port 8081 (foreground).
 # Airflow 3.3.1 simple auth manager: the admin password is generated on first start into
 # $AIRFLOW_HOME/simple_auth_manager_passwords.json.generated; the receiver logs in with it.
 # Nothing here prints a password or a token.
@@ -20,6 +20,7 @@ cd "$SWF_REPO_DIR"
 
 # --- Airflow ---------------------------------------------------------------------------------
 export AIRFLOW_HOME="${AIRFLOW_HOME:-/workspace/airflow_home}"
+export SWF_WEBHOOK_INBOX="${SWF_WEBHOOK_INBOX:-$AIRFLOW_HOME/webhooks/inbox.sqlite3}"
 export AIRFLOW__CORE__DAGS_FOLDER="$SWF_REPO_DIR/dags"
 export AIRFLOW__CORE__LOAD_EXAMPLES=False
 export AIRFLOW__API__PORT="${AIRFLOW__API__PORT:-8080}"
@@ -43,27 +44,23 @@ uv run --group airflow airflow standalone >"$AIRFLOW_HOME/standalone.log" 2>&1 &
 AIRFLOW_PID=$!
 trap 'kill "$AIRFLOW_PID" 2>/dev/null || true' EXIT INT TERM
 
-echo "start.sh: waiting for $AIRFLOW_URL/api/v2/monitor/health ..."
-for _ in $(seq 1 180); do
-  if curl -fsS "$AIRFLOW_URL/api/v2/monitor/health" >/dev/null 2>&1; then break; fi
-  if ! kill -0 "$AIRFLOW_PID" 2>/dev/null; then
-    echo "start.sh: airflow standalone exited; tail of $AIRFLOW_HOME/standalone.log:" >&2
-    tail -n 50 "$AIRFLOW_HOME/standalone.log" >&2
-    exit 1
-  fi
-  sleep 2
-done
-curl -fsS "$AIRFLOW_URL/api/v2/monitor/health" >/dev/null || {
-  echo "start.sh: airflow did not become healthy" >&2
-  exit 1
-}
-echo "start.sh: airflow healthy"
-
 # --- webhook receiver (foreground) -----------------------------------------------------------
 # Credentials for the receiver's /auth/token login: AIRFLOW_TOKEN wins; else AIRFLOW_USER +
 # AIRFLOW_PASSWORD; else the generated admin password (read here, exported, never printed).
 if [ -z "${AIRFLOW_TOKEN:-}" ] && [ -z "${AIRFLOW_PASSWORD:-}" ]; then
   PW_FILE="${AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE:-$AIRFLOW_HOME/simple_auth_manager_passwords.json.generated}"
+  for _ in $(seq 1 180); do
+    if [ -s "$PW_FILE" ]; then break; fi
+    if ! kill -0 "$AIRFLOW_PID" 2>/dev/null; then
+      echo "start.sh: Airflow exited before generating its credential file" >&2
+      exit 1
+    fi
+    sleep 2
+  done
+  if [ ! -s "$PW_FILE" ]; then
+    echo "start.sh: Airflow has not generated its credential file" >&2
+    exit 1
+  fi
   export AIRFLOW_USER="${AIRFLOW_USER:-admin}"
   AIRFLOW_PASSWORD="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$PW_FILE" "$AIRFLOW_USER")"
   export AIRFLOW_PASSWORD

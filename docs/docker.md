@@ -62,6 +62,12 @@ store, and `report.json` is the run summary. The same layout is used by `--sandb
 Stop with `docker compose -f deploy/docker/compose.yml down` (`-v` also drops the Airflow DB, the
 venv volume and the generated password).
 
+Webhook receipts live in the `airflow-home` volume at `/opt/airflow_home/webhooks/inbox.sqlite3`.
+The receiver accepts work while Airflow is unavailable once it has credentials, and retries
+dispatches in the background. `down -v` also deletes these receipts. Inspect them with
+`docker compose -f deploy/docker/compose.yml exec webhook uv run swfactory webhook deliveries`.
+See [durable webhook intake](webhooks.md) for repository routing, retries and `/readyz`.
+
 ## Knobs (`SWF_*` env or CLI flags; env wins over the blueprint)
 
 | Config field | env | default | meaning |

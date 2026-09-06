@@ -4,7 +4,8 @@ The factory itself runs on islo: one long-lived ``swf-orchestrator`` sandbox hos
 ``airflow standalone`` and this receiver on port 8081. GitHub posts to an islo incoming webhook
 (``islo webhook incoming create --deliver-to-port 8081 --path /webhooks/github ...``), islo
 verifies the HMAC and de-duplicates on ``X-GitHub-Delivery``, and delivers the request to this
-process, which maps the event to one Airflow DAG run::
+process, which durably queues the event before replying. A background dispatcher creates one
+stable Airflow DAG run and verifies the existing run after an ambiguous submission::
 
     issues.labeled  label "factory"         -> POST /api/v2/dags/factory/dagRuns {"issues": ["<n>"]}
     issues.labeled  label "factory:<name>"  -> POST /api/v2/dags/<name>/dagRuns  {"issues": ["<n>"]}
@@ -26,6 +27,7 @@ import ipaddress
 import json
 import os
 import re
+import sqlite3
 import sys
 import urllib.error
 import urllib.parse
@@ -35,11 +37,15 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from typing import Any
 
+from swfactory.dispatch import DeliveryConflict, DeliveryInbox, Dispatcher, InboxFull
+from swfactory.paths import validate_repo
+
 DEFAULT_DAG = "factory"
 LABEL = "factory"
 COMMENT_COMMAND = "@factory run"
 WEBHOOK_PATH = "/webhooks/github"
 HEALTH_PATH = "/healthz"
+READY_PATH = "/readyz"
 SIGNATURE_HEADER = "X-Hub-Signature-256"
 SIGNATURE_PREFIX = "sha256="
 # Labels ``deliver`` writes on PRs; a labeled event carrying one is never a dispatch.
@@ -60,10 +66,14 @@ class Trigger:
 
     dag_id: str
     conf: dict[str, Any] = field(default_factory=dict)
+    dag_run_id: str | None = None
 
     def body(self) -> dict[str, Any]:
         """The ``TriggerDAGRunPostBody`` (``logical_date`` is required, ``null`` = now)."""
-        return {"conf": self.conf, "logical_date": None}
+        body: dict[str, Any] = {"conf": self.conf, "logical_date": None}
+        if self.dag_run_id is not None:
+            body["dag_run_id"] = self.dag_run_id
+        return body
 
 
 # ---------------------------------------------------------------- routing (pure)
@@ -95,7 +105,7 @@ def route(event: str, payload: Mapping[str, Any]) -> Trigger | None:
     elif event == "issue_comment" and action == "created":
         comment = payload.get("comment")
         association = comment.get("author_association") if isinstance(comment, Mapping) else None
-        if association not in TRUSTED_ASSOCIATIONS:
+        if not isinstance(association, str) or association not in TRUSTED_ASSOCIATIONS:
             return None
         body = comment.get("body") if isinstance(comment, Mapping) else None
         dag_id = _dag_from_comment(body)
@@ -139,6 +149,32 @@ def _valid_name(name: str) -> str | None:
     return name if _NAME_RE.fullmatch(name) else None
 
 
+def _repository(payload: Mapping[str, Any]) -> str:
+    repository = payload.get("repository")
+    name = repository.get("full_name") if isinstance(repository, Mapping) else None
+    if not isinstance(name, str):
+        raise ValueError("routed deliveries require repository.full_name")
+    return validate_repo(name).casefold()
+
+
+def repository_trigger(trigger: Trigger, repository: str) -> Trigger:
+    """An issue number belongs to one repository; validate against the locally installed route."""
+    from swfactory.blueprint import load
+
+    repository = validate_repo(repository).casefold()
+    blueprint = load(trigger.dag_id)
+    if blueprint.name != trigger.dag_id:
+        raise ValueError("blueprint name does not match the requested DAG")
+    targets = list(
+        dict.fromkeys(
+            target.repo for target in blueprint.targets if target.repo.casefold() == repository
+        )
+    )
+    if not targets:
+        raise ValueError("webhook repository is not a target of this blueprint")
+    return Trigger(trigger.dag_id, {**trigger.conf, "targets": targets})
+
+
 # ---------------------------------------------------------------- signature
 
 
@@ -150,8 +186,11 @@ def verify_signature(secret: str, body: bytes, header: str | None) -> bool:
     """
     if not header or not header.startswith(SIGNATURE_PREFIX):
         return False
+    supplied = header[len(SIGNATURE_PREFIX) :].strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", supplied):
+        return False
     expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, header[len(SIGNATURE_PREFIX) :].strip().lower())
+    return hmac.compare_digest(expected, supplied)
 
 
 # ---------------------------------------------------------------- Airflow REST calls
@@ -239,17 +278,51 @@ def trigger_airflow(
     trigger: Trigger, *, airflow_url: str, token: str, opener: Opener = _NO_REDIRECT_OPENER
 ) -> str:
     """``POST {airflow_url}/api/v2/dags/{dag_id}/dagRuns`` with ``trigger.body()`` and a Bearer
-    token. Returns the created ``dag_run_id`` (or the raw response when it has none). Raises
-    ``urllib.error.HTTPError`` / ``URLError`` untouched so the handler can map them to 502."""
+    token. An identified trigger must return its exact run identity and configuration. After a
+    409, GET that run and compare its evidence; a conflict alone is never a successful receipt.
+    Unidentified callers retain their synchronous response contract."""
     base = _safe_airflow_base(airflow_url)
-    url = f"{base}/api/v2/dags/{trigger.dag_id}/dagRuns"
-    _, text = _post_json(
-        url, trigger.body(), headers={"Authorization": f"Bearer {token}"}, opener=opener
-    )
+    if _valid_name(trigger.dag_id) is None:
+        raise ValueError("invalid webhook DAG id")
+    url = f"{base}/api/v2/dags/{urllib.parse.quote(trigger.dag_id, safe='')}/dagRuns"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        _, text = _post_json(url, trigger.body(), headers=headers, opener=opener)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 409 or trigger.dag_run_id is None:
+            raise
+        exc.close()
+        request = urllib.request.Request(
+            f"{url}/{urllib.parse.quote(trigger.dag_run_id, safe='')}",
+            headers={"Accept": "application/json", **headers},
+            method="GET",
+        )
+        try:
+            with opener(request, timeout=_HTTP_TIMEOUT_S) as response:
+                text = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as read_error:
+            if read_error.code != 404:
+                raise
+            read_error.close()
+            raise RuntimeError("conflicting Airflow run is not yet readable") from None
     try:
         data = json.loads(text)
     except ValueError:
+        if trigger.dag_run_id is not None:
+            raise RuntimeError("Airflow returned an invalid run receipt") from None
         return text.strip()
+    if trigger.dag_run_id is not None:
+        if not isinstance(data, Mapping) or not all(
+            key in data for key in ("dag_id", "dag_run_id", "conf")
+        ):
+            raise RuntimeError("Airflow returned an incomplete run receipt")
+        if (
+            data["dag_id"] != trigger.dag_id
+            or data["dag_run_id"] != trigger.dag_run_id
+            or data["conf"] != trigger.conf
+        ):
+            raise DeliveryConflict("Airflow run identity or configuration differs from delivery")
+        return trigger.dag_run_id
     run_id = data.get("dag_run_id") if isinstance(data, Mapping) else None
     return str(run_id) if run_id else text.strip()
 
@@ -281,18 +354,26 @@ def make_handler(
     secret: str | None = None,
     opener: Opener = _NO_REDIRECT_OPENER,
     log: Callable[[str], None] | None = None,
+    inbox: DeliveryInbox | None = None,
+    dispatcher: Dispatcher | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Build the request handler class bound to one Airflow and one token source.
 
     ``POST /webhooks/github`` -> 202 ``{"routed": true, "dag_id", "dag_run_id"}`` when the event
     dispatches, 200 ``{"routed": false}`` when it is ignored, 400 on bad JSON, 401 on a bad
     signature (only when ``secret`` is set), 502 when Airflow refuses. ``GET /healthz`` -> 200.
+    With an inbox, 202 means the dispatch envelope is committed, not that Airflow is reachable.
+    Redeliveries reuse the receipt. The synchronous path remains for embedded callers.
     Log lines carry the delivery id and the outcome, never the body or a secret.
     """
     emit = log if log is not None else lambda line: print(line, file=sys.stderr, flush=True)
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "swfactory-webhook/1"
+        server_version = "swfactory-webhook/2"
+
+        def setup(self) -> None:
+            super().setup()
+            self.connection.settimeout(10)
 
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - stdlib signature
             return None  # one structured line per event instead (see _reply)
@@ -300,12 +381,31 @@ def make_handler(
         def do_GET(self) -> None:  # noqa: N802 - stdlib naming
             if self.path.split("?", 1)[0] == HEALTH_PATH:
                 self._reply(200, {"ok": True})
+            elif self.path.split("?", 1)[0] == READY_PATH and inbox is not None:
+                try:
+                    summary = inbox.summary()
+                except (sqlite3.Error, OSError):
+                    self._reply(503, {"ok": False, "error": "inbox unavailable"})
+                    return
+                alive = dispatcher is not None and dispatcher.thread.is_alive()
+                capacity = (
+                    sum(summary["counts"][state] for state in ("pending", "dispatching", "dead"))
+                    < inbox.max_pending
+                )
+                ready = alive and capacity
+                self._reply(200 if ready else 503, {"ok": ready, **summary})
             else:
                 self._reply(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802 - stdlib naming
             if self.path.split("?", 1)[0] != WEBHOOK_PATH:
                 self._reply(404, {"error": "not found"})
+                return
+            if self.headers.get("Transfer-Encoding"):
+                self._reply(400, {"error": "Transfer-Encoding is unsupported"})
+                return
+            if len(self.headers.get_all("Content-Length", [])) != 1:
+                self._reply(400, {"error": "one Content-Length header is required"})
                 return
             try:
                 length = int(self.headers.get("Content-Length") or 0)
@@ -315,7 +415,14 @@ def make_handler(
             if length < 0 or length > MAX_BODY_BYTES:
                 self._reply(413, {"error": "payload too large"})
                 return
-            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                body = self.rfile.read(length) if length > 0 else b""
+            except OSError:
+                self._reply(408, {"error": "request body timed out"})
+                return
+            if len(body) != length:
+                self._reply(400, {"error": "incomplete request body"})
+                return
             delivery = self.headers.get("X-GitHub-Delivery", "-")
             event = self.headers.get("X-GitHub-Event", "")
             if secret is not None and not verify_signature(
@@ -331,6 +438,9 @@ def make_handler(
             trigger = route(event, payload if isinstance(payload, dict) else {})
             if trigger is None:
                 self._reply(200, {"routed": False, "event": event}, delivery, event)
+                return
+            if inbox is not None:
+                self._enqueue(trigger, payload, body, delivery, event)
                 return
             try:
                 run_id = trigger_airflow(
@@ -362,6 +472,56 @@ def make_handler(
                 event,
             )
 
+        def _enqueue(
+            self,
+            trigger: Trigger,
+            payload: Mapping[str, Any],
+            body: bytes,
+            delivery_id: str,
+            event: str,
+        ) -> None:
+            assert inbox is not None
+            try:
+                repository = _repository(payload)
+                # A receipt survives blueprint edits/removal. New deliveries must still pass
+                # current routing policy; duplicate bodies must match the saved digest.
+                try:
+                    receipt = inbox.get(delivery_id)
+                except KeyError:
+                    trigger = repository_trigger(trigger, repository)
+                else:
+                    trigger = Trigger(receipt.dag_id, receipt.conf, receipt.dag_run_id)
+                receipt, created = inbox.enqueue(delivery_id, event, body, repository, trigger)
+            except DeliveryConflict as exc:
+                self._reply(409, {"error": str(exc)}, delivery_id, event)
+                return
+            except FileNotFoundError:
+                self._reply(422, {"error": "blueprint is not installed"}, delivery_id, event)
+                return
+            except ValueError:
+                self._reply(
+                    422, {"error": "invalid delivery or repository route"}, delivery_id, event
+                )
+                return
+            except (InboxFull, sqlite3.Error, OSError):
+                self._reply(503, {"error": "inbox unavailable or full"}, delivery_id, event)
+                return
+            if dispatcher is not None:
+                dispatcher.wakeup.set()
+            self._reply(
+                202,
+                {
+                    "routed": True,
+                    "delivery_id": receipt.delivery_id,
+                    "dag_id": receipt.dag_id,
+                    "dag_run_id": receipt.dag_run_id,
+                    "state": receipt.state,
+                    "duplicate": not created,
+                },
+                delivery_id,
+                event,
+            )
+
         def _reply(
             self, status: int, doc: Mapping[str, Any], delivery: str = "-", event: str = ""
         ) -> None:
@@ -370,9 +530,13 @@ def make_handler(
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.wfile.write(data)
+            except OSError:
+                pass  # An acknowledged-in-storage delivery survives a disconnected sender.
             summary = doc.get("dag_id") or doc.get("error") or doc.get("event") or ""
-            emit(f"webhook {self.command} {self.path} -> {status} delivery={delivery} {summary}")
+            safe_delivery = re.sub(r"[^A-Za-z0-9_-]", "?", delivery)[:128]
+            emit(f"webhook {self.command} -> {status} delivery={safe_delivery} {summary!r}")
 
     return Handler
 
@@ -386,17 +550,41 @@ def make_server(
     opener: Opener = _NO_REDIRECT_OPENER,
     host: str = "0.0.0.0",
     log: Callable[[str], None] | None = None,
+    inbox: DeliveryInbox | None = None,
+    max_attempts: int = 12,
 ) -> HTTPServer:
     """A bound (not yet serving) ``ThreadingHTTPServer``; ``port=0`` picks an ephemeral port
     (``server.server_address[1]``) — what the tests use."""
+    dispatcher = None
+    if inbox is not None:
+        dispatcher = Dispatcher(
+            inbox,
+            airflow_url=airflow_url,
+            token_provider=token_provider,
+            opener=opener,
+            log=log or (lambda line: print(line, file=sys.stderr, flush=True)),
+            max_attempts=max_attempts,
+        )
     handler = make_handler(
         airflow_url=airflow_url,
         token_provider=token_provider,
         secret=secret,
         opener=opener,
         log=log,
+        inbox=inbox,
+        dispatcher=dispatcher,
     )
-    return ThreadingHTTPServer((host, port), handler)
+
+    class Server(ThreadingHTTPServer):
+        def server_close(self) -> None:
+            if dispatcher is not None and dispatcher.thread.ident is not None:
+                dispatcher.close()
+            super().server_close()
+
+    server = Server((host, port), handler)
+    if dispatcher is not None:
+        dispatcher.start()
+    return server
 
 
 def serve(
@@ -407,6 +595,8 @@ def serve(
     secret: str | None = None,
     opener: Opener = _NO_REDIRECT_OPENER,
     host: str = "0.0.0.0",
+    inbox: DeliveryInbox | None = None,
+    max_attempts: int = 12,
 ) -> None:
     """Run the receiver until interrupted (``swfactory webhook serve``)."""
     server = make_server(
@@ -416,6 +606,8 @@ def serve(
         secret=secret,
         opener=opener,
         host=host,
+        inbox=inbox,
+        max_attempts=max_attempts,
     )
     bound = server.server_address[1]
     print(

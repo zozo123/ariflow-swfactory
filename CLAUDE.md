@@ -39,6 +39,11 @@ in `stages.py`. Details: README + docs/*.md.
   `uv sync --group airflow` returns to the pinned release.
 - Toolset reconnect failures must preserve the existing handle: never recreate an empty VM while
   the run journal still records completed stages. Persist termination and require a new run.
+- Webhook CLI intake commits to `SWF_WEBHOOK_INBOX` before 202; the background dispatcher uses
+  leased claims and stable Airflow run IDs. Never acknowledge a 409 without reading that exact
+  run and comparing its complete conf. Source-repository targets and provenance are frozen in
+  the receipt. `webhook retry <delivery-id>` reopens only dead dispatches and preserves identity;
+  it must never clear or rerun a delivered Airflow job. See docs/webhooks.md.
 - Toolset sbx: `SWF_TOOLSET_SBX_HOST_NETWORK_POLICY=deny-all` declares an already-configured worker
   policy; it never changes the host. `SWF_TOOLSET_SBX_IMAGE` selects the factory-ready image.
   `SWF_TEST_LIVE_TOOLSET=1 uv run --no-sync pytest tests/test_toolset_live.py` exercises a real

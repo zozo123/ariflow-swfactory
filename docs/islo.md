@@ -100,6 +100,13 @@ unset it trusts islo's upstream check. `swfactory webhook route <event> <payload
 run. `dispatch.yml` (a GitHub Action posting to the Airflow API with the `AIRFLOW_URL` /
 `AIRFLOW_TOKEN` secrets) stays as the alternative trigger when `:8080` is shared instead of `:8081`.
 
+The receiver now commits dispatches to `$AIRFLOW_HOME/webhooks/inbox.sqlite3` before returning
+202. A background worker retries API outages, reclaims interrupted submissions, and verifies the
+same Airflow run on redelivery. Intake restricts targets to `repository.full_name`, validated
+against the installed blueprint. Preserve the inbox with Airflow state; `/readyz` reports queue
+capacity and `swfactory webhook deliveries|inspect|retry` operates its receipts. See
+[durable webhook intake](webhooks.md) for the full recovery and persistence contract.
+
 ## Knowledge items
 
 `deploy/islo/knowledge.sh [owner/repo]` (called by bootstrap, safe to rerun) publishes `CLAUDE.md`
