@@ -129,6 +129,7 @@ pub async fn run(ctx: &Ctx) -> Result<Outcome> {
         Command::Attention => attention_cmd(ctx).await,
         Command::Runs(cmd) => runs_cmd(ctx, cmd).await,
         Command::Jobs(cmd) => jobs_cmd(ctx, cmd).await,
+        Command::Cells(cmd) => crate::cell_exec::run(ctx, cmd).await,
         Command::Logs(args) => logs_cmd(ctx, args).await,
         Command::Gates(cmd) => gates_cmd(ctx, cmd).await,
         Command::Deliveries(cmd) => deliveries_cmd(ctx, cmd).await,
