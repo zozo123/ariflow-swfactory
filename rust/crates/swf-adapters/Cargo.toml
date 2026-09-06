@@ -1,0 +1,27 @@
+[package]
+name = "swf-adapters"
+description = "Service adapters: Airflow REST v2, GitHub through gh, islo, and artifact metrics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+swf-domain.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+tokio-util.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+url.workspace = true
+futures-util.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "process", "signal", "test-util"] }

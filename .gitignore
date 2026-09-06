@@ -17,3 +17,6 @@ dist/
 
 # airflow standalone (AIRFLOW_HOME)
 airflow_home/
+
+# Rust: the swf operator binary builds here (rust/README.md).
+rust/target/

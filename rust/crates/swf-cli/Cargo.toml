@@ -1,0 +1,32 @@
+[package]
+name = "swf-cli"
+description = "swf: one command that operates the whole factory, in scripts and at a terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "swf"
+path = "src/main.rs"
+
+[dependencies]
+swf-domain.workspace = true
+swf-adapters.workspace = true
+swf-app.workspace = true
+swf-tui.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+tempfile.workspace = true
+wiremock.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
