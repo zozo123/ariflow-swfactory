@@ -233,8 +233,18 @@ def test_every_mapped_job_succeeds(stress: dict) -> None:
 
 
 def test_fan_out_returned_issues_x_targets(stress: dict) -> None:
-    """``fan_out``'s XCom is exactly ``Blueprint.jobs(conf)``: the DAG expands over nothing else."""
-    assert stress["fan_out"] == list(_expected_jobs())
+    """``fan_out`` is issues x targets enriched only by the durable Cell envelope."""
+    expected = list(_expected_jobs())
+    actual = stress["fan_out"]
+    assert len(actual) == len(expected)
+    for enriched, core in zip(actual, expected, strict=True):
+        assert {key: enriched[key] for key in core} == core
+        assert enriched["cell_id"].startswith("cell_")
+        assert enriched["cell_epoch"] == 1
+        assert enriched["cell_managed"] is False
+        assert enriched["cell_policy_digest"] is None
+        assert enriched["cell_generation"] is None
+    assert len({job["cell_id"] for job in actual}) == len(expected)
 
 
 def test_each_job_owns_its_run_dir_and_workdir(stress: dict) -> None:

@@ -1,17 +1,16 @@
 """The one way from a ``(blueprint, job, run id)`` triple to a ready ``Ctx``.
 
-WHY one place: the CLI runs a job in a single process, while every Airflow task rebuilds the same
-job from scratch on a worker. Both must come out identical — same run id, run dir, seeded workdir
-and sandbox name — or a retried task talks to a different sandbox than its predecessor and the
-run forks. ``cli.execute`` and ``dags._ctx`` each had a copy and had already drifted (seeding,
-protected globs, sandbox naming). No Airflow import here: ``dags/blueprints.py`` calls in from
-inside its task callables, so DAG parsing still needs nothing but Airflow.
+CLI and Airflow tasks must produce the same run identity/workspace. Backend-managed Airflow jobs
+add one extra trust boundary: their cell binding is persisted in host-owned control state and their
+GitHub SCM is a credential-free backend proxy from the first issue read onward. Airflow still
+schedules the work; the backend alone owns GitHub publication credentials and mutation fencing.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -31,20 +30,14 @@ from swfactory.state import JournalCorruption, RunBusyError, RunState
 if TYPE_CHECKING:
     from swfactory.agent import Agent
     from swfactory.blueprint import Blueprint
+    from swfactory.scm import Scm
 
 
 def run_id_for(seed: str, job_idx: int = 0) -> str:
-    """First 8 hex of ``sha1(<seed>:<job_idx>)`` — the run id of one job of one run.
-
-    Pure, so every task and every retry of that job derives the same run id, hence the same run
-    dir and sandbox name, and resumes the work instead of duplicating it.
-    """
     return hashlib.sha1(f"{seed}:{job_idx}".encode()).hexdigest()[:8]
 
 
 def locate(rel: str) -> str:
-    """Resolve a repo-relative path (issue file, fixtures dir) against cwd, then the checkout:
-    neither a worker nor a ``swfactory run`` elsewhere runs from the factory root."""
     if Path(rel).is_absolute() or Path(rel).exists():
         return rel
     alt = FACTORY_ROOT / rel
@@ -52,7 +45,6 @@ def locate(rel: str) -> str:
 
 
 def job_run_dir(cfg: Config, root: Path | None = None) -> Path:
-    """``<root>/.factory/<run_id>``: the run's host scratch (local remote, stage log, pr.md)."""
     return ((Path(root) if root is not None else Path()) / ".factory" / cfg.run_id).resolve()
 
 
@@ -64,20 +56,10 @@ def job_config(
     overrides: dict[str, Any] | None = None,
     root: Path | None = None,
 ) -> Config:
-    """``Config`` for one job: blueprint, then ``overrides`` (CLI flags, ``None`` ignored), then
-    operational ``SWF_*`` settings, then this run's explicit identity and local paths.
-
-    A blueprint's ``[sandbox]`` says where the REAL agent runs; a scripted replay never needs a
-    MicroVM, so without an explicit ``sandbox`` it falls back to ``local`` (``SWF_SANDBOX`` still
-    wins for operational settings). Host sandboxes get one workdir per run, under the run dir, so
-    concurrent jobs never share a checkout.
-    """
-    over = overrides or {}  # Blueprint.config drops the None entries (flags the user did not pass)
+    over = overrides or {}
     cfg = bp.config(job, run_id=run_id, **over)
     if cfg.agent == "scripted" and over.get("sandbox") is None and cfg.sandbox != "local":
         cfg = bp.config(job, run_id=run_id, **{**over, "sandbox": "local"})
-    # A worker may carry SWF_ISSUE/SWF_REPO/SWF_TARGET_DIR/SWF_RUN_ID from an unrelated run.
-    # Identity belongs to the mapped job and always wins after operational settings are loaded.
     identity: dict[str, Any] = {
         "issue": str(job["issue"]),
         "repo": validate_repo(str(job.get("repo", bp.targets[0].repo))),
@@ -98,8 +80,6 @@ def job_config(
 
 
 def _cell_binding(job: dict[str, Any]) -> dict[str, Any] | None:
-    """Validated durable cell metadata carried by an Airflow mapped job."""
-
     raw_id = job.get("cell_id")
     if raw_id in (None, ""):
         return None
@@ -112,13 +92,41 @@ def _cell_binding(job: dict[str, Any]) -> dict[str, Any] | None:
     managed = job.get("cell_managed", False)
     if type(managed) is not bool:
         raise StageError("policy", "mapped job carries an invalid Factory Cell managed flag")
+    policy_digest = job.get("cell_policy_digest")
+    if policy_digest is not None and (
+        not isinstance(policy_digest, str) or not policy_digest.startswith("policy:")
+    ):
+        raise StageError("policy", "mapped job carries an invalid Factory Cell policy digest")
+    generation = job.get("cell_generation")
+    if generation is not None and not isinstance(generation, str):
+        raise StageError("policy", "mapped job carries an invalid Factory Cell generation")
+    if managed and not policy_digest:
+        raise StageError("policy", "managed Factory Cell is missing its policy digest")
     return {
         "schema_version": 1,
         "cell_id": cell_id,
         "epoch": epoch,
         "managed": managed,
         "job_idx": int(job.get("job_idx", 0)),
+        "policy_digest": policy_digest,
+        "factory_generation": generation,
     }
+
+
+def _managed_scm(cfg: Config, binding: dict[str, Any] | None) -> Scm | None:
+    if binding is None or not binding["managed"] or cfg.scm != "github":
+        return None
+    from swfactory.backend_scm import BackendScm
+
+    return BackendScm(
+        repo=cfg.repo,
+        base_branch=cfg.base_branch,
+        backend_url=os.getenv("SWF_BACKEND_URL") or "",
+        backend_token=os.getenv("SWF_BACKEND_TOKEN") or "",
+        cell_id=binding["cell_id"],
+        epoch=binding["epoch"],
+        policy_digest=str(binding["policy_digest"]),
+    )
 
 
 def build_ctx(
@@ -130,15 +138,15 @@ def build_ctx(
     agent: Agent | None = None,
     root: Path | None = None,
 ) -> Ctx:
-    """Everything a stage needs for one job of one run: ``job_config`` then ``ctx_for``.
-
-    If Airflow supplied Factory Cell metadata, persist it in orchestrator-owned control state.
-    Every stage process and retry can then recover the same identity without trusting sandbox data.
-    """
-
     cfg = job_config(bp, job, run_id=run_id, overrides=overrides, root=root)
-    ctx = ctx_for(cfg, blueprint=bp, run_dir=job_run_dir(cfg, root), agent=agent)
     binding = _cell_binding(job)
+    ctx = ctx_for(
+        cfg,
+        blueprint=bp,
+        run_dir=job_run_dir(cfg, root),
+        agent=agent,
+        scm_override=_managed_scm(cfg, binding),
+    )
     if binding is not None:
         ctx.state.write_control(
             "cell.json",
@@ -147,29 +155,39 @@ def build_ctx(
     return ctx
 
 
-def ctx_for(cfg: Config, *, blueprint: Blueprint, run_dir: Path, agent: Agent | None = None) -> Ctx:
-    """Assemble the ``Ctx`` of a job whose paths are already decided.
-
-    Split from ``build_ctx`` only because ``cli.execute`` is handed a ready ``Config`` and run dir
-    (tests and fixtures build both). Order matters: a host workdir is seeded from the target dir
-    *before* ``make_sandbox``, so srt can turn the target's ``factory.toml`` ``protected`` globs
-    into kernel-level ``denyWrite`` from the very first command, and before ``make_scm``, whose
-    local remote is seeded from that workdir. ``agent`` overrides ``make_agent(cfg)`` (tests
-    inject a ``ScriptedAgent`` with extra fixture dirs).
-    """
+def ctx_for(
+    cfg: Config,
+    *,
+    blueprint: Blueprint,
+    run_dir: Path,
+    agent: Agent | None = None,
+    scm_override: Scm | None = None,
+) -> Ctx:
     run_dir = Path(run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     try:
         with RunState(run_dir).exclusive("prepare"):
-            return _prepare_ctx(cfg, blueprint=blueprint, run_dir=run_dir, agent=agent)
+            return _prepare_ctx(
+                cfg,
+                blueprint=blueprint,
+                run_dir=run_dir,
+                agent=agent,
+                scm_override=scm_override,
+            )
     except RunBusyError as error:
         raise StageError("sandbox", str(error), retryable=True) from error
     except JournalCorruption as error:
         raise StageError("policy", str(error)) from error
 
 
-def _prepare_ctx(cfg: Config, *, blueprint: Blueprint, run_dir: Path, agent: Agent | None) -> Ctx:
-    """Seeding and adapter construction share stage ownership, including existing workdirs."""
+def _prepare_ctx(
+    cfg: Config,
+    *,
+    blueprint: Blueprint,
+    run_dir: Path,
+    agent: Agent | None,
+    scm_override: Scm | None,
+) -> Ctx:
     from swfactory.agent import make_agent
 
     base_repo: Path | None = None
@@ -177,10 +195,10 @@ def _prepare_ctx(cfg: Config, *, blueprint: Blueprint, run_dir: Path, agent: Age
     if cfg.sandbox in HOST_SANDBOXES:
         base_repo = Path(cfg.workdir).resolve()
         seed_local_workdir(base_repo, cfg.target_dir)
-        protected = protected_globs(base_repo)  # build level: the tests dir stays writable
-    scm = make_scm(cfg, run_dir, base_repo=base_repo, base_ref=cfg.base_branch)
+        protected = protected_globs(base_repo)
+    scm = scm_override or make_scm(cfg, run_dir, base_repo=base_repo, base_ref=cfg.base_branch)
     issue = scm.fetch_issue(cfg.issue if cfg.issue.strip().isdigit() else locate(cfg.issue))
-    return Ctx(  # contract stays lazy: setup() seeds the workdir before reading factory.toml
+    return Ctx(
         cfg=cfg,
         sb=make_sandbox(cfg, issue.id, protected=protected, repo=cfg.repo, run_dir=run_dir),
         agent=agent or make_agent(cfg),

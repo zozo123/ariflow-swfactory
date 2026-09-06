@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -41,12 +41,16 @@ def plan_materialization(
     )
 
 
-def verify_sparse_coverage(plan: MaterializationPlan, required_paths: Iterable[str]) -> tuple[bool, tuple[str, ...]]:
+def verify_sparse_coverage(
+    plan: MaterializationPlan, required_paths: Iterable[str]
+) -> tuple[bool, tuple[str, ...]]:
     if plan.mode == "full":
         return True, ()
     missing = []
     for path in map(_normalize, required_paths):
-        if not any(path == root or path.startswith(root.rstrip("/") + "/") for root in plan.sparse_paths):
+        if not any(
+            path == root or path.startswith(root.rstrip("/") + "/") for root in plan.sparse_paths
+        ):
             missing.append(path)
     return not missing, tuple(sorted(set(missing)))
 

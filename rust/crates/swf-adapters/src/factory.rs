@@ -122,11 +122,7 @@ impl FactoryApi {
     }
 
     /// Newest durable Factory Cells, newest mutation first.
-    pub async fn cells(
-        &self,
-        limit: u32,
-        cancel: &CancellationToken,
-    ) -> Result<Vec<CellRecord>> {
+    pub async fn cells(&self, limit: u32, cancel: &CancellationToken) -> Result<Vec<CellRecord>> {
         self.call("/cells", json!({"limit": limit}), cancel).await
     }
 

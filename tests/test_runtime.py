@@ -165,4 +165,9 @@ def test_cli_run_derives_its_config_with_job_config(
 
     ((cfg, kw),) = seen
     assert cfg == job_config(bp, job, run_id="c1i00001", overrides=LOCAL)
-    assert kw == {"blueprint": bp, "run_dir": job_run_dir(cfg), "agent": None}
+    assert kw == {
+        "blueprint": bp,
+        "run_dir": job_run_dir(cfg),
+        "agent": None,
+        "scm_override": None,
+    }

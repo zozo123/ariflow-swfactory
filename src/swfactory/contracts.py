@@ -11,7 +11,7 @@ class ContractVersion:
     minor: int = 0
 
     @classmethod
-    def parse(cls, value: str) -> "ContractVersion":
+    def parse(cls, value: str) -> ContractVersion:
         major, _, minor = value.partition(".")
         return cls(int(major), int(minor or 0))
 
@@ -26,7 +26,10 @@ class CompatibilityWindow:
     current: ContractVersion
 
     def accepts(self, other: ContractVersion) -> bool:
-        return self.minimum.major == other.major == self.current.major and self.minimum <= other <= self.current
+        return (
+            self.minimum.major == other.major == self.current.major
+            and self.minimum <= other <= self.current
+        )
 
     def negotiate(self, offered: ContractVersion) -> ContractVersion:
         if not self.accepts(offered):
@@ -58,7 +61,9 @@ class GenerationStamp:
         }
 
 
-def adjacent_generation_compatible(parent: GenerationStamp, child: GenerationStamp) -> tuple[bool, tuple[str, ...]]:
+def adjacent_generation_compatible(
+    parent: GenerationStamp, child: GenerationStamp
+) -> tuple[bool, tuple[str, ...]]:
     failures = []
     for field in ("backend", "cell", "artifact", "operator"):
         a = getattr(parent, field)

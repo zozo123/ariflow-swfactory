@@ -8,6 +8,7 @@
 pub mod airflow;
 pub mod error;
 pub mod factory;
+pub mod factory_operator;
 pub mod gh;
 pub mod islo;
 pub mod metrics_store;

@@ -8,18 +8,25 @@
 
 pub mod blueprint;
 pub mod cell;
+pub mod control_plane;
 pub mod doctor;
 pub mod evidence;
 pub mod ids;
 pub mod metrics;
 pub mod model;
+pub mod operator;
 pub mod rollup;
 pub mod sanitize;
 pub mod snapshot;
 pub mod states;
+pub mod worker;
 
-pub use cell::{CellEvent, CellRecord};
 pub use ids::{DeliveryId, GateId, IdError, JobId, RunRef};
 pub use model::{
     Gate, IssueRef, JobRow, PullRequest, Run, SandboxRef, Snapshot, SourceHealth, TaskState,
 };
+pub use operator::{
+    BackendCapabilities, ContractVersions, FleetSummary, LimitingDimension, OperationDebt,
+    QueueEntry, QueuePressure, QueueSnapshot,
+};
+pub use worker::{WorkerBatch, WorkerReceipt, WorkerRole, MAX_WORKERS};

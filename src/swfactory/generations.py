@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Dimension(str, Enum):
+class Dimension(StrEnum):
     CORRECTNESS = "correctness"
     EVIDENCE = "evidence"
     RELIABILITY = "reliability"
@@ -29,7 +29,14 @@ class Generation:
     @property
     def id(self) -> str:
         raw = "\0".join(
-            (self.source_sha, self.image_digest, self.blueprint_digest, self.policy_digest, self.schema_version, self.parent_id or "")
+            (
+                self.source_sha,
+                self.image_digest,
+                self.blueprint_digest,
+                self.policy_digest,
+                self.schema_version,
+                self.parent_id or "",
+            )
         ).encode()
         return "gen_" + hashlib.sha256(raw).hexdigest()[:24]
 
@@ -57,7 +64,9 @@ class CampaignBudget:
         )
 
 
-def promotable(evaluations: list[Evaluation], *, required: set[Dimension], human_approved: bool) -> tuple[bool, tuple[str, ...]]:
+def promotable(
+    evaluations: list[Evaluation], *, required: set[Dimension], human_approved: bool
+) -> tuple[bool, tuple[str, ...]]:
     by_dimension = {item.dimension: item for item in evaluations}
     failures = []
     for dimension in sorted(required, key=lambda d: d.value):

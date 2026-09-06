@@ -35,7 +35,9 @@ impl CellOps {
 
     pub async fn list(&self, limit: usize, cancel: &CancellationToken) -> Result<Vec<CellRecord>> {
         if !(1..=1000).contains(&limit) {
-            return Err(OpsError::usage("cell list limit must be between 1 and 1000"));
+            return Err(OpsError::usage(
+                "cell list limit must be between 1 and 1000",
+            ));
         }
         Ok(self.api.cells(limit as u32, cancel).await?)
     }

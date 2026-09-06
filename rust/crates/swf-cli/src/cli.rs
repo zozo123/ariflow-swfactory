@@ -619,14 +619,13 @@ mod tests {
         };
         assert_eq!(limit, 25);
 
-        let inspect = Cli::try_parse_from([
-            "swf",
-            "cells",
-            "inspect",
-            "cell_0123456789abcdef01234567",
-        ])
-        .expect("cells inspect parses");
-        assert!(matches!(inspect.command, Command::Cells(CellsCmd::Inspect { .. })));
+        let inspect =
+            Cli::try_parse_from(["swf", "cells", "inspect", "cell_0123456789abcdef01234567"])
+                .expect("cells inspect parses");
+        assert!(matches!(
+            inspect.command,
+            Command::Cells(CellsCmd::Inspect { .. })
+        ));
     }
 
     #[test]

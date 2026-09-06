@@ -272,9 +272,7 @@ class CellStore:
         with self.lock:
             row = self.get(cell_id)
             if row["epoch"] != expected_epoch:
-                raise StaleEpoch(
-                    f"{cell_id}: expected {expected_epoch}, current {row['epoch']}"
-                )
+                raise StaleEpoch(f"{cell_id}: expected {expected_epoch}, current {row['epoch']}")
             encoded: dict[str, Any] = {}
             for key, value in fields.items():
                 encoded[key + "_json" if key in {"compute", "cleanup"} else key] = (

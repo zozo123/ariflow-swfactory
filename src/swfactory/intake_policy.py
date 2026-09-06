@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Iterable
+from collections.abc import Iterable
+from dataclasses import dataclass
+from enum import StrEnum
 
 
-class WorkKind(str, Enum):
+class WorkKind(StrEnum):
     BUG = "bug"
     FEATURE = "feature"
     REFACTOR = "refactor"
@@ -56,7 +56,9 @@ def dedupe(proposal: WorkProposal, existing: Iterable[ExistingWork]) -> int | No
     return None
 
 
-def triage(proposal: WorkProposal, *, auto_create: bool, allowed_kinds: set[WorkKind] | None = None) -> dict:
+def triage(
+    proposal: WorkProposal, *, auto_create: bool, allowed_kinds: set[WorkKind] | None = None
+) -> dict:
     allowed_kinds = allowed_kinds or set(WorkKind)
     if proposal.kind not in allowed_kinds:
         return {"decision": "reject", "reason": "kind_not_allowed"}
