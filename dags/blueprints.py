@@ -5,27 +5,14 @@ For every blueprint file this module emits ``DAG(dag_id=<blueprint.name>)``::
     fan_out -> job[ setup -> <stage> (-> approve_<stage> -> record_<stage>)* ... -> deliver
                     -> metrics ; teardown ]            (job = one (issue x target), mapped)
 
-``fan_out`` turns ``dag_run.conf`` (``{"issues": [...]}``, ``{"issue": N}`` accepted) into jobs;
-a scheduled line falls back to its required ``trigger.issues``. The ``job`` task group is expanded
-over them, so one issue can be applied to N target repos with one addressable approval per (issue,
-target). Backend-managed submissions additionally carry verified Factory Cell id/epoch bindings;
-direct legacy Airflow submissions derive the same cell id but are explicitly marked unmanaged.
-Loops live inside the stage functions (``swfactory.stages``), never in the DAG.
+``fan_out`` turns ``dag_run.conf`` into jobs; a scheduled line falls back to its required trigger
+issues. The ``job`` task group is expanded over them, so one issue can be applied to N target repos
+with one addressable approval per (issue,target). Backend-managed submissions additionally carry
+verified Factory Cell id/epoch/policy bindings. Direct legacy Airflow submissions derive the same
+cell id but remain explicitly unmanaged. Airflow is the only lifecycle scheduler; managed tasks
+report state back to the backend solely for epoch-fenced authority, admission and evidence.
 
-Parse time reads the TOML *shape* only with stdlib ``tomllib`` (name, trigger, stage order, gates,
-limits); ``swfactory`` is imported only inside task callables so DAG parsing needs nothing but
-Airflow. Every task rebuilds its ``Ctx`` from the job + ``Blueprint.load(name)``; the run id is
-derived from the DAG run id and job index so retries and ``tasks clear`` re-attach to the same
-sandbox (``islo use`` is create-if-needed).
-
-Gates are ``GateOperator`` (an ``ApprovalOperator`` that never skips on its own): the response
-lands in XCom whatever the decision, ``record_<stage>`` writes it to ``approvals.json`` and, on
-Reject, raises ``AirflowSkipException``. The work stages then skip, but ``deliver`` and
-``metrics`` run with ``trigger_rule="none_failed"`` (and ``teardown`` as a teardown), so the
-refusal and its actor are committed and published exactly like an approval.
-
-``airflow dags test`` never resolves HITL tasks: use ``--mark-success-pattern 'job\\.approve_.*'``.
-``SWF_APPROVE=auto`` (parse-time env) makes every gate default to Approve after its timeout.
+Loops live inside stage functions (``swfactory.stages``), never in the DAG.
 """
 
 from __future__ import annotations
@@ -49,9 +36,6 @@ STAGE_RETRIES = {"deliver": 2}
 APPROVE_ENV_AUTO = os.environ.get("SWF_APPROVE") == "auto"
 
 
-# ---------------------------------------------------------------- parse-time shape (tomllib only)
-
-
 def read_shape(path: Path) -> dict[str, Any]:
     """The subset of a blueprint the DAG structure depends on. Validation happens in tasks."""
     data = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -67,23 +51,13 @@ def read_shape(path: Path) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------- runtime wiring (swfactory)
-
-
 def run_id_for(dag_run_id: str, job_idx: int) -> str:
-    """Stable 8-hex run id per (DAG run, job): same sandbox name on every task and retry.
-
-    ``swfactory.runtime.run_id_for``, imported inside the function so DAG parsing stays
-    swfactory-free; ``tests/test_dag_smoke.py`` calls it to locate the run dir.
-    """
     from swfactory.runtime import run_id_for as _impl
 
     return _impl(dag_run_id, job_idx)
 
 
 def _ctx(name: str, job: dict[str, Any], dag_run_id: str):
-    """The stage ``Ctx`` for one job — the same wiring ``swfactory run`` uses
-    (``swfactory.runtime.build_ctx``); all swfactory imports live inside the task callables."""
     from swfactory.blueprint import load
     from swfactory.runtime import build_ctx
 
@@ -91,20 +65,47 @@ def _ctx(name: str, job: dict[str, Any], dag_run_id: str):
 
 
 def _actor(responded_by_user: Any) -> str:
-    """Airflow HITL ``responded_by_user`` (dict / str / None) -> approvals.json actor."""
     if isinstance(responded_by_user, dict):
         return str(responded_by_user.get("name") or responded_by_user.get("id") or "auto")
     return str(responded_by_user) if responded_by_user else "auto"
 
 
 def _stage_fn(stage: str):
-    """The stage callable for a name in ``stages.order`` (``Blueprint`` validated it)."""
     from swfactory.stages import STAGES
 
     return STAGES[stage]
 
 
-# ---------------------------------------------------------------- tasks
+def _cell_transition(job: dict[str, Any], state: str, context: dict[str, Any], suffix: str) -> None:
+    """Runtime-only callback; unmanaged/direct Airflow runs are intentionally no-ops."""
+    from swfactory.cell_callback import transition
+
+    dag_run = context["dag_run"]
+    ti = context.get("ti")
+    task_id = getattr(ti, "task_id", suffix)
+    try_number = getattr(ti, "try_number", 0)
+    transition(
+        job,
+        state,
+        operation_key=(
+            f"airflow:{dag_run.run_id}:{int(job['job_idx'])}:{task_id}:{try_number}:{suffix}"
+        ),
+    )
+
+
+def _failure_callback(context: dict[str, Any]) -> None:
+    """Mark the current managed cell failed without changing Airflow's failure semantics."""
+    try:
+        ti = context["ti"]
+        jobs = ti.xcom_pull(task_ids="fan_out") or []
+        index = int(ti.map_index)
+        if not isinstance(jobs, list) or not 0 <= index < len(jobs):
+            return
+        _cell_transition(jobs[index], "failed", context, "failed")
+    except Exception:
+        # Failure callbacks must never hide or replace the original Airflow task failure. The
+        # backend reconciler can classify an unreported terminal state as repair debt.
+        return
 
 
 def _stage_task(name: str, stage: str, shape: dict[str, Any], outlets: list[Asset]):
@@ -114,25 +115,20 @@ def _stage_task(name: str, stage: str, shape: dict[str, Any], outlets: list[Asse
         execution_timeout=shape["stage_timeout"],
         max_active_tis_per_dagrun=shape["max_parallel_jobs"],
         outlets=outlets,
-        # deliver publishes rejected runs too: it must survive the skip cascade a reject starts.
         trigger_rule="none_failed" if stage == "deliver" else "all_success",
+        on_failure_callback=_failure_callback,
     )
     def _run(job: dict, **context: Any) -> dict:
         ctx = _ctx(name, job, context["dag_run"].run_id)
-        return _stage_fn(stage)(ctx).model_dump()
+        result = _stage_fn(stage)(ctx).model_dump()
+        if stage == "deliver":
+            _cell_transition(job, "success", context, "delivered")
+        return result
 
     return _run
 
 
 class GateOperator(ApprovalOperator):
-    """``ApprovalOperator`` whose Reject skips nothing by itself.
-
-    The stock operator skips its downstream on Reject — its direct child unconditionally
-    (``NotPreviouslySkippedDep`` ignores trigger rules), so ``record_<stage>`` would never see
-    the refusal or the approver. Here the response is returned as XCom for both decisions and
-    ``record_<stage>`` persists it, then short-circuits the line itself.
-    """
-
     def execute_complete(self, context: Context, event: dict[str, Any]) -> Any:
         ret = HITLOperator.execute_complete(self, context=context, event=event)
         self.hitl_summary_extra["approved"] = ret["chosen_options"][0] == self.APPROVE
@@ -154,13 +150,12 @@ def _approve_task(name: str, stage: str, gate: dict[str, Any]) -> ApprovalOperat
         + preview,
         defaults=ApprovalOperator.APPROVE if auto else None,
         response_timeout=timedelta(hours=int(gate.get("timeout_h", 24))),
-        # HITLUser is {"id", "name"}; an empty `assigned` means anyone may answer.
         assigned_users=[{"id": u, "name": u} for u in assigned] or None,
     )
 
 
 def _record_task(name: str, stage: str):
-    @task(task_id=f"record_{stage}")
+    @task(task_id=f"record_{stage}", on_failure_callback=_failure_callback)
     def _run(job: dict, **context: Any) -> dict:
         from datetime import UTC, datetime
 
@@ -170,7 +165,6 @@ def _record_task(name: str, stage: str):
         from swfactory.stages import record_approval
 
         ti = context["ti"]
-        # Marked-success gates (`airflow dags test --mark-success-pattern`) leave no XCom -> auto.
         response = (
             ti.xcom_pull(task_ids=f"{GROUP_ID}.approve_{stage}", map_indexes=ti.map_index) or {}
         )
@@ -182,7 +176,8 @@ def _record_task(name: str, stage: str):
             at=datetime.now(UTC),
         )
         record_approval(_ctx(name, job, context["dag_run"].run_id), approval)
-        if approval.decision == "reject":  # work stages skip; deliver/metrics/teardown still run
+        if approval.decision == "reject":
+            _cell_transition(job, "rejected", context, f"rejected_{stage}")
             raise AirflowSkipException(f"{stage} rejected by {approval.actor}")
         return approval.model_dump(mode="json")
 
@@ -190,17 +185,24 @@ def _record_task(name: str, stage: str):
 
 
 def _setup_task(name: str, shape: dict[str, Any]):
-    @task(task_id="setup", retries=2, execution_timeout=shape["stage_timeout"])
+    @task(
+        task_id="setup",
+        retries=2,
+        execution_timeout=shape["stage_timeout"],
+        on_failure_callback=_failure_callback,
+    )
     def setup(job: dict, **context: Any) -> dict:
         from swfactory import stages
 
-        return stages.setup(_ctx(name, job, context["dag_run"].run_id)).model_dump()
+        result = stages.setup(_ctx(name, job, context["dag_run"].run_id)).model_dump()
+        _cell_transition(job, "running", context, "setup")
+        return result
 
     return setup
 
 
 def _metrics_task(name: str):
-    @task(task_id="metrics", trigger_rule="none_failed")
+    @task(task_id="metrics", trigger_rule="none_failed", on_failure_callback=_failure_callback)
     def metrics(job: dict, **context: Any) -> dict:
         import json
 
@@ -218,17 +220,13 @@ def _teardown_task(name: str):
     def teardown(job: dict, **context: Any) -> None:
         from swfactory import stages
 
-        # `_ctx` never calls sb.ensure(), so closing here can only stop what setup() created.
         stages.teardown(_ctx(name, job, context["dag_run"].run_id))
+        _cell_transition(job, "cleaned", context, "teardown")
 
     return teardown
 
 
-# ---------------------------------------------------------------- DAG per blueprint
-
-
 def build_dag(shape: dict[str, Any]) -> DAG:
-    """Emit the DAG for one blueprint shape (see module docstring for the task layout)."""
     name = shape["name"]
     metrics_asset = Asset(name=f"swf.metrics.{name}")
 
