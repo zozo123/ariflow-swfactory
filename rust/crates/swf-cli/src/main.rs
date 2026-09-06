@@ -10,6 +10,7 @@
 //! first Ctrl-C cancels in-flight work through a token the adapters already honour, rather than
 //! tearing the process down in the middle of a write.
 
+mod cell_exec;
 mod cli;
 mod exec;
 mod exit;
