@@ -4,35 +4,52 @@
 
 <h1 align="center">swfactory</h1>
 
-<p align="center"><strong>Turn an issue into a governed pull request.</strong></p>
+<p align="center"><strong>Run software work like a production system.</strong></p>
 
 <p align="center">
   <a href="https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://airflow.apache.org/docs/apache-airflow/3.3.1/"><img alt="Airflow 3.3.1" src="https://img.shields.io/badge/Airflow-3.3.1-017CEE?logo=apacheairflow&logoColor=white" /></a>
   <a href="https://www.python.org/downloads/release/python-3120/"><img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" /></a>
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-D22128" /></a>
-  <a href="https://skills.sh/zozo123/ariflow-swfactory"><img alt="skills.sh" src="https://skills.sh/b/zozo123/ariflow-swfactory" /></a>
+  <a href="https://skills.sh/zozo123/ariflow-swfactory/airflow-software-factory"><img alt="skills.sh" src="https://skills.sh/b/zozo123/ariflow-swfactory" /></a>
 </p>
 
-`swfactory` is a change-manufacturing line built on Apache Airflow 3. Airflow controls the run.
-An agent works inside an isolated cell. Git stores the evidence. A human keeps the merge key.
+`swfactory` turns a GitHub issue into a reviewed pull request. The issue is the work order. A
+blueprint selects the production route. Airflow schedules the steps. A coding agent works in one
+isolated work cell. Tests, review, and people decide whether the change moves forward.
 
 ```text
-ISSUE -> INTENT GATE -> SPEC -> PLAN GATE -> BUILD / VERIFY -> REVIEW
-      -> VALIDATED PATCH -> PULL REQUEST -> HUMAN MERGE -> METRICS
+WORK ORDER -> ROUTE -> AIRFLOW -> WORK CELL -> QUALITY -> PULL REQUEST -> HUMAN MERGE
+                              \________________________________________/
+                                      saved evidence and history
 ```
 
-This is not an autonomous merge bot. It is infrastructure for making agent-authored change
-observable, bounded, repeatable, and rejectable.
-
-[Explore the control room](https://zozo123.github.io/ariflow-swfactory/) ·
+[Open the live guide](https://zozo123.github.io/ariflow-swfactory/) ·
 [Read the design](docs/design.md) ·
-[Inspect historical run PR #3](https://github.com/zozo123/ariflow-swfactory/pull/3)
+[See a completed factory run](https://github.com/zozo123/ariflow-swfactory/pull/3)
 
-## Run it
+## Factory map
 
-The keyless demo replays a recorded agent run through the real pipeline. It makes no model calls
-and publishes only to a local bare Git remote.
+| Factory term | In this project | Job |
+|---|---|---|
+| Work order | GitHub issue | says what needs to change |
+| Production route | `blueprints/*.toml` | selects stages, approvals, limits, target, and sandbox |
+| Work instructions | target repository's `factory.toml` | names test, lint, source, test, and protected paths |
+| Plant scheduler | Apache Airflow | starts, pauses, retries, maps, and records each job |
+| Work cell | one sandbox per issue and target | contains the checkout, agent, and tools |
+| Operator | the coding agent | writes or reviews within the current stage |
+| Quality checks | fresh tests, review, and patch validation | decide whether work may advance |
+| Trace record | `docs/factory/<issue>/` | keeps intent, plan, approvals, review, metrics, and receipts |
+| Factory floor | `swfactory herd` | shows active runs, gates, pull requests, and sandboxes |
+| Continuous improvement | `metrics.json`, `bands.yaml`, and `maintain` | turns delivery drift into logs, incidents, or new work orders |
+
+People choose the work, approve intent and plan, and merge. Airflow owns run state. The agent owns
+only the task inside its current work cell.
+
+## Try the complete flow locally
+
+The demo runs every production stage, including a failed build and repair, with recorded agent
+outputs. It needs no model key and publishes only to a temporary local Git remote.
 
 ```bash
 git clone https://github.com/zozo123/ariflow-swfactory.git
@@ -41,92 +58,54 @@ uv sync
 uv run swfactory demo
 ```
 
-Run a live issue when the target, sandbox, model access, GitHub auth, and human gates are ready:
+The final report links the generated artifacts and local pull-request record.
+
+## Run it on a real GitHub repository
+
+### 1. Prepare the product repository
+
+Use an existing repository or create one:
 
 ```bash
-uv run swfactory doctor
-uv run swfactory run \
-  --blueprint factory \
-  --issue 42 \
-  --agent claude \
-  --sandbox islo \
-  --scm github \
-  --approve prompt
+gh repo create your-org/your-product --private --clone
 ```
 
-## The operating model
+Add `factory.toml` at the target directory's root. Commands must be non-interactive. The test
+command must return a failure code when tests fail and write fresh JUnit XML to
+`.factory/junit.xml`.
 
-| Phase | Authority | Durable evidence | Failure behavior |
-|---|---|---|---|
-| Intent | originator | verbatim `intent.md` | reject or clarify |
-| Intent gate | human | actor, time, artifact digest | publish rejection evidence |
-| Spec | read-only agent | testable `spec.md` | stop on invalid output |
-| Plan | read-only agent | typed `plan.json` and rendered `plan.md` | stop on invalid output |
-| Plan gate | human | actor, time, artifact digest | publish rejection evidence |
-| Build and verify | bounded write agent | commits, fresh JUnit, invocation receipts | repair within the loop bound |
-| Review | read-only agent plus policy code | structured findings and verdict | block or run one bounded fix loop |
-| Deliver | trusted orchestrator | scoped patch, metrics, audit trail, PR | refuse dirty or unprovable state |
-| Merge | human | GitHub review and branch policy | never automated by this project |
+```toml
+[commands]
+test = "./scripts/ci-test.sh --junit .factory/junit.xml"
+lint = "./scripts/ci-lint.sh"
 
-Each `blueprints/*.toml` file is executable governance: one CLI line and one generated Airflow DAG.
-It declares stage order, gates, loop and budget limits, targets, sandbox profile, and PR labels.
-Stage semantics stay in Python so a TOML edit cannot redefine what “review” or “deliver” means.
-
-## Trust boundary
-
-```text
-TRUSTED CONTROL PLANE
-Airflow · approvals · run state · GitHub credential · patch validation
-                         |
-                         | issue + policy in / evidence + commits out
-                         v
-UNTRUSTED AGENT CELL
-checkout · model process · tools · package installs · target verification
+[paths]
+source = "src"
+tests = "tests"
+junit = ".factory/junit.xml"
+protected = ["factory.toml", ".github/"]
 ```
 
-The agent never receives the GitHub delivery credential. External identifiers and paths are
-validated before they become directories, refs, or remote paths. Baselines, approvals, review
-records, and cost journals remain host-owned until delivery. Missing or empty JUnit is failure.
-Verification side effects and dirty non-artifact files stop the line. Delivery stages only the
-approved artifact tree and passes the patch through scope and secret checks before publication.
+For a monorepo, put one contract in each target directory and set that directory in the route.
 
-`Scm` deliberately has no merge method.
+### 2. Create a production route
 
-## Sandbox fabric
-
-The factory has one protocol: ensure, execute, read, write, exists, close. Providers keep their
-real security semantics; unsupported policy is an error, never a silent downgrade.
-
-| Runtime | Boundary | Best use | Status |
-|---|---|---|---|
-| `local` | none | scripted replay | built in; real agents refused by default |
-| `srt` | OS confinement | keyed developer workstation | built in |
-| `docker` | shared-kernel container | local reproducibility and full stacks | built in |
-| `islo` | remote MicroVM | production agent cell | built in |
-| `toolset` + `sbx` | Docker Sandboxes MicroVM through Airflow `SandboxBackend` | local Airflow sandbox work | adapter built in; provider and binary required |
-| Daytona | hosted stateful sandbox | persistent agent cells | custom backend target; adapter not shipped |
-| E2B | hosted cloud sandbox | ephemeral cells | custom backend target; adapter not shipped |
-| Tensorlake | hosted MicroVM | scalable cells and verification | custom backend target; adapter not shipped |
-| Box by ASCII | persistent Linux VM with Docker and desktop | large repository environments | custom backend target; adapter not shipped |
-
-Bring any Airflow-compatible backend with:
-
-```bash
-SWF_SANDBOX=toolset \
-SWF_TOOLSET_BACKEND=your_package.backends:YourSandboxBackend \
-uv run swfactory run --issue 42 --agent claude --scm github
-```
-
-The adapter must prove reconnectability, bounded output, process-tree timeout, path confinement,
-egress enforcement, minimal credentials, idempotent cleanup, and server-side expiry. See the
-[sandbox provider contract](skills/airflow-software-factory/references/sandboxes.md).
-
-## Factory line contract
+Fork or clone this control repository. Copy `blueprints/default.toml` to
+`blueprints/your-product.toml`, then update its name and target:
 
 ```toml
 [blueprint]
-name = "factory"
+name = "your-product"
 version = 1
+description = "Normal product change"
+
+[trigger]
+kind = "manual"
+
+[[targets]]
+repo = "your-org/your-product"
+dir = ""
+base_branch = "main"
 
 [stages]
 order = ["intent", "spec", "plan", "build_and_test", "review", "deliver"]
@@ -141,112 +120,219 @@ after = "plan"
 artifact = "plan.md"
 timeout_h = 24
 
-[[targets]]
-repo = "your-org/your-repo"
-dir = ""
-base_branch = "main"
-
-[sandbox]
-kind = "islo"
-ttl_s = 172800
-idle_s = 900
-
 [limits]
 max_build_iterations = 3
 max_review_fixes = 1
+max_turns = 40
+budget_usd_per_stage = 2.0
 budget_usd = 8.0
+stage_timeout_h = 3
+max_parallel_jobs = 4
+
+[sandbox]
+kind = "islo"
+gateway_profile = "swfactory"
+environment = "swfactory"
+ttl_s = 172800
+idle_s = 900
 
 [deliver]
 labels = ["factory", "agent-authored"]
 ```
 
-Every target owns a `factory.toml`. It names the verification command, JUnit location, source and
-test directories, and protected paths. The factory refuses to guess them.
+The file name, blueprint name, and Airflow DAG id must match.
 
-## Compose it with Astronomer Blueprint
+### 3. Check access and run one work order
 
-The optional `software_factory` template makes a governed line one reusable step in Astronomer
-Blueprint YAML and the Astro IDE:
+Install the Airflow dependencies, authenticate GitHub and the selected sandbox provider, then run
+the preflight:
 
-```yaml
-steps:
-  manufacture_change:
-    blueprint: software_factory
-    line: factory
-    issues: ["42", "43"]
-    wait_for_completion: true
+```bash
+uv sync --group airflow
+gh auth status
+islo login && islo login --tool github && islo login --tool claude
+uv run swfactory doctor --blueprint your-product
 ```
 
-Astronomer Blueprint owns the outer workflow; the child factory DAG retains dynamic mapping,
-human gates, isolated execution, evidence, and delivery authority. Install it with
-`uv sync --group airflow --group astronomer-blueprint`. See the
-[composition guide](docs/astronomer-blueprint.md) and [example YAML](examples/astronomer-blueprint/product-change.dag.yaml).
+Start issue 42 and answer both approvals in the terminal:
+
+```bash
+uv run swfactory run \
+  --blueprint your-product \
+  --issue 42 \
+  --agent claude \
+  --sandbox islo \
+  --scm github \
+  --approve prompt
+```
+
+The run ends with a pull request or an explicitly blocked or rejected pull request. Inspect the
+pull request, `docs/factory/42/`, test report, review findings, approvals, cost, and patch before a
+person merges it.
+
+## Keep the factory running
+
+The durable deployment has a small trusted control plane and many short-lived work cells:
+
+```text
+GitHub -> signed webhook -> Airflow control plane -> sandbox provider -> one work cell per job
+   ^                              |                         |
+   |                              v                         v
+   +-------- pull request <- quality checks <- patch + evidence
+```
+
+The control plane can run inside a container, VM, or hosted sandbox and create remote work cells
+through a provider API. Keep Airflow state and the webhook receiver on persistent storage. Keep
+GitHub delivery credentials in the control plane. Give each work cell only the model access and
+network destinations required for its job.
+
+### Local Docker rehearsal
+
+```bash
+docker build -f deploy/docker/agent.Dockerfile -t swfactory-agent:local .
+SWF_AGENT=claude SWF_SCM=github \
+ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" GH_TOKEN="$GH_TOKEN" \
+docker compose -f deploy/docker/docker-compose.yml up -d
+```
+
+The stack binds to localhost. Production exposure needs TLS, webhook HMAC verification, durable
+Airflow storage, authentication, backups, and a restricted network. Docker socket access gives the
+Airflow worker control of the Docker host. See [the Docker guide](docs/docker.md).
+
+### Hosted islo deployment
+
+Bootstrap the product repository's agent environment once, then deploy the control repository and
+attach its webhook to the product repository:
+
+```bash
+REPO=your-org/your-product TARGET_DIR= deploy/islo/bootstrap.sh
+
+export SWF_CONTROL_REPO=your-org/swfactory-control
+export SWF_TARGET_REPO=your-org/your-product
+export SWF_CONTROL_BRANCH=main
+export GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"
+deploy/islo/deploy.sh
+```
+
+Store and reuse the webhook secret on later deployments. The script starts Airflow and the
+receiver, creates a signed incoming webhook, and installs the repository hook. See
+[the islo production guide](docs/islo.md).
+
+### Other sandbox providers
+
+The built-in choices are `local`, `srt`, `docker`, `islo`, and Airflow `toolset`. The toolset path
+can load an Airflow-compatible backend for Docker Sandboxes (`sbx`) or a custom Daytona, E2B,
+Tensorlake, or Box by ASCII adapter:
+
+```bash
+SWF_SANDBOX=toolset \
+SWF_TOOLSET_BACKEND=your_package.backends:YourSandboxBackend \
+uv run swfactory run --blueprint your-product --issue 42 --agent claude --scm github
+```
+
+A provider adapter must support reconnecting, timeouts, bounded output, path isolation, network
+rules, limited credentials, cleanup, and expiry. Read the
+[sandbox provider contract](skills/airflow-software-factory/references/sandboxes.md).
+
+## Daily operation
+
+1. **Send work.** Label an issue `factory:<route>`, comment `@factory run <route>`, trigger the DAG,
+   or use the CLI.
+2. **Approve.** Read `intent.md` and `plan.md` in Airflow or run
+   `swfactory approve <dag_run_id> intent|plan`.
+3. **Watch.** Use `swfactory herd`, Airflow, and GitHub checks to follow active work.
+4. **Release.** Review the final patch and evidence, then merge through normal branch protection.
+5. **Improve.** Let `maintain` compare merged run metrics with `bands.yaml`; investigate incidents
+   and admit useful proposals as new work orders.
+
+Delivery metrics cover cycle time, iterations, first-pass verification, review findings, denied
+tools, and cost. Production health, security, customer impact, and business results can feed the
+same system by creating GitHub issues from the tools that already observe those signals.
+
+## Grow useful information and remove noise
+
+Healthy software production runs two loops:
+
+- **Explore:** issues, specs, plans, evaluations, and telemetry add useful choices and evidence.
+- **Standardize:** tests, budgets, work-in-progress limits, protected paths, review, and cleanup
+  remove failed ideas, duplication, stale code, and stale documentation.
+
+Use several narrow routes instead of one universal route. A normal feature can use `factory`; an
+urgent repair can use `hotfix`; dependency upkeep can run on a schedule. Keep each job bounded with
+`max_parallel_jobs`, iteration limits, timeouts, and cost limits. Promote a repeated good practice
+into `factory.toml`, a blueprint, a test, or a reusable skill.
+
+## Routes, repositories, and versions
+
+| Need | Configuration |
+|---|---|
+| Normal feature or repair | manual route with intent and plan approvals |
+| Urgent repair | shorter `hotfix` route with tighter limits |
+| Recurring maintenance | `[trigger] kind = "cron"`, `cron = "…"`, and `issues = ["path/to/work-order.md"]` |
+| Several repositories | multiple `[[targets]]`; each run maps issues × targets |
+| Monorepo | set each target's `dir` and keep a `factory.toml` there |
+| Larger outer workflow | use the optional [Astronomer Blueprint step](docs/astronomer-blueprint.md) |
+
+Astronomer Blueprint can assemble several reusable factory routes in YAML or the Astro IDE. This
+package exposes `software_factory`, which triggers an existing route DAG while that child DAG
+keeps its mapped jobs, approvals, evidence, and run history. Install it with
+`uv sync --group airflow --group astronomer-blueprint`.
+
+Compatibility is explicit:
+
+- Python `>=3.12,<3.13`
+- Apache Airflow `3.3.1`, with an upstream-main canary in CI
+- blueprint schema `version = 1`, read by swfactory `2.0.x`
+- GitHub delivery and a local Git remote for the keyless demo
+- target projects in any language whose contract can produce JUnit XML
+
+Schema and package versions move independently. A blueprint schema version changes when an older
+blueprint can no longer be read. Releases follow semantic versioning and are published only after
+lint, unit tests, the scripted end-to-end run, Airflow parity and smoke, and package build pass.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `swfactory demo` | keyless end-to-end replay |
-| `swfactory run` | run one blueprint over issues x targets |
-| `swfactory doctor` | preflight a live deployment |
-| `swfactory herd` | control-room TUI for runs, gates, PRs, and sandboxes |
-| `swfactory approve` | answer an Airflow HITL gate |
+| `swfactory demo` | run the keyless end-to-end replay |
+| `swfactory run` | run one route over issues × targets |
+| `swfactory doctor` | check a live deployment before work starts |
+| `swfactory herd` | view runs, approvals, pull requests, and sandboxes |
+| `swfactory approve` | answer an Airflow approval gate |
 | `swfactory webhook serve` | route trusted GitHub events into Airflow |
 | `swfactory metrics` | aggregate committed run evidence |
-| `swfactory maintain` | detect metric-band breaches and sweep owned sandboxes |
+| `swfactory maintain` | detect metric drift and sweep owned sandboxes |
 
-## Install the agent skill
-
-The repository ships `airflow-software-factory`, a reusable skill for designing, adopting,
-operating, and auditing this pattern:
+## Install the factory skill
 
 ```bash
 npx skills add zozo123/ariflow-swfactory --skill airflow-software-factory
 ```
 
-## Evidence and limits
+The public skill teaches an agent how to design, adopt, operate, and audit this production system.
 
-The 2.0 rewrite received a static source and documentation audit before tagging. The version-tag
-workflow is the execution gate: lint, the hermetic suite, scripted e2e demo, Airflow parity and
-smoke, and package build must pass before GitHub publishes release artifacts. Its result is the
-2.0 release evidence; the two PRs below remain useful 1.x operating examples.
+## Evidence and project status
 
-- Historical [PR #2](https://github.com/zozo123/ariflow-swfactory/pull/2) is the honest failure
-  path: the line published a labeled blocker instead of pretending success.
-- Historical [PR #3](https://github.com/zozo123/ariflow-swfactory/pull/3) is the clean path: a
-  verified build, zero review findings, committed receipts, and a pull request left for a human.
-- `srt` and Docker share the host kernel. Docker socket access is host-root-equivalent.
-- Airflow `SandboxToolset` contains command tools, not the agent loop. It is not automatically an
-  agent-cell substitute.
-- Private-repository cloning and provider credential delivery remain deployment responsibilities.
-- The project is alpha. Read [SECURITY.md](SECURITY.md) before connecting production repositories.
+The current release is `2.0.1`. [PR #2](https://github.com/zozo123/ariflow-swfactory/pull/2)
+records a blocked run; [PR #3](https://github.com/zozo123/ariflow-swfactory/pull/3) records a clean
+run that stopped at human merge. This project is alpha. Read [SECURITY.md](SECURITY.md) before
+connecting a production repository.
 
 ## Repository map
 
 ```text
-blueprints/                 policy-defined delivery lines
-dags/                       generated Airflow DAGs and HITL gates
-src/swfactory/              runtime, stages, adapters, state, policy, CLI
-skills/airflow-software-factory/
-                            installable public agent skill
-examples/astronomer-blueprint/
-                            optional outer-workflow composition example
-.claude/hooks/              write guard and audit hook
-demo/                       keyless target and recorded agent fixtures
-deploy/docker/              local Airflow, webhook, and sandbox stack
-deploy/islo/                production MicroVM topology
-docs/                       design, deployment, eval, and control-room guides
-site/                       GitHub Pages control room
+blueprints/        production routes and their limits
+dags/              generated Airflow DAGs, approvals, and maintenance
+src/swfactory/     runtime, stages, adapters, state, policy, and CLI
+skills/            installable Airflow software factory skill
+deploy/docker/     local Airflow and Docker work-cell stack
+deploy/islo/       hosted control plane and MicroVM work cells
+docs/              design, deployment, evaluation, and operations guides
+site/              GitHub Pages guide
 ```
 
-## Documentation
-
-- [Design and blueprint schema](docs/design.md)
-- [Astronomer Blueprint composition](docs/astronomer-blueprint.md)
-- [Production on islo](docs/islo.md)
-- [Local Docker stack](docs/docker.md)
-- [Control-room TUI](docs/herd.md)
-- [Evaluation suite](docs/evals.md)
-- [Contributing](CONTRIBUTING.md) and [security policy](SECURITY.md)
+[Design and schema](docs/design.md) · [Docker](docs/docker.md) · [islo](docs/islo.md) ·
+[Factory floor](docs/herd.md) · [Evaluation](docs/evals.md) ·
+[Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 Apache-2.0

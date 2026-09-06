@@ -164,6 +164,20 @@ class Trigger(BaseModel):
 
     kind: Literal["manual", "cron"] = "manual"
     cron: str | None = None
+    issues: list[str] = Field(default_factory=list)
+
+    @field_validator("issues")
+    @classmethod
+    def _issues(cls, values: list[str]) -> list[str]:
+        issues: list[str] = []
+        for item in values:
+            value = item.strip()
+            if not value:
+                raise ValueError("trigger.issues entries must not be empty")
+            issues.append(
+                value if value.isdigit() else normalize_relative_path(value, field="trigger.issues")
+            )
+        return list(dict.fromkeys(issues))
 
     @model_validator(mode="after")
     def _cron_present(self) -> Trigger:
@@ -288,7 +302,7 @@ class Blueprint(BaseModel):
         return tuple(items)
 
     def jobs(self, conf: dict[str, Any] | None) -> list[dict[str, Any]]:
-        """Fan-out of one DAG run: ``conf.issues`` (or ``conf.issue``) x targets.
+        """Fan-out of one DAG run: runtime issues, else ``trigger.issues``, x targets.
 
         ``conf["targets"]`` (list of ``owner/name``) restricts the blueprint's targets.
         Result items: ``{"issue", "repo", "dir", "base_branch", "job_idx"}``.
@@ -299,6 +313,8 @@ class Blueprint(BaseModel):
         raw = conf.get("issues") or None
         if raw is None and conf.get("issue") not in (None, ""):
             raw = [conf["issue"]]
+        if raw is None:
+            raw = self.trigger.issues
         if raw is not None and not isinstance(raw, list | tuple):
             raw = [raw]
         issues: list[str] = []
@@ -311,7 +327,9 @@ class Blueprint(BaseModel):
             )
         issues = list(dict.fromkeys(issues))
         if not issues:
-            raise ValueError('conf needs {"issues": [...]} (or {"issue": N})')
+            raise ValueError(
+                'run needs conf {"issues": [...]} (or {"issue": N}), or trigger.issues'
+            )
         targets = self.targets
         if conf.get("targets"):
             selected = conf["targets"]

@@ -14,14 +14,16 @@
 #   islo environment create --name swfactory-orchestrator --secret ISLO_API_KEY=<islo api-key create>
 #   the agent-side `swfactory` gateway profile + environment from docs/islo.md (unchanged)
 #
-# Env: SWF_REPO (owner/name, default zozo123/ariflow-swfactory), SWF_BRANCH (main),
-#      GITHUB_WEBHOOK_SECRET (required; reuse the same secret on redeploy), SWF_SANDBOX_OWNER (defaults
-#      to the islo login email if `islo status --output json` exposes one), SHARE_TTL (7d).
+# Env: SWF_CONTROL_REPO (factory owner/name), SWF_TARGET_REPO (product owner/name),
+#      SWF_CONTROL_BRANCH (main), GITHUB_WEBHOOK_SECRET (required; reuse on redeploy),
+#      SWF_SANDBOX_OWNER (defaults to the islo login email when available), SHARE_TTL (7d).
+#      SWF_REPO and SWF_BRANCH remain supported as aliases for the control repository.
 # Every islo/gh flag below exists in `islo <cmd> --help` (0.48.1) / `gh api --help`.
 set -euo pipefail
 
-REPO="${SWF_REPO:-zozo123/ariflow-swfactory}"
-BRANCH="${SWF_BRANCH:-main}"
+CONTROL_REPO="${SWF_CONTROL_REPO:-${SWF_REPO:-zozo123/ariflow-swfactory}}"
+TARGET_REPO="${SWF_TARGET_REPO:-$CONTROL_REPO}"
+CONTROL_BRANCH="${SWF_CONTROL_BRANCH:-${SWF_BRANCH:-main}}"
 ORCH="${SWF_ORCHESTRATOR:-swf-orchestrator}"
 GATEWAY="${SWF_ORCH_GATEWAY_PROFILE:-swfactory-orchestrator}"
 ENVIRONMENT="${SWF_ORCH_ENVIRONMENT:-swfactory-orchestrator}"
@@ -29,7 +31,7 @@ WEBHOOK_NAME="${SWF_WEBHOOK_NAME:-swf-github}"
 SHARE_TTL="${SHARE_TTL:-7d}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="$HERE/orchestrator/islo.yaml"
-REPO_NAME="${REPO##*/}"
+REPO_NAME="${CONTROL_REPO##*/}"
 REPO_DIR="/workspace/$REPO_NAME"
 
 if [ -z "${GITHUB_WEBHOOK_SECRET:-}" ]; then
@@ -51,10 +53,10 @@ for k in sys.argv[1:]:
 }
 
 # --- 1. the orchestrator sandbox (create-if-needed; no --pause-after-idle: it must never pause)
-echo "deploy: ensuring sandbox $ORCH from github://$REPO:$BRANCH"
+echo "deploy: ensuring sandbox $ORCH from github://$CONTROL_REPO:$CONTROL_BRANCH"
 islo use "$ORCH" \
   --config "$CONFIG" \
-  --source "github://$REPO:$BRANCH" \
+  --source "github://$CONTROL_REPO:$CONTROL_BRANCH" \
   --gateway-profile "$GATEWAY" \
   --environment "$ENVIRONMENT" \
   --init full \
@@ -118,12 +120,12 @@ RECEIVER_URL="$(islo webhook incoming get "$WEBHOOK_ID" --output json | json_fie
 echo "deploy: receiver URL: $RECEIVER_URL"
 
 # --- 5. GitHub repo hook (issues + issue_comment, JSON, same secret); reuse by URL
-EXISTING="$(gh api "repos/$REPO/hooks" --paginate --jq ".[] | select(.config.url == \"$RECEIVER_URL\") | .id" 2>/dev/null | head -n1 || true)"
+EXISTING="$(gh api "repos/$TARGET_REPO/hooks" --paginate --jq ".[] | select(.config.url == \"$RECEIVER_URL\") | .id" 2>/dev/null | head -n1 || true)"
 if [ -n "$EXISTING" ]; then
   echo "deploy: GitHub hook $EXISTING already points at the receiver; updating secret + events"
-  METHOD=PATCH; ENDPOINT="repos/$REPO/hooks/$EXISTING"
+  METHOD=PATCH; ENDPOINT="repos/$TARGET_REPO/hooks/$EXISTING"
 else
-  METHOD=POST; ENDPOINT="repos/$REPO/hooks"
+  METHOD=POST; ENDPOINT="repos/$TARGET_REPO/hooks"
 fi
 python3 -c '
 import json, os, sys
@@ -137,6 +139,8 @@ print(json.dumps({
 cat <<EOF
 
 deploy: done.
+  control repository: $CONTROL_REPO@$CONTROL_BRANCH
+  target repository : $TARGET_REPO
   label an issue 'factory' / 'factory:<blueprint>' or comment '@factory run [<blueprint>]'
   orchestrator log : islo use $ORCH -- tail -f /workspace/orchestrator.log
   deliveries       : islo webhook incoming deliveries ls $WEBHOOK_ID

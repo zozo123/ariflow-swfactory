@@ -15,7 +15,7 @@
 set -euo pipefail
 
 REPO="${REPO:-zozo123/ariflow-swfactory}"        # target repo (owner/name); cloned by --source
-TARGET_DIR="${TARGET_DIR:-demo/target}"          # subdir the factory operates on ("" = repo root)
+TARGET_DIR="${TARGET_DIR-demo/target}"           # subdir the factory operates on ("" = repo root)
 PROFILE="${PROFILE:-swfactory}"                  # islo gateway profile ([sandbox] gateway_profile)
 ENV="${ENV:-swfactory}"                          # islo environment ([sandbox] environment)
 SNAPSHOT="${SNAPSHOT:-0}"                        # 1 = bake swf-golden-<date> (docs/islo.md)

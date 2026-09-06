@@ -218,8 +218,24 @@ def test_policy_override_via_toml_is_additive_only() -> None:
 
 def test_valid_variants() -> None:
     assert Blueprint.model_validate(_data(gates=[])).gate_timeout_h == 0
-    bp = Blueprint.model_validate(_data(trigger={"kind": "cron", "cron": "0 6 * * 1"}))
+    bp = Blueprint.model_validate(
+        _data(
+            trigger={
+                "kind": "cron",
+                "cron": "0 6 * * 1",
+                "issues": ["42", "demo/issue.md", "42"],
+            }
+        )
+    )
     assert bp.trigger.cron == "0 6 * * 1"
+    assert bp.trigger.issues == ["42", "demo/issue.md"]
+    assert [job["issue"] for job in bp.jobs({})] == [
+        "42",
+        "42",
+        "demo/issue.md",
+        "demo/issue.md",
+    ]
+    assert [job["issue"] for job in bp.jobs({"issues": ["7"]})] == ["7", "7"]
     assert Blueprint.model_validate(_data(order=["intent", "deliver"], gates=[])).order == [
         "intent",
         "deliver",

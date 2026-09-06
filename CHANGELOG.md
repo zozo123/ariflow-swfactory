@@ -6,7 +6,26 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Scheduled blueprints can declare `trigger.issues`; cron-created DAG runs use those issue inputs
+  when no runtime configuration is present, while explicit run configuration still wins.
+
+### Changed
+
+- The README, site, design reference, and public skill now use a practical factory vocabulary:
+  work orders, production routes, plant scheduling, work cells, quality checks, release, and
+  continuous improvement. The README includes a full real-repository setup and deployment guide.
+- The feedback-loop language states exactly which delivery signals it measures and when the
+  default maintainer sees merged evidence.
+- The hosted islo deployment now separates the factory control repository
+  (`SWF_CONTROL_REPO`) from the product repository receiving webhooks and pull requests
+  (`SWF_TARGET_REPO`). The previous `SWF_REPO` / `SWF_BRANCH` inputs remain compatible aliases.
+
+### Fixed
+
+- `TARGET_DIR=` now selects a repository-root target during islo bootstrap, matching the documented
+  empty-directory behavior instead of falling back to `demo/target`.
 
 ## [2.0.1] - 2026-09-06
 

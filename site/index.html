@@ -6,14 +6,14 @@
     <script>document.documentElement.classList.add("has-js");</script>
     <meta
       name="description"
-      content="swfactory turns GitHub issues into tested, reviewed pull requests with Airflow 3 orchestration, human gates, isolated AI agents, and a committed audit trail."
+      content="swfactory runs GitHub work orders through versioned production routes, isolated coding-agent work cells, quality checks, and human release decisions on Apache Airflow 3."
     />
     <meta name="theme-color" content="#07090d" />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="swfactory | Issues in. Governed pull requests out." />
+    <meta property="og:title" content="swfactory | Run software work like a factory." />
     <meta
       property="og:description"
-      content="An AI-native software factory orchestrated by Apache Airflow 3."
+      content="GitHub holds the work order. A blueprint sets the route. Airflow schedules the work. Tests, review, and people check the result."
     />
     <meta property="og:url" content="https://zozo123.github.io/ariflow-swfactory/" />
     <meta property="og:image" content="https://zozo123.github.io/ariflow-swfactory/social-card.png" />
@@ -29,7 +29,7 @@
       fetchpriority="high"
     />
     <link rel="stylesheet" href="styles.css" />
-    <title>swfactory | Governed AI software delivery</title>
+    <title>swfactory | Run software work like a production system</title>
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -38,7 +38,7 @@
         "codeRepository": "https://github.com/zozo123/ariflow-swfactory",
         "programmingLanguage": "Python",
         "license": "https://www.apache.org/licenses/LICENSE-2.0",
-        "description": "AI-native software factory orchestrated by Apache Airflow 3"
+        "description": "A software production system that turns GitHub work orders into reviewed pull requests on Apache Airflow 3"
       }
     </script>
     <script src="app.js" defer></script>
@@ -58,7 +58,7 @@
 
         <div class="desktop-nav">
           <a href="#pipeline">Pipeline</a>
-          <a href="#drivers">Entrypoints</a>
+          <a href="#drivers">Factory cycle</a>
           <a href="#security">Boundary</a>
           <a href="#blueprints">Blueprint</a>
           <a href="#proof">Evidence</a>
@@ -89,7 +89,7 @@
       <nav class="mobile-nav shell" aria-label="Mobile navigation">
         <p class="micro-label">Navigate</p>
         <a href="#pipeline">Pipeline</a>
-        <a href="#drivers">Entrypoints</a>
+        <a href="#drivers">Factory cycle</a>
         <a href="#security">Trust boundary</a>
         <a href="#blueprints">Blueprint</a>
         <a href="#proof">Evidence</a>
@@ -110,11 +110,11 @@
               <span>Open source</span>
             </div>
 
-            <h1>Give agents work.<br /><span>Keep control.</span></h1>
+            <h1>Build software.<br /><span>Run the factory.</span></h1>
 
             <p class="hero-lede">
-              Turn an issue into a governed pull request. Airflow controls the line; agents work
-              inside isolated cells.
+              Turn a GitHub work order into a reviewed pull request. Airflow runs the route. Tests,
+              review, and people check the result.
             </p>
 
             <div class="hero-actions">
@@ -142,8 +142,8 @@
               fetchpriority="high"
             />
             <figcaption>
-              <span>ISSUE</span><i></i><span>POLICY</span><i></i><span>CELL</span><i></i
-              ><span>EVIDENCE</span><i></i><span>PR</span>
+              <span>WORK ORDER</span><i></i><span>ROUTE</span><i></i><span>CELL</span><i></i
+              ><span>QUALITY</span><i></i><span>PR</span>
             </figcaption>
           </figure>
         </div>
@@ -151,12 +151,12 @@
         <div
           class="signal-strip"
           role="img"
-          aria-label="Factory flow: GitHub issue to Airflow DAG to isolated agent to test and review to a pull request for human merge"
+          aria-label="Factory flow: work order to production route to Airflow to isolated work cell to quality checks to a pull request for human merge"
         >
           <div class="signal-track">
-            <span>GITHUB ISSUE</span><i>→</i><span>AIRFLOW DAG</span><i>→</i
-            ><span>ISOLATED AGENT</span><i>→</i><span>TEST + REVIEW</span><i>→</i
-            ><span>PR FOR HUMAN MERGE</span>
+            <span>WORK ORDER</span><i>→</i><span>PRODUCTION ROUTE</span><i>→</i
+            ><span>AIRFLOW</span><i>→</i><span>ISOLATED WORK CELL</span><i>→</i
+            ><span>QUALITY CHECKS</span><i>→</i><span>PR FOR HUMAN MERGE</span>
           </div>
         </div>
       </section>
@@ -164,11 +164,11 @@
       <section id="pipeline" class="section shell">
         <header class="section-head reveal">
           <div>
-            <p class="kicker">One issue. One governed line.</p>
+            <p class="kicker">One work order. One production route.</p>
             <h2>Autonomy with<br /><span>a paper trail.</span></h2>
           </div>
           <p class="section-lede">
-            The model does the creative work. Deterministic code controls permissions, budgets,
+            The agent does the creative work. Deterministic code controls permissions, budgets,
             gates, tests, and delivery.
           </p>
         </header>
@@ -274,74 +274,95 @@
         <div class="shell">
           <header class="section-head reveal">
             <div>
-              <p class="kicker">Four ways in. One assembly.</p>
-              <h2>Different triggers.<br /><span>Identical run.</span></h2>
+              <p class="kicker">How the factory runs</p>
+              <h2>From work order<br /><span>to pull request.</span></h2>
             </div>
             <p class="section-lede">
-              DAG, CLI, webhook, and control room all resolve the same blueprint and job into the
-              same runtime context. There is no shadow implementation to drift.
+              GitHub holds the work order. A blueprint sets the route. Airflow schedules each
+              step. Tests, review, and people check the result.
             </p>
           </header>
 
-          <div class="driver-grid">
-            <article class="driver-card driver-primary reveal">
-              <div class="driver-top"><span class="driver-index">CONTROL PLANE</span><code>dag</code></div>
-              <h3>Airflow is the line.</h3>
-              <p>
-                One DAG per blueprint. Issues × targets become mapped task groups, with native HITL
-                tasks at the gates.
-              </p>
-              <span class="driver-path">dags/blueprints.py</span>
-              <div class="mini-dag" aria-hidden="true">
-                <i></i><b></b><i></i><b></b><i></i><b></b><i></i>
-              </div>
-            </article>
+          <figure class="control-system reveal">
+            <figcaption class="control-system-head">
+              <span class="micro-label">Factory cycle</span>
+              <strong>One route. One work cell. One trace.</strong>
+            </figcaption>
 
-            <article class="driver-card reveal">
-              <div class="driver-top"><span class="driver-index">LOCAL</span><code>cli</code></div>
-              <h3>The same line from a shell.</h3>
-              <p>Replay it without keys, or run a real agent against a real repository.</p>
-              <span class="driver-path">swfactory run · demo</span>
-            </article>
+            <ol class="control-cycle">
+              <li class="control-node control-demand">
+                <span class="control-role">WORK ORDER</span>
+                <h3>Choose the work.</h3>
+                <p>A GitHub issue says what needs to change and why.</p>
+                <code>issue</code>
+              </li>
 
-            <article class="driver-card reveal">
-              <div class="driver-top"><span class="driver-index">EVENT</span><code>webhook</code></div>
-              <h3>An issue label starts work.</h3>
-              <p>
-                Add <code>factory[:&lt;name&gt;]</code>; the receiver creates the matching Airflow DAG
-                run.
-              </p>
-              <span class="driver-path">swfactory webhook serve</span>
-            </article>
+              <li class="control-node control-policy">
+                <span class="control-role">ROUTE</span>
+                <h3>Choose the build route.</h3>
+                <p>
+                  <code>factory[:&lt;name&gt;]</code> selects the target, steps, approvals, limits, and
+                  sandbox.
+                </p>
+                <code>blueprints/*.toml</code>
+              </li>
 
-            <article class="driver-card driver-herd reveal">
-              <div class="driver-top"><span class="driver-index">OPERATE</span><code>herd</code></div>
-              <h3>Humans get a control room.</h3>
-              <p>Inspect runs, answer gates, watch PRs, sandboxes and metrics from one TUI.</p>
-              <div class="herd-screen" role="group" aria-label="herd pending gate example">
-                <div class="herd-bar"><span>HERD / GATES</span><span>1 pending</span></div>
-                <div class="herd-row herd-labels"><span>dag</span><span>gate</span><span>subject</span></div>
-                <div class="herd-row"><span>factory</span><b>approve_plan</b><span>plan.md / #42</span></div>
-                <div class="herd-action"><span>admin</span><strong>[A] APPROVE</strong><span>[R] reject</span></div>
-              </div>
-            </article>
+              <li class="control-node control-airflow">
+                <span class="control-role">SCHEDULER</span>
+                <h3>Airflow runs the steps.</h3>
+                <p>
+                  Every job, wait, retry, timeout, and approval has a visible state.
+                </p>
+                <code>dags/blueprints.py</code>
+              </li>
 
-            <article class="runtime-card reveal">
+              <li class="control-node control-proof">
+                <span class="control-role">QUALITY</span>
+                <h3>Checks inspect the change.</h3>
+                <p>
+                  Plans, fresh tests, independent review, artifact hashes, and patch checks travel
+                  with the work.
+                </p>
+                <code>artifacts + commits</code>
+              </li>
+
+              <li class="control-node control-authority">
+                <span class="control-role">RELEASE</span>
+                <h3>People approve and merge.</h3>
+                <p>
+                  Intent, plan, rejection, and final merge remain human decisions.
+                </p>
+                <code>gates + merge</code>
+              </li>
+
+              <li class="control-node control-learning">
+                <span class="control-role">IMPROVEMENT</span>
+                <h3>Run history opens new work.</h3>
+                <p>
+                  Metric bands record drift, open incidents, and propose the next work order.
+                </p>
+                <code>metrics.json → bands.yaml → issue</code>
+              </li>
+            </ol>
+
+            <div class="agent-role">
               <div>
-                <p class="micro-label">The KISS core</p>
-                <h3><code>(blueprint, job, run id)</code> → Ctx</h3>
+                <span class="micro-label">Work cell</span>
+                <strong>The coding agent works inside one sandbox.</strong>
               </div>
               <p>
-                CLI and DAG rebuild the same deterministic context: same run directory, worktree,
-                sandbox name, budgets, approvals, and resumable stage log.
+                It receives one bounded job and returns edits plus evidence. The trusted control
+                plane keeps approvals, delivery credentials, and release authority.
               </p>
-              <dl>
-                <div><dt>run id</dt><dd>sha1(dag_run_id:job)[:8]</dd></div>
-                <div><dt>run dir</dt><dd>.factory/&lt;run_id&gt;/</dd></div>
-                <div><dt>sandbox</dt><dd>swf-&lt;issue&gt;-&lt;run8&gt;</dd></div>
-              </dl>
-            </article>
-          </div>
+            </div>
+
+            <dl class="control-surfaces" aria-label="Factory interfaces">
+              <div><dt>send work</dt><dd>issue label or trusted comment</dd></div>
+              <div><dt>start</dt><dd>Airflow UI, API, herd, cron, or CLI</dd></div>
+              <div><dt>watch</dt><dd>Airflow and herd</dd></div>
+              <div><dt>trace</dt><dd><code>(route, job, run id)</code></dd></div>
+            </dl>
+          </figure>
         </div>
       </section>
 
@@ -496,7 +517,7 @@
           <header class="section-head reveal">
             <div>
               <p class="kicker">The factory is a file.</p>
-              <h2>Change the line.<br /><span>Not the engine.</span></h2>
+              <h2>Configure each<br /><span>production route.</span></h2>
             </div>
             <p class="section-lede">
               A TOML blueprint declares stages, human gates, limits, targets, sandbox profile, and
@@ -618,7 +639,7 @@
           >
             <div class="evidence-head"><span>RUN 02</span><b>clean path</b></div>
             <div class="evidence-mark">✓</div>
-            <h3>The line delivered.</h3>
+            <h3>The route finished.</h3>
             <p>First-pass CI, zero review findings, and every receipt committed on the branch.</p>
             <dl><div><dt>tests</dt><dd>14</dd></div><div><dt>findings</dt><dd>0</dd></div><div><dt>cost</dt><dd>$1.94</dd></div></dl>
             <span class="evidence-link">Inspect PR #3 ↗</span>
@@ -643,11 +664,12 @@
 
         <div id="maintain" class="feedback-loop reveal">
           <div>
-            <p class="micro-label">A factory that watches itself</p>
-            <h3>Every run tunes the next one.</h3>
+            <p class="micro-label">Continuous improvement</p>
+            <h3>Merged run history guides later work.</h3>
             <p>
-              Real-run metrics feed <code>bands.yaml</code>. Scripted demos are excluded, and only
-              response tiers that say so wake the model.
+              Delivery time, retries, findings, denied tools, and cost feed
+              <code>bands.yaml</code>. The result can record drift, open an incident, or propose a
+              new work order.
             </p>
           </div>
           <ol class="bands">
@@ -666,7 +688,7 @@
             <p class="section-lede">
               The recorded agent replay executes every production stage, fails a build, repairs it,
               reviews the result, and publishes to a local bare Git remote. It is the end-to-end
-              test, not a canned animation.
+              test you can inspect.
             </p>
             <div class="doc-links">
               <a href="https://github.com/zozo123/ariflow-swfactory/blob/main/docs/design.md" target="_blank" rel="noreferrer">Architecture ↗</a>

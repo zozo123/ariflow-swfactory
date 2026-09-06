@@ -1,40 +1,42 @@
 ---
 name: airflow-software-factory
-description: Design, configure, operate, or audit a governed AI software delivery line on Apache Airflow that turns issues into reviewed pull requests. Use for swfactory blueprints, approval gates, agent sandbox selection, evidence chains, and Airflow deployment; not for ordinary ETL DAGs.
+description: Design, configure, operate, or audit an Apache Airflow software factory that turns GitHub work orders into reviewed pull requests. Use for production routes, approval gates, coding-agent work cells, evidence chains, and factory deployment.
 metadata:
-  short-description: Build governed software factories on Airflow
+  short-description: Run software factories on Airflow
 ---
 
 # Airflow software factory
 
-Build a change-manufacturing line, not a chatbot wrapped in a DAG.
+Build a repeatable software production system on Apache Airflow.
 
-Airflow is the control plane. It schedules work, expands issue-to-target jobs, pauses for human
-decisions, retries infrastructure failures, records state, and exposes operations. The coding
-agent is a replaceable worker inside a bounded cell. Git is the durable ledger. A human keeps the
-merge key.
+Treat the GitHub issue as a work order, the blueprint as a production route, Airflow as the plant
+scheduler, and each sandbox as one work cell. Airflow expands issue-to-target jobs, pauses for
+human decisions, retries infrastructure failures, records state, and exposes operations. A coding
+agent performs the bounded job. Git keeps the trace record. A human keeps the merge key.
 
 ```text
-ISSUE -> INTENT GATE -> SPEC -> PLAN GATE -> BUILD / VERIFY -> REVIEW
-      -> VALIDATED PATCH -> PULL REQUEST -> HUMAN MERGE -> RUN METRICS
+WORK ORDER -> ROUTE -> INTENT GATE -> SPEC -> PLAN GATE -> WORK CELL
+           -> TESTS + REVIEW -> VALIDATED PATCH -> PULL REQUEST -> HUMAN MERGE
+                                                               |
+                                                               v
+                                                     CONTINUOUS IMPROVEMENT
 ```
 
 ## Choose the job
 
 Infer the narrowest useful mode from the request:
 
-- **Demo:** run the scripted, keyless line to inspect behavior without model calls.
+- **Demo:** run the scripted, keyless route to inspect behavior without model calls.
 - **Adopt:** add `factory.toml`, select a blueprint, and connect one target repository.
 - **Operate:** trigger, approve, inspect, retry, reject, or clean up existing runs.
 - **Audit:** inspect trust boundaries, evidence, failure behavior, and deployment configuration.
 - **Extend:** add a blueprint, stage policy, sandbox adapter, SCM adapter, or metric response band.
 
 Before changing a repository, inspect `factory.toml`, the chosen blueprint, protected paths, the
-test command, branch policy, and the deployment boundary. Preserve explicit user scope. Opening a
-pull request does not imply permission to merge it; running a factory does not imply permission to
-weaken protected paths or expose credentials.
+test command, branch policy, and the deployment boundary. Preserve explicit user scope. Ask for
+separate authorization before merging, weakening protected paths, or exposing credentials.
 
-## Model the line as policy
+## Define the production route
 
 A blueprint is executable governance. Keep stage behavior in code and deployment choices in TOML.
 Require these invariants:
@@ -49,11 +51,10 @@ Require these invariants:
 - delivery accepts only reviewed commits plus orchestrator-owned evidence.
 - rejected and blocked work remains visible; it is never relabeled as success.
 
-Do not confuse that policy blueprint with Astronomer Blueprint. When a team uses Astronomer's
-composer or Astro IDE, put its `software_factory` template outside the line: it may select an
-existing line and pass issues/target filters, but it must trigger the governed child DAG rather
-than recreate or remove its gates. Read `docs/astronomer-blueprint.md` in a swfactory checkout
-before adding this composition layer.
+The swfactory blueprint defines one production route. Astronomer Blueprint can compose that route
+inside a larger workflow. Its `software_factory` template selects an existing route and passes
+issues or target filters to the child DAG, preserving the child's approvals. Read
+`docs/astronomer-blueprint.md` before adding this composition layer.
 
 Use the target's `factory.toml` as the command contract. Do not guess package managers, test
 commands, source paths, or protected paths. Keep generated JUnit below `.factory/`.
@@ -67,7 +68,7 @@ process, or the whole Airflow task.
 Never silently downgrade a requested sandbox. If a backend cannot enforce a requested network,
 filesystem, lifetime, credential, or resource rule, stop with a configuration error.
 
-## Produce evidence, not theater
+## Keep a trace record
 
 For each job, preserve a reviewable chain under `docs/factory/<issue>/`:
 
@@ -110,5 +111,5 @@ Classify failures before retrying:
 - stop before publication if the patch scope, artifact hashes, baseline, or workspace cleanliness
   cannot be proven.
 
-When reporting the result, state the line used, target, boundary, gate decisions, verification
+When reporting the result, state the route used, target, boundary, gate decisions, verification
 evidence, review disposition, PR URL if created, and anything intentionally not executed.

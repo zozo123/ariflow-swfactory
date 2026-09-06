@@ -5,10 +5,10 @@ For every blueprint file this module emits ``DAG(dag_id=<blueprint.name>)``::
     fan_out -> job[ setup -> <stage> (-> approve_<stage> -> record_<stage>)* ... -> deliver
                     -> metrics ; teardown ]            (job = one (issue x target), mapped)
 
-``fan_out`` turns ``dag_run.conf`` (``{"issues": [...]}``, ``{"issue": N}`` accepted) into jobs
-and the ``job`` task group is expanded over them, so one issue can be applied to N target repos
-with one addressable approval per (issue, target). Loops live inside the stage functions
-(``swfactory.stages``), never in the DAG.
+``fan_out`` turns ``dag_run.conf`` (``{"issues": [...]}``, ``{"issue": N}`` accepted) into jobs;
+a scheduled line falls back to its required ``trigger.issues``. The ``job`` task group is expanded
+over them, so one issue can be applied to N target repos with one addressable approval per (issue,
+target). Loops live inside the stage functions (``swfactory.stages``), never in the DAG.
 
 Parse time reads the TOML *shape* only with stdlib ``tomllib`` (name, trigger, stage order, gates,
 limits); ``swfactory`` is imported only inside task callables so DAG parsing needs nothing but

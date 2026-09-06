@@ -24,6 +24,9 @@ deploy/islo/bootstrap.sh    # one-time: agent gateway + environment, optional sn
 export GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)  # generate once; store and reuse on redeploy
 # First provision the swfactory-orchestrator gateway and ISLO_API_KEY environment described in
 # deploy/islo/deploy.sh's prerequisite header.
+export SWF_CONTROL_REPO=your-org/swfactory-control    # repository containing dags/ + blueprints/
+export SWF_TARGET_REPO=your-org/your-product          # repository receiving the hook and PR
+export SWF_CONTROL_BRANCH=main
 deploy/islo/deploy.sh       # orchestrator sandbox from deploy/islo/orchestrator/{islo.yaml,start.sh}:
                             #   its own gateway + environment (ISLO_API_KEY), Airflow + the receiver,
                             #   the islo incoming webhook and the GitHub hook; prints the shared UI URL
@@ -76,10 +79,12 @@ GitHub (issues, issue_comment) --HMAC--> islo incoming webhook (verifies X-Hub-S
   --> POST /api/v2/dags/<blueprint>/dagRuns on the orchestrator's Airflow (:8080, islo share'd)
 ```
 
-`deploy.sh` creates the incoming webhook by name (`islo webhook incoming create --deliver-to-port
-8081 --path /webhooks/github --hmac-secret-value $GITHUB_WEBHOOK_SECRET`), reuses it on redeploy
-(rotate with `islo webhook incoming update`), and points the repo hook at the receiver URL it
-returns. `webhook.route` maps events to one DAG run:
+`deploy.sh` clones `SWF_CONTROL_REPO` at `SWF_CONTROL_BRANCH`, creates the incoming webhook by name
+(`islo webhook incoming create --deliver-to-port 8081 --path /webhooks/github
+--hmac-secret-value $GITHUB_WEBHOOK_SECRET`), reuses it on redeploy (rotate with
+`islo webhook incoming update`), and points the `SWF_TARGET_REPO` hook at the receiver URL it
+returns. `SWF_REPO` and `SWF_BRANCH` remain aliases for older single-repository deployments.
+`webhook.route` maps events to one DAG run:
 
 | Event | Result |
 | --- | --- |

@@ -35,6 +35,7 @@ name = "nightly"
 [trigger]
 kind = "cron"
 cron = "0 6 * * 1"
+issues = ["ops/nightly.md"]
 [[targets]]
 repo = "acme/app"
 [stages]

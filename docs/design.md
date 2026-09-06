@@ -1,29 +1,28 @@
-# Design: the line, the DAG, and why they are shaped this way
+# Design: the factory, its DAGs, and its boundaries
 
-Reference for the parts the README only names: how a blueprint declares a line, what the generated
+Reference for the parts the README only names: how a blueprint declares a route, what the generated
 Airflow DAG does, how metrics and bands close the loop, and the decisions (and accepted risks)
 behind all of it.
 
-Validation status: the 2.0 rewrite was audited statically before tagging. The version-tag workflow
+Validation status: the 2.0 rewrite was audited statically before tagging. The v2.0.1 workflow
 then gates publication on lint, the hermetic suite, scripted e2e demo, Airflow parity and smoke,
 and package build. Live hosted-provider runs remain deployment validation; the section explicitly
 labeled as prior 1.1 evidence records older compatibility runs.
 
 ## Scope and authority
 
-swfactory is a delivery control plane. It turns declared change intent into a reviewable pull
-request while keeping policy, approvals, evidence, budgets, and the source-control credential on
-the trusted side of the boundary.
+swfactory turns a declared work order into a reviewable pull request. It keeps routes, approvals,
+evidence, budgets, and the source-control credential in a trusted control plane.
 
-It owns the line definition, job identity, stage transitions, human gates, sandbox lifecycle,
-evidence journal, patch validation, and publication. It delegates reasoning and edits to an
-untrusted agent cell, delegates the verification command and protected paths to the target's
-`factory.toml`, and leaves merge authority with a human. Astronomer Blueprint may compose the line
-into a larger workflow, but it does not inherit or rewrite the line's authority.
+The control plane owns the route, job identity, stage transitions, approvals, sandbox lifecycle,
+trace record, patch validation, and publication. A coding agent performs the assigned work inside
+one sandbox. The target's `factory.toml` supplies its test command and protected paths. A person
+retains merge authority. Astronomer Blueprint can place this route inside a larger workflow while
+the route keeps its own approvals and limits.
 
-It is intentionally not a merge bot, project tracker, CI replacement, or generic sandbox broker.
-It does not infer a target contract, turn visual YAML into new stage semantics, silently weaken an
-unsupported provider policy, or treat child-DAG completion as approval.
+The project covers admitted software work from intent through pull request. Backlog ranking,
+product decisions, production monitoring, and final merge remain with the systems and people that
+already own them.
 
 ```text
 issue x target -> capture baseline + contract -> intent -> human gate -> spec -> plan
@@ -31,6 +30,42 @@ issue x target -> capture baseline + contract -> intent -> human gate -> spec ->
                -> validate exact patch + evidence -> PR or explicit blocked/rejected PR
                -> human merge
 ```
+
+## How the factory runs
+
+1. **Work order.** A person or upstream product system creates a GitHub issue describing the
+   desired change.
+2. **Production route.** A label, trusted comment, Airflow trigger, schedule, or CLI command selects
+   a versioned blueprint. The blueprint fixes the target, stages, approvals, limits, sandbox, and
+   delivery labels. The target's `factory.toml` fixes the test command and working scope.
+3. **Plant scheduler.** Airflow manages mapped jobs, dependencies, retries, timeouts, approvals,
+   and run history. The CLI uses the same stage functions and `(blueprint, job, run id)` identity.
+4. **Work cell.** One coding agent receives one bounded job in one sandbox and returns edits plus
+   evidence.
+5. **Quality checks.** Typed plans, approval hashes, fresh JUnit, independent review, commit
+   history, and exact-patch validation decide whether the work can advance.
+6. **Release.** People approve intent and plan, review the pull request, and merge through the
+   repository's normal branch policy.
+7. **Continuous improvement.** `metrics.json` and `bands.yaml` record drift, open incidents, or
+   propose new issues that return as work orders.
+
+```text
+work order -> production route -> Airflow -> work cell -> quality checks
+                       |             |                           |
+                       v             v                           v
+                  approvals      run history              pull request
+                       |                                         |
+                       +----------------> human merge <-----------+
+                                              |
+                                              v
+new work order <- incident / proposal <- metric bands <- merged run evidence
+```
+
+The built-in metrics describe factory execution: cycle time, iterations, first-pass verification,
+review findings, denied tools, and cost. `maintain` reads the configured checkout; with the default
+base-branch checkout, it sees run evidence after merge. Production health, customer impact,
+security, and business results can join the cycle through integrations that create ordinary
+GitHub work orders.
 
 ## Blueprints
 
@@ -42,6 +77,7 @@ and an extra `hotfix` PR label. A blueprint is validated by `swfactory.blueprint
 | Section | What it fixes | Rules |
 | --- | --- | --- |
 | `[blueprint]` | `name` = DAG id = CLI name | `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`, must equal the CLI name |
+| `[trigger]` | manual or cron admission | cron requires `cron`; a scheduled execution needs non-empty `issues`; runtime run configuration overrides those defaults |
 | `[[targets]]` | `repo`, `dir`, `base_branch` — jobs per run = issues x targets | >= 1 |
 | `[stages] order` | which stage functions run | subsequence of `intent spec plan build_and_test review deliver`, first `intent`, last `deliver`; omitted inputs render `(none)` |
 | `[[gates]]` | `after`, `artifact`, `timeout_h`, `assigned`, `auto` | `after` in `{intent, plan}` and in `order`; `auto=true` -> the gate defaults to Approve (actor `auto`) |
