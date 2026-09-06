@@ -6,6 +6,7 @@
 //! drifting apart while the factory underneath keeps moving.
 
 pub mod attention;
+pub mod cells;
 pub mod context;
 pub mod delivery;
 pub mod doctor;
