@@ -1,0 +1,50 @@
+{
+  "cell": {
+    "cell_id": "cell_0123456789abcdef01234567",
+    "schema_version": 1,
+    "repo": "acme/widgets",
+    "target": "services/api@main",
+    "issue": "42",
+    "epoch": 3,
+    "state": "queued",
+    "airflow_dag_id": "factory",
+    "airflow_run_id": "manual__2026-09-06T20:30:00+00:00",
+    "map_index": 7,
+    "factory_generation": "gen_abc123",
+    "policy_digest": "sha256:policy",
+    "base_sha": "1111111111111111111111111111111111111111",
+    "observed_target_sha": "2222222222222222222222222222222222222222",
+    "compute": {
+      "provider": "islo",
+      "incarnation": "isb_demo"
+    },
+    "cleanup": null,
+    "created_at": 1788726000.125,
+    "updated_at": 1788726060.5
+  },
+  "history": [
+    {
+      "seq": 1,
+      "epoch": 3,
+      "operation_key": "activation:3",
+      "kind": "activated",
+      "payload": {
+        "actor": "backend:submit"
+      },
+      "created_at": 1788726000.125
+    },
+    {
+      "seq": 2,
+      "epoch": 3,
+      "operation_key": "airflow-bind:manual__2026-09-06T20:30:00+00:00:7",
+      "kind": "patch",
+      "payload": {
+        "state": "queued",
+        "airflow_dag_id": "factory",
+        "airflow_run_id": "manual__2026-09-06T20:30:00+00:00",
+        "map_index": 7
+      },
+      "created_at": 1788726001.0
+    }
+  ]
+}
