@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{json, Number, Value};
 
 use swf_domain::model::{Run, Snapshot, TaskState};
 use swf_domain::{blueprint, doctor, metrics, rollup, snapshot};
@@ -208,6 +208,39 @@ fn number_eq(a: &Number, b: &Number) -> bool {
         (Some(a), Some(b)) => a == b && a.is_sign_negative() == b.is_sign_negative(),
         _ => a == b,
     }
+}
+
+/// The comparison is the one place a contract harness can quietly stop being a contract, so its
+/// exact tolerance is pinned rather than left to the reader of `number_eq`.
+#[test]
+fn the_number_comparison_forgives_only_the_int_float_spelling() {
+    let eq = |a: &str, b: &str| {
+        json_eq(
+            &serde_json::from_str(a).expect(a),
+            &serde_json::from_str(b).expect(b),
+        )
+    };
+
+    // The one sanctioned tolerance: `round(sum([]), 6)` is the `int` `0` in Python and an `f64`
+    // in Rust, and JSON cannot tell the two apart.
+    assert!(eq("0", "0.0"));
+    assert!(eq("0.0", "0"));
+    assert!(eq("1", "1.0"));
+
+    // Not tolerances. Float error, the sign of zero, and integers past 2^53 all still fail.
+    assert!(!eq("0.30000000000000004", "0.3"));
+    assert!(!eq("-0.0", "0.0"));
+    assert!(!eq("-0.0", "0"));
+    assert!(!eq("9007199254740993", "9007199254740992"));
+    assert!(!eq("18446744073709551615", "18446744073709551614"));
+    assert!(!eq("-1", "18446744073709551615"));
+
+    // And nothing about the structural strictness moved.
+    assert!(!eq(r#"{"a":1}"#, r#"{"a":1,"b":2}"#));
+    assert!(!eq("[1,2]", "[2,1]"));
+    assert!(!eq(r#""0""#, "0"));
+    assert!(!eq("null", "0"));
+    assert!(!eq("false", "0"));
 }
 
 /// Whether the harness could evaluate a case at all.

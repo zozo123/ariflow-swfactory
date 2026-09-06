@@ -65,13 +65,13 @@ pub fn parse_timestamp(value: &Value) -> Option<Timestamp> {
         return None;
     }
     // `replace("Z", "+00:00")` replaces *every* `Z`, not just a trailing one — Python's does too.
-    let text = raw.replace('Z', "+00:00").replace(' ', "T");
+    let text = as_fromisoformat_spells_it(&raw.replace('Z', "+00:00"))?;
     if let Ok(dt) = DateTime::parse_from_rfc3339(&text) {
-        return Some(dt);
+        return no_leap_second(dt);
     }
     for format in ["%Y-%m-%dT%H:%M:%S%.f%:z", "%Y-%m-%dT%H:%M:%S%.f%z"] {
         if let Ok(dt) = DateTime::parse_from_str(&text, format) {
-            return Some(dt);
+            return no_leap_second(dt);
         }
     }
     for format in [
@@ -80,13 +80,74 @@ pub fn parse_timestamp(value: &Value) -> Option<Timestamp> {
         "%Y-%m-%dT%H:%M",
     ] {
         if let Ok(naive) = NaiveDateTime::parse_from_str(&text, format) {
-            return Some(stamped_utc(naive));
+            return no_leap_second(stamped_utc(naive));
         }
     }
     NaiveDate::parse_from_str(&text, "%Y-%m-%d")
         .ok()
         .and_then(|d| d.and_hms_opt(0, 0, 0))
         .map(stamped_utc)
+}
+
+/// `fromisoformat` has no leap second: `...T12:00:60` is a `ValueError`, so it is `None` here.
+///
+/// Chrono spells a leap second as a nanosecond field at or past 1e9, which [`iso`] would render as
+/// a *seven*-digit fraction — a string that is neither valid ISO-8601 nor anything Python can
+/// produce. Refusing it at the parse boundary is where Python refuses it.
+fn no_leap_second(at: Timestamp) -> Option<Timestamp> {
+    (at.nanosecond() < 1_000_000_000).then_some(at)
+}
+
+/// Reconcile the spellings `datetime.fromisoformat` accepts with the ones chrono does.
+///
+/// The two are close but not the same, and each direction of the difference is a divergence in the
+/// snapshot document — a `start` that Python reads and this does not comes out `null`, and one this
+/// reads and Python does not comes out as a timestamp. So the three cheap cases are aligned here:
+///
+/// * **Any single separator character.** `fromisoformat` splits the date from the time at index 10
+///   whatever the character is — `T`, a space, `t`, even `_`. Chrono only knows `T`.
+/// * **An hour-only offset.** `+02` is ISO-8601 and Python takes it; chrono wants `+02:00`.
+/// * **Two spellings chrono takes and Python refuses**: a leading sign (chrono's expanded year,
+///   `ValueError` in Python) and a lower-case `z` (Python only rewrites the upper-case one, and
+///   `fromisoformat` then raises on what is left).
+///
+/// A *digit* at index 10 is left alone rather than rewritten. Python does treat it as a separator,
+/// but rewriting it would hand chrono `2026-09-03T2:00:00`, whose single-digit hour chrono accepts
+/// and `fromisoformat` rejects — and inventing a timestamp where the Python printed `null` is the
+/// one direction of this difference that corrupts the document rather than thinning it.
+///
+/// What is deliberately *not* reconciled, because no source the collector reads emits it: the
+/// basic format (`20260903T120000`), ISO week dates (`2026-W36-4`), sub-minute UTC offsets
+/// (`+00:00:30`), and a fraction on a seconds-less time (`12:00.123`). Python accepts all of them
+/// and this answers `None` — the safe direction: "not known", never a value Python did not have.
+/// A 1463-input differential run against CPython 3.12 leaves those as the only differences, and
+/// every one of them is `None` here rather than a fabricated timestamp.
+fn as_fromisoformat_spells_it(text: &str) -> Option<String> {
+    if text.starts_with('+') || text.starts_with('-') || text.ends_with('z') {
+        return None;
+    }
+    let mut out = text.to_string();
+    match out.as_bytes().get(10).copied() {
+        // A digit is left as-is (see above); a non-ASCII byte there may not even be a character
+        // boundary, and no source spells a separator that way. Either is `None`, not a panic.
+        Some(b) if b.is_ascii_digit() || !b.is_ascii() => return None,
+        Some(_) => out.replace_range(10..11, "T"),
+        None => {}
+    }
+    // The offset sign, if any, is the first `+`/`-` *after* the separator — index 10 itself can be
+    // a `-`, which `fromisoformat` reads as the separator and not as a sign.
+    if let Some(sign) = out
+        .bytes()
+        .enumerate()
+        .find(|(i, b)| *i > 10 && (*b == b'+' || *b == b'-'))
+        .map(|(i, _)| i)
+    {
+        let tail = &out[sign + 1..];
+        if tail.len() == 2 && tail.bytes().all(|b| b.is_ascii_digit()) {
+            out.push_str(":00");
+        }
+    }
+    Some(out)
 }
 
 /// `_as_datetime`'s `dt.replace(tzinfo=UTC)`: a naive stamp is *labelled* UTC, never shifted.
@@ -101,7 +162,11 @@ fn stamped_utc(naive: NaiveDateTime) -> Timestamp {
 /// and 0/3/6/9 fractional digits, which is a different string for the same instant and would show
 /// up as a diff on every line of the snapshot.
 pub fn iso(at: Timestamp) -> String {
-    let micros = at.nanosecond() / 1_000;
+    // Chrono reports a leap second as a nanosecond field at or past 1e9, which would format as a
+    // seven-digit fraction. [`parse_timestamp`] already refuses one, but a `Timestamp` assigned
+    // field-by-field elsewhere has not been through it, and this must never emit a string Python
+    // could not have written.
+    let micros = at.nanosecond().min(999_999_999) / 1_000;
     if micros == 0 {
         at.format("%Y-%m-%dT%H:%M:%S%:z").to_string()
     } else {
@@ -1229,6 +1294,60 @@ mod tests {
         }))
         .expect("a sandbox with a broken stamp still reads");
         assert!(sandbox.created_at.is_none());
+    }
+
+    #[test]
+    fn the_spellings_fromisoformat_takes_and_chrono_does_not_are_reconciled() {
+        // Verified against CPython 3.12 `datetime.fromisoformat` one string at a time.
+        for (input, want) in [
+            // Any single character separates the date from the time.
+            ("2026-09-03t12:00:00", "2026-09-03T12:00:00+00:00"),
+            ("2026-09-03 12:00:00", "2026-09-03T12:00:00+00:00"),
+            ("2026-09-03_12:00:00", "2026-09-03T12:00:00+00:00"),
+            ("2026-09-03-12:00:00", "2026-09-03T12:00:00+00:00"),
+            // An hour-only offset is ISO-8601 and `fromisoformat` keeps it.
+            ("2026-09-03T12:00:00+02", "2026-09-03T12:00:00+02:00"),
+            ("2026-09-03T12:00:00-02", "2026-09-03T12:00:00-02:00"),
+            (
+                "2026-09-03T12:00:00.123456+02",
+                "2026-09-03T12:00:00.123456+02:00",
+            ),
+        ] {
+            let at = parse_timestamp(&json!(input)).unwrap_or_else(|| panic!("{input}"));
+            assert_eq!(iso(at), want, "{input}");
+        }
+
+        // And the ones chrono takes that Python refuses, so the Rust cannot invent a timestamp
+        // where `swfactory herd --once --json` printed `null`.
+        for input in [
+            // A leap second: `ValueError` in Python, and a seven-digit fraction if it got through.
+            "2026-09-03T12:00:60",
+            // `fromisoformat` only rewrites an upper-case `Z`.
+            "2026-09-03T12:00:00z",
+            // Chrono's expanded year; `fromisoformat` has no such form.
+            "+002026-09-03T12:00:00",
+            // Index 10 is a digit, so this is not a date followed by a separator.
+            "2026-09-0312:00:00",
+        ] {
+            assert!(parse_timestamp(&json!(input)).is_none(), "{input}");
+        }
+    }
+
+    #[test]
+    fn a_leap_second_never_reaches_the_document_as_a_seven_digit_fraction() {
+        // The parser refuses one, and `iso` refuses to spell one even if a caller assigns it.
+        let leap = Utc
+            .with_ymd_and_hms(2026, 12, 31, 23, 59, 59)
+            .single()
+            .and_then(|dt| dt.with_nanosecond(1_500_000_000))
+            .expect("chrono spells a leap second as nanos past 1e9")
+            .fixed_offset();
+        let rendered = iso(leap);
+        if let Some((_, rest)) = rendered.split_once('.') {
+            let digits = rest.chars().take_while(char::is_ascii_digit).count();
+            assert_eq!(digits, 6, "{rendered} is not Python's six-digit fraction");
+        }
+        assert!(parse_timestamp(&json!("2026-12-31T23:59:60")).is_none());
     }
 
     #[test]
