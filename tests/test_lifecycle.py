@@ -35,6 +35,11 @@ def test_plan_work_graph_rejects_undeclared_files() -> None:
         _plan(PlanTask(id="impl", title="Implement", files=["src/c.py"]))
 
 
+def test_plan_work_nodes_cannot_claim_lifecycle_roles() -> None:
+    with pytest.raises(ValidationError, match="code_writer"):
+        PlanTask.model_validate({"id": "review", "title": "Review", "role": "reviewer"})
+
+
 def test_work_layers_preserve_parallelism_and_fork_hints() -> None:
     plan = _plan(
         PlanTask(id="tests", title="Add tests", files=["src/a.py"]),
