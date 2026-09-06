@@ -1,0 +1,45 @@
+name: finish-line-format
+
+on:
+  push:
+    branches:
+      - finish/managed-lifecycle-graphs
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: finish/managed-lifecycle-graphs
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - run: uv sync
+      - name: Canonical Python format
+        run: |
+          uv run ruff format src/swfactory/backend.py src/swfactory/models.py src/swfactory/lifecycle.py tests/test_lifecycle.py
+          uv run ruff check .
+          uv run ruff format --check .
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Canonical Rust format
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml --all
+          cargo fmt --manifest-path rust/Cargo.toml --all --check
+      - run: git diff --check
+      - name: Commit canonical formatting
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/swfactory/backend.py src/swfactory/models.py src/swfactory/lifecycle.py tests/test_lifecycle.py rust
+          git commit -m 'Apply canonical Python and Rust formatting'
+          git push origin HEAD:finish/managed-lifecycle-graphs
