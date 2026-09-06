@@ -1,0 +1,18 @@
+{
+  "branch": "liquid400/d01-c01-authority-transfer",
+  "cell_epoch_required": true,
+  "concern": "canonical invariant",
+  "domain": "Authority transfer",
+  "fan_in_rule": "stabilize, verify evidence, remove superseded abstractions",
+  "issue": {
+    "number": 755,
+    "title": "[Liquid400/D01-C01] Authority transfer: canonical invariant",
+    "url": "https://github.com/zozo123/ariflow-swfactory/issues/755"
+  },
+  "key": "D01-C01",
+  "objective": "Make takeover and reactivation explicit, fenced, auditable and reversible.",
+  "owner_role": "authority",
+  "scheduler": "airflow",
+  "schema_version": 1,
+  "worker_limit": 7
+}
