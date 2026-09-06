@@ -75,7 +75,15 @@ fn swf(home: &TempDir) -> Command {
 fn connected(url: &str) -> TempDir {
     let home = TempDir::new().expect("tempdir");
     swf(&home)
-        .args(["context", "add", "t", "--airflow-url", url, "--use"])
+        .args([
+            "context",
+            "add",
+            "t",
+            "--direct",
+            "--airflow-url",
+            url,
+            "--use",
+        ])
         .assert()
         .success();
     home

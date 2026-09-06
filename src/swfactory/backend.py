@@ -138,7 +138,9 @@ class Factory:
     def _checked_airflow(self, method: str, path: str, body: dict | None = None) -> Any:
         status, payload = self.airflow(method, path, body)
         if status >= 300:
-            outcome = "; mutation outcome may be unknown" if method != "GET" and status >= 500 else ""
+            outcome = (
+                "; mutation outcome may be unknown" if method != "GET" and status >= 500 else ""
+            )
             raise Refused(status, f"Airflow rejected {method} (HTTP {status}){outcome}")
         return payload
 
@@ -159,7 +161,9 @@ class Factory:
         jobs = line.jobs(conf)  # Authoritative validation against the server's installed line.
         path = "/dags/" + urllib.parse.quote(line.name, safe="")
         self._checked_airflow("PATCH", path, {"is_paused": False})
-        result = self._checked_airflow("POST", path + "/dagRuns", {"logical_date": None, "conf": conf})
+        result = self._checked_airflow(
+            "POST", path + "/dagRuns", {"logical_date": None, "conf": conf}
+        )
         run_id = (result or {}).get("dag_run_id") or (result or {}).get("run_id")
         if not run_id:
             raise Refused(
@@ -422,17 +426,19 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
             except Refused as error:
                 status, payload = error.status, {"detail": str(error)}
             except PermissionError:
-                status, payload = 403, {
-                    "detail": "worker ownership or factory-name check refused removal"
-                }
+                status, payload = (
+                    403,
+                    {"detail": "worker ownership or factory-name check refused removal"},
+                )
             except FileNotFoundError:
                 status, payload = 404, {"detail": "backend resource or required tool not found"}
             except (ValueError, TypeError) as error:
                 status, payload = 400, {"detail": str(error)[:300]}
             except (ControlError, OSError, subprocess.SubprocessError):
-                status, payload = 502, {
-                    "detail": "backend service unavailable; mutation outcome may be unknown"
-                }
+                status, payload = (
+                    502,
+                    {"detail": "backend service unavailable; mutation outcome may be unknown"},
+                )
             self.reply(status, payload)
 
         do_GET = handle_api

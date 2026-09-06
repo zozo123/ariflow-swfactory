@@ -21,10 +21,17 @@ isolated coding agents, quality checks and human approvals.
 **Rust is the control room. Python is the factory backend and execution engine. Airflow is the scheduler.**
 
 [Interactive graphical demo](https://zozo123.github.io/ariflow-swfactory/#factory-demo) ·
-[Backend setup](docs/factory-backend.md) · [Operator reference](docs/swf.md) ·
-[Complete deployment guide](OPERATIONS.md)
+[Managed lifecycle graphs](docs/lifecycle.md) · [Backend setup](docs/factory-backend.md) ·
+[Operator reference](docs/swf.md) · [Complete deployment guide](OPERATIONS.md)
 
 ## See the whole flow
+
+[![Managed lifecycle: issue maker, groomer, planner, parallel writers, reviewer, improver and deliverer](site/assets/lifecycle-demo.gif)](docs/lifecycle.md)
+
+The lifecycle stays operationally simple: Airflow owns a fixed, versioned production-line DAG;
+each approved `plan.json` may carry a bounded issue-specific work DAG. Independent nodes can be
+marked as fork candidates without claiming that today's sandbox backend can clone a live cell.
+Native forks are required to preserve parent lineage and evidence identity.
 
 [![Illustrated CLI and mapped DAG walkthrough](site/assets/factory-walkthrough.svg)](https://zozo123.github.io/ariflow-swfactory/#factory-demo)
 
@@ -142,10 +149,13 @@ This excerpt shows the route and approval boundaries. Start from the complete
 [default blueprint](blueprints/default.toml), set worker configuration and limits, and follow the
 [production setup guide](OPERATIONS.md#run-it-on-a-real-github-repository). Airflow discovers one DAG
 per installed blueprint. Runtime target selections can only narrow that blueprint's repositories.
+Issue-specific dependencies remain validated data inside the plan instead of creating scheduler DAG
+files at runtime; see [managed lifecycle graphs](docs/lifecycle.md).
 
 ## Operate and recover
 
 - [Commands, TUI and bulk approvals](docs/swf.md)
+- [Managed lifecycle graphs and fork contract](docs/lifecycle.md)
 - [Durable webhook intake, dispatch retries and receipts](docs/webhooks.md)
 - [Run ownership, interrupted operations and journal recovery](docs/run-recovery.md)
 - [Docker deployment](docs/docker.md) and [islo deployment](docs/islo.md)

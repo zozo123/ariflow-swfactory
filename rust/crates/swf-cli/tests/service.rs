@@ -109,6 +109,7 @@ fn home_for(url: &str) -> TempDir {
             "t",
             "--airflow-url",
             url,
+            "--direct",
             "--dag",
             "factory",
             "--use",
