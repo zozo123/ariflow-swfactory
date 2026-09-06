@@ -385,9 +385,7 @@ fn de_truthy<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Erro
 }
 
 /// Read the histogram, tolerating `null` and a missing severity.
-fn de_findings<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<FindingsBySeverity, D::Error> {
+fn de_findings<'de, D: Deserializer<'de>>(deserializer: D) -> Result<FindingsBySeverity, D::Error> {
     let value = Value::deserialize(deserializer)?;
     let Some(fields) = value.as_object() else {
         return Ok(FindingsBySeverity::default());
@@ -490,19 +488,23 @@ mod tests {
 
     #[test]
     fn findings_sum_across_runs_and_blockers_is_lifted_out() {
-        let mut a = RunMetrics::default();
-        a.findings_by_severity = FindingsBySeverity {
-            blocker: 1,
-            major: 2,
-            minor: 0,
-            nit: 3,
+        let a = RunMetrics {
+            findings_by_severity: FindingsBySeverity {
+                blocker: 1,
+                major: 2,
+                minor: 0,
+                nit: 3,
+            },
+            ..RunMetrics::default()
         };
-        let mut b = RunMetrics::default();
-        b.findings_by_severity = FindingsBySeverity {
-            blocker: 2,
-            major: 0,
-            minor: 1,
-            nit: 0,
+        let b = RunMetrics {
+            findings_by_severity: FindingsBySeverity {
+                blocker: 2,
+                major: 0,
+                minor: 1,
+                nit: 0,
+            },
+            ..RunMetrics::default()
         };
         let summary = summarize(&[a, b]);
         assert_eq!(summary.findings_by_severity.blocker, 3);
@@ -542,7 +544,10 @@ mod tests {
         assert_eq!(table_value(&json!("")), "(no metrics yet)");
         assert_eq!(table_value(&json!("boom")), "boom");
         let partial = table_value(&json!({"runs": 3}));
-        assert!(partial.starts_with("runs                   3 (0 scripted)"), "{partial}");
+        assert!(
+            partial.starts_with("runs                   3 (0 scripted)"),
+            "{partial}"
+        );
         assert!(partial.ends_with("$0.0000"), "{partial}");
     }
 

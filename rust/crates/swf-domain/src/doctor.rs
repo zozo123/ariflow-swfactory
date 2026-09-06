@@ -231,7 +231,10 @@ mod tests {
     fn status_has_exactly_three_spellings() {
         assert_eq!(Check::pass("a", "").status().as_str(), "ok");
         assert_eq!(Check::fail("a", "", "").status().as_str(), "FAIL");
-        assert_eq!(Check::fail("a", "", "").optional().status().as_str(), "warn");
+        assert_eq!(
+            Check::fail("a", "", "").optional().status().as_str(),
+            "warn"
+        );
     }
 
     #[test]

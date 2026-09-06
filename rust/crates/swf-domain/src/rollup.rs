@@ -132,7 +132,10 @@ pub fn group_jobs(
     order
         .into_iter()
         .filter_map(|idx| {
-            let tasks = buckets.iter().find(|(key, _)| *key == idx).map(|(_, v)| v)?;
+            let tasks = buckets
+                .iter()
+                .find(|(key, _)| *key == idx)
+                .map(|(_, v)| v)?;
             Some(JobRow {
                 dag_id: dag_id.to_string(),
                 run_id: run_id.to_string(),
@@ -448,7 +451,10 @@ mod tests {
 
     #[test]
     fn failure_outranks_an_active_task() {
-        let tasks = vec![ts("job.a", 0, Some("running")), ts("job.b", 0, Some("failed"))];
+        let tasks = vec![
+            ts("job.a", 0, Some("running")),
+            ts("job.b", 0, Some("failed")),
+        ];
         assert_eq!(job_state(&tasks), "failed");
     }
 
@@ -537,7 +543,10 @@ mod tests {
             _ => Default::default(),
         };
         let row = collapsed_job(&run);
-        assert_eq!((row.map_index, row.issue.as_str(), row.state.as_str()), (-1, "42, 43", "success"));
+        assert_eq!(
+            (row.map_index, row.issue.as_str(), row.state.as_str()),
+            (-1, "42, 43", "success")
+        );
         assert!(row.tasks.is_empty());
 
         let bare = collapsed_job(&Run::new("f", "r", "queued"));
@@ -545,15 +554,27 @@ mod tests {
         assert_eq!(bare.state, "queued");
 
         // `unknown` is a run state, not a job state — it must survive the roll-up untouched.
-        assert_eq!(collapsed_job(&Run::new("f", "r", "unknown")).state, "unknown");
+        assert_eq!(
+            collapsed_job(&Run::new("f", "r", "unknown")).state,
+            "unknown"
+        );
     }
 
     #[test]
     fn stage_progress_names_the_active_frontier() {
-        let mut tasks: Vec<TaskState> = ["setup", "intent", "approve_intent", "record_intent", "spec", "plan", "approve_plan", "record_plan"]
-            .iter()
-            .map(|s| ts(&format!("job.{s}"), 0, Some("success")))
-            .collect();
+        let mut tasks: Vec<TaskState> = [
+            "setup",
+            "intent",
+            "approve_intent",
+            "record_intent",
+            "spec",
+            "plan",
+            "approve_plan",
+            "record_plan",
+        ]
+        .iter()
+        .map(|s| ts(&format!("job.{s}"), 0, Some("success")))
+        .collect();
         tasks.push(ts("job.build_and_test", 0, Some("running")));
         assert_eq!(stage_progress(&tasks), "build_and_test");
     }
@@ -592,8 +613,14 @@ mod tests {
     #[test]
     fn stage_progress_edge_cases() {
         assert_eq!(stage_progress(&[]), "-");
-        assert_eq!(stage_progress(&[ts("fan_out", -1, Some("success"))]), "fan_out");
-        assert_eq!(stage_progress(&[ts("job.setup", 0, Some("none"))]), "pending");
+        assert_eq!(
+            stage_progress(&[ts("fan_out", -1, Some("success"))]),
+            "fan_out"
+        );
+        assert_eq!(
+            stage_progress(&[ts("job.setup", 0, Some("none"))]),
+            "pending"
+        );
         assert_eq!(stage_progress(&[ts("job.setup", 0, None)]), "pending");
     }
 
@@ -660,13 +687,19 @@ mod tests {
             {"conclusion": "neutral"},
             {"conclusion": "banana"},
         ]);
-        assert_eq!(summarize_checks(Some(&rollup)), "2 pass / 1 fail / 2 pending");
+        assert_eq!(
+            summarize_checks(Some(&rollup)),
+            "2 pass / 1 fail / 2 pending"
+        );
     }
 
     #[test]
     fn an_incomplete_status_with_a_conclusion_is_not_pending() {
         let rollup = json!([{"status": "QUEUED", "conclusion": "CANCELLED"}]);
-        assert_eq!(summarize_checks(Some(&rollup)), "0 pass / 1 fail / 0 pending");
+        assert_eq!(
+            summarize_checks(Some(&rollup)),
+            "0 pass / 1 fail / 0 pending"
+        );
     }
 
     #[test]

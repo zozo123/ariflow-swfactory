@@ -155,11 +155,7 @@ impl Evidence {
     }
 
     /// A check that does not apply to this delivery.
-    pub fn skipped(
-        id: impl Into<String>,
-        level: EvidenceLevel,
-        reason: impl Into<String>,
-    ) -> Self {
+    pub fn skipped(id: impl Into<String>, level: EvidenceLevel, reason: impl Into<String>) -> Self {
         let reason = reason.into();
         Self {
             id: id.into(),
@@ -463,7 +459,11 @@ mod tests {
 
     #[test]
     fn a_self_report_can_never_reach_the_verified_level() {
-        let checks = vec![Evidence::pass("chain.present", Reported, "all files present")];
+        let checks = vec![Evidence::pass(
+            "chain.present",
+            Reported,
+            "all files present",
+        )];
         let report = DeliveryReport::resolve(delivery(), checks, None, false);
         assert!(report.workflow_succeeded);
         assert!(!report.independently_verified);
@@ -586,6 +586,9 @@ mod tests {
         assert!(text.contains("\"branch_published\""), "{text}");
         assert!(text.contains("\"independently_verified\""), "{text}");
         assert!(text.contains("\"status\":\"unavailable\""), "{text}");
-        assert_eq!(serde_json::from_str::<DeliveryReport>(&text).ok(), Some(report));
+        assert_eq!(
+            serde_json::from_str::<DeliveryReport>(&text).ok(),
+            Some(report)
+        );
     }
 }

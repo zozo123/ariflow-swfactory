@@ -72,8 +72,10 @@ const SECTIONS: &[&str] = &[
 
 /// Which artifact each gate is allowed to show. A gate that displays the wrong file is a gate
 /// that asks for approval of something other than what it names.
-const GATE_ARTIFACTS: &[(&str, &[&str])] =
-    &[("intent", &["intent.md"]), ("plan", &["plan.json", "plan.md"])];
+const GATE_ARTIFACTS: &[(&str, &[&str])] = &[
+    ("intent", &["intent.md"]),
+    ("plan", &["plan.json", "plan.md"]),
+];
 
 /// The blueprint loaded when no `--blueprint` is given. Its *file* is `default.toml`.
 pub const DEFAULT_BLUEPRINT: &str = "factory";
@@ -546,7 +548,7 @@ impl Blueprint {
                 )));
             }
             seen.push(&gate.after);
-            if !self.order.iter().any(|s| *s == gate.after) {
+            if !self.order.contains(&gate.after) {
                 return Err(BlueprintError::invalid(format!(
                     "gate after {} is not in stages.order {}",
                     py_repr(&gate.after),
@@ -725,9 +727,9 @@ fn lift(value: toml::Value, section: &str, key: &str) -> Result<toml::Value, Blu
             py_list([key]),
         )));
     }
-    fields.remove(key).ok_or_else(|| {
-        BlueprintError::invalid(format!("[{section}] must define {key}"))
-    })
+    fields
+        .remove(key)
+        .ok_or_else(|| BlueprintError::invalid(format!("[{section}] must define {key}")))
 }
 
 /// `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$` — an islo-compatible id, hand-rolled so the domain crate
@@ -893,9 +895,7 @@ pub fn normalize_absolute_posix_path(value: &str, field: &str) -> Result<String,
         return Err(format!("{field} must be a clean absolute POSIX path"));
     }
     if !value.starts_with('/') || value.split('/').any(|p| p == "..") || value == "/" {
-        return Err(format!(
-            "{field} must be an absolute sandbox path below /"
-        ));
+        return Err(format!("{field} must be an absolute sandbox path below /"));
     }
     let normalized = join_components(value.split('/'));
     if normalized.is_empty() {
@@ -1010,9 +1010,15 @@ order = ["intent", "deliver"]
             "order = [\"intent\", \"deliver\"]",
             "order = [\"intent\", \"deliver\"]\nextra = 1",
         );
-        assert_eq!(err(&stages), "unknown [stages] keys ['extra']; known: ['order']");
+        assert_eq!(
+            err(&stages),
+            "unknown [stages] keys ['extra']; known: ['order']"
+        );
         let deliver = format!("{MINIMAL}\n[deliver]\nlabels = []\nother = 1\n");
-        assert_eq!(err(&deliver), "unknown [deliver] keys ['other']; known: ['labels']");
+        assert_eq!(
+            err(&deliver),
+            "unknown [deliver] keys ['other']; known: ['labels']"
+        );
     }
 
     #[test]
@@ -1027,9 +1033,12 @@ order = ["intent", "deliver"]
         assert_eq!(err(&with("[]")), "stages.order must not be empty");
         assert!(err(&with("[\"intent\", \"banana\", \"deliver\"]"))
             .starts_with("stages.order has unknown stages ['banana']; known: ('intent', 'spec',"));
-        assert!(err(&with("[\"intent\", \"plan\", \"spec\", \"deliver\"]"))
-            .contains("must be a subsequence of ['intent', 'spec', 'plan', 'build_and_test', \
-                       'review', 'deliver'] (canonical order, no repeats)"));
+        assert!(
+            err(&with("[\"intent\", \"plan\", \"spec\", \"deliver\"]")).contains(
+                "must be a subsequence of ['intent', 'spec', 'plan', 'build_and_test', \
+                       'review', 'deliver'] (canonical order, no repeats)"
+            )
+        );
         assert!(err(&with("[\"intent\", \"intent\", \"deliver\"]")).contains("no repeats"));
         assert_eq!(
             err(&with("[\"spec\", \"deliver\"]")),
@@ -1069,7 +1078,10 @@ order = ["intent", "deliver"]
             err(&gated("plan", "spec.md")),
             "gate after 'plan' must show one of ['plan.json', 'plan.md'], not 'spec.md'"
         );
-        let twice = format!("{}\n[[gates]]\nafter = \"intent\"\nartifact = \"intent.md\"\ntimeout_h = 1\n", gated("intent", "intent.md"));
+        let twice = format!(
+            "{}\n[[gates]]\nafter = \"intent\"\nartifact = \"intent.md\"\ntimeout_h = 1\n",
+            gated("intent", "intent.md")
+        );
         assert_eq!(err(&twice), "more than one gate after 'intent'");
     }
 
@@ -1162,7 +1174,10 @@ order = ["intent", "deliver"]
             normalize_relative_path("", "gates.artifact", false),
             Err("gates.artifact must not be empty".to_string())
         );
-        assert_eq!(normalize_relative_path("", "targets.dir", true), Ok(String::new()));
+        assert_eq!(
+            normalize_relative_path("", "targets.dir", true),
+            Ok(String::new())
+        );
         assert_eq!(
             normalize_relative_path("./demo//target/", "targets.dir", true),
             Ok("demo/target".to_string())
@@ -1204,7 +1219,9 @@ order = ["intent", "deliver"]
     fn git_refs_reject_the_shapes_that_actually_bite() {
         assert!(validate_git_ref("main", "targets.base_branch").is_ok());
         assert!(validate_git_ref("release/1.0", "targets.base_branch").is_ok());
-        for bad in ["", "@", "-x", "/x", "x/", "x.", "a..b", "a//b", "a@{1}", ".hidden", "a.lock", "x~]"] {
+        for bad in [
+            "", "@", "-x", "/x", "x/", "x.", "a..b", "a//b", "a@{1}", ".hidden", "a.lock", "x~]",
+        ] {
             assert!(
                 validate_git_ref(bad, "targets.base_branch").is_err(),
                 "{bad} should be rejected"
@@ -1230,7 +1247,11 @@ order = ["intent", "deliver"]
             assert!(!is_blueprint_name(bad), "{bad}");
         }
         let text = MINIMAL.replace("\"min\"", "\"bad.name\"");
-        assert!(err(&text).starts_with("blueprint.name must match"), "{}", err(&text));
+        assert!(
+            err(&text).starts_with("blueprint.name must match"),
+            "{}",
+            err(&text)
+        );
     }
 
     #[test]
@@ -1243,9 +1264,8 @@ order = ["intent", "deliver"]
 
     #[test]
     fn trigger_issues_keep_numbers_verbatim_and_deduplicate() {
-        let text = format!(
-            "{MINIMAL}\n[trigger]\nissues = [\"42\", \"./demo/issue.md\", \"42\"]\n"
-        );
+        let text =
+            format!("{MINIMAL}\n[trigger]\nissues = [\"42\", \"./demo/issue.md\", \"42\"]\n");
         let bp = match parse(&text) {
             Ok(bp) => bp,
             Err(e) => panic!("{e}"),

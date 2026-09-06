@@ -518,7 +518,10 @@ mod tests {
         let text = snapshot_text(&snap);
         assert!(text.contains("\n  job - - - queued"), "{text}");
         assert!(text.ends_with("error islo: islo not on PATH"), "{text}");
-        assert_eq!(snapshot_json(&snap, Utc::now())["runs"][0]["jobs"][0]["map_index"], json!(-1));
+        assert_eq!(
+            snapshot_json(&snap, Utc::now())["runs"][0]["jobs"][0]["map_index"],
+            json!(-1)
+        );
     }
 
     #[test]
