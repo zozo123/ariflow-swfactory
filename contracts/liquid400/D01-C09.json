@@ -1,0 +1,18 @@
+{
+  "branch": "liquid400/d01-c09-authority-transfer",
+  "cell_epoch_required": true,
+  "concern": "evidence and SLO",
+  "domain": "Authority transfer",
+  "fan_in_rule": "stabilize, verify evidence, remove superseded abstractions",
+  "issue": {
+    "number": 763,
+    "title": "[Liquid400/D01-C09] Authority transfer: evidence and SLO",
+    "url": "https://github.com/zozo123/ariflow-swfactory/issues/763"
+  },
+  "key": "D01-C09",
+  "objective": "Make takeover and reactivation explicit, fenced, auditable and reversible.",
+  "owner_role": "authority",
+  "scheduler": "airflow",
+  "schema_version": 1,
+  "worker_limit": 7
+}
