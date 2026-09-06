@@ -1,0 +1,50 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/zozo123/ariflow-swfactory
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8082
+
+backend:
+  tokenSecret:
+    name: swfactory-backend
+    key: token
+  airflow:
+    url: ""
+    tokenSecret:
+      name: swfactory-airflow
+      key: token
+  postgres:
+    dsnSecret:
+      name: swfactory-postgres
+      key: dsn
+  repo: ""
+  owner: ""
+  generation: "stable"
+  drain: false
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

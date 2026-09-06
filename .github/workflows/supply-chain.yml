@@ -1,0 +1,75 @@
+name: supply-chain
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  provenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Generate SPDX SBOM
+        run: syft dir:. -o spdx-json=swfactory.spdx.json
+
+      - name: Generate CycloneDX SBOM
+        run: syft dir:. -o cyclonedx-json=swfactory.cdx.json
+
+      - name: Checksums
+        run: sha256sum swfactory.spdx.json swfactory.cdx.json > SHA256SUMS
+
+      - name: Build provenance manifest
+        env:
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          manifest = {
+              "schema_version": 1,
+              "repository": os.environ["REPOSITORY"],
+              "commit_sha": os.environ["COMMIT_SHA"],
+              "workflow_run_id": os.environ["RUN_ID"],
+              "artifacts": ["swfactory.spdx.json", "swfactory.cdx.json", "SHA256SUMS"],
+              "claims": {
+                  "sbom_generated": True,
+                  "checksums_generated": True,
+                  "keyless_attestation_requested": True,
+              },
+          }
+          Path("provenance.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+          PY
+
+      - name: Attest SBOM artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            swfactory.spdx.json
+            swfactory.cdx.json
+            SHA256SUMS
+            provenance.json
+
+      - name: Upload supply-chain bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: supply-chain-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            swfactory.spdx.json
+            swfactory.cdx.json
+            SHA256SUMS
+            provenance.json
