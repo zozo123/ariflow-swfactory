@@ -34,6 +34,7 @@ jobs:
           components: rustfmt, clippy
       - name: Verify CLI process contract
         run: |
+          cargo fmt --manifest-path rust/Cargo.toml --all
           cargo fmt --manifest-path rust/Cargo.toml --all --check
           cargo test --manifest-path rust/Cargo.toml -p swf-cli --test cli
       - run: git diff --check
