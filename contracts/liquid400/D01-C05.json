@@ -1,0 +1,18 @@
+{
+  "branch": "liquid400/d01-c05-authority-transfer",
+  "cell_epoch_required": true,
+  "concern": "operator surface",
+  "domain": "Authority transfer",
+  "fan_in_rule": "stabilize, verify evidence, remove superseded abstractions",
+  "issue": {
+    "number": 759,
+    "title": "[Liquid400/D01-C05] Authority transfer: operator surface",
+    "url": "https://github.com/zozo123/ariflow-swfactory/issues/759"
+  },
+  "key": "D01-C05",
+  "objective": "Make takeover and reactivation explicit, fenced, auditable and reversible.",
+  "owner_role": "authority",
+  "scheduler": "airflow",
+  "schema_version": 1,
+  "worker_limit": 7
+}
