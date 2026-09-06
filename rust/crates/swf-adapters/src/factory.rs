@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
+use swf_domain::cell::{CellEvent, CellRecord};
 use swf_domain::metrics::{MetricsSummary, RunMetrics};
 use swf_domain::model::{IssueRef, PullRequest, SandboxRef};
 use swf_domain::sanitize::sanitize_line;
@@ -118,6 +119,31 @@ impl FactoryApi {
             () = cancel.cancelled() => Err(AdapterError::Cancelled),
             result = request => result,
         }
+    }
+
+    /// Newest durable Factory Cells, newest mutation first.
+    pub async fn cells(
+        &self,
+        limit: u32,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<CellRecord>> {
+        self.call("/cells", json!({"limit": limit}), cancel).await
+    }
+
+    /// One durable Factory Cell projection.
+    pub async fn cell(&self, cell_id: &str, cancel: &CancellationToken) -> Result<CellRecord> {
+        self.call("/cells/inspect", json!({"cell_id": cell_id}), cancel)
+            .await
+    }
+
+    /// The append-only history of one durable Factory Cell.
+    pub async fn cell_history(
+        &self,
+        cell_id: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<CellEvent>> {
+        self.call("/cells/history", json!({"cell_id": cell_id}), cancel)
+            .await
     }
 }
 
