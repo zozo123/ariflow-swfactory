@@ -250,7 +250,8 @@ uv sync --group airflow           # intentionally return to the pinned release
 package dependencies so a same-version release wheel cannot silently stand in for main. The islo
 overlay also resolves `AI_PROVIDER_REF` once and verifies both its repository URL and commit. Both CI
 jobs invoke this same script. The main job runs the full suite and a live scheduler with eight
-admin-attributed HITL approvals, per-job test results, and delivery artifacts. The islo fork job
+admin-attributed HITL approvals, per-job test results, and delivery artifacts. It then clones
+each published branch, verifies its approvals and branch isolation, and reruns the target tests. The islo fork job
 remains experimental. The live scheduler uses the local sandbox and local Git remotes.
 
 `SWF_TEST_LIVE_TOOLSET=1 uv run --no-sync pytest tests/test_toolset_live.py` separately tests a real

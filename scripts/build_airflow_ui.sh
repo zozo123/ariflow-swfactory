@@ -15,6 +15,9 @@ if [ -n "${AIRFLOW_UI_SOURCE:-}" ]; then
   [ "$(git -C "$SOURCE" rev-parse HEAD)" = "$COMMIT" ] || {
     echo "UI source must match installed Airflow commit $COMMIT" >&2; exit 1;
   }
+  git -C "$SOURCE" diff --quiet HEAD -- airflow-core || {
+    echo "UI source has tracked changes; use a clean checkout of $COMMIT" >&2; exit 1;
+  }
 else
   TEMP_SOURCE="$(mktemp -d "${TMPDIR:-/tmp}/swf-airflow-ui.XXXXXX")"
   SOURCE="$TEMP_SOURCE"

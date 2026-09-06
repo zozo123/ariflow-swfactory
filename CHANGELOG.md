@@ -8,6 +8,9 @@ All notable changes to this project will be documented here. The format follows
 
 ### Added
 
+- Live E2E now clones every published branch, checks remote branch isolation and published
+  approvals, and reruns the target's tests from that clean delivered checkout.
+
 - Reproducible Airflow-main installation with commit provenance checks and both web UIs built
   from source. The upstream common.ai sandbox provider is now the default development provider;
   `--islo` explicitly selects the experimental fork.
@@ -23,6 +26,10 @@ All notable changes to this project will be documented here. The format follows
   target repository's `factory.toml` through GitHub when it is not in the control checkout.
 
 ### Changed
+
+- Toolset reconnect failures preserve the existing sandbox handle and run state instead of
+  silently provisioning an empty replacement. Backend-reported termination is persisted across
+  task restarts and blocks continuation of the old run while retaining cleanup support.
 
 - The README, site, design reference, and public skill now use a practical factory vocabulary:
   work orders, production routes, plant scheduling, work cells, quality checks, release, and

@@ -345,7 +345,9 @@ DAG's tasks used, so a row that cannot be found is a real divergence and not a g
 
 import json
 import os
+import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 from swfactory.blueprint import load
@@ -380,6 +382,35 @@ for job in bp.jobs({"issues": sys.argv[4:]}):
         a.get("actor") != "admin" for a in approvals
     ):
         missing.append(f"job {idx}: approvals were not recorded as admin: {approvals}")
+    # Verify the published code in a clean clone, independent of the worker checkout/cache.
+    branch = f"factory/{chain.name}-{cfg.run_id}"
+    delivered = work / "delivered" / str(idx)
+    try:
+        refs = subprocess.run(
+            ["git", "-C", str(run_dir / "remote.git"), "for-each-ref", "--format=%(refname)"],
+            capture_output=True, text=True, check=True, timeout=30,
+        ).stdout.splitlines()
+        if set(refs) != {"refs/heads/main", f"refs/heads/{branch}"}:
+            raise ValueError(f"unexpected delivery refs: {refs}")
+        subprocess.run(
+            ["git", "clone", "--quiet", "--branch", branch, str(run_dir / "remote.git"), str(delivered)],
+            check=True, timeout=30,
+        )
+        published = json.loads(
+            (delivered / "docs" / "factory" / chain.name / "approvals.json").read_text("utf-8")
+        )
+        if published != approvals:
+            raise ValueError("published approvals differ from the verified worker approvals")
+        contract = tomllib.loads((delivered / "factory.toml").read_text("utf-8"))
+        log_path = work / f"delivered-{idx}.log"
+        with log_path.open("w") as log:
+            subprocess.run(
+                ["bash", "-c", contract["commands"]["test"]], cwd=delivered,
+                stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180,
+            )
+        print(f"job {idx}: published branch verified; clean-checkout tests passed")
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
+        missing.append(f"job {idx}: published delivery verification failed: {e}")
     rows.append(
         [
             str(idx),

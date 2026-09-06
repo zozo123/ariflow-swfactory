@@ -46,7 +46,8 @@ web UIs. Set `AIRFLOW_REF=<commit>` to reproduce a run. Keep `--no-sync` on subs
 the experimental islo provider fork; the default sandbox provider comes from upstream main.
 
 The live E2E starts a temporary Airflow instance, runs two issues across two targets, answers eight
-real approval gates as admin, and checks each job's test results and delivery artifacts. It uses
+real approval gates as admin, and checks each job's test results and delivery artifacts. It then
+clones each published branch and reruns its tests independently. It uses
 the scripted agent and local Git remotes. To separately test real sbx microVM transport and
 cleanup on an authenticated Docker Sandboxes host:
 

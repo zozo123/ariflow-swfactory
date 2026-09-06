@@ -1064,3 +1064,65 @@ def test_toolset_sbx_policy_options_are_backend_specific(monkeypatch, backend):
         if backend == "sbx"
         else {}
     )
+
+
+@pytest.mark.parametrize("failure", ["exception", "nonzero"])
+def test_toolset_reconnect_failure_preserves_existing_work(tmp_path, monkeypatch, failure):
+    from swfactory.state import RunState
+
+    state = RunState(tmp_path)
+    backend, original = _toolset(state=state)
+    original.ensure()
+    calls_before = len([c for c in backend.calls if c[0] == "create"])
+    restored = sandbox_mod.ToolsetSandbox(backend, workdir=original.workdir, state=state)
+    if failure == "exception":
+
+        def unavailable(*args, **kwargs):
+            raise ConnectionError("temporary transport outage")
+
+        monkeypatch.setattr(backend, "run_command", unavailable)
+    else:
+        backend.rc = 1
+    with pytest.raises(StageError) as exc:
+        restored.ensure()
+    assert exc.value.retryable
+    assert restored.sandbox_id == "sbx-1"
+    assert state.has_control(sandbox_mod.TOOLSET_STATE_FILE)
+    assert len([c for c in backend.calls if c[0] == "create"]) == calls_before
+    monkeypatch.undo()
+    backend.rc = 0
+    restored.ensure()
+    assert restored.sandbox_id == "sbx-1"
+    assert len([c for c in backend.calls if c[0] == "create"]) == calls_before
+
+
+def test_toolset_termination_survives_task_restart_and_still_allows_cleanup(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from swfactory.state import RunState
+
+    state = RunState(tmp_path)
+    backend, sandbox = _toolset(state=state)
+    sandbox.ensure()
+    monkeypatch.setattr(
+        backend,
+        "run_command",
+        lambda *a, **kw: SimpleNamespace(
+            exit_code=0,
+            stdout="",
+            stderr="",
+            timed_out=True,
+            sandbox_terminated=True,
+        ),
+    )
+    assert not sandbox.run("long-running-command").ok
+    with pytest.raises(StageError, match="terminated"):
+        sandbox.run("must-not-run")
+    restored = sandbox_mod.ToolsetSandbox(backend, workdir=sandbox.workdir, state=state)
+    with pytest.raises(StageError, match="terminated") as exc:
+        restored.ensure()
+    assert not exc.value.retryable
+    assert len([c for c in backend.calls if c[0] == "create"]) == 1
+    restored.close()
+    assert backend.destroyed == ["sbx-1"]
+    assert not state.has_control(sandbox_mod.TOOLSET_STATE_FILE)
