@@ -42,16 +42,16 @@ def main() -> None:
     replace(
         "src/swfactory/repo_runtime.py",
         "def _glob_under(root: str, paths: Iterable[str], ignored: Iterable[str]) -> bool:\n",
-        "def _glob_root(pattern: str) -> str:\n    if pattern.endswith(\"/**\"):\n        return pattern[:-3].rstrip(\"/\")\n    return pattern.rstrip(\"/\")\n\n\ndef _glob_under(root: str, paths: Iterable[str], ignored: Iterable[str]) -> bool:\n",
+        'def _glob_root(pattern: str) -> str:\n    if pattern.endswith("/**"):\n        return pattern[:-3].rstrip("/")\n    return pattern.rstrip("/")\n\n\ndef _glob_under(root: str, paths: Iterable[str], ignored: Iterable[str]) -> bool:\n',
     )
     replace(
         "src/swfactory/repo_runtime.py",
-        "fnmatch.fnmatchcase(root, pattern.rstrip(\"/**\")) for pattern in path_patterns",
+        'fnmatch.fnmatchcase(root, pattern.rstrip("/**")) for pattern in path_patterns',
         "fnmatch.fnmatchcase(root, _glob_root(pattern)) for pattern in path_patterns",
     )
     replace(
         "src/swfactory/repo_runtime.py",
-        "fnmatch.fnmatchcase(root, pattern.rstrip(\"/**\")) for pattern in ignore_patterns",
+        'fnmatch.fnmatchcase(root, pattern.rstrip("/**")) for pattern in ignore_patterns',
         "fnmatch.fnmatchcase(root, _glob_root(pattern)) for pattern in ignore_patterns",
     )
     for path, class_name in (
@@ -64,8 +64,8 @@ def main() -> None:
 
     replace(
         "tests/test_dag_stress.py",
-        "def test_fan_out_returned_issues_x_targets(stress: dict) -> None:\n    \"\"\"``fan_out``'s XCom is exactly ``Blueprint.jobs(conf)``: the DAG expands over nothing else.\"\"\"\n    assert stress[\"fan_out\"] == list(_expected_jobs())",
-        "def test_fan_out_returned_issues_x_targets(stress: dict) -> None:\n    \"\"\"``fan_out`` is issues x targets enriched only by the durable Cell envelope.\"\"\"\n    expected = list(_expected_jobs())\n    actual = stress[\"fan_out\"]\n    assert len(actual) == len(expected)\n    for enriched, core in zip(actual, expected, strict=True):\n        assert {key: enriched[key] for key in core} == core\n        assert enriched[\"cell_id\"].startswith(\"cell_\")\n        assert enriched[\"cell_epoch\"] == 1\n        assert enriched[\"cell_managed\"] is False\n        assert enriched[\"cell_policy_digest\"] is None\n        assert enriched[\"cell_generation\"] is None\n    assert len({job[\"cell_id\"] for job in actual}) == len(expected)",
+        'def test_fan_out_returned_issues_x_targets(stress: dict) -> None:\n    """``fan_out``\'s XCom is exactly ``Blueprint.jobs(conf)``: the DAG expands over nothing else."""\n    assert stress["fan_out"] == list(_expected_jobs())',
+        'def test_fan_out_returned_issues_x_targets(stress: dict) -> None:\n    """``fan_out`` is issues x targets enriched only by the durable Cell envelope."""\n    expected = list(_expected_jobs())\n    actual = stress["fan_out"]\n    assert len(actual) == len(expected)\n    for enriched, core in zip(actual, expected, strict=True):\n        assert {key: enriched[key] for key in core} == core\n        assert enriched["cell_id"].startswith("cell_")\n        assert enriched["cell_epoch"] == 1\n        assert enriched["cell_managed"] is False\n        assert enriched["cell_policy_digest"] is None\n        assert enriched["cell_generation"] is None\n    assert len({job["cell_id"] for job in actual}) == len(expected)',
     )
 
 

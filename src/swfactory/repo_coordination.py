@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 
-class StalePolicy(str, Enum):
+class StalePolicy(StrEnum):
     BLOCK = "block"
     WARN = "warn"
     REBASE = "rebase"

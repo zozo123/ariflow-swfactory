@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Dimension(str, Enum):
+class Dimension(StrEnum):
     CORRECTNESS = "correctness"
     EVIDENCE = "evidence"
     RELIABILITY = "reliability"

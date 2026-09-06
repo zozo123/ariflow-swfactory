@@ -20,7 +20,8 @@ from swfactory.idempotency import MutationOutcome, OperationJournal, OperationRe
 
 
 class ControlKernel:
-    def __init__(self, root: Path, *, limits: Limits = Limits()):
+    def __init__(self, root: Path, *, limits: Limits | None = None):
+        limits = limits or Limits()
         root.mkdir(parents=True, exist_ok=True)
         self.root = root
         self.operations = OperationJournal(root / "operations.sqlite3")

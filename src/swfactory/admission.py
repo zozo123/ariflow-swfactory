@@ -47,8 +47,8 @@ class Decision:
 
 
 class AdmissionController:
-    def __init__(self, limits: Limits = Limits()):
-        self.limits = limits
+    def __init__(self, limits: Limits | None = None):
+        self.limits = limits or Limits()
         self._queue: list[QueuedWork] = []
         self._sequence = 0
         self._active: dict[str, QueuedWork] = {}

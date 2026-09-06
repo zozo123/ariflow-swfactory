@@ -343,15 +343,21 @@ def _norm(path: str) -> str:
     return str(PurePosixPath(path.replace("\\", "/")))
 
 
+def _glob_root(pattern: str) -> str:
+    if pattern.endswith("/**"):
+        return pattern[:-3].rstrip("/")
+    return pattern.rstrip("/")
+
+
 def _glob_under(root: str, paths: Iterable[str], ignored: Iterable[str]) -> bool:
     root = _norm(root).lstrip("./")
     path_patterns = tuple(paths)
     ignore_patterns = tuple(ignored)
     if path_patterns and not any(
-        fnmatch.fnmatchcase(root, pattern.rstrip("/**")) for pattern in path_patterns
+        fnmatch.fnmatchcase(root, _glob_root(pattern)) for pattern in path_patterns
     ):
         return False
-    return not any(fnmatch.fnmatchcase(root, pattern.rstrip("/**")) for pattern in ignore_patterns)
+    return not any(fnmatch.fnmatchcase(root, _glob_root(pattern)) for pattern in ignore_patterns)
 
 
 def _run(argv: list[str], *, capture: bool = False) -> str:

@@ -122,11 +122,11 @@ class ExecutorPolicy:
 
 class WorkExecutor:
     def __init__(
-        self, runner: NodeRunner, merger: NodeMerger, policy: ExecutorPolicy = ExecutorPolicy()
+        self, runner: NodeRunner, merger: NodeMerger, policy: ExecutorPolicy | None = None
     ):
         self.runner = runner
         self.merger = merger
-        self.policy = policy
+        self.policy = policy or ExecutorPolicy()
 
     def execute(
         self,

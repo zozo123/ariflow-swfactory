@@ -62,9 +62,9 @@ class DurableAdmission:
     one reproducible explanation for a queue decision.
     """
 
-    def __init__(self, path: Path, limits: Limits = Limits()):
+    def __init__(self, path: Path, limits: Limits | None = None):
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.limits = limits
+        self.limits = limits or Limits()
         self.db = sqlite3.connect(
             path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False
         )

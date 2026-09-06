@@ -5,10 +5,10 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class WorkKind(str, Enum):
+class WorkKind(StrEnum):
     BUG = "bug"
     FEATURE = "feature"
     REFACTOR = "refactor"
