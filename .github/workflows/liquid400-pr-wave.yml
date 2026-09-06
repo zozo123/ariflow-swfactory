@@ -1,0 +1,38 @@
+name: liquid400-pr-wave
+
+on:
+  push:
+    branches:
+      - spectrum/400-pr-wave
+    paths:
+      - scripts/seed_liquid400_pr_wave.py
+      - .github/workflows/liquid400-pr-wave.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: liquid400-pr-wave
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      LIQUID400_BASE: spectrum/400-pr-wave
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: spectrum/400-pr-wave
+          fetch-depth: 0
+          token: ${{ github.token }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Seed 400 issues and PR-ready branches
+        run: python scripts/seed_liquid400_pr_wave.py
