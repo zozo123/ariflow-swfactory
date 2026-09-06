@@ -15,7 +15,7 @@ Exit codes:
   0  success
   1  operational failure (a check is red, a gate answer was refused, verification failed)
   2  usage error (a bad flag, an unparseable id, a mutation without --yes on a non-TTY)
-  3  not found (no such context, run, job, gate, delivery or sandbox)
+  3  not found (no such context, run, job, cell, gate, delivery or sandbox)
   4  authentication or authorisation failure
   5  service unreachable (DNS, connect, TLS, timeout, or a missing gh/islo)
   6  conflict (the gate was already answered, or the evidence moved under you)
@@ -30,7 +30,7 @@ Diagnostics always go to stderr, so `swf … --json | jq` is safe in a pipeline.
     name = "swf",
     version,
     propagate_version = true,
-    about = "Operate the software factory: connect, submit, watch, approve, verify",
+    about = "Operate the software factory: connect, submit, inspect, approve, verify",
     after_help = EXIT_CODES,
     after_long_help = EXIT_CODES
 )]
@@ -87,6 +87,10 @@ pub enum Command {
     /// Mapped jobs — the unit a gate, a sandbox and a delivery all belong to.
     #[command(subcommand)]
     Jobs(JobsCmd),
+
+    /// Durable issue×target Factory Cells and their ownership/evidence history.
+    #[command(subcommand)]
+    Cells(CellsCmd),
 
     /// One task attempt's log.
     Logs(LogsArgs),
@@ -286,6 +290,29 @@ pub enum JobsCmd {
     Inspect {
         /// `dag/run#index`.
         job: String,
+    },
+}
+
+/// `swf cells …`
+#[derive(Debug, Subcommand)]
+pub enum CellsCmd {
+    /// Newest durable Factory Cells, newest mutation first.
+    List {
+        /// Maximum cells to return.
+        #[arg(long, default_value_t = 100, value_name = "N")]
+        limit: usize,
+    },
+
+    /// One cell's durable projection: epoch, Airflow identity, compute and cleanup state.
+    Inspect {
+        /// `cell_` followed by 24 hexadecimal characters.
+        cell_id: String,
+    },
+
+    /// One cell's append-only authority/evidence history.
+    History {
+        /// `cell_` followed by 24 hexadecimal characters.
+        cell_id: String,
     },
 }
 
@@ -555,8 +582,6 @@ mod tests {
 
     #[test]
     fn stop_never_claims_to_have_stopped_anything() {
-        // Non-negotiable 9: the word "stop" is Airflow's, and the help has to correct it before an
-        // operator believes their sandbox went away.
         let mut cmd = Cli::command();
         let help = cmd.render_long_help().to_string();
         assert!(help.contains("swf"), "{help}");
@@ -572,7 +597,6 @@ mod tests {
 
     #[test]
     fn global_flags_are_accepted_after_the_subcommand() {
-        // A script writes `swf gates approve <id> --yes`, not `swf --yes gates approve <id>`.
         let cli =
             Cli::try_parse_from(["swf", "gates", "approve", "a/b#0:intent", "--yes", "--json"])
                 .expect("parse");
@@ -587,9 +611,26 @@ mod tests {
     }
 
     #[test]
+    fn cells_have_stable_read_only_shapes() {
+        let list = Cli::try_parse_from(["swf", "cells", "list", "--limit", "25"])
+            .expect("cells list parses");
+        let Command::Cells(CellsCmd::List { limit }) = list.command else {
+            panic!("expected cells list");
+        };
+        assert_eq!(limit, 25);
+
+        let inspect = Cli::try_parse_from([
+            "swf",
+            "cells",
+            "inspect",
+            "cell_0123456789abcdef01234567",
+        ])
+        .expect("cells inspect parses");
+        assert!(matches!(inspect.command, Command::Cells(CellsCmd::Inspect { .. })));
+    }
+
+    #[test]
     fn a_gate_answer_takes_either_an_identity_or_a_whole_filtered_set() {
-        // Both shapes have to parse; which combinations are *legal* is decided in `exec`, where
-        // the refusal can say why, rather than in a clap conflict nobody can explain.
         let one = Cli::try_parse_from(["swf", "gates", "approve", "a/b#0:plan"]).expect("parse");
         let Command::Gates(GatesCmd::Approve(args)) = one.command else {
             panic!("expected gates approve");
@@ -629,8 +670,6 @@ mod tests {
 
     #[test]
     fn the_listings_take_the_filters_the_batch_takes() {
-        // A listing an operator narrowed has to *be* the batch they are about to run, so the
-        // filter flags are the same words on both.
         let gates = Cli::try_parse_from([
             "swf", "gates", "list", "--dag", "factory", "--gate", "intent", "--ready", "--limit",
             "5",
@@ -685,14 +724,8 @@ mod tests {
             .map(|mut cmd| cmd.render_long_help().to_string())
             .unwrap_or_default();
         assert!(approve.contains("--dry-run"), "{approve}");
-        assert!(
-            approve.contains("writes nothing"),
-            "the help has to say the dry run is safe before it is trusted: {approve}"
-        );
-        assert!(
-            approve.contains("ready"),
-            "and that a batch answers only ready gates: {approve}"
-        );
+        assert!(approve.contains("writes nothing"), "{approve}");
+        assert!(approve.contains("ready"), "{approve}");
     }
 
     #[test]

@@ -7,6 +7,7 @@
 //! and not by an operator at 2 a.m.
 
 pub mod blueprint;
+pub mod cell;
 pub mod doctor;
 pub mod evidence;
 pub mod ids;
@@ -17,6 +18,7 @@ pub mod sanitize;
 pub mod snapshot;
 pub mod states;
 
+pub use cell::{CellEvent, CellRecord};
 pub use ids::{DeliveryId, GateId, IdError, JobId, RunRef};
 pub use model::{
     Gate, IssueRef, JobRow, PullRequest, Run, SandboxRef, Snapshot, SourceHealth, TaskState,
