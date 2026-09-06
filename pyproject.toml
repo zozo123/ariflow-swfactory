@@ -48,7 +48,7 @@ airflow = [
 # Optional outer composition layer. It discovers ``SoftwareFactory`` through the package entry
 # point and triggers the existing governed line DAG; it does not replace swfactory's policy.
 astronomer-blueprint = ["airflow-blueprint==0.4.0"]
-# Bleeding edge: apache/airflow@main plus the pending islo sandbox backend (apache/airflow#71672)
+# Bleeding edge: one apache/airflow@main snapshot including common.ai; --islo opts into #71672
 # is one script, not a locked group — locking a git dependency on the Airflow monorepo would clone
 # ~1 GB and pin a commit that is stale the next day. See scripts/airflow_main.sh and docs/design.md.
 [build-system]

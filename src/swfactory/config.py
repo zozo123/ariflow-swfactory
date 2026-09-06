@@ -102,6 +102,8 @@ class Config(BaseSettings):
     # Airflow's own sandbox abstraction (provider common.ai): sbx ships released; islo,
     # opensandbox and asciibox are pending upstream PRs (apache/airflow #71672/#71676/#71725).
     toolset_backend: str = "sbx"
+    toolset_sbx_host_network_policy: Literal["unknown", "deny-all", "allow-all"] = "unknown"
+    toolset_sbx_image: str = "python:3.12-slim"
     toolset_workdir: str = "/workspace/repo"  # repository root inside a SandboxBackend
     sandbox_owner: str | None = None  # SWF_SANDBOX_OWNER: only this creator's sandboxes may be rm'd
 

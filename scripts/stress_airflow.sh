@@ -14,6 +14,7 @@
 # Env: SWF_APPROVE=auto  do NOT answer the gates — let `gates[].auto` default them to Approve,
 #                        which the ApprovalOperator only does after timeout_h (1 h). Slow on
 #                        purpose: that is the unattended backstop, not the fast path.
+#      SWF_AIRFLOW_NO_SYNC=1 use the installed Airflow main overlay without reinstalling release.
 #      SWF_STRESS_KEEP=1 keep the work dir (standalone home, run dirs, logs) after exit.
 #
 # No keys and no network: scripted agent, local sandbox, local git remote. Exit code is non-zero
@@ -74,7 +75,12 @@ trap cleanup EXIT
 # One `uv run` to materialise/locate the venv, then the venv's own binaries: nothing else in this
 # script holds uv's lock, so a long `airflow standalone` cannot block another `uv run` (or be
 # blocked by one).
-PY="$(uv run --project "$REPO" --group airflow python -c 'import sys; print(sys.executable)')"
+if [ "${SWF_AIRFLOW_NO_SYNC:-}" = "1" ]; then
+  PY="$(uv run --no-sync --project "$REPO" python -c 'import sys; print(sys.executable)')"
+else
+  PY="$(uv run --project "$REPO" --group airflow python -c 'import sys; print(sys.executable)')"
+fi
+"$PY" -c 'import airflow; print("Live E2E Airflow:", airflow.__version__)'
 BIN="$(dirname "$PY")"
 [ -x "$BIN/airflow" ] || {
   echo "no airflow in $BIN — run: uv sync --group airflow" >&2
@@ -165,6 +171,15 @@ sys.exit(0 if all(data.get(p, {}).get("status") == "healthy" for p in parts) els
   fi
   sleep 1
   i=$((i + 1))
+done
+
+# Source installs must serve real dashboard/login HTML, not merely start the REST API.
+curl -fsS "$BASE/" >"$WORK/dashboard.html"
+curl -fsS "$BASE/auth/login" >"$WORK/login.html"
+for page in dashboard login; do
+  grep -Eqi '<!doctype html|<html[[:space:]>]' "$WORK/$page.html" || {
+    echo "$page did not return HTML" >&2; exit 1;
+  }
 done
 
 # `airflow standalone` writes the admin password on first boot. The gates are answered as that
@@ -329,7 +344,10 @@ DAG's tasks used, so a row that cannot be found is a real divergence and not a g
 """
 
 import json
+import os
+import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 from swfactory.blueprint import load
@@ -357,6 +375,42 @@ for job in bp.jobs({"issues": sys.argv[4:]}):
         missing.append(f"job {idx}: no pr.md in {run_dir}")
     if not metrics.get("tests_passed"):
         missing.append(f"job {idx}: tests_passed={metrics.get('tests_passed')}")
+    expected_gates = [("intent", "approve"), ("plan", "approve")]
+    if [(a.get("gate"), a.get("decision")) for a in approvals] != expected_gates:
+        missing.append(f"job {idx}: missing or incorrect gate decisions: {approvals}")
+    if os.environ.get("SWF_APPROVE") != "auto" and any(
+        a.get("actor") != "admin" for a in approvals
+    ):
+        missing.append(f"job {idx}: approvals were not recorded as admin: {approvals}")
+    # Verify the published code in a clean clone, independent of the worker checkout/cache.
+    branch = f"factory/{chain.name}-{cfg.run_id}"
+    delivered = work / "delivered" / str(idx)
+    try:
+        refs = subprocess.run(
+            ["git", "-C", str(run_dir / "remote.git"), "for-each-ref", "--format=%(refname)"],
+            capture_output=True, text=True, check=True, timeout=30,
+        ).stdout.splitlines()
+        if set(refs) != {"refs/heads/main", f"refs/heads/{branch}"}:
+            raise ValueError(f"unexpected delivery refs: {refs}")
+        subprocess.run(
+            ["git", "clone", "--quiet", "--branch", branch, str(run_dir / "remote.git"), str(delivered)],
+            check=True, timeout=30,
+        )
+        published = json.loads(
+            (delivered / "docs" / "factory" / chain.name / "approvals.json").read_text("utf-8")
+        )
+        if published != approvals:
+            raise ValueError("published approvals differ from the verified worker approvals")
+        contract = tomllib.loads((delivered / "factory.toml").read_text("utf-8"))
+        log_path = work / f"delivered-{idx}.log"
+        with log_path.open("w") as log:
+            subprocess.run(
+                ["bash", "-c", contract["commands"]["test"]], cwd=delivered,
+                stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180,
+            )
+        print(f"job {idx}: published branch verified; clean-checkout tests passed")
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
+        missing.append(f"job {idx}: published delivery verification failed: {e}")
     rows.append(
         [
             str(idx),

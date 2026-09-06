@@ -891,6 +891,7 @@ class ToolsetSandbox:
         self.state = state
         self.backend_identity = f"{type(backend).__module__}.{type(backend).__qualname__}"
         self.sandbox_id: str | None = None
+        self._terminated = False
 
     def _restore_id(self) -> None:
         if self.sandbox_id is not None or self.state is None:
@@ -907,6 +908,7 @@ class ToolsetSandbox:
         except (AttributeError, KeyError, TypeError, ValueError) as e:
             raise StageError("policy", f"invalid toolset sandbox state: {e}") from e
         self.sandbox_id = sandbox_id
+        self._terminated = bool(record.get("terminated", False))
 
     def _persist_id(self) -> None:
         if self.state is None or self.sandbox_id is None:
@@ -914,7 +916,11 @@ class ToolsetSandbox:
         self.state.write_control(
             TOOLSET_STATE_FILE,
             json.dumps(
-                {"backend": self.backend_identity, "sandbox_id": self.sandbox_id},
+                {
+                    "backend": self.backend_identity,
+                    "sandbox_id": self.sandbox_id,
+                    "terminated": self._terminated,
+                },
                 separators=(",", ":"),
             )
             + "\n",
@@ -942,13 +948,22 @@ class ToolsetSandbox:
     def ensure(self) -> None:
         """Create the sandbox once, provision the checkout, and select the target directory."""
         self._restore_id()
+        self._check_alive()
         if self.sandbox_id is not None:
             try:
                 probe = self._run_backend("true", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
-            except Exception:
-                probe = None
-            if probe is None or not probe.ok:
-                self.sandbox_id = None
+            except Exception as e:
+                raise StageError(
+                    "sandbox",
+                    "cannot reconnect to the existing sandbox; preserving its handle and run state",
+                    retryable=True,
+                ) from e
+            if not probe.ok:
+                raise StageError(
+                    "sandbox",
+                    "existing sandbox is unavailable; recover it or start a new factory run",
+                    retryable=not self._terminated,
+                )
         if self.sandbox_id is None:
             sandbox_id = self.backend.create(spec=self._spec())
             if not isinstance(sandbox_id, str) or not sandbox_id.strip():
@@ -985,7 +1000,14 @@ class ToolsetSandbox:
                 "sandbox", f"toolset target directory is unavailable: {result.stderr[-800:]}"
             )
 
+    def _check_alive(self) -> None:
+        if self._terminated:
+            raise StageError(
+                "sandbox", "sandbox was terminated; start a new factory run to rebuild its work"
+            )
+
     def _id(self) -> str:
+        self._check_alive()
         if self.sandbox_id is None:
             self.ensure()
         assert self.sandbox_id is not None
@@ -1022,6 +1044,10 @@ class ToolsetSandbox:
         ]
         stderr = "\n".join([str(res.stderr or ""), *(f"[toolset] {n}" for n in notes)]).strip()
         terminated = bool(getattr(res, "sandbox_terminated", False))
+        if terminated:
+            # Keep the handle for cleanup, but never continue old stage records in a fresh VM.
+            self._terminated = True
+            self._persist_id()
         exit_code = res.exit_code if isinstance(res.exit_code, int) else 1
         degraded = bool(notes) or bool(res.timed_out)
         return RunResult(
@@ -1115,8 +1141,14 @@ def make_sandbox(
         repo_root = cfg.toolset_workdir.rstrip("/") or "/workspace/repo"
         target = normalize_relative_path(cfg.target_dir, field="target_dir", allow_empty=True)
         workdir = posixpath.join(repo_root, target) if target else repo_root
+        backend_kwargs = {}
+        if cfg.toolset_backend == "sbx":
+            backend_kwargs = {
+                "host_network_policy": cfg.toolset_sbx_host_network_policy,
+                "image": cfg.toolset_sbx_image,
+            }
         return ToolsetSandbox(
-            load_toolset_backend(cfg.toolset_backend),
+            load_toolset_backend(cfg.toolset_backend, **backend_kwargs),
             workdir=workdir,
             env={k: os.environ[k] for k in claude_env if k in os.environ},
             allow_egress_to=_dedupe([*cfg.srt_allowed_domains, *SRT_CLAUDE_DOMAINS, "github.com"]),

@@ -28,6 +28,39 @@ WORK ORDER -> ROUTE -> AIRFLOW -> WORK CELL -> QUALITY -> PULL REQUEST -> HUMAN 
 [Read the design](docs/design.md) ·
 [See a completed factory run](https://github.com/zozo123/ariflow-swfactory/pull/3)
 
+## Run against the latest Airflow main
+
+Requires Python 3.12, uv, Git, Node 22+ and pnpm 10.28.1.
+
+```sh
+./scripts/airflow_main.sh
+uv run --no-sync pytest
+uv run --no-sync swfactory demo
+SWF_AIRFLOW_NO_SYNC=1 scripts/stress_airflow.sh
+```
+
+The installer resolves `apache/airflow@main` once, installs core, task SDK, standard and common.ai
+providers plus the Airflow metapackage from that commit, checks their provenance, and builds both
+web UIs. Set `AIRFLOW_REF=<commit>` to reproduce a run. Keep `--no-sync` on subsequent commands;
+`uv sync --group airflow` intentionally returns to the pinned release. `--islo` explicitly selects
+the experimental islo provider fork; the default sandbox provider comes from upstream main.
+
+The live E2E starts a temporary Airflow instance, runs two issues across two targets, answers eight
+real approval gates as admin, and checks each job's test results and delivery artifacts. It then
+clones each published branch and reruns its tests independently. It uses
+the scripted agent and local Git remotes. To separately test real sbx microVM transport and
+cleanup on an authenticated Docker Sandboxes host:
+
+```sh
+SWF_TEST_LIVE_TOOLSET=1 uv run --no-sync pytest tests/test_toolset_live.py
+```
+
+This opt-in microVM test requests open networking and does not change host policy. Factory toolset
+runs retain network restrictions: set `SWF_TOOLSET_SBX_HOST_NETWORK_POLICY=deny-all` only after
+configuring that policy on a dedicated worker, and set `SWF_TOOLSET_SBX_IMAGE` to an image with Git,
+the target's test tools, and the selected agent. The provider's default Python image suffices for
+the transport test but does not contain all factory tools.
+
 ## Factory map
 
 | Factory term | In this project | Job |

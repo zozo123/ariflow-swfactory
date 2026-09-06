@@ -24,8 +24,16 @@ in `stages.py`. Details: README + docs/*.md.
 - `deploy/islo/bootstrap.sh` (gateway, environment, snapshot, knowledge) then `deploy.sh`
   (orchestrator sandbox + webhooks) — docs/islo.md.
 
-- `./scripts/airflow_main.sh` — put the checkout on apache/airflow@main plus the pending islo
-  sandbox backend; `uv sync --group airflow` returns to the pinned release.
+- `./scripts/airflow_main.sh` — install one verified apache/airflow@main snapshot and build both
+  UIs (Node 22+, pnpm 10.28.1). `--islo` opts into the pending provider fork. Use `uv run --no-sync`
+  afterwards; `SWF_AIRFLOW_NO_SYNC=1 scripts/stress_airflow.sh` tests live HITL gates on that stack.
+  `uv sync --group airflow` returns to the pinned release.
+- Toolset reconnect failures must preserve the existing handle: never recreate an empty VM while
+  the run journal still records completed stages. Persist termination and require a new run.
+- Toolset sbx: `SWF_TOOLSET_SBX_HOST_NETWORK_POLICY=deny-all` declares an already-configured worker
+  policy; it never changes the host. `SWF_TOOLSET_SBX_IMAGE` selects the factory-ready image.
+  `SWF_TEST_LIVE_TOOLSET=1 uv run --no-sync pytest tests/test_toolset_live.py` exercises a real
+  microVM with explicitly open networking; normal factory runs keep their restrictive spec.
 - `uv sync --group airflow --group astronomer-blueprint` — install the optional outer DAG
   composer; `examples/astronomer-blueprint/` shows a `software_factory` step.
 

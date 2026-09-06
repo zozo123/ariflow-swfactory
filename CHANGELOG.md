@@ -8,6 +8,17 @@ All notable changes to this project will be documented here. The format follows
 
 ### Added
 
+- Live E2E now clones every published branch, checks remote branch isolation and published
+  approvals, and reruns the target's tests from that clean delivered checkout.
+
+- Reproducible Airflow-main installation with commit provenance checks and both web UIs built
+  from source. The upstream common.ai sandbox provider is now the default development provider;
+  `--islo` explicitly selects the experimental fork.
+- Main CI runs the complete suite and live scheduler/HITL E2E without reinstalling the release.
+  Live E2E now verifies gate decisions and admin attribution, not just DAG success.
+- Configurable sbx host policy declaration and factory image, plus an opt-in real microVM
+  file/command/cleanup test.
+
 - Scheduled blueprints can declare `trigger.issues`; cron-created DAG runs use those issue inputs
   when no runtime configuration is present, while explicit run configuration still wins.
 - `swfactory doctor` now validates only the selected sandbox, agent, and SCM providers. It checks
@@ -15,6 +26,10 @@ All notable changes to this project will be documented here. The format follows
   target repository's `factory.toml` through GitHub when it is not in the control checkout.
 
 ### Changed
+
+- Toolset reconnect failures preserve the existing sandbox handle and run state instead of
+  silently provisioning an empty replacement. Backend-reported termination is persisted across
+  task restarts and blocks continuation of the old run while retaining cleanup support.
 
 - The README, site, design reference, and public skill now use a practical factory vocabulary:
   work orders, production routes, plant scheduling, work cells, quality checks, release, and
