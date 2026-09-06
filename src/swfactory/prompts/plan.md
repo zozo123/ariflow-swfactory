@@ -20,7 +20,7 @@ Return ONLY a JSON object (it is validated against a schema) with these keys:
 - `work`: the issue-specific dependency graph. Keep it small (normally 1–8 nodes). Each node has:
   - `id`: stable lowercase identifier (`tests`, `api`, `docs`, ...).
   - `title`: one verifiable unit of work.
-  - `role`: normally `code_writer`; the fixed lifecycle owns groomer/planner/reviewer/improver.
+  - `role`: must be `code_writer`; groomer/planner/reviewer/improver/deliverer are fixed lifecycle roles and cannot be injected into the build graph.
   - `depends_on`: node ids that must finish first. Root nodes use `[]`.
   - `files`: only paths already declared in top-level `files`.
   - `tests`: requirement-tagged checks this node is responsible for.
