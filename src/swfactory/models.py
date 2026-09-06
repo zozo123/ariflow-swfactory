@@ -113,7 +113,7 @@ class PlanTask(BoundaryModel):
 
     id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,62}$")
     title: str = Field(min_length=1, max_length=240)
-    role: AgentRole = "code_writer"
+    role: Literal["code_writer"] = "code_writer"
     depends_on: list[str] = Field(default_factory=list, max_length=32)
     files: list[str] = Field(default_factory=list, max_length=128)
     tests: list[str] = Field(default_factory=list, max_length=128)
