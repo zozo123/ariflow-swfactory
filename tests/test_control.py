@@ -11,6 +11,7 @@ import io
 import json
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -20,6 +21,8 @@ from typing import Any
 import pytest
 
 from swfactory.control import (
+    MAX_PAGES,
+    PAGE_LIMIT,
     AirflowClient,
     ControlError,
     Gate,
@@ -163,10 +166,11 @@ ISLO_LS = json.dumps(
 def test_airflow_reads_send_bearer_and_hit_v2_routes() -> None:
     opener = FakeOpener(
         {
-            ("GET", "/api/v2/dags?tags=swfactory&limit=100"): {
-                "dags": [{"dag_id": "factory"}, {"dag_id": "hotfix"}]
+            ("GET", "/api/v2/dags?tags=swfactory&limit=100&offset=0"): {
+                "dags": [{"dag_id": "factory"}, {"dag_id": "hotfix"}],
+                "total_entries": 2,
             },
-            ("GET", "/api/v2/dags/factory/dagRuns?limit=2&order_by=-run_after"): {
+            ("GET", "/api/v2/dags/factory/dagRuns?order_by=-run_after&limit=2&offset=0"): {
                 "dag_runs": [
                     {
                         "dag_run_id": RUN_ID,
@@ -176,20 +180,22 @@ def test_airflow_reads_send_bearer_and_hit_v2_routes() -> None:
                         "end_date": "2026-09-03T08:21:10.613775Z",
                         "conf": {"issues": ["demo/issue.md"]},
                     }
-                ]
+                ],
+                "total_entries": 1,
             },
             (
                 "GET",
-                f"/api/v2/dags/factory/dagRuns/{RUN_SEG}/taskInstances?limit=500",
+                f"/api/v2/dags/factory/dagRuns/{RUN_SEG}/taskInstances?limit=100&offset=0",
             ): {
                 "task_instances": [
                     {"task_id": "fan_out", "map_index": -1, "state": "success"},
                     {"task_id": "job.build_and_test", "map_index": 0, "state": "running"},
-                ]
+                ],
+                "total_entries": 2,
             },
             (
                 "GET",
-                "/api/v2/dags/~/dagRuns/~/hitlDetails?response_received=false&limit=100",
+                "/api/v2/dags/~/dagRuns/~/hitlDetails?response_received=false&limit=100&offset=0",
             ): HITL_LIVE,
         }
     )
@@ -222,6 +228,169 @@ def test_airflow_reads_send_bearer_and_hit_v2_routes() -> None:
     assert g.options == ["Approve", "Reject"] and g.subject.startswith("[factory] approve intent")
     assert g.created_at == datetime(2026, 9, 3, 8, 19, 12, 857207, tzinfo=UTC)
     assert all(r.get_method() == "GET" and r.data is None for r in opener.requests)
+
+
+# ---------------------------------------------------------------- paging
+
+
+class PagedOpener:
+    """Airflow's paging, faithfully: ``limit`` is clamped to ``clamp`` and nobody is told.
+
+    One collection, served from ``rows`` by ``offset``/``limit``. ``total`` chooses what the body
+    says about its own size — ``"count"`` for the honest integer, ``"null"`` for the ``int | null``
+    the schema allows (and cursor mode really sends), ``"absent"`` for a body without the field —
+    because a client that leans on ``total_entries`` breaks on two of those three.
+    """
+
+    def __init__(
+        self, key: str, rows: list[dict], *, clamp: int = 100, total: str = "count"
+    ) -> None:
+        self.key = key
+        self.rows = rows
+        self.clamp = clamp
+        self.total = total
+        self.asks: list[tuple[int, int]] = []  # (limit asked, offset asked), in order
+        self.queries: list[dict[str, list[str]]] = []
+
+    def __call__(self, request: urllib.request.Request, *, timeout: float) -> _Resp:
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)
+        self.queries.append(query)
+        limit, offset = int(query["limit"][0]), int(query["offset"][0])
+        self.asks.append((limit, offset))
+        body: dict[str, Any] = {self.key: self.rows[offset : offset + min(limit, self.clamp)]}
+        if self.total == "count":
+            body["total_entries"] = len(self.rows)
+        elif self.total == "null":
+            body["total_entries"] = None
+        return _Resp(body)
+
+
+class EndlessOpener:
+    """A server that never says "done": every page is full and ``total_entries`` never comes."""
+
+    def __init__(self) -> None:
+        self.asks = 0
+        self.exhausted = False
+
+    def __call__(self, request: urllib.request.Request, *, timeout: float) -> _Resp:
+        self.asks += 1
+        return _Resp({"task_instances": [] if self.exhausted else _tis(PAGE_LIMIT)})
+
+
+def _tis(n: int) -> list[dict]:
+    """``n`` task instances of one wide run — one job index each, so order is checkable."""
+    return [{"task_id": "job.build_and_test", "map_index": i, "state": "success"} for i in range(n)]
+
+
+def _runs(n: int) -> list[dict]:
+    return [{"dag_id": "factory", "dag_run_id": f"r{i}", "state": "success"} for i in range(n)]
+
+
+def test_task_states_walks_every_page_of_a_run_too_wide_for_one() -> None:
+    """A 243-task run is three pages, and all 243 rows come back.
+
+    The bug this pins: one ``limit=500`` request looks like "everything" and is silently clamped
+    to ``[api] maximum_page_limit`` (100), so 143 task instances never reached the Runs table —
+    and a run that wide is exactly the one an operator opened the control room for.
+    """
+    opener = PagedOpener("task_instances", _tis(243))
+    af = AirflowClient(AF, token="tok", opener=opener)
+
+    tasks = af.task_states("factory", RUN_ID)
+    assert len(tasks) == 243
+    assert [t.map_index for t in tasks] == list(range(243))  # in order, no page dropped or re-read
+    assert opener.asks == [(100, 0), (100, 100), (100, 200)]  # never 500, and total_entries stops
+    assert af.truncated == {}
+
+
+def test_paging_advances_by_the_rows_returned_not_by_the_limit_it_asked_for() -> None:
+    """A deployment clamping to 40 still yields all 90 rows: offset follows the answer, not the ask.
+
+    Stepping ``offset`` by the requested limit would jump 0 -> 100, past the whole collection, and
+    report 40 of 90 tasks as the truth — the original bug wearing a different page size.
+    """
+    opener = PagedOpener("task_instances", _tis(90), clamp=40)
+    af = AirflowClient(AF, token="tok", opener=opener)
+
+    assert len(af.task_states("factory", RUN_ID)) == 90
+    assert opener.asks == [(100, 0), (100, 40), (100, 80)]
+
+
+def test_paging_stops_on_an_empty_page_when_total_entries_is_null_or_absent() -> None:
+    """``total_entries`` is ``int | null`` and not ``required``: the empty page is the real stop."""
+    opener = PagedOpener("task_instances", _tis(150), total="null")
+    af = AirflowClient(AF, token="tok", opener=opener)
+
+    assert len(af.task_states("factory", RUN_ID)) == 150
+    # 100, then a *short* page of 50 that does not end the walk (a short page can just be a
+    # clamped one), then the empty page that does.
+    assert opener.asks == [(100, 0), (100, 100), (100, 150)]
+
+    absent = PagedOpener("dag_runs", _runs(3), total="absent")
+    runs = AirflowClient(AF, opener=absent).list_runs("factory", limit=50)
+    assert [r.run_id for r in runs] == ["r0", "r1", "r2"]
+    assert absent.asks == [(50, 0), (47, 3)]  # the follow-up asks for the remainder, not another 50
+
+
+def test_paging_an_empty_first_page_is_an_empty_answer_not_an_error() -> None:
+    """A DAG with no runs, a factory with no gates: one request, one empty list, no exception."""
+    opener = PagedOpener("dag_runs", [])
+    af = AirflowClient(AF, token="tok", opener=opener)
+    assert af.list_runs("factory") == [] and opener.asks == [(20, 0)]
+
+    gates = PagedOpener("hitl_details", [])
+    assert AirflowClient(AF, opener=gates).pending_gates() == []
+    assert gates.asks == [(100, 0)] and gates.queries[0]["response_received"] == ["false"]
+
+
+def test_list_runs_limit_means_the_newest_n_runs_not_one_request() -> None:
+    opener = PagedOpener("dag_runs", _runs(250))
+    af = AirflowClient(AF, token="tok", opener=opener)
+
+    runs = af.list_runs("factory", limit=120)
+    assert [r.run_id for r in runs] == [f"r{i}" for i in range(120)]  # newest 120, then stop
+    assert opener.asks == [(100, 0), (20, 100)]  # the second ask is the remainder, not another 100
+    assert opener.queries[0]["order_by"] == ["-run_after"]  # newest first is what makes N the top N
+
+    # ``limit=0`` is the one number that must never reach the wire: this API reads it as "return
+    # nothing", so paging on it would walk empty pages until the cap and answer with nothing.
+    opener.asks.clear()
+    assert af.list_runs("factory", limit=0) == [] and opener.asks == []
+
+
+def test_list_dags_and_pending_gates_page_too() -> None:
+    """The two unfiltered collections: a factory with many lines, a backlog of many gates."""
+    dags = PagedOpener("dags", [{"dag_id": f"line{i}"} for i in range(120)], total="null")
+    af = AirflowClient(AF, token="tok", opener=dags)
+    assert af.list_dags() == [f"line{i}" for i in range(120)]
+    assert dags.asks == [(100, 0), (100, 100), (100, 120)]
+    assert dags.queries[0]["tags"] == ["swfactory"]
+
+    hitl = PagedOpener("hitl_details", [dict(HITL_LIVE["hitl_details"][0])] * 101)
+    gates = AirflowClient(AF, opener=hitl).pending_gates()
+    assert len(gates) == 101 and hitl.asks == [(100, 0), (100, 100)]
+    assert all(g.task_id == "job.approve_intent" for g in gates)
+
+
+def test_a_collection_that_never_ends_stops_at_the_page_cap_and_says_so() -> None:
+    """The walk is bounded, and the bound is reported rather than swallowed.
+
+    A server that ignores ``offset`` (or a filter matching everything) must not spin forever, and
+    must not look like a complete answer either: the rows already read are kept, and the path is
+    recorded so :func:`collect` can put "this table is short" on the operator's screen.
+    """
+    opener = EndlessOpener()
+    af = AirflowClient(AF, token="tok", opener=opener)
+    path = f"/dags/factory/dagRuns/{RUN_SEG}/taskInstances"
+
+    tasks = af.task_states("factory", RUN_ID)
+    assert len(tasks) == MAX_PAGES * PAGE_LIMIT == 10_000
+    assert opener.asks == MAX_PAGES  # bounded: no request storm
+    assert af.truncated == {path: 10_000}
+
+    opener.exhausted = True
+    assert af.task_states("factory", RUN_ID) == []
+    assert af.truncated == {}  # a complete read retires the note; it never outlives the condition
 
 
 def test_airflow_respond_patches_hitl_details_with_chosen_option() -> None:
@@ -276,7 +445,7 @@ def test_airflow_trigger_and_stop_and_run_url() -> None:
 
 # ---------------------------------------------------------------- per-job rows
 
-TI_PATH = f"/api/v2/dags/factory/dagRuns/{RUN_SEG}/taskInstances?limit=500"
+TI_PATH = f"/api/v2/dags/factory/dagRuns/{RUN_SEG}/taskInstances?limit=100&offset=0"
 XCOM_PATH = (
     f"/api/v2/dags/factory/dagRuns/{RUN_SEG}/taskInstances/fan_out"
     "/xcomEntries/return_value?map_index=-1"
@@ -294,7 +463,8 @@ TWO_JOB_TIS = {
         {"task_id": "job.setup", "map_index": 1, "state": "success"},
         {"task_id": "job.intent", "map_index": 1, "state": "failed"},
         {"task_id": "job.deliver", "map_index": 1, "state": None},
-    ]
+    ],
+    "total_entries": 7,
 }
 
 
@@ -338,7 +508,10 @@ def test_job_rows_without_xcom_fall_back_to_conf_then_to_dash() -> None:
 
 
 def test_job_rows_before_fan_out_and_with_junk_xcom() -> None:
-    tis = {"task_instances": [{"task_id": "fan_out", "map_index": -1, "state": "running"}]}
+    tis = {
+        "task_instances": [{"task_id": "fan_out", "map_index": -1, "state": "running"}],
+        "total_entries": 1,
+    }
     opener = FakeOpener({("GET", TI_PATH): tis, ("GET", XCOM_PATH): {"value": "not json at all"}})
     af = AirflowClient(AF, token="tok", opener=opener)
 
@@ -404,7 +577,7 @@ def test_airflow_username_password_mints_token_once() -> None:
     opener = FakeOpener(
         {
             ("POST", "/auth/token"): {"access_token": "minted"},
-            ("GET", "/api/v2/dags?tags=swfactory&limit=100"): {"dags": []},
+            ("GET", "/api/v2/dags?tags=swfactory&limit=100&offset=0"): {"dags": []},
         }
     )
     af = AirflowClient(AF, username="admin", password="pw", opener=opener)
@@ -428,9 +601,8 @@ def test_airflow_errors_become_control_errors() -> None:
     af = AirflowClient(AF, token="t", opener=FakeOpener({}))
     with pytest.raises(ControlError, match="HTTP 404"):
         af.list_dags()
-    down = FakeOpener(
-        {("GET", "/api/v2/dags?tags=swfactory&limit=100"): urllib.error.URLError("refused")}
-    )
+    dags_page = ("GET", "/api/v2/dags?tags=swfactory&limit=100&offset=0")
+    down = FakeOpener({dags_page: urllib.error.URLError("refused")})
     with pytest.raises(ControlError, match="refused"):
         AirflowClient(AF, token="t", opener=down).list_dags()
     junk = AirflowClient(AF, opener=lambda req, timeout: _RawResp(b"<html>"))
@@ -679,6 +851,27 @@ def test_collect_degrades_per_source() -> None:
     assert len(partial.gates) == 1
 
     assert collect(None, None, None, None).errors == {}
+
+
+def test_collect_puts_a_page_capped_read_on_the_screen() -> None:
+    """A truncated read raises nothing, so ``errors`` is the only place the shortfall can show.
+
+    Without this the snapshot is indistinguishable from a complete one: a table that is missing
+    rows and says nothing about it is the failure mode the paging helper exists to end.
+    """
+    af = _Airflow()
+    af.truncated = {"/dags/factory/dagRuns": 10_000, "/dags/~/dagRuns/~/hitlDetails": 10_000}
+    snap = collect(af, None, None, None)
+
+    assert set(snap.errors) == {"airflow:truncated"}
+    assert snap.errors["airflow:truncated"] == (
+        "/dags/factory/dagRuns stopped at 10000 rows (page cap); "
+        "/dags/~/dagRuns/~/hitlDetails stopped at 10000 rows (page cap)"
+    )
+    assert [r.run_id for r in snap.runs] == ["r-running", "r-done"]  # the rows read still stand
+
+    # A source without the attribute (any fake, any other client) is not an error.
+    assert collect(_Airflow(), None, None, None).errors == {}
 
 
 # ---------------------------------------------------------------- data helpers
