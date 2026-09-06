@@ -15,6 +15,7 @@ mod cli;
 mod exec;
 mod exit;
 mod json;
+mod operator_exec;
 mod render;
 mod term;
 
@@ -35,16 +36,21 @@ fn main() {
 /// Parse, run, print. The only place that decides what the shell is told.
 fn start() -> i32 {
     let argv: Vec<String> = std::env::args().collect();
-    // `--json` has to be known before the parser can fail, or a usage error would be the one
-    // failure a `--json` consumer could not read (§C.2 promises an envelope for every kind).
     let wants_json = argv.iter().any(|arg| arg == "--json");
+
+    // Queue/repair/fleet/compatibility were added during the liquid-development stabilization.
+    // Their parser is temporarily isolated so the huge legacy clap enum does not become a merge
+    // hotspot. The commands immediately delegate to the shared swf-app/FactoryApi path; no service
+    // or business logic is duplicated. Issue #197 tracks folding this spelling shim into cli.rs.
+    if operator_command(&argv) {
+        return operator_exec::start(&argv);
+    }
 
     let cli = match Cli::try_parse_from(&argv) {
         Ok(cli) => cli,
         Err(err) => {
             let _ = err.print();
             if !err.use_stderr() {
-                // `--help` and `--version` are "errors" that succeeded.
                 return 0;
             }
             if wants_json {
@@ -60,8 +66,6 @@ fn start() -> i32 {
         }
     };
 
-    // Completions are generated from the parser itself, so they cannot describe a command that
-    // does not exist. Nothing else is needed — no context, no runtime, no network.
     if let Command::Completions(args) = &cli.command {
         let mut command = Cli::command();
         let name = command.get_name().to_string();
@@ -95,8 +99,6 @@ fn start() -> i32 {
             Ok(outcome) => outcome
                 .emit(json, &mut std::io::stdout())
                 .unwrap_or_else(|err| {
-                    // A closed pipe (`swf jobs list | head`) is the normal way this fails, and it
-                    // is not the operator's problem to solve.
                     let _ = writeln!(std::io::stderr(), "error: cannot write the answer: {err}");
                     1
                 }),
@@ -110,11 +112,28 @@ fn start() -> i32 {
     })
 }
 
+fn operator_command(argv: &[String]) -> bool {
+    let mut index = 1;
+    while index < argv.len() {
+        let arg = argv[index].as_str();
+        if matches!(arg, "--context" | "--timeout") {
+            index += 2;
+            continue;
+        }
+        if arg.starts_with("--context=") || arg.starts_with("--timeout=") {
+            index += 1;
+            continue;
+        }
+        if arg.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        return matches!(arg, "queue" | "operations" | "fleet" | "compatibility");
+    }
+    false
+}
+
 /// Cancel in-flight work on the first Ctrl-C, and let the second one end the process.
-///
-/// The first interrupt is cooperative on purpose: adapters already take a cancellation token, so
-/// abandoning a read is clean, and a gate answer that is halfway through its re-validation gets to
-/// stop *before* the PATCH rather than during it.
 fn watch_for_interrupt(cancel: CancellationToken) {
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -127,7 +146,6 @@ fn watch_for_interrupt(cancel: CancellationToken) {
     });
 }
 
-/// clap renders several lines; the envelope's `message` is one sentence (§C.2).
 fn first_line(text: &str) -> String {
     text.lines()
         .map(str::trim)
@@ -151,5 +169,19 @@ mod tests {
     #[test]
     fn the_parser_still_builds_after_every_command_was_added() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn operator_dispatch_ignores_global_option_values() {
+        let argv = vec!["swf", "--context", "fleet", "doctor"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(!operator_command(&argv));
+        let argv = vec!["swf", "--json", "queue", "list"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(operator_command(&argv));
     }
 }
