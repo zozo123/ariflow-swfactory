@@ -11,6 +11,7 @@ inside its task callables, so DAG parsing still needs nothing but Airflow.
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -96,6 +97,30 @@ def job_config(
     return cfg.model_copy(update=update)
 
 
+def _cell_binding(job: dict[str, Any]) -> dict[str, Any] | None:
+    """Validated durable cell metadata carried by an Airflow mapped job."""
+
+    raw_id = job.get("cell_id")
+    if raw_id in (None, ""):
+        return None
+    cell_id = str(raw_id).strip()
+    if not cell_id.startswith("cell_") or len(cell_id) != 29:
+        raise StageError("policy", "mapped job carries an invalid Factory Cell id")
+    epoch = job.get("cell_epoch")
+    if type(epoch) is not int or epoch < 1:
+        raise StageError("policy", "mapped job carries an invalid Factory Cell epoch")
+    managed = job.get("cell_managed", False)
+    if type(managed) is not bool:
+        raise StageError("policy", "mapped job carries an invalid Factory Cell managed flag")
+    return {
+        "schema_version": 1,
+        "cell_id": cell_id,
+        "epoch": epoch,
+        "managed": managed,
+        "job_idx": int(job.get("job_idx", 0)),
+    }
+
+
 def build_ctx(
     bp: Blueprint,
     job: dict[str, Any],
@@ -105,9 +130,21 @@ def build_ctx(
     agent: Agent | None = None,
     root: Path | None = None,
 ) -> Ctx:
-    """Everything a stage needs for one job of one run: ``job_config`` then ``ctx_for``."""
+    """Everything a stage needs for one job of one run: ``job_config`` then ``ctx_for``.
+
+    If Airflow supplied Factory Cell metadata, persist it in orchestrator-owned control state.
+    Every stage process and retry can then recover the same identity without trusting sandbox data.
+    """
+
     cfg = job_config(bp, job, run_id=run_id, overrides=overrides, root=root)
-    return ctx_for(cfg, blueprint=bp, run_dir=job_run_dir(cfg, root), agent=agent)
+    ctx = ctx_for(cfg, blueprint=bp, run_dir=job_run_dir(cfg, root), agent=agent)
+    binding = _cell_binding(job)
+    if binding is not None:
+        ctx.state.write_control(
+            "cell.json",
+            json.dumps(binding, sort_keys=True, separators=(",", ":")) + "\n",
+        )
+    return ctx
 
 
 def ctx_for(cfg: Config, *, blueprint: Blueprint, run_dir: Path, agent: Agent | None = None) -> Ctx:

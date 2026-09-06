@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from swfactory import blueprint
+from swfactory.cell_runtime import identity_for_job
+from swfactory.cells import CellBusy, CellStore, DuplicateOperation, SCHEMA_VERSION
 from swfactory.control import AirflowClient, ControlError, GitHubClient, IsloClient, MetricsSource
 from swfactory.inspection import inspect_run, list_runs
 from swfactory.webhook import _NoRedirect, _safe_airflow_base
@@ -83,6 +85,7 @@ class Factory:
         self.owner = owner
         self.root = root.resolve()
         self.state_root = state_root.resolve()
+        self.cell_store = CellStore(self.state_root / "cells.sqlite3")
         self.opener = urllib.request.build_opener(_NoRedirect)
         self.credentials = AirflowClient(
             self.airflow_url,
@@ -157,8 +160,27 @@ class Factory:
         targets = body.get("targets", [])
         if not isinstance(targets, list) or any(not isinstance(t, str) for t in targets):
             raise ValueError("targets must be an array of repository names")
-        conf = {"issues": issues, **({"targets": targets} if targets else {})}
+
+        conf: dict[str, Any] = {"issues": issues, **({"targets": targets} if targets else {})}
         jobs = line.jobs(conf)  # Authoritative validation against the server's installed line.
+
+        # Activation is a durable compare-and-swap before the external Airflow mutation. Two
+        # concurrent submissions for the same issue×target cannot both become authoritative.
+        bindings: list[dict[str, Any]] = []
+        for job in jobs:
+            try:
+                cell = self.cell_store.activate(identity_for_job(job), actor="backend:submit")
+            except CellBusy as error:
+                raise Refused(409, str(error)) from error
+            bindings.append(
+                {
+                    "job_idx": int(job["job_idx"]),
+                    "cell_id": cell["cell_id"],
+                    "epoch": int(cell["epoch"]),
+                }
+            )
+        conf["_factory_cells"] = bindings
+
         path = "/dags/" + urllib.parse.quote(line.name, safe="")
         self._checked_airflow("PATCH", path, {"is_paused": False})
         result = self._checked_airflow(
@@ -169,11 +191,28 @@ class Factory:
             raise Refused(
                 502, "Airflow accepted submission without a run ID; inspect runs before retrying"
             )
+
+        for binding in bindings:
+            try:
+                self.cell_store.patch(
+                    binding["cell_id"],
+                    binding["epoch"],
+                    f"airflow-bind:{run_id}:{binding['job_idx']}",
+                    state="queued",
+                    airflow_dag_id=line.name,
+                    airflow_run_id=run_id,
+                    map_index=binding["job_idx"],
+                )
+            except DuplicateOperation:
+                # The exact binding was already durably recorded; replay is safe.
+                pass
+
         return {
             "dag_id": line.name,
             "run_id": run_id,
             "issues": issues,
             "jobs": len(jobs),
+            "cells": [b["cell_id"] for b in bindings],
             "blueprint": {"name": line.name, "resolved": True},
             "url": self.airflow_url + path + "/runs/" + urllib.parse.quote(run_id, safe=""),
         }
@@ -248,6 +287,12 @@ class Factory:
             raise Refused(502, "GitHub operation failed; check backend credentials and repository")
         return json.loads(result.stdout)
 
+    def _cell(self, cell_id: str) -> dict[str, Any]:
+        try:
+            return self.cell_store.get(cell_id)
+        except KeyError as error:
+            raise Refused(404, f"no Factory Cell {cell_id}") from error
+
     def operation(self, path: str, body: dict) -> Any:
         if path == "/doctor":
             checks = [
@@ -256,7 +301,13 @@ class Factory:
                     "status": "ok",
                     "detail": "Python API v1",
                     "required": True,
-                }
+                },
+                {
+                    "name": "factory cells",
+                    "status": "ok",
+                    "detail": f"durable CellStore schema v{SCHEMA_VERSION}",
+                    "required": True,
+                },
             ]
             try:
                 health = self._checked_airflow("GET", "/monitor/health")
@@ -300,6 +351,14 @@ class Factory:
             return checks
         if path == "/work-orders":
             return self.submit(body)
+        if path == "/cells":
+            return self.cell_store.list(limit=self._limit(body))
+        if path == "/cells/inspect":
+            return self._cell(_text(body, "cell_id"))
+        if path == "/cells/history":
+            cell_id = _text(body, "cell_id")
+            self._cell(cell_id)
+            return self.cell_store.history(cell_id)
         if path == "/deliveries/prs":
             if not self.repo:
                 return []
@@ -418,7 +477,12 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                         self.command, self.path[len(mount) :], body
                     )
                 elif self.command == "GET" and self.path == PREFIX + "/health":
-                    status, payload = 200, {"service": "swfactory", "api_version": 1}
+                    status, payload = 200, {
+                        "service": "swfactory",
+                        "api_version": 1,
+                        "cell_schema_version": SCHEMA_VERSION,
+                        "mutation_ready": True,
+                    }
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/"):
                     status, payload = 200, factory.operation(self.path[len(PREFIX) :], body)
                 else:
@@ -457,5 +521,8 @@ def serve(host: str = "127.0.0.1", port: int = 8082) -> None:
         root=Path(os.getenv("SWF_METRICS_ROOT", ".")),
         state_root=Path(os.getenv("SWF_STATE_ROOT", ".factory")),
     )
-    with make_server(factory, host, port) as server:
-        server.serve_forever()
+    try:
+        with make_server(factory, host, port) as server:
+            server.serve_forever()
+    finally:
+        factory.cell_store.close()
