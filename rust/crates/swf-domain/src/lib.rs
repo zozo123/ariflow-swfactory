@@ -14,6 +14,7 @@ pub mod evidence;
 pub mod ids;
 pub mod metrics;
 pub mod model;
+pub mod operator;
 pub mod rollup;
 pub mod sanitize;
 pub mod snapshot;
@@ -22,4 +23,8 @@ pub mod states;
 pub use ids::{DeliveryId, GateId, IdError, JobId, RunRef};
 pub use model::{
     Gate, IssueRef, JobRow, PullRequest, Run, SandboxRef, Snapshot, SourceHealth, TaskState,
+};
+pub use operator::{
+    BackendCapabilities, ContractVersions, FleetSummary, LimitingDimension, OperationDebt,
+    QueueEntry, QueuePressure, QueueSnapshot,
 };
