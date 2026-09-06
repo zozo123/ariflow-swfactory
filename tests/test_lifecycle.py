@@ -70,6 +70,7 @@ def test_compile_graph_uses_fixed_roles_and_dynamic_work() -> None:
     assert by_id["review"].depends_on == ["work:impl"]
     assert by_id["improve"].condition == "review=request_changes"
     assert by_id["deliver"].role == "deliverer"
+    assert by_id["deliver"].depends_on == ["review"]
 
 
 def test_compile_graph_falls_back_for_legacy_plan() -> None:
@@ -89,6 +90,7 @@ def test_managed_graph_fork_candidates_are_hint_only() -> None:
         ),
     )
     assert graph.fork_semantics == "hint-only"
+    assert graph.fork_evidence == "lineage-required"
     assert graph.fork_candidates() == [["work:a", "work:b"]]
 
 
