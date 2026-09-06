@@ -2610,3 +2610,216 @@ pre {
   line-height: 1.6;
   opacity: 0.82;
 }
+
+/* The frame player. A full-screen interface cannot be described, only shown, so the six panels
+   below carry real snapshot output. Two rules here are load-bearing rather than decorative: the
+   frame never wraps (a reflowed TUI frame is noise, so it scrolls sideways instead), and the
+   panels are visible by default. JavaScript is what collapses them to one, which is why the page
+   still reads as a stack of frames if the script never runs. */
+.tui-player {
+  margin-top: 34px;
+}
+
+.tui-player-head h3 {
+  margin-top: 13px;
+  font-size: 1.08rem;
+}
+
+.tui-lede {
+  max-width: 68ch;
+  margin-top: 14px;
+  color: var(--text-soft);
+  font-size: 0.9rem;
+  line-height: 1.62;
+}
+
+.tui-lede code {
+  color: var(--cyan);
+  font-size: 0.86em;
+}
+
+/* Only worth saying where the frame actually overflows. */
+.tui-scroll-hint {
+  display: none;
+}
+
+.tui-tabs {
+  display: flex;
+  margin-top: 20px;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.tui-tabs[hidden],
+.tui-nav[hidden] {
+  display: none;
+}
+
+.tui-tab {
+  padding: 6px 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+
+.tui-tab:hover {
+  border-color: rgba(242, 139, 48, 0.38);
+  color: var(--text-soft);
+}
+
+.tui-tab[aria-selected="true"] {
+  border-color: rgba(242, 139, 48, 0.5);
+  background: var(--cyan-wash);
+  color: var(--cyan);
+}
+
+.tui-terminal {
+  margin-top: 14px;
+}
+
+.tui-nav {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 8px;
+}
+
+.tui-step {
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-soft);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+
+.tui-step:hover {
+  border-color: rgba(242, 139, 48, 0.38);
+  background: var(--cyan-wash);
+  color: var(--cyan);
+}
+
+.tui-count {
+  min-width: 5ch;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.tui-frame {
+  padding: 22px 26px 26px;
+}
+
+.tui-frame + .tui-frame {
+  border-top: 1px solid var(--line);
+}
+
+/* Every visible frame is announced by name and by the geometry it was rendered at, because the
+   80x24 panel is only meaningful next to the 120x40 ones. */
+.tui-frame-head {
+  display: flex;
+  margin: 0;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.tui-frame-head b {
+  color: var(--cyan);
+  font-weight: 500;
+}
+
+.tui-geom {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.tui-frame-note {
+  max-width: 76ch;
+  margin: 8px 0 16px;
+  color: var(--text-soft);
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+
+.tui-frame-note code {
+  color: var(--cyan);
+  font-size: 0.9em;
+}
+
+/* The frame itself. `white-space: pre` is the whole point: the binary aligned these columns to a
+   character grid, and anything that rewraps them destroys the information. `min-height` holds the
+   40-row height so switching panels does not move the page under the reader. */
+.tui-terminal .tui-screen {
+  min-height: calc(40 * 1.5em);
+  padding: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  color: #cbd5df;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: pre;
+  word-break: normal;
+}
+
+.tui-terminal .tui-screen code {
+  font: inherit;
+}
+
+.tui-terminal .tui-screen:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 3px;
+}
+
+.tui-foot {
+  color: var(--muted);
+  font-family: var(--mono);
+  background: rgba(255, 255, 255, 0.022);
+}
+
+/* Switching panels is a cut, not a transition; the fade only softens the jump and the global
+   reduced-motion rule already flattens it to nothing. */
+.tui-frame.is-entering {
+  animation: tui-frame-in 200ms var(--ease);
+}
+
+@keyframes tui-frame-in {
+  from {
+    opacity: 0.35;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 940px) {
+  .tui-scroll-hint {
+    display: inline;
+  }
+
+  .tui-frame {
+    padding: 18px 16px 20px;
+  }
+
+  /* A fixed 40-row box wastes most of a phone screen, and the frame scrolls anyway. */
+  .tui-terminal .tui-screen {
+    min-height: 0;
+  }
+}

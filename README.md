@@ -29,6 +29,41 @@ WORK ORDER -> ROUTE -> AIRFLOW -> WORK CELL -> QUALITY -> PULL REQUEST -> HUMAN 
 [Read the design](docs/design.md) ·
 [See a completed factory run](https://github.com/zozo123/ariflow-swfactory/pull/3)
 
+## How it works
+
+Four pieces, one job each. The split is the design, not an accident of history.
+
+| Layer | Built with | Owns |
+| --- | --- | --- |
+| **Scheduling** | Apache Airflow 3.3.1 (Python 3.12) | one DAG per blueprint; runs, retries, task mapping over issues × targets, and the human approval gates |
+| **Execution** | Python 3.12, managed by [uv](https://docs.astral.sh/uv/) | the stages themselves — intent → spec → plan → build+test → review → deliver |
+| **Operation** | Rust — the `swf` binary | the operator's client: one command and a full-screen interface over Airflow's REST API |
+| **Isolation** | islo MicroVM, `srt`, or Docker | the work cell, where the coding agent runs holding no GitHub credential |
+
+Git is the durable store underneath all of it: every run commits its artifacts, approvals and
+metrics next to the code they describe, so the evidence outlives the scheduler that produced it.
+
+**Why the pieces are split this way.** The orchestrator is the only process holding tokens, so the
+sandbox is a real trust boundary rather than a convention — model-written code never executes where
+a credential lives. Airflow keeps the scheduling because retries, task mapping and human-in-the-loop
+gates are exactly what it is good at, and a second implementation of those is the migration this
+project will not make. And `swf` is Rust because operating a factory should not require installing
+the factory: it holds no authority of its own and re-reads every decision from the service that owns
+it before acting, which is what lets it be a single binary you drop on a laptop.
+
+**What you need, depending on what you are doing:**
+
+| To… | You need |
+| --- | --- |
+| **operate** a factory | just `swf` — one binary, no Python, no `uv`, no virtualenv |
+| **run** a factory | Python 3.12, `uv`, Airflow 3.3.1, `git`, `gh`, and a sandbox provider |
+| **develop** on it | the above plus Rust 1.82 (`rust/`, five crates — see [rust/README.md](rust/README.md)) |
+
+```sh
+curl -fsSL https://zozo123.github.io/ariflow-swfactory/install.sh | sh   # operate
+uv sync && uv run swfactory demo                                        # run one locally
+```
+
 ## Run against the latest Airflow main
 
 Requires Python 3.12, uv, Git, Node 22+ and pnpm 10.28.1.
@@ -305,6 +340,42 @@ swf gates approve 'factory/manual__2026-09-06T08:04:02+00:00#1:plan'
 swf deliveries verify --clone           # re-derive the delivery instead of trusting the report
 swf tui                                 # the same operations, interactively
 ```
+
+That last line is the same operations with a screen on it. Here is the Jobs view at 80 columns by
+24 rows, pasted verbatim out of the TUI's snapshot tests — the detail pane folds away below 100
+columns, so this is what a half-width terminal actually gets:
+
+```text
+swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ jobs 4 rows
+ 2 jobs          4 │dag      run            job issue  stage    state
+ 3 job detail      │factory  manual__2026-0 0   142    approve_ ◆ awaiting_input
+ 4 review          │factory  manual__2026-0 1   143    build_an ▸ running
+ 5 deliveries    2 │hotfix   manual__2026-0 0   sre-9  build_an ✗ failed
+ 6 infrastructure 7│hotfix   manual__2026-0 1   sre-10 deliver  ✓ success
+ 7 history         │
+                   │
+                   │
+                   │
+                   │
+                   │
+                   │
+                   │
+ activity ──────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+enter detail  t trigger  s stop  o open  L logs  r refresh  / search  : cmd  ? h
+```
+
+Left is the view list with the count of rows behind each view; the last line is the key map for the
+view you are on. In the header, `refreshed 09:30:00 (0s ago)` is the last refresh pass — every
+source carries its own age, and the one that falls behind adds its own badge (`◔ stale`,
+`⋯ truncated`, `✗ github`) rather than quietly ageing out of sight.
 
 Every command answers `--json` with exactly one document on stdout, every diagnostic on stderr, and
 a stable exit code: 1 operational, 2 usage, 3 not found, 4 authentication, 5 unreachable, 6
