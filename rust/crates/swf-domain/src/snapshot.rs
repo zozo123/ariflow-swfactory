@@ -10,33 +10,18 @@
 //! fractional digits or none at all. Chrono's RFC-3339 helpers emit `Z` and 0/3/6/9 digits, which
 //! is a different string for the same instant and would show up as a diff on every line.
 
-use chrono::{DateTime, Timelike, Utc};
+use chrono::{DateTime, Utc};
 use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Serialize, Serializer};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::metrics;
 use crate::model::{Gate, PullRequest, Run, SandboxRef, Snapshot, SourceError};
 use crate::rollup::{job_index, stage_progress};
 
-/// Render an instant the way Python's `datetime.isoformat()` does.
-///
-/// Seconds precision when there are no microseconds, exactly six fractional digits when there
-/// are, and always an explicit `+00:00` offset. The `Z` spelling is the same instant and the
-/// wrong string.
-pub fn iso(at: DateTime<Utc>) -> String {
-    let micros = at.nanosecond() / 1_000;
-    if micros == 0 {
-        at.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
-    } else {
-        format!("{}.{micros:06}+00:00", at.format("%Y-%m-%dT%H:%M:%S"))
-    }
-}
-
-/// The same, for a timestamp a source may not have reported. `None` becomes JSON `null`.
-pub fn iso_opt(at: Option<DateTime<Utc>>) -> Option<String> {
-    at.map(iso)
-}
+// `iso`/`iso_opt` are the `Timestamp` type's own Python spelling, so they live beside it in
+// `model`. They stay re-exported here because this is the module the spelling is *for*.
+pub use crate::model::{iso, iso_opt};
 
 /// The exact document `swfactory herd --once --json` prints, as a value.
 ///
@@ -69,7 +54,9 @@ pub fn snapshot_text(snap: &Snapshot) -> String {
     let jobs: usize = snap.job_count();
     let mut lines = vec![format!(
         "collected {}  runs {}  jobs {}  gates {}  prs {}  sandboxes {}",
-        iso(snap.collected_at),
+        // Python interpolates `data["collected_at"]` straight into the f-string, so a snapshot
+        // with no collection time prints the word `None` rather than a blank.
+        iso_opt(snap.collected_at).unwrap_or_else(|| "None".to_string()),
         snap.runs.len(),
         jobs,
         snap.gates.len(),
@@ -120,7 +107,7 @@ struct SnapshotDoc<'a> {
 impl<'a> From<&'a Snapshot> for SnapshotDoc<'a> {
     fn from(snap: &'a Snapshot) -> Self {
         Self {
-            collected_at: Some(iso(snap.collected_at)),
+            collected_at: iso_opt(snap.collected_at),
             runs: snap.runs.iter().map(RunDoc::from).collect(),
             gates: snap.gates.iter().map(GateDoc::from).collect(),
             prs: snap.prs.iter().map(PrDoc::from).collect(),
@@ -276,7 +263,13 @@ struct OrderedMetrics<'a>(&'a Value);
 
 impl Serialize for OrderedMetrics<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serialize_ordered(self.0, metrics::SUMMARY_KEYS, serializer)
+        // Python emits `dict(snapshot.metrics or {})`, so this key is *always* an object: a pass
+        // that read no metrics prints `{}`, never `null`. `Snapshot::metrics` is an untyped
+        // `Value` and a source could hand back anything, so anything that is not an object is
+        // rendered as the empty summary rather than leaking a non-dict into the contract.
+        let empty = Value::Object(Map::new());
+        let value = if self.0.is_object() { self.0 } else { &empty };
+        serialize_ordered(value, metrics::SUMMARY_KEYS, serializer)
     }
 }
 
@@ -346,7 +339,7 @@ mod tests {
     fn sample() -> Snapshot {
         let mut snap = Snapshot::new(at("2026-09-03T12:00:00Z"));
         let mut run = Run::new("factory", "manual__1", "running");
-        run.start = Some(at("2026-09-03T11:00:00Z"));
+        run.start = Some(at("2026-09-03T11:00:00Z").fixed_offset());
         run.conf = match json!({"issues": ["42", "43"]}) {
             Value::Object(map) => map,
             _ => Default::default(),
@@ -375,17 +368,22 @@ mod tests {
 
     #[test]
     fn iso_uses_pythons_offset_spelling_not_z() {
-        assert_eq!(iso(at("2026-09-03T12:00:00Z")), "2026-09-03T12:00:00+00:00");
+        assert_eq!(
+            iso(at("2026-09-03T12:00:00Z").fixed_offset()),
+            "2026-09-03T12:00:00+00:00"
+        );
         let micro = match Utc.timestamp_opt(1_756_900_800, 123_456_000) {
             chrono::LocalResult::Single(dt) => dt,
             _ => return,
         };
+        let micro = micro.fixed_offset();
         assert!(iso(micro).ends_with(".123456+00:00"), "{}", iso(micro));
         // Sub-microsecond precision cannot survive Python's datetime, so it is truncated.
         let nano = match Utc.timestamp_opt(1_756_900_800, 999) {
             chrono::LocalResult::Single(dt) => dt,
             _ => return,
         };
+        let nano = nano.fixed_offset();
         assert!(iso(nano).ends_with(":00+00:00"), "{}", iso(nano));
     }
 
@@ -460,6 +458,38 @@ mod tests {
         assert!(text.contains("\"errors\": {}"), "{text}");
         assert!(text.contains("\"metrics\": {}"), "{text}");
         assert!(!text.ends_with('\n'));
+    }
+
+    #[test]
+    fn metrics_is_always_an_object_even_when_the_pass_read_none() {
+        // `dict(snapshot.metrics or {})`: the key is present and object-shaped whatever the
+        // source did, so a snapshot that never reached the metrics tree still diffs cleanly.
+        let mut snap = Snapshot::new(at("2026-09-03T12:00:00Z"));
+        snap.metrics = Value::Null;
+        assert_eq!(snapshot_json(&snap, Utc::now())["metrics"], json!({}));
+        snap.metrics = json!("not a summary");
+        assert_eq!(snapshot_json(&snap, Utc::now())["metrics"], json!({}));
+    }
+
+    #[test]
+    fn a_snapshot_with_no_collection_time_prints_null_and_the_word_none() {
+        let mut snap = Snapshot::new(at("2026-09-03T12:00:00Z"));
+        snap.collected_at = None;
+        assert_eq!(
+            snapshot_json(&snap, Utc::now())["collected_at"],
+            Value::Null
+        );
+        assert!(snapshot_text(&snap).starts_with("collected None  "));
+    }
+
+    #[test]
+    fn a_reported_offset_reaches_the_document_unchanged() {
+        let mut snap = Snapshot::new(at("2026-09-03T12:00:00Z"));
+        snap.collected_at = crate::model::parse_timestamp(&json!("2026-09-03T14:00:00+02:00"));
+        assert_eq!(
+            snapshot_json(&snap, Utc::now())["collected_at"],
+            json!("2026-09-03T14:00:00+02:00")
+        );
     }
 
     #[test]

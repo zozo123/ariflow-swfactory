@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -40,6 +40,120 @@ pub const SOURCE_GITHUB: &str = "github";
 pub const SOURCE_ISLO: &str = "islo";
 /// The source key for the committed metrics tree.
 pub const SOURCE_METRICS: &str = "metrics";
+
+/// A timestamp as Python carries one: an instant **plus the UTC offset it arrived with**.
+///
+/// `herd._as_datetime` never converts — it only *stamps* a naive value with UTC — and `_iso` then
+/// prints `dt.isoformat()`, which spells the datetime's own offset. So a source that reported
+/// `2026-09-03T14:00:00+02:00` must come back out of the snapshot as `+02:00`; normalising it to
+/// UTC is the same instant and a different document, and the byte-diff against
+/// `swfactory herd --once --json` is the whole point of this module. `DateTime<Utc>` structurally
+/// cannot remember that offset, so every timestamp Python round-trips through `_iso` is a
+/// `DateTime<FixedOffset>` here.
+pub type Timestamp = DateTime<FixedOffset>;
+
+/// Read a timestamp exactly as `herd._as_datetime` does, including its tolerance.
+///
+/// Python's is `datetime.fromisoformat(value.strip().replace("Z", "+00:00"))` inside a
+/// `try/except ValueError` that answers `None` — so anything unparseable, `null`, a number, or an
+/// empty string is "not known", never an error. Mirroring that here is deliberate: the snapshot is
+/// a report about services that may be broken, and one unreadable `created_at` must not refuse the
+/// whole document (rule 4 — one dead source never blanks another's pane).
+pub fn parse_timestamp(value: &Value) -> Option<Timestamp> {
+    let raw = value.as_str()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // `replace("Z", "+00:00")` replaces *every* `Z`, not just a trailing one — Python's does too.
+    let text = raw.replace('Z', "+00:00").replace(' ', "T");
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&text) {
+        return Some(dt);
+    }
+    for format in ["%Y-%m-%dT%H:%M:%S%.f%:z", "%Y-%m-%dT%H:%M:%S%.f%z"] {
+        if let Ok(dt) = DateTime::parse_from_str(&text, format) {
+            return Some(dt);
+        }
+    }
+    for format in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+    ] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(&text, format) {
+            return Some(stamped_utc(naive));
+        }
+    }
+    NaiveDate::parse_from_str(&text, "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(stamped_utc)
+}
+
+/// `_as_datetime`'s `dt.replace(tzinfo=UTC)`: a naive stamp is *labelled* UTC, never shifted.
+fn stamped_utc(naive: NaiveDateTime) -> Timestamp {
+    Utc.from_utc_datetime(&naive).fixed_offset()
+}
+
+/// Render an instant the way Python's `datetime.isoformat()` does.
+///
+/// Seconds precision when there are no microseconds, exactly six fractional digits when there
+/// are, and the datetime's own offset — `+00:00`, never `Z`. Chrono's RFC-3339 helpers emit `Z`
+/// and 0/3/6/9 fractional digits, which is a different string for the same instant and would show
+/// up as a diff on every line of the snapshot.
+pub fn iso(at: Timestamp) -> String {
+    let micros = at.nanosecond() / 1_000;
+    if micros == 0 {
+        at.format("%Y-%m-%dT%H:%M:%S%:z").to_string()
+    } else {
+        format!(
+            "{}.{micros:06}{}",
+            at.format("%Y-%m-%dT%H:%M:%S"),
+            at.format("%:z")
+        )
+    }
+}
+
+/// The same, for a timestamp a source may not have reported. `None` becomes JSON `null`, which is
+/// what `_iso` returns for one.
+pub fn iso_opt(at: Option<Timestamp>) -> Option<String> {
+    at.map(iso)
+}
+
+/// Deserialise `Option<Timestamp>` through [`parse_timestamp`], so `null`, an absent key and an
+/// unreadable string all read as "not known" instead of failing the whole snapshot.
+fn de_timestamp_opt<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Timestamp>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(parse_timestamp(&value))
+}
+
+/// Serialise `Option<Timestamp>` in Python's `isoformat()` spelling, so the model's own JSON and
+/// the snapshot document agree character for character.
+fn ser_timestamp_opt<S: Serializer>(
+    at: &Option<Timestamp>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match at {
+        Some(at) => serializer.serialize_str(&iso(*at)),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// Read a collection field with Python's `... or []` tolerance.
+///
+/// Every list and dict the collector reads is spelled `list(g.options or [])`,
+/// `dict(snapshot.errors or {})`, `self.conf.get("issues") or []` — a JSON `null` where a
+/// collection belongs means *empty*, and so does an absent key (the dataclasses all use
+/// `field(default_factory=list)`). Airflow and `gh` both emit `null` for "none of these", so
+/// rejecting it would fail on real payloads, not just on fixtures.
+fn de_null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 /// One Airflow task instance, reduced to the three fields any roll-up needs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,7 +199,7 @@ pub struct JobRow {
     #[serde(default = "default_job_state")]
     pub state: String,
     /// The task instances this row rolled up, in the order the API returned them.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub tasks: Vec<TaskState>,
 }
 
@@ -139,14 +253,24 @@ pub struct Run {
     /// The DAG run state verbatim — `unknown` when Airflow reported nothing.
     pub state: String,
     /// When the run started, if it has.
-    pub start: Option<DateTime<Utc>>,
+    #[serde(
+        default,
+        serialize_with = "ser_timestamp_opt",
+        deserialize_with = "de_timestamp_opt"
+    )]
+    pub start: Option<Timestamp>,
     /// When the run finished, if it has.
-    pub end: Option<DateTime<Utc>>,
+    #[serde(
+        default,
+        serialize_with = "ser_timestamp_opt",
+        deserialize_with = "de_timestamp_opt"
+    )]
+    pub end: Option<Timestamp>,
     /// The `conf` the run was triggered with. This is where the issue list lives.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub conf: Map<String, Value>,
     /// Job rows, filled by the collector — one per mapped job, or a single collapsed row.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub jobs: Vec<JobRow>,
 }
 
@@ -236,9 +360,17 @@ pub struct Gate {
     /// The evidence the operator is being asked to judge. Untrusted.
     pub body: String,
     /// When the HITL detail was created.
-    pub created_at: Option<DateTime<Utc>>,
+    #[serde(
+        default,
+        serialize_with = "ser_timestamp_opt",
+        deserialize_with = "de_timestamp_opt"
+    )]
+    pub created_at: Option<Timestamp>,
     /// The answers Airflow will accept, e.g. `["Approve", "Reject"]`.
-    #[serde(default)]
+    ///
+    /// `null` reads as "none declared", mirroring `list(g.options or [])`; an empty list means the
+    /// gate accepts anything (see [`Gate::accepts`]).
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub options: Vec<String>,
     /// True only when the gate's task instance is genuinely parked in `awaiting_input` (or
     /// `deferred` on older builds).
@@ -271,6 +403,10 @@ impl Gate {
         created_at: Option<DateTime<Utc>>,
         options: Vec<String>,
     ) -> Self {
+        // The constructor keeps taking `DateTime<Utc>`: every adapter has already normalised to
+        // UTC by the time it builds a gate, and a caller that genuinely has an offset to preserve
+        // assigns the field directly.
+        let created_at = created_at.map(|at| at.fixed_offset());
         let subject = subject.into();
         let body = body.into();
         let revision = Self::revision_of(&subject, &body);
@@ -348,8 +484,8 @@ pub struct PullRequest {
     pub title: String,
     /// The web URL.
     pub url: String,
-    /// Label names, flattened from `gh`'s objects.
-    #[serde(default)]
+    /// Label names, flattened from `gh`'s objects. `null` reads as none, per `list(p.labels or [])`.
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub labels: Vec<String>,
     /// `OPEN` / `MERGED` / `CLOSED`.
     pub state: String,
@@ -368,8 +504,8 @@ pub struct IssueRef {
     pub title: String,
     /// The web URL.
     pub url: String,
-    /// Label names.
-    #[serde(default)]
+    /// Label names. `null` reads as none.
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub labels: Vec<String>,
 }
 
@@ -384,7 +520,12 @@ pub struct SandboxRef {
     /// Who the provider says created it.
     pub created_by: String,
     /// When the provider says it was created.
-    pub created_at: Option<DateTime<Utc>>,
+    #[serde(
+        default,
+        serialize_with = "ser_timestamp_opt",
+        deserialize_with = "de_timestamp_opt"
+    )]
+    pub created_at: Option<Timestamp>,
 }
 
 impl SandboxRef {
@@ -399,7 +540,8 @@ impl SandboxRef {
             name: name.into(),
             status: status.into(),
             created_by: created_by.into(),
-            created_at,
+            // As in `Gate::new`: `islo` reports UTC, so the constructor stays UTC-shaped.
+            created_at: created_at.map(|at| at.fixed_offset()),
         }
     }
 
@@ -525,23 +667,35 @@ impl fmt::Display for SourceError {
 /// soon as two runs fail in the same pass. The accessors below make it read like a map anyway.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
-    /// When the pass started.
-    pub collected_at: DateTime<Utc>,
+    /// When the pass started, if it is known.
+    ///
+    /// Optional because `snapshot_data` reads it as `_iso(getattr(snapshot, "collected_at", None))`
+    /// and prints `null` for a snapshot that has none — a shape a fixture pins. A pass built by
+    /// [`Snapshot::new`] always has one.
+    #[serde(
+        default,
+        serialize_with = "ser_timestamp_opt",
+        deserialize_with = "de_timestamp_opt"
+    )]
+    pub collected_at: Option<Timestamp>,
     /// Runs, newest first per DAG, in the order the API returned them.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub runs: Vec<Run>,
     /// Gates awaiting an answer.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub gates: Vec<Gate>,
     /// Pull requests the factory opened.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub prs: Vec<PullRequest>,
     /// Sandboxes the configured owner created.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub sandboxes: Vec<SandboxRef>,
     /// The committed metrics summary, verbatim. Left as a `Value` because its key order is
     /// `metrics::summarize`'s and belongs to that module, not this one.
-    #[serde(default)]
+    ///
+    /// Absent or `null` reads as `{}`, which is what `field(default_factory=dict)` plus
+    /// `dict(snapshot.metrics or {})` amounts to on the Python side.
+    #[serde(default = "empty_object", deserialize_with = "de_metrics")]
     pub metrics: Value,
     /// Per-source failures, in the order the collector hit them.
     #[serde(
@@ -551,15 +705,22 @@ pub struct Snapshot {
     )]
     pub errors: Vec<SourceError>,
     /// Per-source freshness. Not part of the Python JSON; the snapshot emitter must not print it.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "de_null_as_default",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub health: BTreeMap<String, SourceHealth>,
 }
 
 impl Snapshot {
     /// An empty pass stamped with the collection time.
+    ///
+    /// Takes `DateTime<Utc>` because a pass is stamped from the product's own clock, which is UTC;
+    /// the offset [`Timestamp`] preserves matters only for values *read back* from a source.
     pub fn new(collected_at: DateTime<Utc>) -> Self {
         Self {
-            collected_at,
+            collected_at: Some(collected_at.fixed_offset()),
             runs: Vec::new(),
             gates: Vec::new(),
             prs: Vec::new(),
@@ -627,6 +788,21 @@ impl Snapshot {
     }
 }
 
+/// The `{}` a snapshot with no metrics carries — `field(default_factory=dict)`.
+fn empty_object() -> Value {
+    Value::Object(Map::new())
+}
+
+/// Read `metrics` with `dict(snapshot.metrics or {})` tolerance: `null` is an empty summary.
+fn de_metrics<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Value, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(if value.is_null() {
+        empty_object()
+    } else {
+        value
+    })
+}
+
 /// Emit `errors` as a JSON object, in collection order. `serde_json`'s writer preserves the order
 /// entries are fed to it, which is the whole reason the field is a `Vec`.
 fn serialize_errors<S: Serializer>(
@@ -650,7 +826,23 @@ fn deserialize_errors<'de, D: Deserializer<'de>>(
         type Value = Vec<SourceError>;
 
         fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a map of source name to failure text")
+            f.write_str("a map of source name to failure text, or null")
+        }
+
+        // `dict(snapshot.errors or {})`: a `null` errors map is an empty one, not a parse error.
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+
+        fn visit_some<D: Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            deserializer.deserialize_any(self)
         }
 
         fn visit_map<M: MapAccess<'de>>(self, mut access: M) -> Result<Self::Value, M::Error> {
@@ -662,7 +854,7 @@ fn deserialize_errors<'de, D: Deserializer<'de>>(
         }
     }
 
-    deserializer.deserialize_map(OrderedErrors)
+    deserializer.deserialize_any(OrderedErrors)
 }
 
 #[cfg(test)]
@@ -924,7 +1116,7 @@ mod tests {
     #[test]
     fn the_dataclasses_round_trip_through_serde_with_python_key_names() {
         let mut run = Run::new("factory", "r1", "running");
-        run.start = Some(at(1_000));
+        run.start = Some(at(1_000).fixed_offset());
         run.conf = match json!({"issues": ["42"]}) {
             Value::Object(m) => m,
             _ => Map::new(),
@@ -938,6 +1130,105 @@ mod tests {
             );
         }
         assert_eq!(serde_json::from_str::<Run>(&text).expect("round trip"), run);
+    }
+
+    #[test]
+    fn a_null_collection_reads_as_empty_because_python_writes_or_default() {
+        // Every one of these is `null` on the wire from Airflow or `gh`, and Python's
+        // `list(... or [])` / `dict(... or {})` reads each as empty. Rejecting them would fail on
+        // real payloads, not just on fixtures.
+        let snap: Snapshot = serde_json::from_value(json!({
+            "collected_at": "2026-09-03T12:00:00+00:00",
+            "runs": null,
+            "gates": null,
+            "prs": null,
+            "sandboxes": null,
+            "metrics": null,
+            "errors": null,
+            "health": null,
+        }))
+        .expect("nulls are empty, not errors");
+        assert!(snap.runs.is_empty() && snap.gates.is_empty() && snap.prs.is_empty());
+        assert!(snap.sandboxes.is_empty() && snap.errors.is_empty() && snap.health.is_empty());
+        assert_eq!(snap.metrics, json!({}));
+
+        let gate: Gate = serde_json::from_value(json!({
+            "dag_id": "f", "run_id": "r", "task_id": "job.approve_plan", "map_index": -1,
+            "subject": "", "body": "", "created_at": null, "options": null,
+        }))
+        .expect("a gate with no options");
+        assert!(gate.options.is_empty() && gate.created_at.is_none());
+
+        let pr: PullRequest = serde_json::from_value(json!({
+            "number": 7, "title": "t", "url": "u", "labels": null,
+            "state": "OPEN", "checks": "", "head": "h",
+        }))
+        .expect("a PR with no labels");
+        assert!(pr.labels.is_empty());
+    }
+
+    #[test]
+    fn an_absent_key_is_the_dataclass_default() {
+        // `Snapshot` is `field(default_factory=list)` all the way down, so a document carrying
+        // only `collected_at` is a complete, empty snapshot.
+        let snap: Snapshot =
+            serde_json::from_value(json!({"collected_at": "2026-09-03T12:00:00+00:00"}))
+                .expect("a bare snapshot");
+        assert!(snap.runs.is_empty() && snap.errors.is_empty());
+        assert_eq!(snap.metrics, json!({}));
+        assert!(snap.collected_at.is_some());
+
+        let bare: Snapshot =
+            serde_json::from_value(json!({})).expect("even collected_at is optional");
+        assert!(bare.collected_at.is_none());
+    }
+
+    #[test]
+    fn a_reported_offset_is_preserved_rather_than_normalised() {
+        // `_as_datetime` returns the parsed datetime untouched when it is already aware, and
+        // `_iso` prints *its* offset. `14:00+02:00` is the same instant as `12:00Z` and a
+        // different document.
+        let at = parse_timestamp(&json!("2026-09-03T14:00:00+02:00")).expect("aware");
+        assert_eq!(iso(at), "2026-09-03T14:00:00+02:00");
+        let same_instant = parse_timestamp(&json!("2026-09-03T12:00:00Z")).expect("utc");
+        assert_eq!(at, same_instant);
+        assert_ne!(iso(at), iso(same_instant));
+    }
+
+    #[test]
+    fn a_naive_timestamp_is_stamped_utc_not_shifted() {
+        // `dt.replace(tzinfo=UTC)` — the wall clock stays put and gains a UTC label.
+        let at = parse_timestamp(&json!("2026-09-03T12:00:00")).expect("naive");
+        assert_eq!(iso(at), "2026-09-03T12:00:00+00:00");
+    }
+
+    #[test]
+    fn microseconds_render_six_digits_and_finer_precision_is_dropped() {
+        let at = parse_timestamp(&json!("2026-09-03T12:00:00.123456+00:00")).expect("micros");
+        assert_eq!(iso(at), "2026-09-03T12:00:00.123456+00:00");
+        // Python's `datetime` has no sub-microsecond field, so neither does the rendering.
+        let nanos = parse_timestamp(&json!("2026-09-03T12:00:00.000000999+00:00")).expect("nanos");
+        assert_eq!(iso(nanos), "2026-09-03T12:00:00+00:00");
+    }
+
+    #[test]
+    fn an_unreadable_timestamp_is_unknown_rather_than_an_error() {
+        // `_as_datetime` swallows `ValueError` and answers `None`; a broken `created_at` in one
+        // `islo ls` row must not refuse the whole snapshot.
+        for value in [
+            json!("not a date"),
+            json!(""),
+            json!(null),
+            json!(1_756_900_800),
+        ] {
+            assert!(parse_timestamp(&value).is_none(), "{value}");
+        }
+        let sandbox: SandboxRef = serde_json::from_value(json!({
+            "name": "swf-x-0123abcd", "status": "running", "created_by": "me",
+            "created_at": "nonsense",
+        }))
+        .expect("a sandbox with a broken stamp still reads");
+        assert!(sandbox.created_at.is_none());
     }
 
     #[test]

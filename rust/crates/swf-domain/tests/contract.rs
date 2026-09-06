@@ -106,7 +106,7 @@ fn rust_reproduces_every_python_contract_fixture() {
                 )),
                 Outcome::Value(actual) => {
                     checked += 1;
-                    if actual != case.expected {
+                    if !json_eq(&actual, &case.expected) {
                         failures.push(format!(
                             "{}::{} [{}] diverged from the Python\n  input:    {}\n  \
                              expected: {}\n  actual:   {}",
@@ -141,6 +141,73 @@ fn rust_reproduces_every_python_contract_fixture() {
         failures.len(),
         failures.join("\n\n"),
     );
+}
+
+/// Compare two JSON documents the way JSON itself defines equality, with numbers compared by
+/// value rather than by spelling.
+///
+/// This is *not* a loosening of the contract. JSON has exactly one number type: `0` and `0.0` are
+/// two spellings of the same value, and no conforming reader can tell them apart. The divergence
+/// it removes is an artefact of the two languages, not of the port — Python's `sum([])` is the
+/// `int` `0`, so `round(0, 6)` is `0` and `json.dumps` writes `0`, while a Rust `f64` total writes
+/// `0.0`. Requiring textual identity there would pin a CPython implementation detail (the `int`/
+/// `float` split) that the wire format does not have, and the honest fix is not to make the Rust
+/// emit integers for money — a cost that happens to land on a whole dollar is still a cost.
+///
+/// Everything else stays exactly as strict as it was: types must match, strings are compared byte
+/// for byte, arrays must be the same length *in order*, objects must have the same key set, and a
+/// number that differs by any amount at all still fails. Key *order* was never compared here —
+/// `serde_json::Value` sorts object keys without the `preserve_order` feature — and the snapshot
+/// module's own tests pin the emitted order on the string form instead.
+///
+/// The one spelling this forgives is `int` vs `float`. It is *not* a licence to compare numbers
+/// approximately: see [`number_eq`] for the two ways a naive `as_f64` comparison would have gone
+/// further than that and silently stopped biting.
+fn json_eq(actual: &Value, expected: &Value) -> bool {
+    match (actual, expected) {
+        (Value::Number(a), Value::Number(b)) => number_eq(a, b),
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| json_eq(x, y))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(k, v)| b.get(k).is_some_and(|other| json_eq(v, other)))
+        }
+        _ => actual == expected,
+    }
+}
+
+/// Two JSON numbers, compared by value — and *only* by value.
+///
+/// Routing both sides through `as_f64` looks like the obvious way to forgive the `int`/`float`
+/// spelling, and it quietly forgives two things that are not spellings at all:
+///
+/// 1. **Integers wider than 53 bits.** `Number::as_f64` answers `Some` for *every* JSON number,
+///    widening `u64`/`i64` lossily on the way, so it never reaches a fallback arm — it would call
+///    `9007199254740993` and `9007199254740992` equal. Integers are therefore compared as
+///    integers, and only a comparison with an actual float falls through to `f64`.
+/// 2. **The sign of zero.** `-0.0 == 0.0` is true in IEEE-754 and false on the wire: `json.dumps`
+///    prints `-0.0`, and `math.copysign` reads it back, so the two are different documents that a
+///    Python consumer can tell apart. This is exactly the divergence `metrics::round_half_even`
+///    normalises away (Rust's `Sum for f64` folds from `-0.0`; Python's `sum()` folds from the
+///    `int` `0`), and comparing through bare `f64` equality would have hidden that bug rather
+///    than caught it — verified by deleting the normalisation and watching this harness stay
+///    green. The sign bit stays part of the contract.
+///
+/// What remains forgiven is only the case the doc on [`json_eq`] argues for: an integer against a
+/// float of the same value, `0` against `0.0`.
+fn number_eq(a: &Number, b: &Number) -> bool {
+    if let (Some(a), Some(b)) = (a.as_i64(), b.as_i64()) {
+        return a == b;
+    }
+    if let (Some(a), Some(b)) = (a.as_u64(), b.as_u64()) {
+        return a == b;
+    }
+    match (a.as_f64(), b.as_f64()) {
+        (Some(a), Some(b)) => a == b && a.is_sign_negative() == b.is_sign_negative(),
+        _ => a == b,
+    }
 }
 
 /// Whether the harness could evaluate a case at all.
@@ -285,6 +352,12 @@ fn blueprint_from_toml(input: &Value) -> Outcome {
 /// could not read. The coercion lives here so the domain signature stays honest.
 fn job_index(value: &Value) -> String {
     let index = match value {
+        // Python's `bool` *is* an `int`, so `int(True)` is `1` and `int(False)` is `0`, and
+        // `herd.job_index(True)` answers `"1"`. Airflow never sends a boolean `map_index`, but the
+        // coercion belongs at this JSON boundary — exactly where Python's `int()` sits — rather
+        // than in the typed `job_index(i32)` signature, which would have to grow a parameter it
+        // has no honest use for.
+        Value::Bool(b) => Some(f64::from(u8::from(*b))),
         Value::Number(n) => n.as_f64().map(|f| f.trunc()),
         Value::String(s) => s.trim().parse::<f64>().ok().map(f64::trunc),
         _ => None,

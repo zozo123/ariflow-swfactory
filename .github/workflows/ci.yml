@@ -100,3 +100,45 @@ jobs:
       - run: npm install --global pnpm@10.28.1
       - run: scripts/airflow_main.sh --islo
       - run: uv run --no-sync pytest tests/test_sandbox_argv.py tests/test_dag_parity.py
+
+  # `swf` is a second client of the same Airflow and GitHub APIs the Python control room drives, so
+  # it earns the same three gates the Python side has: format, lint-as-error, and the hermetic
+  # suite. The release build runs here too — a workspace that tests green but fails to link is
+  # still a broken release, and finding that out at tag time is finding it out too late. The
+  # manifest lives under rust/ because the repository root is the Python package.
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: "rustfmt, clippy" }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "rust" }
+      - run: cargo fmt --manifest-path rust/Cargo.toml --all --check
+      - run: >-
+          cargo clippy --manifest-path rust/Cargo.toml
+          --all-targets --all-features -- -D warnings
+      - run: cargo test --manifest-path rust/Cargo.toml --workspace
+      - name: Release build (the binary release.yml ships; --locked keeps Cargo.lock authoritative)
+        run: cargo build --manifest-path rust/Cargo.toml --release --locked
+
+  # The two implementations must not merely both work, they must agree. tests/fixtures/contract/
+  # holds one recorded answer per ported pure function: the pytest half asserts Python still
+  # produces it, the cargo half asserts Rust does. Both halves run here, in one job over one
+  # checkout, because the fixtures are the contract — a commit that regenerates them to match a
+  # drifting implementation has to turn the other language red in the same run, or the safety net
+  # is decorative.
+  contract-equivalence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "rust" }
+      - run: uv sync
+      - run: uv run pytest tests/test_contract_fixtures.py
+      - run: cargo test --manifest-path rust/Cargo.toml -p swf-domain --test contract

@@ -1,0 +1,354 @@
+{
+  "function": "stage_progress",
+  "doc": "stage_progress names each job's frontier — first active task in TASK_ORDER, else the last finished one annotated when it is not success — and collapses duplicates.",
+  "cases": [
+    {
+      "name": "empty",
+      "input": {
+        "tasks": []
+      },
+      "expected": "-"
+    },
+    {
+      "name": "active_frontier_wins",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.intent",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.approve_intent",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.record_intent",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.plan",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.approve_plan",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.record_plan",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.build_and_test",
+            "map_index": 0,
+            "state": "running"
+          }
+        ]
+      },
+      "expected": "build_and_test"
+    },
+    {
+      "name": "gate_deferred",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.plan",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.approve_plan",
+            "map_index": 0,
+            "state": "deferred"
+          }
+        ]
+      },
+      "expected": "approve_plan"
+    },
+    {
+      "name": "gate_awaiting_input",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.intent",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.approve_intent",
+            "map_index": 0,
+            "state": "awaiting_input"
+          }
+        ]
+      },
+      "expected": "approve_intent"
+    },
+    {
+      "name": "failed_is_annotated",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.intent",
+            "map_index": 0,
+            "state": "failed"
+          }
+        ]
+      },
+      "expected": "intent:failed"
+    },
+    {
+      "name": "skipped_is_annotated",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.deliver",
+            "map_index": 0,
+            "state": "skipped"
+          }
+        ]
+      },
+      "expected": "deliver:skipped"
+    },
+    {
+      "name": "removed_is_annotated",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "removed"
+          }
+        ]
+      },
+      "expected": "setup:removed"
+    },
+    {
+      "name": "state_none_is_pending",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "none"
+          }
+        ]
+      },
+      "expected": "pending"
+    },
+    {
+      "name": "null_state_is_pending",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": null
+          }
+        ]
+      },
+      "expected": "pending"
+    },
+    {
+      "name": "unmapped_fan_out_keeps_its_bare_name",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "fan_out",
+            "map_index": -1,
+            "state": "success"
+          }
+        ]
+      },
+      "expected": "fan_out"
+    },
+    {
+      "name": "two_jobs_two_frontiers",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "running"
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 1,
+            "state": "success"
+          },
+          {
+            "task_id": "job.approve_intent",
+            "map_index": 1,
+            "state": "deferred"
+          }
+        ]
+      },
+      "expected": "spec, approve_intent"
+    },
+    {
+      "name": "duplicate_frontiers_collapse",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "running"
+          },
+          {
+            "task_id": "job.spec",
+            "map_index": 1,
+            "state": "running"
+          }
+        ]
+      },
+      "expected": "spec"
+    },
+    {
+      "name": "bucket_order_is_first_seen_not_sorted",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.plan",
+            "map_index": 5,
+            "state": "running"
+          },
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "running"
+          }
+        ]
+      },
+      "expected": "plan, spec"
+    },
+    {
+      "name": "later_task_overwrites_the_same_stage",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "running"
+          },
+          {
+            "task_id": "group.spec",
+            "map_index": 0,
+            "state": "failed"
+          }
+        ]
+      },
+      "expected": "spec:failed"
+    },
+    {
+      "name": "unknown_stages_sort_after_known_ones",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.zeta",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.alpha",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          }
+        ]
+      },
+      "expected": "zeta"
+    },
+    {
+      "name": "unknown_stage_active_beats_known_finished",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.aardvark",
+            "map_index": 0,
+            "state": "running"
+          }
+        ]
+      },
+      "expected": "aardvark"
+    },
+    {
+      "name": "deep_dotted_task_id_keeps_the_last_segment",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "a.b.c.build_and_test",
+            "map_index": 0,
+            "state": "running"
+          }
+        ]
+      },
+      "expected": "build_and_test"
+    },
+    {
+      "name": "mixed_failed_and_running_jobs",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.build_and_test",
+            "map_index": 0,
+            "state": "failed"
+          },
+          {
+            "task_id": "job.build_and_test",
+            "map_index": 1,
+            "state": "running"
+          }
+        ]
+      },
+      "expected": "build_and_test:failed, build_and_test"
+    }
+  ]
+}

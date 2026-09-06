@@ -1,0 +1,227 @@
+{
+  "function": "summarize_checks",
+  "doc": "summarize_checks folds a statusCheckRollup (CheckRun and StatusContext alike) into 'N pass / N fail / N pending', or 'none' when there is no list at all.",
+  "cases": [
+    {
+      "name": "null_rollup",
+      "input": {
+        "rollup": null
+      },
+      "expected": "none"
+    },
+    {
+      "name": "empty_list",
+      "input": {
+        "rollup": []
+      },
+      "expected": "none"
+    },
+    {
+      "name": "non_list_dict",
+      "input": {
+        "rollup": {
+          "conclusion": "SUCCESS"
+        }
+      },
+      "expected": "none"
+    },
+    {
+      "name": "non_list_string",
+      "input": {
+        "rollup": "SUCCESS"
+      },
+      "expected": "none"
+    },
+    {
+      "name": "only_junk_entries_still_render_zeros",
+      "input": {
+        "rollup": [
+          "nope",
+          7,
+          null,
+          [
+            "x"
+          ]
+        ]
+      },
+      "expected": "0 pass / 0 fail / 0 pending"
+    },
+    {
+      "name": "check_run_and_status_context_mixed",
+      "input": {
+        "rollup": [
+          {
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS"
+          },
+          {
+            "state": "FAILURE"
+          },
+          {
+            "state": "SUCCESS"
+          }
+        ]
+      },
+      "expected": "2 pass / 1 fail / 0 pending"
+    },
+    {
+      "name": "in_progress_check_is_pending",
+      "input": {
+        "rollup": [
+          {
+            "status": "IN_PROGRESS",
+            "conclusion": null
+          }
+        ]
+      },
+      "expected": "0 pass / 0 fail / 1 pending"
+    },
+    {
+      "name": "queued_check_is_pending",
+      "input": {
+        "rollup": [
+          {
+            "status": "QUEUED"
+          }
+        ]
+      },
+      "expected": "0 pass / 0 fail / 1 pending"
+    },
+    {
+      "name": "unknown_conclusion_is_pending",
+      "input": {
+        "rollup": [
+          {
+            "status": "COMPLETED",
+            "conclusion": "WEIRD"
+          }
+        ]
+      },
+      "expected": "0 pass / 0 fail / 1 pending"
+    },
+    {
+      "name": "empty_verdict_is_pending",
+      "input": {
+        "rollup": [
+          {
+            "status": "COMPLETED"
+          }
+        ]
+      },
+      "expected": "0 pass / 0 fail / 1 pending"
+    },
+    {
+      "name": "lowercase_conclusion_is_uppercased",
+      "input": {
+        "rollup": [
+          {
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      "expected": "1 pass / 0 fail / 0 pending"
+    },
+    {
+      "name": "conclusion_present_with_pending_status_is_not_pending",
+      "input": {
+        "rollup": [
+          {
+            "status": "QUEUED",
+            "conclusion": "SKIPPED"
+          }
+        ]
+      },
+      "expected": "1 pass / 0 fail / 0 pending"
+    },
+    {
+      "name": "every_failure_verdict",
+      "input": {
+        "rollup": [
+          {
+            "conclusion": "FAILURE"
+          },
+          {
+            "conclusion": "ERROR"
+          },
+          {
+            "conclusion": "TIMED_OUT"
+          },
+          {
+            "conclusion": "CANCELLED"
+          },
+          {
+            "conclusion": "ACTION_REQUIRED"
+          },
+          {
+            "conclusion": "STARTUP_FAILURE"
+          },
+          {
+            "conclusion": "STALE"
+          }
+        ]
+      },
+      "expected": "0 pass / 7 fail / 0 pending"
+    },
+    {
+      "name": "every_pass_verdict",
+      "input": {
+        "rollup": [
+          {
+            "conclusion": "SUCCESS"
+          },
+          {
+            "conclusion": "NEUTRAL"
+          },
+          {
+            "conclusion": "SKIPPED"
+          }
+        ]
+      },
+      "expected": "3 pass / 0 fail / 0 pending"
+    },
+    {
+      "name": "junk_mixed_with_real_entries",
+      "input": {
+        "rollup": [
+          {
+            "conclusion": "SUCCESS"
+          },
+          "junk",
+          {
+            "status": "IN_PROGRESS"
+          },
+          0,
+          {
+            "state": "ERROR"
+          }
+        ]
+      },
+      "expected": "1 pass / 1 fail / 1 pending"
+    },
+    {
+      "name": "conclusion_beats_state",
+      "input": {
+        "rollup": [
+          {
+            "conclusion": "SUCCESS",
+            "state": "FAILURE"
+          }
+        ]
+      },
+      "expected": "1 pass / 0 fail / 0 pending"
+    },
+    {
+      "name": "empty_conclusion_falls_through_to_state",
+      "input": {
+        "rollup": [
+          {
+            "conclusion": "",
+            "state": "FAILURE"
+          }
+        ]
+      },
+      "expected": "0 pass / 1 fail / 0 pending"
+    }
+  ]
+}

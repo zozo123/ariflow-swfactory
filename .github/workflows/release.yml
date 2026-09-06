@@ -17,6 +17,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The gate has run by the time anything else starts, so every later job can take the version
+    # it resolved instead of re-deriving it from the tag and disagreeing about the answer.
+    outputs:
+      version: ${{ steps.notes.outputs.version }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -81,12 +85,158 @@ jobs:
           uv build
           ls -l dist/
 
+      # The release itself is created once, in `publish`, after every platform's binary exists.
+      # The wheel and the sdist wait here as a workflow artifact so a failed macOS build cannot
+      # leave a published release with half of its assets missing.
+      - name: Keep the Python artifacts for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-python
+          path: dist/
+          if-no-files-found: error
+
+  # The completions are emitted by the binary itself, so they cannot drift from the CLI the way a
+  # checked-in copy would. They are the same text on every target, and the cross-built aarch64
+  # binary cannot be run on the runner that builds it, so they are generated once here and copied
+  # into all four archives — which also makes them byte-identical across platforms.
+  swf-completions:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "rust" }
+      - name: Emit the bash, zsh and fish completions from swf itself
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path rust/Cargo.toml --release --locked -p swf-cli
+          mkdir -p completions
+          for shell in bash zsh fish; do
+            rust/target/release/swf completions "$shell" > "completions/swf.$shell"
+          done
+          ls -l completions
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swf-completions
+          path: completions/
+          if-no-files-found: error
+
+  # One `swf` per platform an operator actually runs the factory from: Apple silicon and Intel
+  # laptops, and the two Linux architectures the control plane is deployed on. Every leg builds
+  # from the tagged tree with --locked, so a released binary is reproducible from the tag alone.
+  # Both macOS slices come off one Apple-silicon runner because Apple's clang and SDK already
+  # cross-compile to x86_64; aarch64 Linux is the only leg that needs a foreign C toolchain, since
+  # ring is the one dependency here that compiles C. No `cross` container: the only thing that has
+  # to match is the target triple.
+  swf-binaries:
+    needs: [release, swf-completions]
+    timeout-minutes: 30
+    # Nothing in this job writes to the repository or the release; publish does that, once.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, os: macos-14, cross_cc: false }
+          - { target: x86_64-apple-darwin, os: macos-14, cross_cc: false }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, cross_cc: false }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, cross_cc: true }
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.target }}" }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "rust", key: "${{ matrix.target }}" }
+      - uses: actions/download-artifact@v4
+        with: { name: swf-completions, path: completions }
+      - name: Install the aarch64 cross toolchain (ring compiles C; rustc needs a linker for it)
+        if: matrix.cross_cc
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build swf for ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        run: >-
+          cargo build --manifest-path rust/Cargo.toml --release --locked
+          -p swf-cli --target "$TARGET"
+      # A tarball, not a bare binary: it carries the executable bit through the GitHub CDN and
+      # leaves room for the completions and the licence without a second asset per platform.
+      - name: Package swf-${{ needs.release.outputs.version }}-${{ matrix.target }}.tar.gz
+        run: |
+          set -euo pipefail
+          name="swf-$VERSION-$TARGET"
+          stage="$RUNNER_TEMP/$name"
+          mkdir -p "$stage/completions"
+          cp "rust/target/$TARGET/release/swf" "$stage/swf"
+          cp LICENSE README.md "$stage/"
+          cp completions/swf.bash completions/swf.zsh completions/swf.fish "$stage/completions/"
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/$name.tar.gz" "$name"
+          tar -tzf "$RUNNER_TEMP/$name.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swf-${{ matrix.target }}
+          path: ${{ runner.temp }}/swf-*.tar.gz
+          if-no-files-found: error
+
+  # The release is created once, after every asset exists, so a failed macOS build never leaves a
+  # half-populated release behind — the same property the version gate gives the tag. Assets are
+  # moved by their exact interpolated names rather than globbed in, so a version mismatch fails
+  # here, loudly, instead of publishing a release that is quietly missing a platform.
+  publish:
+    needs: [release, swf-binaries]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/artifacts
+          merge-multiple: true
+      - name: Collect the assets and checksum them together
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          mv "$RUNNER_TEMP/artifacts/swfactory-$VERSION-py3-none-any.whl" release/
+          mv "$RUNNER_TEMP/artifacts/swfactory-$VERSION.tar.gz" release/
+          for target in \
+            aarch64-apple-darwin \
+            x86_64-apple-darwin \
+            x86_64-unknown-linux-gnu \
+            aarch64-unknown-linux-gnu; do
+            mv "$RUNNER_TEMP/artifacts/swf-$VERSION-$target.tar.gz" release/
+          done
+          # SHA256SUMS is written outside the directory it describes, then moved in, so it can
+          # never end up listing itself.
+          (cd release && shasum -a 256 -- *) > "$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" release/
+          cat release/SHA256SUMS
+      - name: Re-extract the CHANGELOG section for the release body
+        run: |
+          set -euo pipefail
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
       - name: Create the GitHub Release
         run: |
           set -euo pipefail
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag \
-            --title "swfactory ${{ steps.notes.outputs.version }}" \
+            --title "swfactory $VERSION" \
             --notes-file "$RUNNER_TEMP/release-notes.md" \
-            dist/swfactory-${{ steps.notes.outputs.version }}-py3-none-any.whl \
-            dist/swfactory-${{ steps.notes.outputs.version }}.tar.gz
+            release/*

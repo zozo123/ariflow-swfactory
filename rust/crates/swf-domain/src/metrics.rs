@@ -292,7 +292,16 @@ pub fn round_half_even(value: f64, digits: i32) -> f64 {
     } else {
         scaled.round()
     };
-    rounded / factor
+    let result = rounded / factor;
+    // Never `-0.0`. Python's `sum()` starts from the *integer* `0`, so `0 + (-0.0)` is `0.0` and
+    // `round(0.0, 6)` is `0.0`; Rust's `Sum for f64` starts from `-0.0`, so an empty (or
+    // all-negative-zero) total keeps the sign bit and `json.dumps` would print `-0.0` where the
+    // Python printed `0`. `-0.0 == 0.0`, so this comparison catches both spellings.
+    if result == 0.0 {
+        0.0
+    } else {
+        result
+    }
 }
 
 /// Render the summary as the seven-row text table `swfactory metrics` prints.
@@ -474,6 +483,18 @@ mod tests {
     fn fmean_is_zero_for_no_input() {
         assert_eq!(fmean(&[]), 0.0);
         assert_eq!(fmean(&[1.0, 2.0]), 1.5);
+    }
+
+    #[test]
+    fn a_zero_total_never_carries_a_sign_bit() {
+        // Rust's `Sum for f64` folds from `-0.0`, so an empty total arrives here negative;
+        // Python's `sum()` folds from the integer `0` and can never produce `-0.0`. `json.dumps`
+        // would print the difference.
+        let empty: f64 = [].iter().sum();
+        assert!(empty.is_sign_negative(), "the premise of this test");
+        assert!(!round_half_even(empty, 6).is_sign_negative());
+        assert!(!summarize(&[]).total_cost_usd.is_sign_negative());
+        assert!(!round_half_even(-0.000_000_1, 6).is_sign_negative());
     }
 
     #[test]

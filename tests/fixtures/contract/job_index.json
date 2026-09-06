@@ -1,0 +1,97 @@
+{
+  "function": "job_index",
+  "doc": "job_index renders a map_index as a table cell: '-' until the run has fanned out. Cases named python_only_* exercise Python's duck-typed int(); Rust takes an i32 and cannot reach them.",
+  "cases": [
+    {
+      "name": "zero",
+      "input": {
+        "map_index": 0
+      },
+      "expected": "0"
+    },
+    {
+      "name": "three",
+      "input": {
+        "map_index": 3
+      },
+      "expected": "3"
+    },
+    {
+      "name": "minus_one_is_unmapped",
+      "input": {
+        "map_index": -1
+      },
+      "expected": "-"
+    },
+    {
+      "name": "minus_two_is_also_unmapped",
+      "input": {
+        "map_index": -2
+      },
+      "expected": "-"
+    },
+    {
+      "name": "large_index",
+      "input": {
+        "map_index": 2147483647
+      },
+      "expected": "2147483647"
+    },
+    {
+      "name": "min_i32",
+      "input": {
+        "map_index": -2147483648
+      },
+      "expected": "-"
+    },
+    {
+      "name": "python_only_null",
+      "input": {
+        "map_index": null
+      },
+      "expected": "-"
+    },
+    {
+      "name": "python_only_numeric_string",
+      "input": {
+        "map_index": "7"
+      },
+      "expected": "7"
+    },
+    {
+      "name": "python_only_negative_numeric_string",
+      "input": {
+        "map_index": "-1"
+      },
+      "expected": "-"
+    },
+    {
+      "name": "python_only_non_numeric_string",
+      "input": {
+        "map_index": "abc"
+      },
+      "expected": "-"
+    },
+    {
+      "name": "python_only_empty_string",
+      "input": {
+        "map_index": ""
+      },
+      "expected": "-"
+    },
+    {
+      "name": "python_only_true",
+      "input": {
+        "map_index": true
+      },
+      "expected": "1"
+    },
+    {
+      "name": "python_only_float_truncates",
+      "input": {
+        "map_index": 2.9
+      },
+      "expected": "2"
+    }
+  ]
+}
