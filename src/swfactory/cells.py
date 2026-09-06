@@ -70,7 +70,7 @@ class CellStore:
         self.db = sqlite3.connect(
             path,
             timeout=30,
-            isolation_level=None,
+            isolation_level="IMMEDIATE",
             check_same_thread=False,
         )
         self.db.row_factory = sqlite3.Row
