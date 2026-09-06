@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 1
+TERMINAL_STATES = frozenset({"success", "failed", "cancelled", "rejected", "cleaned"})
 
 
 class CellError(RuntimeError):
@@ -26,6 +27,10 @@ class StaleEpoch(CellError):
 
 
 class DuplicateOperation(CellError):
+    pass
+
+
+class CellBusy(CellError):
     pass
 
 
@@ -122,15 +127,69 @@ class CellStore:
         cell_id = identity.stable_id()
         now = time.time()
         with self.lock, self.db:
-            self.db.execute(
-                """INSERT OR IGNORE INTO cells(
-                    cell_id,schema_version,repo,target,issue,epoch,state,created_at,updated_at
-                ) VALUES(?,?,?,?,?,1,'created',?,?)""",
-                (cell_id, SCHEMA_VERSION, identity.repo, identity.target, identity.issue, now, now),
-            )
+            self._insert_identity(identity, now)
             if fields:
                 self.patch(cell_id, 1, "ensure:init", **fields)
             return self.get(cell_id)
+
+    def activate(self, identity: CellIdentity, actor: str) -> dict[str, Any]:
+        """Atomically claim an issue×target cell for one lifecycle activation.
+
+        A fresh cell keeps epoch 1. Re-activating a terminal cell advances the epoch, which fences
+        every stale actor from the previous lifecycle. An active/dispatching cell is never silently
+        duplicated or taken over by ordinary submission.
+        """
+
+        cell_id = identity.stable_id()
+        now = time.time()
+        with self.lock, self.db:
+            self._insert_identity(identity, now)
+            row = self.db.execute("SELECT * FROM cells WHERE cell_id=?", (cell_id,)).fetchone()
+            if row is None:  # defensive: INSERT OR IGNORE above must make this impossible
+                raise KeyError(cell_id)
+            current = self._decode(row)
+            fresh = current["state"] == "created" and current["airflow_run_id"] is None
+            if not fresh and current["state"] not in TERMINAL_STATES:
+                raise CellBusy(
+                    f"{cell_id} is already active at epoch {current['epoch']} "
+                    f"in state {current['state']}"
+                )
+            next_epoch = int(current["epoch"]) if fresh else int(current["epoch"]) + 1
+            cur = self.db.execute(
+                """UPDATE cells SET
+                    epoch=?, state='dispatching', airflow_dag_id=NULL, airflow_run_id=NULL,
+                    map_index=NULL, compute_json=NULL, cleanup_json=NULL, updated_at=?
+                    WHERE cell_id=? AND epoch=? AND state=?""",
+                (next_epoch, now, cell_id, current["epoch"], current["state"]),
+            )
+            if cur.rowcount != 1:
+                raise StaleEpoch(f"{cell_id}: activation lost its compare-and-swap")
+            self._append(
+                Mutation(
+                    cell_id=cell_id,
+                    epoch=next_epoch,
+                    operation_key=f"activation:{next_epoch}",
+                    kind="activated",
+                    payload={"actor": actor},
+                )
+            )
+            return self.get(cell_id)
+
+    def _insert_identity(self, identity: CellIdentity, now: float) -> None:
+        self.db.execute(
+            """INSERT OR IGNORE INTO cells(
+                cell_id,schema_version,repo,target,issue,epoch,state,created_at,updated_at
+            ) VALUES(?,?,?,?,?,1,'created',?,?)""",
+            (
+                identity.stable_id(),
+                SCHEMA_VERSION,
+                identity.repo,
+                identity.target,
+                identity.issue,
+                now,
+                now,
+            ),
+        )
 
     def get(self, cell_id: str) -> dict[str, Any]:
         with self.lock:
@@ -167,7 +226,7 @@ class CellStore:
             ]
 
     def take_epoch(self, cell_id: str, expected_epoch: int, actor: str) -> int:
-        """Advance the mutation fence atomically and record the takeover."""
+        """Advance the mutation fence atomically and record an explicit takeover."""
         next_epoch = expected_epoch + 1
         now = time.time()
         with self.lock, self.db:
