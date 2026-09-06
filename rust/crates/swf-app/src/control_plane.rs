@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use serde_json::json;
 use swf_adapters::factory::FactoryApi;
-use swf_domain::control_plane::{CompatibilityDocument, FleetSummary, OperationRecord, QueueRecord};
+use swf_domain::control_plane::{
+    CompatibilityDocument, FleetSummary, OperationRecord, QueueRecord,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::context::Context;
@@ -32,10 +34,7 @@ impl ControlPlaneOps {
         })
     }
 
-    pub async fn compatibility(
-        &self,
-        cancel: &CancellationToken,
-    ) -> Result<CompatibilityDocument> {
+    pub async fn compatibility(&self, cancel: &CancellationToken) -> Result<CompatibilityDocument> {
         Ok(self.api.call("/compatibility", json!({}), cancel).await?)
     }
 
@@ -48,11 +47,7 @@ impl ControlPlaneOps {
         bounded(limit, "queue")?;
         Ok(self
             .api
-            .call(
-                "/queue",
-                json!({"state": state, "limit": limit}),
-                cancel,
-            )
+            .call("/queue", json!({"state": state, "limit": limit}), cancel)
             .await?)
     }
 
@@ -62,7 +57,9 @@ impl ControlPlaneOps {
         cancel: &CancellationToken,
     ) -> Result<QueueRecord> {
         if work_id.trim().is_empty() || work_id.len() > 256 {
-            return Err(OpsError::usage("work id must be nonempty and at most 256 characters"));
+            return Err(OpsError::usage(
+                "work id must be nonempty and at most 256 characters",
+            ));
         }
         Ok(self
             .api
