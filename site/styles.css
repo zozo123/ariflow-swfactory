@@ -2823,3 +2823,69 @@ pre {
     min-height: 0;
   }
 }
+
+/* Shared README diagram plus an explicit, non-live production walkthrough. */
+.factory-flow-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line, #314054);
+  border-radius: 20px;
+  margin: 2rem 0;
+}
+.factory-player {
+  background: #101a28;
+  border: 1px solid #314054;
+  border-radius: 20px;
+  padding: clamp(1rem, 3vw, 2.5rem);
+  color: #edf3fa;
+}
+.factory-player-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .75rem;
+}
+.factory-player button {
+  border: 1px solid #52667e;
+  background: #19283b;
+  border-radius: 8px;
+  padding: .75rem 1rem;
+  color: #edf3fa;
+  font: inherit;
+  cursor: pointer;
+}
+.factory-player button:hover { border-color: #7bd4e5; }
+.factory-player button:focus-visible { outline: 3px solid #7bd4e5; outline-offset: 3px; }
+.factory-player button:disabled { opacity: .5; cursor: default; }
+.factory-player [data-factory-count] { margin-left: auto; color: #acbfd5; }
+.factory-stations {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 0;
+  margin: 1.5rem 0;
+  gap: .65rem;
+  list-style: none;
+}
+.factory-stations button { width: 100%; height: 100%; font-size: .9rem; }
+.factory-stations button[aria-current="step"] { color: #0b1320; background: #7bd4e5; }
+.factory-stations button.is-complete { border-color: #95dea8; }
+.factory-player.is-gate button[aria-current="step"] { background: #f4a45c; }
+.factory-station-detail { border-top: 1px solid #314054; padding-top: 1.5rem; }
+.factory-station-detail h3 { margin: .7rem 0; font-size: clamp(1.5rem, 3vw, 2rem); }
+.factory-station-detail p { line-height: 1.7; max-width: 78ch; }
+.factory-station-detail pre {
+  background: #050b13;
+  padding: 1.25rem;
+  border-radius: 10px;
+  overflow-x: auto;
+  color: #95dea8;
+  font-size: .95rem;
+  line-height: 1.7;
+}
+.factory-demo-state { color: #a6b7ca; font-size: .9rem; }
+.factory-player.is-gate .factory-demo-state { color: #f4a45c; }
+@media (max-width: 620px) {
+  .factory-stations { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .factory-player-controls button { flex: 1 1 40%; }
+}

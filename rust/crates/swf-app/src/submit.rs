@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use swf_adapters::traits::Runs;
 use swf_domain::blueprint::{is_blueprint_name, validate_repo, Blueprint, DEFAULT_BLUEPRINT};
 use swf_domain::ids::RunRef;
@@ -75,7 +75,7 @@ impl SubmitRequest {
 }
 
 /// Which blueprint a submission ran against, and whether it could be read here.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlueprintRef {
     /// The name, which is also the DAG id.
     pub name: String,
@@ -87,7 +87,7 @@ pub struct BlueprintRef {
 }
 
 /// A run that now exists.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Submission {
     /// The DAG the run belongs to.
     pub dag_id: String,

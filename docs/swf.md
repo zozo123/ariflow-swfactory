@@ -6,7 +6,11 @@ gate, verify what was delivered, and remove your own sandboxes. It is an **opera
 a second factory. It schedules nothing, runs no stage, holds no credential of its own and makes no
 decision it did not first re-read from the service that owns it.
 
-The seam is the same one `herd` uses, moved into Rust and split across five crates:
+The normal connection is Rust console → Python factory backend → Airflow.
+See [backend setup and API v1](factory-backend.md) before connecting. Airflow, GitHub and islo
+credentials live on that backend; the terminal uses `SWF_BACKEND_TOKEN`.
+
+The code is split across five crates:
 `swf-domain` (contracts and the pure roll-ups, no I/O at all), `swf-adapters` (Airflow `/api/v2`,
 `gh`, `islo`, the committed `metrics.json` files), `swf-app` (the operations), `swf-tui` and
 `swf-cli`. Every command and every keystroke in `swf tui` goes through the same `Ops` object, so the
@@ -15,7 +19,7 @@ second implementation. Airflow keeps scheduling, retries, task mapping and the H
 [design.md](design.md) for what that control plane owns.
 
 ```sh
-swf context add prod --airflow-url https://airflow.example.com --repo acme/widgets --use
+swf context add prod --backend-url https://factory.example.com --airflow-url https://airflow.example.com --repo acme/widgets --use
 swf doctor                                     # readiness: one line per check, a fix: each failure
 swf submit --issue 42 --blueprint factory         # governed work to Airflow
 swf attention                                     # what needs a person right now
@@ -149,13 +153,18 @@ package. The release tarballs are the artifacts, as they are for the Python whee
 
 ## Connect a factory — `swf context`
 
+Start `swfactory backend` on the control-plane host first and set `SWF_BACKEND_TOKEN` on the
+operator machine. The default endpoint is `http://localhost:8082`. The `--token-env`, `--user`
+and `--password-env` options below apply only to explicit `--direct` compatibility mode.
+Without a backend, use `swf context add ... --direct --force` to retain a direct connection.
+
 A context is one factory environment: where Airflow is, which repository deliveries land in, who
 owns the sandboxes, which DAGs to read, and **the name of the variable** the credential lives in.
 
 ```sh
 swf context add prod --airflow-url https://airflow.example.com/airflow/ \
                      --repo acme/widgets --owner me@example.com \
-                     --token-env AIRFLOW_TOKEN --use
+                     --backend-url https://factory.example.com --use
 swf context list                                  # every environment, the active one marked
 swf context show                                  # the active one, every credential redacted
 swf --context staging jobs list                   # one command against another environment

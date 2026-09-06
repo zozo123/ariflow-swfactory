@@ -1,0 +1,95 @@
+# Inspecting and recovering local runs
+
+The control plane saves authoritative run evidence in `.factory/<run-id>/state/`. A run's
+sandbox copy is an audit artifact; it never authorizes stage skips, approval decisions or spend.
+The CLI and Airflow tasks use the same host state and ownership boundary.
+
+```sh
+uv run swfactory state list
+uv run swfactory state list --attention --json
+uv run swfactory state inspect <run-id> --events 50
+```
+
+Use `--root /path/to/.factory` when the worker's state lives elsewhere. These commands only read
+local evidence: they do not connect to Airflow, reconnect to a sandbox, execute an agent or repair
+files. `list` reports the most recently changed runs; `--attention` filters that selected set for
+failed/interrupted operations, journal damage or torn tails. `inspect` emits one JSON document
+and exits 1 when some evidence cannot be read or validated. Missing runs exit 3.
+
+The result includes identity, the latest non-skipped result per stage, recorded cost, current
+ownership, recent operation records, journal sizes, incomplete tail lengths and archived fragments.
+Corrupt stage evidence produces an unknown cost and an explicit error rather than a zero total.
+Snapshots describe local evidence at read time; Airflow remains the authority for scheduler state.
+
+## One owner while a run changes
+
+Preparation, setup, each production stage, recording an approval and teardown acquire the same
+POSIX `flock` on `state/run.lock`. The lock covers the full operation, including the initial
+completed-stage check, budget refresh, sandbox changes and final stage journal append. It is
+released between operations and while a person considers an approval.
+
+A second mutation fails immediately with a retryable sandbox error. It does not invoke the agent,
+close the sandbox or append a failed stage result over the owner's evidence. Existing Airflow
+retry settings still decide whether that task retries automatically; teardown now has two retries.
+Use the normal Airflow task retry/clear workflow after the active owner finishes when needed.
+
+This is a kernel-held lock, with no timeout that could hand a live operation to another worker.
+The operating system releases it when its owning process exits. Never remove or replace
+`run.lock` to unlock a run: another inode would let two processes believe they own it. A stale PID
+in the operation history is evidence, not lock ownership. There is deliberately no CLI unlock.
+
+`state/operations.jsonl` records each attempt with an attempt ID, operation, process/host,
+start time and terminal event. Exceptions record their type without copying prompts, credentials
+or raw error bodies into the operation journal. A process killed before its terminal record leaves
+an unclosed `started` entry. Inspection reports it as interrupted only when the lock is free; the
+next owner preserves an `interrupted` receipt before recording its own attempt.
+
+An interrupted operation may already have produced side effects. This history does not roll back
+a commit, stop a remote command, reconstruct unknown model spend, or prove that an agent did no
+work. Review the stage evidence and work-cell state before retrying interrupted work. Existing
+workspace-HEAD checks, gate evidence, patch validation and delivery restrictions still apply.
+
+## Journal recovery
+
+Readers take a shared file lock so a concurrent append cannot appear as a damaged record. Each
+record is decoded separately; an interrupted UTF-8 character in the final append cannot prevent
+reading earlier complete records.
+
+Writers validate the existing journal under an exclusive lock before changing it:
+
+| Existing ending | Append behavior |
+| --- | --- |
+| Complete newline-terminated JSON records | Append the next record normally |
+| Complete final JSON without a newline | Insert a separator and preserve the record |
+| Incomplete final record without a newline | Save its exact bytes under `state/recovery/`, truncate only that fragment, then append |
+| Invalid newline-terminated record, or corruption before the last line | Refuse to append; preserve the journal for investigation |
+
+An inspection never changes a file. Automatic tail recovery happens only when a writer already
+owns the journal. Fragments are named with a SHA-256 digest of the journal name and pre-repair
+bytes. The fragment file and its directory are synced before truncation; repeating a recovery
+after a crash preserves the same evidence. New state directories are mode 0700 and new journal,
+lock and atomic replacement files are mode 0600. Existing permissions are preserved on append.
+
+Atomic control/artifact writes now sync both content and directory entries. Newly created state
+directories and control-file removals are synced as well. Symlinks that escape the run's state or
+artifact root are refused.
+
+## Budget handling across attempts
+
+After acquiring stage ownership, the runtime refreshes its recorded spend. This also covers a
+long-lived CLI context that was idle while another worker advanced the run. Each agent call gets
+the smaller of the configured per-call limit and the remaining run budget; an exhausted budget
+prevents the call. Returned cost is charged before downloading the agent envelope, so a failed
+download is included in the failed stage's spend. The post-call run ceiling remains enforced.
+
+The accounting is based on returned model costs and persisted stage results. A hard process kill
+before either is recorded can still leave unknown spend; `recorded_cost_usd` deliberately does
+not claim otherwise. Model-reported costs can overshoot a requested cap, which remains a failure.
+
+## Deployment boundary
+
+The worker processes for a run must see the same trusted state directory on a filesystem with
+working POSIX locks and durability semantics. Independent replica disks do not coordinate, and
+this is not distributed fencing of remote sandbox processes. Platforms without POSIX locks refuse
+mutations instead of silently running without exclusion. Keep local state persistent and outside
+agent-writable work-cell mounts; `work/` and `state/` remain siblings.

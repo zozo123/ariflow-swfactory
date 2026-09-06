@@ -483,7 +483,11 @@ impl Env {
             airflow_url: ctx.airflow_url.clone(),
             repo: ctx.repo.clone().unwrap_or_else(|| "-".into()),
             owner: ctx.owner.clone().unwrap_or_else(|| "-".into()),
-            actor: actor_of(&ctx.auth),
+            actor: if ctx.backend_url.is_empty() {
+                actor_of(&ctx.auth)
+            } else {
+                "factory backend Airflow identity".to_string()
+            },
             dag_ids: ctx.dag_ids.clone(),
         }
     }

@@ -106,6 +106,9 @@ impl Ctx {
 /// user and this process never decodes it. Saying "Airflow token owner" is the honest answer, and
 /// it is the same wording `herd` uses so the two control rooms echo one event the same way.
 pub fn actor(context: &Context) -> String {
+    if !context.backend_url.is_empty() {
+        return "factory backend Airflow identity".to_string();
+    }
     match &context.auth {
         Auth::Basic { user, .. } => user.clone(),
         _ => "Airflow token owner".to_string(),
@@ -194,6 +197,11 @@ fn context_cmd(ctx: &Ctx, cmd: &ContextCmd) -> Result<Outcome> {
 fn context_add(ctx: &Ctx, args: &ContextAddArgs) -> Result<Outcome> {
     let mut store = ctx.store()?;
     let mut context = Context::new(&args.name, &args.airflow_url);
+    context.backend_url = if args.direct {
+        String::new()
+    } else {
+        args.backend_url.clone()
+    };
     context.repo.clone_from(&args.repo);
     context.owner.clone_from(&args.owner);
     if let Some(root) = &args.metrics_root {
@@ -990,6 +998,8 @@ mod tests {
         let args = ContextAddArgs {
             name: "x".into(),
             airflow_url: "http://x".into(),
+            backend_url: "http://localhost:8082".into(),
+            direct: false,
             repo: None,
             owner: None,
             metrics_root: None,
@@ -1015,6 +1025,8 @@ mod tests {
         let args = ContextAddArgs {
             name: "x".into(),
             airflow_url: "http://x".into(),
+            backend_url: "http://localhost:8082".into(),
+            direct: false,
             repo: None,
             owner: None,
             metrics_root: None,
@@ -1040,6 +1052,8 @@ mod tests {
         let args = ContextAddArgs {
             name: "x".into(),
             airflow_url: "http://x".into(),
+            backend_url: "http://localhost:8082".into(),
+            direct: false,
             repo: None,
             owner: None,
             metrics_root: None,
@@ -1057,6 +1071,7 @@ mod tests {
     #[test]
     fn the_actor_is_named_only_when_this_client_actually_knows_it() {
         let mut context = Context::builtin();
+        context.backend_url.clear();
         assert_eq!(actor(&context), "Airflow token owner");
         context.auth = Auth::TokenEnv { var: "T".into() };
         assert_eq!(actor(&context), "Airflow token owner");

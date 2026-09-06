@@ -121,8 +121,16 @@ pub fn contexts(all: &[Context], active: &str, term: &Term) -> String {
         table.row([
             marker.to_string(),
             context.name.clone(),
-            context.airflow_url.clone(),
-            context.auth.redacted(),
+            if context.backend_url.is_empty() {
+                context.airflow_url.clone()
+            } else {
+                context.backend_url.clone()
+            },
+            if context.backend_url.is_empty() {
+                context.auth.redacted()
+            } else {
+                "SWF_BACKEND_TOKEN".to_string()
+            },
             context.repo.clone().unwrap_or_else(|| "-".into()),
         ]);
     }

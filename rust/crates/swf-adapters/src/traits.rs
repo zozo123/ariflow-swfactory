@@ -208,7 +208,7 @@ pub trait Runs: Send + Sync {
 ///
 /// Narrower than [`PullRequest`] on purpose: `06-delivery-evidence.md` §4.3 asks a different
 /// question here (`baseRefName`, `headRefOid`) than the herd table does.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
 pub struct PrHead {
     /// The PR's web URL.
     pub url: String,

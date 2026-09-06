@@ -212,10 +212,12 @@ def _metrics_task(name: str):
 
 
 def _teardown_task(name: str):
-    @task(task_id="teardown", trigger_rule="all_done")
+    @task(task_id="teardown", trigger_rule="all_done", retries=2)
     def teardown(job: dict, **context: Any) -> None:
+        from swfactory import stages
+
         # `_ctx` never calls sb.ensure(), so closing here can only stop what setup() created.
-        _ctx(name, job, context["dag_run"].run_id).sb.close()
+        stages.teardown(_ctx(name, job, context["dag_run"].run_id))
 
     return teardown
 

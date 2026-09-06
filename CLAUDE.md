@@ -19,9 +19,12 @@ in `stages.py`. Details: README + docs/*.md.
   [--json]` (exit 1 per red row, with a `fix:`); `metrics|maintain --root .`; `herd`; `webhook`.
 - `cargo test --manifest-path rust/Cargo.toml --workspace`, `cargo fmt`/`clippy -- -D warnings` —
   the `swf` operator binary in `rust/` (docs/swf.md). It drives the same Airflow/`gh`/`islo`
-  interfaces as `control.py`; it runs no stage. `contract-equivalence` CI asserts both languages
+  interfaces as `control.py` only in explicit `--direct` mode. Normally it connects to the Python
+  `backend.py` API; service credentials and work-order validation live there. It runs no stage. `contract-equivalence` CI asserts both languages
   produce `tests/fixtures/contract/`; `scripts/swf_e2e.sh` is the live acceptance test.
-- `swf context add <name> --airflow-url <url> --token-env VAR` (the config holds env var NAMES,
+- `swfactory backend` serves API v1 on loopback:8082; requires `SWF_BACKEND_TOKEN`. See
+  docs/factory-backend.md for the Rust/Python boundary, service credentials and migration.
+- `swf context add <name> --backend-url <url> --airflow-url <public-ui-url>` (the config holds env var NAMES,
   never values), then `doctor | submit --issue <n> | attention | jobs list | gates review|approve
   <dag/run#i:gate> | deliveries verify --clone | snapshot --json | tui`. Exit codes are contract:
   1 operational, 2 usage, 3 not found, 4 auth, 5 unreachable, 6 conflict. `runs stop` only marks
@@ -73,6 +76,11 @@ in `stages.py`. Details: README + docs/*.md.
   `.factory/<run_id>/state/stages.jsonl` -> `status="skipped"`. The agent-writable sandbox is never
   consulted for skips or the budget. Loops are `Config`-bounded; exhaustion is
   `StageError(kind="policy")` or a `factory:blocked` PR, never a retry.
+- Preparation, setup, stages, approval recording and teardown hold the same `state/run.lock`
+  through their mutation. Never delete that file to recover ownership; POSIX releases the lock
+  when its owner exits. `operations.jsonl` records attempts separately from authoritative stage
+  results. `swfactory state list|inspect` reads local ownership and journal evidence without
+  reconnecting to a cell. See docs/run-recovery.md for interrupted attempts and archived tails.
 - `deliver` never skips: `validate_patch` (no `..`/absolute/`.git`/symlink; paths under the target
   dir + `docs/factory/`) and `scan_secrets` run before any git or network call; only the bot-owned
   `factory/*` branch is force-updated and an open PR is edited in place. A rejected gate still

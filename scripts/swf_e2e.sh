@@ -171,7 +171,7 @@ print(users.get('admin') or next(iter(users.values())))
 export SWF_E2E_PASSWORD="$PASSWORD"
 
 say "swf context add $CONTEXT"
-"$SWF" context add "$CONTEXT" \
+"$SWF" context add "$CONTEXT" --direct \
   --airflow-url "$BASE" \
   --repo "zozo123/ariflow-swfactory" \
   --user admin --password-env SWF_E2E_PASSWORD \

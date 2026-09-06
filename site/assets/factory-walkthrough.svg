@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="930" viewBox="0 0 1200 930" role="img" aria-labelledby="title desc">
+<title id="title">Software factory: console, backend and mapped DAG</title>
+<desc id="desc">Illustrated example, not a live execution. Rust submits a work order to the Python backend. Airflow maps each issue and target into a cell. Each cell runs setup, intent, human approval, specification, plan, human approval, build and test, review, delivery and cleanup. A human merges the resulting pull request.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#718498"/></marker></defs>
+<rect width="1200" height="930" rx="24" fill="#0b1320"/>
+<g font-family="ui-monospace, SFMono-Regular, Consolas, monospace">
+<text x="40" y="48" font-size="15" letter-spacing="2" fill="#f4a45c">CONTROL ROOM / ILLUSTRATED WALKTHROUGH</text>
+<text x="40" y="98" font-size="34" font-weight="700" fill="#f3f7fc">One issue. One governed production route.</text>
+<text x="40" y="134" font-size="18" fill="#a6b7ca">Follow a work order from terminal to reviewed pull request.</text>
+<rect x="40" y="168" width="264" height="94" rx="12" fill="#152336" stroke="#7bd4e5"/><text x="56" y="204" font-size="18" fill="#7bd4e5">RUST CONSOLE</text><text x="56" y="237" font-size="13" fill="#d0dbe8">Select, inspect, confirm</text>
+<path d="M 304 215 H 323" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="326" y="168" width="264" height="94" rx="12" fill="#152336" stroke="#f4a45c"/><text x="342" y="204" font-size="18" fill="#f4a45c">PYTHON BACKEND</text><text x="342" y="237" font-size="13" fill="#d0dbe8">Validate, authorize, dispatch</text>
+<path d="M 590 215 H 609" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="612" y="168" width="264" height="94" rx="12" fill="#152336" stroke="#7bd4e5"/><text x="628" y="204" font-size="18" fill="#7bd4e5">AIRFLOW</text><text x="628" y="237" font-size="13" fill="#d0dbe8">Schedule, map, retry, wait</text>
+<path d="M 876 215 H 895" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="898" y="168" width="264" height="94" rx="12" fill="#152336" stroke="#95dea8"/><text x="914" y="204" font-size="18" fill="#95dea8">PYTHON WORK CELL</text><text x="914" y="237" font-size="13" fill="#d0dbe8">Execute stages in isolation</text>
+<rect x="40" y="294" width="1120" height="115" rx="12" fill="#050b13" stroke="#314054"/>
+<circle cx="65" cy="316" r="5" fill="#f38e87"/><circle cx="84" cy="316" r="5" fill="#f4cb7b"/><circle cx="103" cy="316" r="5" fill="#95dea8"/>
+<text x="62" y="352" font-size="20" fill="#95dea8">$ swf submit --blueprint factory --issue 42</text>
+<text x="62" y="384" font-size="16" fill="#a6b7ca">Work order admitted → one batch → issues × targets mapped into independent cells</text>
+<text x="40" y="454" font-size="17" letter-spacing="1" fill="#f4a45c">INSIDE EACH MAPPED CELL / DEFAULT LINE</text>
+<rect x="40" y="480" width="264" height="82" rx="10" fill="#152336" stroke="#718498"/><text x="55" y="510" font-size="17" fill="#edf3fa">01 SETUP</text><text x="55" y="539" font-size="13" fill="#afbed0">Own journal + create cell</text>
+<path d="M 304 521 H 323" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="326" y="480" width="264" height="82" rx="10" fill="#152336" stroke="#718498"/><text x="341" y="510" font-size="17" fill="#edf3fa">02 INTENT</text><text x="341" y="539" font-size="13" fill="#afbed0">Understand the work order</text>
+<path d="M 590 521 H 609" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="612" y="480" width="264" height="82" rx="10" fill="#30261d" stroke="#f4a45c"/><text x="627" y="510" font-size="17" fill="#f4a45c">03 HUMAN GATE</text><text x="627" y="539" font-size="13" fill="#afbed0">Read and approve intent</text>
+<path d="M 876 521 H 895" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="898" y="480" width="264" height="82" rx="10" fill="#152336" stroke="#718498"/><text x="913" y="510" font-size="17" fill="#edf3fa">04 SPEC</text><text x="913" y="539" font-size="13" fill="#afbed0">Define acceptance</text>
+<rect x="40" y="590" width="264" height="82" rx="10" fill="#152336" stroke="#718498"/><text x="55" y="620" font-size="17" fill="#edf3fa">08 REVIEW</text><text x="55" y="649" font-size="13" fill="#afbed0">Inspect findings + fixes</text>
+<path d="M 323 631 H 304" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="326" y="590" width="264" height="82" rx="10" fill="#152336" stroke="#718498"/><text x="341" y="620" font-size="17" fill="#edf3fa">07 BUILD + TEST</text><text x="341" y="649" font-size="13" fill="#afbed0">Bounded iteration loop</text>
+<path d="M 609 631 H 590" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="612" y="590" width="264" height="82" rx="10" fill="#30261d" stroke="#f4a45c"/><text x="627" y="620" font-size="17" fill="#f4a45c">06 HUMAN GATE</text><text x="627" y="649" font-size="13" fill="#afbed0">Read and approve plan</text>
+<path d="M 895 631 H 876" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="898" y="590" width="264" height="82" rx="10" fill="#152336" stroke="#718498"/><text x="913" y="620" font-size="17" fill="#edf3fa">05 PLAN</text><text x="913" y="649" font-size="13" fill="#afbed0">Choose an implementation</text>
+<rect x="40" y="700" width="264" height="82" rx="10" fill="#152336" stroke="#718498"/><text x="55" y="730" font-size="17" fill="#edf3fa">09 DELIVER</text><text x="55" y="759" font-size="13" fill="#afbed0">Publish patch + evidence</text>
+<path d="M 304 741 H 323" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="326" y="700" width="264" height="82" rx="10" fill="#152336" stroke="#718498"/><text x="341" y="730" font-size="17" fill="#edf3fa">10 CLEANUP</text><text x="341" y="759" font-size="13" fill="#afbed0">Record and release cell</text>
+<path d="M 590 741 H 609" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="612" y="700" width="264" height="82" rx="10" fill="#152336" stroke="#718498"/><text x="627" y="730" font-size="17" fill="#edf3fa">11 PULL REQUEST</text><text x="627" y="759" font-size="13" fill="#afbed0">Inspect independent checks</text>
+<path d="M 876 741 H 895" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="898" y="700" width="264" height="82" rx="10" fill="#152336" stroke="#718498"/><text x="913" y="730" font-size="17" fill="#edf3fa">12 HUMAN MERGE</text><text x="913" y="759" font-size="13" fill="#afbed0">Outside factory authority</text>
+<path d="M 1030 562 V 587" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M 170 672 V 697" stroke="#718498" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="40" y="845" font-size="18" fill="#95dea8">$ swf tui</text>
+<text x="220" y="845" font-size="17" fill="#d0dbe8">Jobs · logs · gate evidence · deliveries · worker status</text>
+<text x="40" y="885" font-size="15" fill="#a6b7ca">Gates pause for people. Tests and review can block delivery. Every stage leaves evidence.</text>
+</g></svg>

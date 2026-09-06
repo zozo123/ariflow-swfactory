@@ -101,6 +101,7 @@ pub enum Auth {
 #[derive(Debug)]
 pub struct AirflowApi {
     base: String,
+    ui_base: Option<String>,
     http: Client,
     auth: Auth,
     timeout: Duration,
@@ -117,6 +118,7 @@ impl AirflowApi {
     /// here, so no call site has to think about it again.
     pub fn new(base_url: &str, auth: Auth, timeout: Duration) -> Result<Self> {
         let http = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .user_agent(concat!("swf/", env!("CARGO_PKG_VERSION")))
             .build()
@@ -125,6 +127,7 @@ impl AirflowApi {
                 detail: truncate(&e.to_string()),
             })?;
         Ok(Self {
+            ui_base: None,
             base: base_url.trim_end_matches('/').to_string(),
             http,
             auth,
@@ -379,8 +382,19 @@ impl AirflowApi {
     }
 
     /// The UI deep link for a run, built from ids so a just-triggered run can be linked at once.
+    /// Set the public UI URL when REST calls travel through the factory backend.
+    pub fn with_ui_base(mut self, ui_url: &str) -> Self {
+        self.ui_base = Some(ui_url.trim_end_matches('/').to_string());
+        self
+    }
+
     pub fn deep_link(&self, dag_id: &str, run_id: &str) -> String {
-        format!("{}/dags/{}/runs/{}", self.base, seg(dag_id), seg(run_id))
+        format!(
+            "{}/dags/{}/runs/{}",
+            self.ui_base.as_deref().unwrap_or(&self.base),
+            seg(dag_id),
+            seg(run_id)
+        )
     }
 }
 
@@ -819,6 +833,12 @@ impl Runs for AirflowApi {
     }
 
     async fn health(&self, cancel: &CancellationToken) -> Result<Value> {
+        if self.ui_base.is_some() {
+            return Ok(self
+                .api(Method::GET, "/monitor/health", &[], None, cancel)
+                .await?
+                .unwrap_or(Value::Null));
+        }
         // Unauthenticated on purpose: this is the probe that tells "wrong URL" from "wrong token",
         // and sending a credential would collapse the two answers into one.
         Ok(self

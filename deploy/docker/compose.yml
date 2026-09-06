@@ -89,6 +89,28 @@ services:
       - "127.0.0.1:8081:8081"
     restart: unless-stopped
 
+  backend:
+    <<: *common
+    profiles: ["console"]
+    command: ["bash", "deploy/docker/backend.sh"]
+    depends_on:
+      airflow:
+        condition: service_started
+    environment:
+      <<: *common-env
+      AIRFLOW_URL: http://airflow:8080
+      SWF_AIRFLOW_HTTP_HOSTS: airflow
+      AIRFLOW_USER: ${AIRFLOW_USER:-admin}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-}
+      AIRFLOW_TOKEN: ${AIRFLOW_TOKEN:-}
+      SWF_BACKEND_TOKEN: ${SWF_BACKEND_TOKEN:-}
+      SWF_REPO: ${SWF_REPO:-}
+      SWF_SANDBOX_OWNER: ${SWF_SANDBOX_OWNER:-}
+      GH_TOKEN: ${GH_TOKEN:-}
+    ports:
+      - "127.0.0.1:8082:8082"
+    restart: unless-stopped
+
   # Build target only (`docker compose -f deploy/docker/compose.yml build sandbox-image`);
   # nothing runs it — DockerSandbox starts it per command via `docker run --rm`.
   sandbox-image:

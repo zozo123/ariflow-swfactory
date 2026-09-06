@@ -6,6 +6,23 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Shared CLI/DAG graphic in the README and website, plus an interactive 11-station walkthrough
+  that pauses at both simulated human gates. It is explicitly illustrative and makes no live calls.
+- Rewritten README with a concise console/backend setup; the full deployment reference is preserved
+  in `OPERATIONS.md`.
+
+### Changed
+
+- The Rust console now connects to a Python factory backend by default. Backend API v1 owns
+  service credentials, installed-line validation, work-order submission with target selection,
+  fresh approval readiness checks, worker cleanup, metrics and run-recovery inspection.
+- Added `swfactory backend`, context `--backend-url` and explicit `--direct` migration mode,
+  plus a Docker `console` profile. See [the backend contract](docs/factory-backend.md).
+- Rust preserves the existing paginated Airflow response contract and bulk approval behavior;
+  backend transport never retries uncertain mutations or silently falls back to local credentials.
+
 ## [2.1.0] - 2026-09-06
 
 The operator gets a native binary. `swf` is one executable that drives a factory environment over
@@ -17,6 +34,17 @@ running a wide fan-out should read the control-room pagination fix below: it was
 tables.
 
 ### Added
+
+- Host run ownership across preparation, setup, stages, approvals and cleanup, with durable
+  operation-attempt history and interrupted-attempt detection. Competing mutations fail before
+  changing the sandbox or the authoritative stage result; teardown has two Airflow retries.
+- `swfactory state list` and `state inspect` expose local ownership, journal health, recent
+  operations and recorded spend without contacting a sandbox or agent.
+- Journal recovery now archives torn trailing bytes before the next append, including split UTF-8
+  characters, while refusing corruption in committed records. Atomic state writes also sync
+  directory entries, and new state directories and files use private permissions.
+- Agent budgets are capped to the remaining run allowance, refreshed under stage ownership,
+  and charged before downloading result envelopes. See [run recovery](docs/run-recovery.md).
 
 - Durable webhook intake with a persistent SQLite inbox, leased worker claims, bounded retries,
   backoff and dead dispatch receipts. Accepted events survive receiver restarts and Airflow

@@ -35,7 +35,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import typer
 import yaml
@@ -65,7 +65,7 @@ from swfactory.models import (
 )
 from swfactory.sandbox import SRT_RUNTIME_PROTECTED, LocalSandbox, Sandbox, SrtSandbox
 from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
-from swfactory.state import RunState
+from swfactory.state import JournalCorruption, RunBusyError, RunState
 
 if TYPE_CHECKING:
     from swfactory.blueprint import Blueprint
@@ -272,6 +272,22 @@ def _pipeline(ctx: Ctx) -> tuple[Stage | Gate, ...]:
     return ctx.blueprint.pipeline() if ctx.blueprint else PIPELINE
 
 
+def _owned[OwnedResult](fn: Callable[..., OwnedResult]) -> Callable[..., OwnedResult]:
+    """Acquire ownership before any stage check, budget read or sandbox mutation."""
+
+    @functools.wraps(fn)
+    def wrapper(ctx: Ctx, *args: Any, **kwargs: Any) -> OwnedResult:
+        try:
+            with ctx.state.exclusive(fn.__name__):
+                return fn(ctx, *args, **kwargs)
+        except RunBusyError as error:
+            raise StageError("sandbox", str(error), retryable=True) from error
+        except JournalCorruption as error:
+            raise StageError("policy", str(error)) from error
+
+    return wrapper
+
+
 def _timed(fn: Stage) -> Stage:
     """Fill ``duration_s``/``cost_usd`` and persist the result: authoritatively to
     ``<run_dir>/state/stages.jsonl`` on the orchestrator, plus a copy in the sandbox
@@ -281,7 +297,7 @@ def _timed(fn: Stage) -> Stage:
     def wrapper(ctx: Ctx) -> StageResult:
         # Seed before taking the delta. On a fresh Airflow task, seeding inside the first agent
         # call would otherwise attribute every earlier task's cost to this stage a second time.
-        seed_budget(ctx)
+        seed_budget(ctx, refresh=True)
         t0, spent0 = time.monotonic(), ctx.spent_usd
         try:
             result = fn(ctx)
@@ -300,7 +316,7 @@ def _timed(fn: Stage) -> Stage:
         _append_stage(ctx, result)
         return result
 
-    return wrapper
+    return _owned(wrapper)
 
 
 def _append_stage(ctx: Ctx, result: StageResult) -> None:
@@ -324,13 +340,17 @@ def load_stage_results(ctx: Ctx) -> list[StageResult]:
     return sorted(latest.values(), key=lambda r: order.index(r.stage) if r.stage in order else -1)
 
 
-def seed_budget(ctx: Ctx) -> float:
-    """Once per process: add what earlier tasks/processes of this run spent (every record in
-    ``<run_dir>/state/stages.jsonl``) to ``ctx.spent_usd`` so ``Config.max_budget_usd`` is a RUN
-    ceiling under the DAG too, not a per-task one. Returns the seeded total."""
+def seed_budget(ctx: Ctx, *, refresh: bool = False) -> float:
+    """Seed persisted spend, then refresh under stage ownership when a retained context resumes.
+
+    Another worker can advance this run while a CLI waits for approval. Once-per-process caching
+    alone would let that CLI reuse an obsolete budget. Retain any in-process, unjournaled charge.
+    """
     if not ctx.budget_seeded:
         ctx.spent_usd += sum(r.cost_usd for r in _persisted(ctx))
         ctx.budget_seeded = True
+    elif refresh:
+        ctx.spent_usd = max(ctx.spent_usd, sum(r.cost_usd for r in _persisted(ctx)))
     return ctx.spent_usd
 
 
@@ -341,6 +361,14 @@ def _agent(
     Under srt the kernel ``denyWrite`` set follows the stage (``protected_for``): ``fix`` calls
     lose write access to the tests dir that ``build`` needed, matching the ``Edit(...)`` rules."""
     seed_budget(ctx)
+    remaining = ctx.cfg.max_budget_usd - ctx.spent_usd
+    if remaining <= 0:
+        raise StageError("policy", f"run budget exhausted before {stage}.{iteration}")
+    call_cfg = ctx.cfg.model_copy(
+        update={
+            "max_budget_usd_per_stage": min(ctx.cfg.max_budget_usd_per_stage, remaining),
+        }
+    )
     protected = protected_for(_contract(ctx), stage)
     if hasattr(ctx.sb, "set_protected"):
         ctx.sb.set_protected(protected)
@@ -351,13 +379,11 @@ def _agent(
         prompt=prompt,
         policy=_policy(ctx, stage),
         schema=schema,
-        cfg=ctx.cfg,
+        cfg=call_cfg,
         issue_id=ctx.issue.id,
         protected=protected,
     )
-    envelope = f"{ctx.art}/agent/{stage}.{iteration}.json"
-    if ctx.sb.exists(envelope):
-        ctx.state.write_artifact(envelope, ctx.sb.read(envelope))
+    # Charge before any further sandbox I/O: a failed envelope download must not erase spend.
     ctx.spent_usd += res.cost_usd
     if ctx.spent_usd > ctx.cfg.max_budget_usd:
         raise StageError(
@@ -365,6 +391,9 @@ def _agent(
             f"run budget exceeded: {ctx.spent_usd:.2f} > {ctx.cfg.max_budget_usd:.2f} USD "
             f"after {stage}.{iteration}",
         )
+    envelope = f"{ctx.art}/agent/{stage}.{iteration}.json"
+    if ctx.sb.exists(envelope):
+        ctx.state.write_artifact(envelope, ctx.sb.read(envelope))
     if res.is_error:
         raise StageError("agent", f"{stage}.{iteration} failed: {res.subtype}: {res.text[-800:]}")
     if schema is not None and res.data is None:
@@ -596,6 +625,7 @@ def _seed_exclude(ctx: Ctx) -> None:
         ctx.sb.write(path, current + sep + "\n".join(missing) + "\n")
 
 
+@_owned
 def setup(ctx: Ctx) -> StageResult:
     """Prepare the sandbox: repo, bot identity, baseline, work branch, deps, base sha, contract."""
     t0 = time.monotonic()
@@ -993,6 +1023,7 @@ def _gate_artifact(ctx: Ctx, gate_name: str) -> str:
     return f"{ctx.art}/{gate.artifact}"
 
 
+@_owned
 def record_approval(ctx: Ctx, approval: Approval) -> None:
     """Record the latest decision for one gate in ``approvals.json`` (committed by deliver).
 
@@ -1011,6 +1042,12 @@ def record_approval(ctx: Ctx, approval: Approval) -> None:
     ]
     data.append(approval.model_dump(mode="json"))
     ctx.write_artifact(path, _dumps(data))
+
+
+@_owned
+def teardown(ctx: Ctx) -> None:
+    """Cleanup must not terminate a work cell currently owned by another task attempt."""
+    ctx.sb.close()
 
 
 def _md_table(headers: list[str], rows: list[list[str]]) -> str:

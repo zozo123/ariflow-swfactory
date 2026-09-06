@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from swfactory.config import FACTORY_ROOT, Config, protected_globs
+from swfactory.models import StageError
 from swfactory.paths import (
     normalize_relative_path,
     validate_git_ref,
@@ -24,6 +25,7 @@ from swfactory.paths import (
 from swfactory.sandbox import HOST_SANDBOXES, make_sandbox
 from swfactory.scm import make_scm
 from swfactory.stages import Ctx, seed_local_workdir
+from swfactory.state import JournalCorruption, RunBusyError, RunState
 
 if TYPE_CHECKING:
     from swfactory.agent import Agent
@@ -118,10 +120,21 @@ def ctx_for(cfg: Config, *, blueprint: Blueprint, run_dir: Path, agent: Agent | 
     local remote is seeded from that workdir. ``agent`` overrides ``make_agent(cfg)`` (tests
     inject a ``ScriptedAgent`` with extra fixture dirs).
     """
-    from swfactory.agent import make_agent  # runtime import: agent loads the prompt templates
-
     run_dir = Path(run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with RunState(run_dir).exclusive("prepare"):
+            return _prepare_ctx(cfg, blueprint=blueprint, run_dir=run_dir, agent=agent)
+    except RunBusyError as error:
+        raise StageError("sandbox", str(error), retryable=True) from error
+    except JournalCorruption as error:
+        raise StageError("policy", str(error)) from error
+
+
+def _prepare_ctx(cfg: Config, *, blueprint: Blueprint, run_dir: Path, agent: Agent | None) -> Ctx:
+    """Seeding and adapter construction share stage ownership, including existing workdirs."""
+    from swfactory.agent import make_agent
+
     base_repo: Path | None = None
     protected: list[str] = []
     if cfg.sandbox in HOST_SANDBOXES:

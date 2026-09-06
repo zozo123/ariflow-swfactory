@@ -144,3 +144,10 @@ unconfined on the host — a false sense of a boundary, and a second sandbox per
 capability. If Docker Sandboxes grow an `exec`, a `DockerSandbox` subclass could swap `argv()` and
 nothing else in the module would change. crabbox already knows a `docker-sandbox` provider for the
 **test command** only (`--tests crabbox`, local sandbox; see [design.md](design.md)).
+
+## Rust console backend
+
+Set `SWF_BACKEND_TOKEN` to an operator secret of at least 32 characters and start Compose with
+`--profile console` to expose the Python factory API at `http://localhost:8082`.
+The backend reads Airflow credentials from the shared volume and keeps GitHub credentials on
+the control plane. See [the complete setup](factory-backend.md).

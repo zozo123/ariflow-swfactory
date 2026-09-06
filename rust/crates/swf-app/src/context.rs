@@ -239,6 +239,9 @@ pub struct Context {
     pub name: String,
     /// The full base URL, path prefix included. `/api/v2` and `/auth/token` are appended to it.
     pub airflow_url: String,
+    /// Python factory API. Empty explicitly selects legacy direct service access.
+    #[serde(default)]
+    pub backend_url: String,
     /// `owner/name` of the repository deliveries land in. Absent means `gh` is not wired up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
@@ -273,6 +276,7 @@ impl Context {
         Self {
             name: name.into(),
             airflow_url: normalize_url(airflow_url),
+            backend_url: String::new(),
             repo: None,
             owner: None,
             metrics_root: default_metrics_root(),
@@ -288,7 +292,9 @@ impl Context {
     /// not configured anything yet" into "you configured localhost", and `swf doctor` would stop
     /// being able to tell the operator which of the two they are in.
     pub fn builtin() -> Self {
-        Self::new(BUILTIN_CONTEXT, DEFAULT_AIRFLOW_URL)
+        let mut context = Self::new(BUILTIN_CONTEXT, DEFAULT_AIRFLOW_URL);
+        context.backend_url = "http://localhost:8082".to_string();
+        context
     }
 
     /// True for the in-memory fallback: no file said any of this.
@@ -676,6 +682,8 @@ pub fn show_json(context: &Context) -> serde_json::Value {
     serde_json::json!({
         "name": context.name,
         "airflow_url": context.airflow_url,
+        "backend_url": context.backend_url,
+        "backend_token_env": "SWF_BACKEND_TOKEN",
         "repo": context.repo,
         "owner": context.owner,
         "metrics_root": context.metrics_root,

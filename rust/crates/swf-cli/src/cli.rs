@@ -162,9 +162,17 @@ pub struct ContextAddArgs {
     /// What to call it.
     pub name: String,
 
-    /// The full base URL, path prefix included: `/api/v2` and `/auth/token` are appended to it.
+    /// Public Airflow UI URL; also the API URL in explicit --direct mode.
     #[arg(long, value_name = "URL")]
     pub airflow_url: String,
+
+    /// Python factory backend URL. Credentials use SWF_BACKEND_TOKEN.
+    #[arg(long, default_value = "http://localhost:8082", value_name = "URL")]
+    pub backend_url: String,
+
+    /// Explicit compatibility mode: connect directly to Airflow, gh and islo.
+    #[arg(long)]
+    pub direct: bool,
 
     /// `owner/name` of the repository deliveries land in.
     #[arg(long, value_name = "OWNER/NAME")]

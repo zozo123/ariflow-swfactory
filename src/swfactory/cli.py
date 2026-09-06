@@ -30,6 +30,19 @@ from swfactory.stages import Approver, Ctx, cli_approver, run_pipeline, setup
 
 app = typer.Typer(help="AI-native software factory.", no_args_is_help=True, add_completion=False)
 
+
+@app.command("backend")
+def backend_serve(host: str = "127.0.0.1", port: int = 8082) -> None:
+    """Serve the factory API for the Rust console; credentials come from backend environment."""
+    from swfactory.backend import serve
+
+    try:
+        serve(host, port)
+    except (ValueError, OSError) as error:
+        typer.echo(f"backend: {error}", err=True)
+        raise typer.Exit(1) from error
+
+
 SCRIPTED_BANNER = "SCRIPTED REPLAY — agent=scripted, no model calls"
 
 
@@ -98,6 +111,10 @@ def _run_jobs(
         except ValueError as e:
             typer.echo(f"config error: {e}", err=True)
             raise typer.Exit(2) from e
+        except StageError as e:
+            typer.echo(f"run unavailable: {e}", err=True)
+            failed = True
+            continue
         if ctx.cfg.agent == "scripted":
             typer.echo(f"{SCRIPTED_BANNER}; fixtures: {ctx.cfg.fixtures_dir}")
         try:
@@ -296,6 +313,89 @@ def maintain(
     if sweep_ttl_s:
         for name in maintain_mod.sweep_sandboxes(sweep_ttl_s, owner=owner):
             typer.echo(f"removed orphan sandbox {name}")
+
+
+# ---------------------------------------------------------------- local host-owned evidence
+
+state_app = typer.Typer(
+    help="Inspect saved host run evidence without reconnecting to sandboxes.", no_args_is_help=True
+)
+app.add_typer(state_app, name="state")
+
+
+@state_app.command("list")
+def state_list(
+    root: Annotated[Path, typer.Option(help="directory containing saved run directories")] = Path(
+        ".factory"
+    ),
+    limit: Annotated[int, typer.Option(min=1, max=1000)] = 50,
+    attention: Annotated[
+        bool, typer.Option(help="only interrupted, failed or damaged runs")
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="one JSON document")] = False,
+) -> None:
+    """List the most recently changed local runs, their ownership and recorded spend."""
+    from swfactory.inspection import list_runs
+
+    try:
+        runs = list_runs(root, limit=limit)
+    except (OSError, ValueError) as error:
+        typer.echo(f"saved state unavailable: {error}", err=True)
+        raise typer.Exit(2) from error
+    if attention:
+        runs = [
+            run
+            for run in runs
+            if run["interrupted"]
+            or run["errors"]
+            or run["torn_tail_bytes"]
+            or run["last_event"] == "failed"
+        ]
+    if as_json:
+        typer.echo(json.dumps({"runs": runs}))
+        return
+    if not runs:
+        typer.echo("No matching saved runs.")
+    for run in runs:
+        status = (
+            "damaged"
+            if run["errors"]
+            else "active"
+            if run["held"]
+            else "interrupted"
+            if run["interrupted"]
+            else run["last_event"] or "saved"
+        )
+        cost = run["recorded_cost_usd"]
+        amount = f"${cost:.4f}" if cost is not None else "unknown"
+        typer.echo(
+            f"{run['run_id']}  {status:<11}  {run['repo'] or '-'} "
+            f"#{run['issue_id'] or '-'}  {run['last_operation'] or '-'}  {amount}"
+        )
+
+
+@state_app.command("inspect")
+def state_inspect(
+    run_id: Annotated[str, typer.Argument(help="saved factory run ID")],
+    root: Annotated[Path, typer.Option(help="directory containing saved run directories")] = Path(
+        ".factory"
+    ),
+    events: Annotated[int, typer.Option(min=1, max=1000, help="recent operation records")] = 50,
+) -> None:
+    """Print identity, stage evidence, operation ownership and journal health as JSON."""
+    from swfactory.inspection import inspect_run
+
+    try:
+        details = inspect_run(root, run_id, event_limit=events)
+    except FileNotFoundError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(3) from error
+    except (OSError, ValueError) as error:
+        typer.echo(f"saved state unavailable: {error}", err=True)
+        raise typer.Exit(2) from error
+    typer.echo(json.dumps(details, indent=2))
+    if details["errors"]:
+        raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------- webhook (orchestrator on islo)

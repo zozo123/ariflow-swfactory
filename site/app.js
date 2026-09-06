@@ -197,3 +197,134 @@ if (tuiTabButtons.length && tuiPanels.every(Boolean)) {
 
 const year = document.getElementById("year");
 if (year) year.textContent = String(new Date().getFullYear());
+
+// An explanatory walkthrough only: never submit work or answer a real gate from this page.
+const factoryPlayer = document.querySelector("[data-factory-player]");
+if (factoryPlayer) {
+  const stations = [
+    {
+      title: "Admit a work order", owner: "Rust console → Python backend",
+      description: "The backend validates the installed line and target repositories, then creates one Airflow batch. Each issue × target becomes an independent mapped job.",
+      command: "swf submit --blueprint factory --issue 42", state: "Work order ready to submit",
+    },
+    {
+      title: "Prepare an isolated work cell", owner: "Airflow schedules → Python runtime",
+      description: "Python claims the run journal and prepares the job's sandbox. A competing mutation must wait for ownership; a lost worker is not silently replaced with an empty one.",
+      command: "swf jobs list", state: "job.setup · preparing sandbox and evidence",
+    },
+    {
+      title: "Understand the intent", owner: "Python stage → isolated agent",
+      description: "The agent turns the issue into an intent artifact. Airflow schedules the next station; the Rust console displays the saved task state and logs.",
+      command: "swf logs '<job-id>' --task intent", state: "job.intent · intent.md produced",
+    },
+    {
+      title: "A person approves the intent", owner: "Human decision → Python backend → Airflow HITL",
+      description: "Read the actual gate evidence. The task waits for an explicit answer. The backend checks that this exact mapped gate is still waiting before forwarding the approval.",
+      command: "swf gates list\nswf gates review '<gate-id>'\nswf gates approve '<gate-id>'", state: "Paused at intent gate · approve this demo to continue", gate: true,
+    },
+    {
+      title: "Specify acceptance", owner: "Python specification stage",
+      description: "The approved intent becomes a specification: behavior, scope and acceptance criteria. Artifacts stay with the work order instead of living only in a terminal session.",
+      command: "swf logs '<job-id>' --task spec", state: "job.spec · spec.md produced",
+    },
+    {
+      title: "Plan the change", owner: "Python planning stage",
+      description: "The implementation plan connects the specification to a concrete set of changes. It is saved before a person is asked to let implementation begin.",
+      command: "swf logs '<job-id>' --task plan", state: "job.plan · plan.md produced",
+    },
+    {
+      title: "Approve the plan", owner: "Human decision → Python backend → Airflow HITL",
+      description: "The operator reviews the plan and the current gate revision. Bulk approval preserves per-gate outcomes; an uncertain write cannot count as success.",
+      command: "swf gates list\nswf gates review '<gate-id>'\nswf gates approve '<gate-id>'", state: "Paused at plan gate · approve this demo to continue", gate: true,
+    },
+    {
+      title: "Build and run quality checks", owner: "Python stage → isolated coding agent",
+      description: "Implementation and tests run inside the work cell. Iterations, turns and spend are bounded by the line's limits. Failure remains visible; this illustration does not claim that any test ran.",
+      command: "swf logs '<job-id>' --task build_and_test", state: "job.build_and_test · bounded implementation loop",
+    },
+    {
+      title: "Review the result", owner: "Python review and policy",
+      description: "Review records findings and may request a bounded fix. Unresolved blockers remain attached to the delivery; they are not hidden behind a green-looking terminal.",
+      command: "swf logs '<job-id>' --task review", state: "job.review · findings and decisions saved",
+    },
+    {
+      title: "Publish the delivery", owner: "Python control plane → GitHub",
+      description: "The trusted control plane publishes the patch and evidence to a pull request. GitHub credentials never enter the coding sandbox. Publication is distinct from independent verification and merge.",
+      command: "swf deliveries list", state: "job.deliver · PR and evidence published in this illustration",
+    },
+    {
+      title: "Release the work cell", owner: "Python cleanup → human release decision",
+      description: "Cleanup records its operation and releases the sandbox. A human still reviews checks and merges the PR. Interrupted operations and recovered journal fragments remain inspectable on the backend host.",
+      command: "swf jobs list\n# On the backend host:\nswfactory state inspect '<run-id>'", state: "Walkthrough complete · human merge remains separate",
+    },
+  ];
+  const stepButtons = [...factoryPlayer.querySelectorAll("[data-factory-step]")];
+  const play = factoryPlayer.querySelector("[data-factory-play]");
+  const next = factoryPlayer.querySelector("[data-factory-next]");
+  const reset = factoryPlayer.querySelector("[data-factory-reset]");
+  let position = 0;
+  let timer = null;
+  let playing = false;
+
+  function pauseFactoryDemo() {
+    window.clearTimeout(timer);
+    timer = null;
+    playing = false;
+    play.textContent = "Play walkthrough";
+  }
+
+  function renderFactoryStation(index) {
+    position = Math.max(0, Math.min(index, stations.length - 1));
+    const station = stations[position];
+    for (const [key, value] of Object.entries({
+      owner: station.owner, title: station.title, description: station.description,
+      command: station.command, state: `Illustration · ${station.state}`,
+      count: `${position + 1} / ${stations.length}`,
+    })) {
+      factoryPlayer.querySelector(`[data-factory-${key}]`).textContent = value;
+    }
+    stepButtons.forEach((button, index) => {
+      if (index === position) button.setAttribute("aria-current", "step");
+      else button.removeAttribute("aria-current");
+      button.classList.toggle("is-complete", index < position);
+    });
+    next.textContent = station.gate ? "Approve demo gate" : "Next station";
+    next.disabled = position === stations.length - 1;
+    factoryPlayer.classList.toggle("is-gate", Boolean(station.gate));
+    // A running walkthrough always stops at a human decision. Play cannot answer it.
+    if (station.gate || position === stations.length - 1) pauseFactoryDemo();
+    play.disabled = Boolean(station.gate);
+  }
+
+  function scheduleFactoryStation() {
+    timer = window.setTimeout(() => {
+      if (!playing) return;
+      renderFactoryStation(position + 1);
+      if (playing) scheduleFactoryStation();
+    }, 2800);
+  }
+
+  play.addEventListener("click", () => {
+    if (playing) return pauseFactoryDemo();
+    if (position === stations.length - 1) renderFactoryStation(0);
+    playing = true;
+    play.textContent = "Pause walkthrough";
+    scheduleFactoryStation();
+  });
+  next.addEventListener("click", () => {
+    pauseFactoryDemo();
+    renderFactoryStation(position + 1);
+  });
+  reset.addEventListener("click", () => {
+    pauseFactoryDemo();
+    renderFactoryStation(0);
+  });
+  stepButtons.forEach((button, index) => button.addEventListener("click", () => {
+    pauseFactoryDemo();
+    renderFactoryStation(index);
+  }));
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) pauseFactoryDemo();
+  });
+  renderFactoryStation(0);
+}

@@ -22,6 +22,7 @@ use std::time::Duration;
 use chrono::Utc;
 use swf_adapters::airflow::AirflowApi;
 use swf_adapters::error::AdapterError;
+use swf_adapters::factory::FactoryApi;
 use swf_adapters::gh::GhCli;
 use swf_adapters::islo::IsloCli;
 use swf_adapters::metrics_store::FsMetrics;
@@ -305,6 +306,7 @@ pub struct RunList {
 /// Everything both interfaces can do, over one environment.
 pub struct Ops {
     context: Context,
+    backend: Option<Arc<FactoryApi>>,
     runs: Option<Arc<dyn Runs>>,
     deliveries: Option<Arc<dyn Deliveries>>,
     sandboxes: Option<Arc<dyn Sandboxes>>,
@@ -383,6 +385,7 @@ impl Ops {
         OpsBuilder {
             ops: Self {
                 context,
+                backend: None,
                 runs: None,
                 deliveries: None,
                 sandboxes: None,
@@ -405,7 +408,23 @@ impl Ops {
     }
 
     /// The same, with the HTTP deadline `--timeout` sets. It never bounds a subprocess (§C.6).
-    pub fn connect_with_timeout(context: Context, timeout: Duration) -> Result<Self> {
+    pub fn connect_with_timeout(mut context: Context, timeout: Duration) -> Result<Self> {
+        let backend_url =
+            std::env::var("SWF_BACKEND_URL").unwrap_or_else(|_| context.backend_url.clone());
+        context.backend_url.clone_from(&backend_url);
+        if !backend_url.is_empty() {
+            let token = std::env::var("SWF_BACKEND_TOKEN").unwrap_or_default();
+            let backend = Arc::new(FactoryApi::new(&backend_url, token, timeout)?);
+            let airflow = backend.runs(&context.airflow_url)?;
+            let mut ops = Self::builder(context)
+                .runs(Arc::new(airflow))
+                .deliveries(backend.clone())
+                .sandboxes(backend.clone())
+                .metrics(backend.clone())
+                .build();
+            ops.backend = Some(backend);
+            return Ok(ops);
+        }
         let auth = context.airflow_auth()?;
         let airflow = AirflowApi::new(&context.airflow_url, auth, timeout)?;
         let commands: Arc<dyn CommandRunner> = Arc::new(SystemRunner);
@@ -499,6 +518,16 @@ impl Ops {
 
     /// The readiness report for this machine. Never fails — a failing check *is* the answer.
     pub async fn doctor(&self, cancel: &CancellationToken) -> Vec<Check> {
+        if let Some(backend) = &self.backend {
+            return match backend.call("/doctor", serde_json::json!({}), cancel).await {
+                Ok(checks) => checks,
+                Err(error) => vec![Check::fail(
+                    "factory backend",
+                    error.to_string(),
+                    "start swfactory backend and check SWF_BACKEND_TOKEN",
+                )],
+            };
+        }
         crate::doctor::checks(
             &self.context,
             self.runs.as_deref(),
@@ -514,6 +543,22 @@ impl Ops {
         request: &SubmitRequest,
         cancel: &CancellationToken,
     ) -> Result<Submission> {
+        if let Some(backend) = &self.backend {
+            let mut submitted: Submission = backend
+                .call(
+                    "/work-orders",
+                    serde_json::json!({
+                        "line": request.blueprint,
+                        "issues": request.issues,
+                        "targets": request.targets,
+                    }),
+                    cancel,
+                )
+                .await?;
+            // The backend may see an internal Airflow hostname. Browser links use the context.
+            submitted.url = self.runs()?.run_url(&submitted.run());
+            return Ok(submitted);
+        }
         crate::submit::submit(self.runs()?, request, cancel).await
     }
 
