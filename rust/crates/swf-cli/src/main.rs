@@ -113,6 +113,9 @@ fn start() -> i32 {
 }
 
 fn operator_command(argv: &[String]) -> bool {
+    if !operator_exec::recognizes(argv) {
+        return false;
+    }
     let mut index = 1;
     while index < argv.len() {
         let arg = argv[index].as_str();
