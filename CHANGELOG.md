@@ -81,6 +81,14 @@ All notable changes to this project will be documented here. The format follows
 
 ### Fixed
 
+- The Python control room now pages every Airflow collection instead of trusting one request.
+  Airflow silently clamps `limit` to `[api] maximum_page_limit` (default 100), so the old
+  `limit=500` read of a run's task instances returned the first 100 and dropped the rest — the
+  wide run an operator opened the control room for was exactly the one whose jobs went missing.
+  Runs, DAGs, task instances and pending gates are walked by `offset` until the collection is
+  exhausted; a read that hits the page cap keeps its rows and reports `airflow:truncated` in the
+  snapshot rather than passing a short table off as the whole factory. This is the behavior `swf`
+  already had, so the two clients now agree on a large fan-out.
 - `TARGET_DIR=` now selects a repository-root target during islo bootstrap, matching the documented
   empty-directory behavior instead of falling back to `demo/target`.
 - The README's Docker rehearsal uses the shipped image and Compose file names.

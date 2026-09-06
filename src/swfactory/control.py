@@ -47,6 +47,14 @@ GATE_APPROVE = "Approve"  # ApprovalOperator.APPROVE / REJECT in airflow.provide
 GATE_REJECT = "Reject"
 ACTIVE_RUN_STATES = frozenset({"queued", "running"})
 DEFAULT_TIMEOUT_S = 15.0
+# What one page of a collection may ask for. Airflow clamps ``limit`` to ``[api]
+# maximum_page_limit`` (default 100) and says nothing about it, so asking for more is only a lie
+# the client tells itself: the extra rows never arrive and the read looks complete.
+PAGE_LIMIT = 100
+# How many pages one collection read may fetch before it stops and admits it stopped. A hundred
+# pages is ten thousand rows: past that the filter is wrong, not the collection, and the honest
+# answer is a short table with a visible note rather than a request storm.
+MAX_PAGES = 100
 _SUBPROCESS_TIMEOUT_S = 120
 FAN_OUT_TASK_ID = "fan_out"  # dags/blueprints.py: the task whose XCom lists the jobs
 XCOM_RETURN_KEY = "return_value"
@@ -321,6 +329,9 @@ class AirflowClient:
     ``token`` wins when given; otherwise ``username``/``password`` are exchanged lazily on the
     first call and cached. Without any credential requests go out unauthenticated (fine for a
     dev server with ``simple_auth_manager_all_admins``).
+
+    Every collection read goes through :meth:`_paged`: nothing here trusts one request to have
+    returned a whole collection, because the server silently clamps how much it will hand over.
     """
 
     def __init__(
@@ -339,6 +350,9 @@ class AirflowClient:
         self._password = password
         self._opener = opener
         self.timeout = timeout
+        # Collection path -> rows read before :data:`MAX_PAGES` stopped the walk. Empty is the
+        # normal state; see :meth:`_paged` for why the fact lives here and not in an exception.
+        self.truncated: dict[str, int] = {}
 
     # -- auth / transport
 
@@ -397,28 +411,95 @@ class AirflowClient:
         text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
         return _json(text, f"{method} {url}") if text.strip() else None
 
+    def _paged(
+        self,
+        path: str,
+        key: str,
+        *,
+        query: dict[str, Any] | None = None,
+        want: int | None = None,
+    ) -> list[dict]:
+        """Read a whole collection, page by page, and return its ``key`` rows in server order.
+
+        Airflow clamps the ``limit`` query parameter to ``[api] maximum_page_limit`` (default
+        100) inside ``LimitFilter.depends`` — a plain ``min()``, with no header, no warning and
+        no error. So one ``limit=500`` read of a 300-task run answers 200 OK with the first 100
+        task instances and drops the rest, and the run big enough to need a control room is
+        exactly the one whose rows go missing. Ask for at most :data:`PAGE_LIMIT` and walk
+        ``offset`` instead.
+
+        Three rules, each of which is a data-loss bug when broken:
+
+        * ``offset`` advances by the rows **actually returned**, never by the limit requested:
+          the server may have clamped that limit, and stepping by the ask would skip rows.
+        * an **empty page** is the terminator. ``total_entries`` is ``int | null`` — it is absent
+          from the ``required`` list of ``dagRuns`` and ``taskInstances`` and is null in cursor
+          mode — so it is only ever a second, earlier stop, never the only one.
+        * ``want`` (a caller's "the newest N") bounds the ask but never below one row:
+          ``min(0, 100) == 0`` tells this API "return nothing", not "no limit".
+
+        The walk gives up after :data:`MAX_PAGES` pages rather than trust a server to eventually
+        say "done", and records that in :attr:`truncated` (path -> rows read) instead of raising
+        or logging. Raising would discard the rows already in hand — the very loss this method
+        exists to stop — and a log line has nowhere to go under a full-screen TUI; the attribute
+        is data the caller can render. :func:`collect` folds it into :attr:`Snapshot.errors`, so
+        a shortened table says so on the screen it is shortened on. A later complete read of the
+        same path clears its entry, so the note never outlives the condition.
+        """
+        rows: list[dict] = []
+        offset = pages = 0
+        capped = False
+        while want is None or len(rows) < want:
+            if pages >= MAX_PAGES:
+                capped = True
+                break
+            limit = PAGE_LIMIT if want is None else min(PAGE_LIMIT, want - len(rows))
+            data = self._api("GET", path, query={**(query or {}), "limit": limit, "offset": offset})
+            page = [r for r in (data or {}).get(key) or [] if isinstance(r, dict)]
+            rows.extend(page)
+            offset += len(page)
+            pages += 1
+            if not page:
+                break
+            total = (data or {}).get("total_entries")
+            if isinstance(total, int) and offset >= total:
+                break
+        if capped:
+            self.truncated[path] = len(rows)
+        else:
+            self.truncated.pop(path, None)
+        return rows
+
     # -- reads
 
     def list_dags(self, tag: str = "swfactory") -> list[str]:
         """Ids of the DAGs tagged ``tag`` (``dags/blueprints.py`` tags every line ``swfactory``)."""
-        data = self._api("GET", "/dags", query={"tags": tag, "limit": 100})
-        return [str(d["dag_id"]) for d in (data or {}).get("dags", []) if "dag_id" in d]
+        dags = self._paged("/dags", "dags", query={"tags": tag})
+        return [str(d["dag_id"]) for d in dags if "dag_id" in d]
 
     def list_runs(self, dag_id: str, limit: int = 20) -> list[Run]:
-        """Most recent ``limit`` runs of ``dag_id``, newest first, without task states."""
-        data = self._api(
-            "GET",
+        """Most recent ``limit`` runs of ``dag_id``, newest first, without task states.
+
+        ``limit`` is the answer's size, not one request's: ``-run_after`` puts the newest first,
+        so paging until ``limit`` rows are in hand gives the newest ``limit`` runs even when the
+        server hands back fewer per page than asked.
+        """
+        runs = self._paged(
             f"/dags/{_seg(dag_id)}/dagRuns",
-            query={"limit": limit, "order_by": "-run_after"},
+            "dag_runs",
+            query={"order_by": "-run_after"},
+            want=limit,
         )
-        return [_run_from(d) for d in (data or {}).get("dag_runs", [])]
+        return [_run_from(d) for d in runs]
 
     def task_states(self, dag_id: str, run_id: str) -> list[TaskState]:
-        """Every task instance of one run (``job.<stage>`` mapped per job index)."""
-        data = self._api(
-            "GET",
-            f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}/taskInstances",
-            query={"limit": 500},
+        """Every task instance of one run (``job.<stage>`` mapped per job index).
+
+        Unbounded on purpose: a run's task count is ``fan_out`` x stages, so a wide run is
+        several pages and a client that reads one page reports a job as never having started.
+        """
+        tis = self._paged(
+            f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}/taskInstances", "task_instances"
         )
         return [
             TaskState(
@@ -426,7 +507,7 @@ class AirflowClient:
                 map_index=int(ti.get("map_index", -1)),
                 state=ti.get("state"),
             )
-            for ti in (data or {}).get("task_instances", [])
+            for ti in tis
         ]
 
     def fan_out_jobs(self, dag_id: str, run_id: str) -> list[dict]:
@@ -454,7 +535,7 @@ class AirflowClient:
     ) -> list[JobRow]:
         """One row per job of ``run_id``: task instances grouped by ``map_index``, issue named.
 
-        Two bounded reads: ``taskInstances`` (the states) and ``fan_out``'s XCom (the issues).
+        Two reads: ``taskInstances`` (the states, paged) and ``fan_out``'s XCom (the issues).
         A missing or unreadable XCom degrades to ``fallback_issues`` / ``-``.
         """
         tasks = self.task_states(dag_id, run_id)
@@ -465,13 +546,15 @@ class AirflowClient:
         return group_jobs(dag_id, run_id, tasks, fan_out, fallback_issues=fallback_issues)
 
     def pending_gates(self) -> list[Gate]:
-        """Unanswered HITL gates across all DAGs (``GET /dags/~/dagRuns/~/hitlDetails``)."""
-        data = self._api(
-            "GET",
-            "/dags/~/dagRuns/~/hitlDetails",
-            query={"response_received": "false", "limit": 100},
+        """Unanswered HITL gates across all DAGs (``GET /dags/~/dagRuns/~/hitlDetails``).
+
+        Paged like the rest: this route is unfiltered by DAG, so a busy factory outruns one page
+        and the hidden gates are the ones nobody answers.
+        """
+        gates = self._paged(
+            "/dags/~/dagRuns/~/hitlDetails", "hitl_details", query={"response_received": "false"}
         )
-        return [_gate_from(h) for h in (data or {}).get("hitl_details", [])]
+        return [_gate_from(h) for h in gates]
 
     # -- writes
 
@@ -734,6 +817,10 @@ def collect(
     runs of each DAG — the ones an operator acts on. Every other run (and every run whose read
     failed) still contributes exactly one :func:`collapsed_job` row, so the table never lies by
     omission. A ``None`` client is skipped.
+
+    A read that walked all the way to :data:`MAX_PAGES` lands in ``errors`` under
+    ``airflow:truncated``: it succeeded, so nothing raised, but the rows it returned are not all
+    of them and that has to reach the screen.
     """
     snap = Snapshot(collected_at=now())
     if airflow is not None:
@@ -761,6 +848,15 @@ def collect(
             snap.gates = airflow.pending_gates()
         except Exception as e:  # noqa: BLE001
             snap.errors["gates"] = str(e)
+        # A collection read that hit its page cap returned *some* rows and no error, so the only
+        # way the operator learns the table is short is if the snapshot says so. ``getattr``
+        # because ``RunSource`` is a read contract: a stand-in source owes us four methods, not
+        # this bookkeeping.
+        capped: dict[str, int] = getattr(airflow, "truncated", None) or {}
+        if capped:
+            snap.errors["airflow:truncated"] = "; ".join(
+                f"{path} stopped at {rows} rows (page cap)" for path, rows in sorted(capped.items())
+            )
     if github is not None:
         try:
             snap.prs = github.prs()
