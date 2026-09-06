@@ -33,7 +33,7 @@ class ManagedNode(BoundaryModel):
 
 
 class ManagedGraph(BoundaryModel):
-    schema: Literal[1] = 1
+    version: Literal[1] = 1
     issue_id: str
     scheduler: Literal["fixed-airflow-dag"] = "fixed-airflow-dag"
     fork_semantics: Literal["hint-only"] = "hint-only"
