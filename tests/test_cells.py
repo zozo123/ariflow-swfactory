@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 
 import pytest
 
 from swfactory.cell_runtime import bind_jobs, identity_for_job
-from swfactory.cells import CellBusy, CellStore, StaleEpoch
+from swfactory.cells import CellBusy, CellStore, SCHEMA_VERSION, StaleEpoch
 
 
 def _job(index: int = 0) -> dict[str, object]:
@@ -110,3 +111,39 @@ def test_two_threads_cannot_claim_the_same_fresh_cell(tmp_path: Path) -> None:
         assert store.get(identity.stable_id())["epoch"] == 1
     finally:
         store.close()
+
+
+def test_python_accepts_the_shared_factory_cell_v1_wire_fixture() -> None:
+    path = Path(__file__).parent / "fixtures" / "cells" / "factory_cell_v1.json"
+    golden = json.loads(path.read_text(encoding="utf-8"))
+    cell = golden["cell"]
+    history = golden["history"]
+
+    assert cell["schema_version"] == SCHEMA_VERSION == 1
+    assert cell["cell_id"].startswith("cell_") and len(cell["cell_id"]) == 29
+    assert cell["epoch"] >= 1
+    assert cell["airflow_dag_id"] == "factory"
+    assert cell["map_index"] == 7
+    assert set(cell) == {
+        "cell_id",
+        "schema_version",
+        "repo",
+        "target",
+        "issue",
+        "epoch",
+        "state",
+        "airflow_dag_id",
+        "airflow_run_id",
+        "map_index",
+        "factory_generation",
+        "policy_digest",
+        "base_sha",
+        "observed_target_sha",
+        "compute",
+        "cleanup",
+        "created_at",
+        "updated_at",
+    }
+    assert [event["seq"] for event in history] == [1, 2]
+    assert all(event["epoch"] == cell["epoch"] for event in history)
+    assert history[0]["operation_key"] == "activation:3"
