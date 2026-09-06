@@ -10,9 +10,9 @@ import shutil
 import subprocess
 import time
 import tomllib
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Mapping
 
 import yaml
 
@@ -47,10 +47,15 @@ class RepositoryTopology:
                 sorted(
                     workflow.workflow
                     for workflow in self.workflows
-                    if any(_glob_under(root, workflow.paths, workflow.paths_ignore) for root in module.roots)
+                    if any(
+                        _glob_under(root, workflow.paths, workflow.paths_ignore)
+                        for root in module.roots
+                    )
                 )
             )
-            modules.append(Module(module.name, module.roots, module.depends_on, checks or module.checks))
+            modules.append(
+                Module(module.name, module.roots, module.depends_on, checks or module.checks)
+            )
         return Topology(tuple(modules))
 
     def owners_for(self, path: str) -> tuple[str, ...]:
@@ -265,9 +270,7 @@ def _materialize_once(repo_url: str, plan: MaterializationPlan, destination: Pat
     if plan.mode == "sparse":
         _run(["git", "-C", str(destination), "sparse-checkout", "init", "--cone"])
         if plan.sparse_paths:
-            _run(
-                ["git", "-C", str(destination), "sparse-checkout", "set", *plan.sparse_paths]
-            )
+            _run(["git", "-C", str(destination), "sparse-checkout", "set", *plan.sparse_paths])
     # A SHA may not be a named branch, so explicitly fetch then detach FETCH_HEAD.
     fetch = ["git", "-C", str(destination), "fetch"]
     if plan.shallow:
@@ -312,7 +315,9 @@ def quarantine_cache(path: Path, validation: CacheValidation, quarantine_root: P
     target = quarantine_root / f"{path.name}.{suffix}.bad"
     os.replace(path, target)
     metadata = target.with_suffix(target.suffix + ".json")
-    metadata.write_text(json.dumps(asdict(validation), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    metadata.write_text(
+        json.dumps(asdict(validation), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return target
 
 
@@ -338,13 +343,21 @@ def _norm(path: str) -> str:
     return str(PurePosixPath(path.replace("\\", "/")))
 
 
+def _glob_root(pattern: str) -> str:
+    if pattern.endswith("/**"):
+        return pattern[:-3].rstrip("/")
+    return pattern.rstrip("/")
+
+
 def _glob_under(root: str, paths: Iterable[str], ignored: Iterable[str]) -> bool:
     root = _norm(root).lstrip("./")
     path_patterns = tuple(paths)
     ignore_patterns = tuple(ignored)
-    if path_patterns and not any(fnmatch.fnmatchcase(root, pattern.rstrip("/**")) for pattern in path_patterns):
+    if path_patterns and not any(
+        fnmatch.fnmatchcase(root, _glob_root(pattern)) for pattern in path_patterns
+    ):
         return False
-    return not any(fnmatch.fnmatchcase(root, pattern.rstrip("/**")) for pattern in ignore_patterns)
+    return not any(fnmatch.fnmatchcase(root, _glob_root(pattern)) for pattern in ignore_patterns)
 
 
 def _run(argv: list[str], *, capture: bool = False) -> str:

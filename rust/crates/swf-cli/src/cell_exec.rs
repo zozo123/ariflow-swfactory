@@ -48,7 +48,8 @@ fn render_list(rows: &[CellRecord]) -> String {
     if rows.is_empty() {
         return "no Factory Cells".to_string();
     }
-    let mut out = String::from("CELL                         EPOCH STATE        ISSUE REPOSITORY / TARGET\n");
+    let mut out =
+        String::from("CELL                         EPOCH STATE        ISSUE REPOSITORY / TARGET\n");
     for row in rows {
         out.push_str(&format!(
             "{:<28} {:>5} {:<12} {:<5} {} / {}\n",
@@ -64,7 +65,9 @@ fn render_list(rows: &[CellRecord]) -> String {
 }
 
 fn render_cell(row: &CellRecord) -> String {
-    let airflow = row.airflow_identity().unwrap_or_else(|| "unbound".to_string());
+    let airflow = row
+        .airflow_identity()
+        .unwrap_or_else(|| "unbound".to_string());
     let generation = row.factory_generation.as_deref().unwrap_or("-");
     let policy = row.policy_digest.as_deref().unwrap_or("-");
     let base = row.base_sha.as_deref().unwrap_or("-");
@@ -95,7 +98,10 @@ fn render_history(cell_id: &str, rows: &[CellEvent]) -> String {
     if rows.is_empty() {
         return format!("{} has no recorded events", sanitize_line(cell_id));
     }
-    let mut out = format!("history {}\nSEQ EPOCH KIND                 OPERATION\n", sanitize_line(cell_id));
+    let mut out = format!(
+        "history {}\nSEQ EPOCH KIND                 OPERATION\n",
+        sanitize_line(cell_id)
+    );
     for row in rows {
         out.push_str(&format!(
             "{:>3} {:>5} {:<20} {}\n",

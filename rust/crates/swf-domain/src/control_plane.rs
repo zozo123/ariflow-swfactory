@@ -87,7 +87,9 @@ impl CompatibilityDocument {
         if self.features.get(name).copied().unwrap_or(false) {
             Ok(())
         } else {
-            Err(format!("factory backend does not advertise required feature {name:?}"))
+            Err(format!(
+                "factory backend does not advertise required feature {name:?}"
+            ))
         }
     }
 

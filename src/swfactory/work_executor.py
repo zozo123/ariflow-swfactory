@@ -10,9 +10,10 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
+from collections.abc import Iterable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
-from typing import Callable, Iterable, Literal, Protocol
+from dataclasses import asdict, dataclass
+from typing import Literal, Protocol
 
 from swfactory.workgraph import WorkNode, conflict_set, deterministic_merge_order, waves
 
@@ -120,10 +121,12 @@ class ExecutorPolicy:
 
 
 class WorkExecutor:
-    def __init__(self, runner: NodeRunner, merger: NodeMerger, policy: ExecutorPolicy = ExecutorPolicy()):
+    def __init__(
+        self, runner: NodeRunner, merger: NodeMerger, policy: ExecutorPolicy | None = None
+    ):
         self.runner = runner
         self.merger = merger
-        self.policy = policy
+        self.policy = policy or ExecutorPolicy()
 
     def execute(
         self,
@@ -219,11 +222,14 @@ class WorkExecutor:
                 break
         return out
 
-    def _parallel(self, requests: list[NodeRequest], cancellation: Cancellation) -> list[NodeResult]:
+    def _parallel(
+        self, requests: list[NodeRequest], cancellation: Cancellation
+    ) -> list[NodeResult]:
         by_id: dict[str, NodeResult] = {}
         with ThreadPoolExecutor(max_workers=min(self.policy.max_parallel, len(requests))) as pool:
             futures: dict[Future[NodeResult], NodeRequest] = {
-                pool.submit(self._run_with_retry, request, cancellation): request for request in requests
+                pool.submit(self._run_with_retry, request, cancellation): request
+                for request in requests
             }
             for future in as_completed(futures):
                 request = futures[future]

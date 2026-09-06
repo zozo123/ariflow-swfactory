@@ -28,7 +28,7 @@ from typing import Any
 from swfactory import blueprint
 from swfactory.admission import Priority
 from swfactory.cell_runtime import identity_for_job
-from swfactory.cells import CellBusy, CellStore, DuplicateOperation, SCHEMA_VERSION, TERMINAL_STATES
+from swfactory.cells import SCHEMA_VERSION, TERMINAL_STATES, CellBusy, CellStore, DuplicateOperation
 from swfactory.control import AirflowClient, ControlError, GitHubClient, IsloClient, MetricsSource
 from swfactory.control_kernel import ControlKernel
 from swfactory.idempotency import MutationOutcome, OperationRef
@@ -156,7 +156,9 @@ class Factory:
     def _checked_airflow(self, method: str, path: str, body: dict | None = None) -> Any:
         status, payload = self.airflow(method, path, body)
         if status >= 300:
-            suffix = "; mutation outcome may be unknown" if method != "GET" and status >= 500 else ""
+            suffix = (
+                "; mutation outcome may be unknown" if method != "GET" and status >= 500 else ""
+            )
             raise Refused(status, f"Airflow rejected {method} (HTTP {status}){suffix}")
         return payload
 
@@ -221,7 +223,9 @@ class Factory:
                 try:
                     cell = self.cell_store.get(identity.stable_id())
                 except KeyError as error:
-                    raise Refused(409, "active admission has no corresponding Factory Cell") from error
+                    raise Refused(
+                        409, "active admission has no corresponding Factory Cell"
+                    ) from error
                 if cell["state"] in TERMINAL_STATES:
                     raise Refused(409, "active admission points at a terminal Factory Cell")
             else:
@@ -252,7 +256,9 @@ class Factory:
             )
         return bindings
 
-    def _journal_airflow_unpause(self, authority: dict[str, Any], line_name: str, path: str) -> None:
+    def _journal_airflow_unpause(
+        self, authority: dict[str, Any], line_name: str, path: str
+    ) -> None:
         ref = OperationRef.build(
             authority["cell_id"], authority["epoch"], "airflow_unpause", line_name
         )
@@ -265,7 +271,9 @@ class Factory:
             status, payload = self.airflow("GET", path, None)
             if status == 200 and isinstance(payload, dict):
                 if payload.get("is_paused") is False:
-                    return MutationOutcome("committed", payload, {"dag": line_name}, "DAG is unpaused")
+                    return MutationOutcome(
+                        "committed", payload, {"dag": line_name}, "DAG is unpaused"
+                    )
                 return MutationOutcome(
                     "definitely_absent", None, {"dag": line_name}, "DAG remains paused"
                 )
@@ -487,7 +495,9 @@ class Factory:
                 {"chosen_options": ["Reject"], "params_input": {}},
             ):
                 raise ValueError("only explicit Approve or Reject answers are supported")
-            tasks = AirflowClient(self.airflow_url, token=self._credential(), opener=self.opener.open)
+            tasks = AirflowClient(
+                self.airflow_url, token=self._credential(), opener=self.opener.open
+            )
             states = tasks.task_states(segments[1], segments[3])
             index = int(segments[6])
             if not any(
@@ -545,7 +555,11 @@ class Factory:
             counts[state] = counts.get(state, 0) + 1
             generation = str(cell.get("factory_generation") or "unknown")
             generations[generation] = generations.get(generation, 0) + 1
-            if state == "dispatching" and not cell.get("airflow_run_id") and now - float(cell["updated_at"]) > 300:
+            if (
+                state == "dispatching"
+                and not cell.get("airflow_run_id")
+                and now - float(cell["updated_at"]) > 300
+            ):
                 stale += 1
                 orphaned += 1
             if cell.get("compute") and not cell.get("cleanup") and state in TERMINAL_STATES:
@@ -587,7 +601,9 @@ class Factory:
         )
         current = self._cell(cell_id)
         if int(current["epoch"]) != epoch:
-            raise Refused(409, f"stale Factory Cell epoch {epoch}; current epoch is {current['epoch']}")
+            raise Refused(
+                409, f"stale Factory Cell epoch {epoch}; current epoch is {current['epoch']}"
+            )
 
         if requested == "cleaned":
             cleanup = {
@@ -613,8 +629,13 @@ class Factory:
             next_state = updated["state"]
         else:
             old_state = str(current["state"])
-            if old_state in {"failed", "cancelled", "rejected", "cleaned"} and requested != old_state:
-                raise Refused(409, f"terminal Factory Cell cannot transition {old_state} -> {requested}")
+            if (
+                old_state in {"failed", "cancelled", "rejected", "cleaned"}
+                and requested != old_state
+            ):
+                raise Refused(
+                    409, f"terminal Factory Cell cannot transition {old_state} -> {requested}"
+                )
             if old_state == "success" and requested not in {"success", "failed"}:
                 raise Refused(409, f"Factory Cell cannot transition success -> {requested}")
             if requested == "running" and old_state not in {"dispatching", "queued", "running"}:
@@ -639,7 +660,12 @@ class Factory:
             cell_id=cell_id,
             epoch=epoch,
             kind="lifecycle_transition" if requested != "cleaned" else "cleanup",
-            payload={"from": current.get("state"), "requested": requested, "to": next_state, "released_work": released},
+            payload={
+                "from": current.get("state"),
+                "requested": requested,
+                "to": next_state,
+                "released_work": released,
+            },
             policy_digest=updated.get("policy_digest"),
             trace=TraceContext.for_cell(cell_id, epoch, "lifecycle", operation_key),
         )
@@ -649,22 +675,64 @@ class Factory:
         if path == "/doctor":
             caps = self.capabilities()
             checks = [
-                {"name": "factory backend", "status": "ok", "detail": "Python API v1", "required": True},
-                {"name": "factory cells", "status": "ok", "detail": f"durable CellStore schema v{SCHEMA_VERSION}", "required": True},
-                {"name": "mutation readiness", "status": "ok" if caps["mutation_ready"] else "warn", "detail": caps, "required": True},
+                {
+                    "name": "factory backend",
+                    "status": "ok",
+                    "detail": "Python API v1",
+                    "required": True,
+                },
+                {
+                    "name": "factory cells",
+                    "status": "ok",
+                    "detail": f"durable CellStore schema v{SCHEMA_VERSION}",
+                    "required": True,
+                },
+                {
+                    "name": "mutation readiness",
+                    "status": "ok" if caps["mutation_ready"] else "warn",
+                    "detail": caps,
+                    "required": True,
+                },
             ]
             try:
                 health = self._checked_airflow("GET", "/monitor/health")
                 for name in ("metadatabase", "scheduler"):
                     healthy = (health.get(name) or {}).get("status") == "healthy"
-                    checks.append({"name": name, "status": "ok" if healthy else "fail", "detail": "Airflow health", "required": True, "fix": "" if healthy else "restore the Airflow service"})
+                    checks.append(
+                        {
+                            "name": name,
+                            "status": "ok" if healthy else "fail",
+                            "detail": "Airflow health",
+                            "required": True,
+                            "fix": "" if healthy else "restore the Airflow service",
+                        }
+                    )
                 self._checked_airflow("GET", "/dags?limit=1")
                 checks.append({"name": "airflow auth", "status": "ok", "required": True})
             except (Refused, ControlError, OSError):
-                checks.append({"name": "airflow", "status": "fail", "required": True, "detail": "Airflow is unavailable or authentication failed", "fix": "check AIRFLOW_URL and credentials on the backend"})
+                checks.append(
+                    {
+                        "name": "airflow",
+                        "status": "fail",
+                        "required": True,
+                        "detail": "Airflow is unavailable or authentication failed",
+                        "fix": "check AIRFLOW_URL and credentials on the backend",
+                    }
+                )
             for tool, configured in (("gh", bool(self.repo)), ("islo", bool(self.owner))):
                 present = bool(shutil.which(tool))
-                checks.append({"name": tool, "status": "ok" if present else "warn", "required": False, "detail": f"backend tool installed={present}, configured={configured}; credentials not probed", "fix": "" if present else f"install {tool} on the backend if needed"})
+                checks.append(
+                    {
+                        "name": tool,
+                        "status": "ok" if present else "warn",
+                        "required": False,
+                        "detail": (
+                            f"backend tool installed={present}, configured={configured}; "
+                            "credentials not probed"
+                        ),
+                        "fix": "" if present else f"install {tool} on the backend if needed",
+                    }
+                )
             return checks
         if path == "/compatibility":
             return self.capabilities()
@@ -728,13 +796,34 @@ class Factory:
                 limit=self._limit(body),
             )
         if path == "/deliveries/head":
-            rows = self._gh(["pr", "list", "--head", text(body, "branch"), "--state", "all", "--limit", "1", "--json", "url,state,title,labels,headRefOid,baseRefName"])
+            rows = self._gh(
+                [
+                    "pr",
+                    "list",
+                    "--head",
+                    text(body, "branch"),
+                    "--state",
+                    "all",
+                    "--limit",
+                    "1",
+                    "--json",
+                    "url,state,title,labels,headRefOid,baseRefName",
+                ]
+            )
             if not rows:
                 return None
             row = rows[0]
-            return {"url": row["url"], "state": row["state"], "title": row["title"], "labels": [label["name"] for label in row.get("labels", [])], "head_sha": row["headRefOid"], "base_ref": row["baseRefName"]}
+            return {
+                "url": row["url"],
+                "state": row["state"],
+                "title": row["title"],
+                "labels": [label["name"] for label in row.get("labels", [])],
+                "head_sha": row["headRefOid"],
+                "base_ref": row["baseRefName"],
+            }
         if path in {"/deliveries/checks", "/deliveries/url"}:
             from swfactory.control import summarize_checks
+
             number = body.get("number")
             if type(number) is not int or number <= 0:
                 raise ValueError("number must be a positive integer")
@@ -756,7 +845,12 @@ class Factory:
             return inspect_run(self.state_root, text(body, "run_id"))
         if path == "/lines":
             return [
-                {"name": bp.name, "targets": [t.repo for t in bp.targets], "route": list(bp.order), "gates": [g.model_dump() for g in bp.gates]}
+                {
+                    "name": bp.name,
+                    "targets": [t.repo for t in bp.targets],
+                    "route": list(bp.order),
+                    "gates": [g.model_dump() for g in bp.gates],
+                }
                 for bp in (blueprint.load(str(p)) for p in blueprint.blueprint_paths())
             ]
         raise Refused(404, "unknown factory operation")

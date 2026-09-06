@@ -4,7 +4,7 @@ The package replaces the former monolithic ``swfactory.backend`` module while pr
 imports.  Service semantics live in ``service`` and HTTP transport in ``server``.
 """
 
-from .service import Factory, Refused
 from .server import make_server, serve
+from .service import Factory, Refused
 
 __all__ = ["Factory", "Refused", "make_server", "serve"]

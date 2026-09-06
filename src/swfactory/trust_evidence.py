@@ -7,8 +7,9 @@ redaction contract, and then delegates to the append-only evidence writer.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from swfactory.lifecycle_evidence import EvidenceWriter, TraceContext
 from swfactory.security_contract import CanonicalPolicy, MutationEnvelope, redact
@@ -88,7 +89,8 @@ def validate_mutation_policy(envelope: MutationEnvelope, current_policy_digest: 
     envelope.validate()
     if envelope.policy_digest != current_policy_digest:
         raise PermissionError(
-            "mutation policy digest is stale; refuse external side effect until the cell is reactivated"
+            "mutation policy digest is stale; refuse external side effect until the cell "
+            "is reactivated"
         )
 
 

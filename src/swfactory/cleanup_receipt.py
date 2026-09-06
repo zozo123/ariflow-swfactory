@@ -1,7 +1,8 @@
 """Versioned cleanup receipts and bounded repair leases.
 
-Cleanup is a convergent external mutation, not a best-effort `close()` side effect.  Providers report
-what they observed; callers decide whether that observation is authoritative for the current cell
+Cleanup is a convergent external mutation, not a best-effort `close()` side effect. Providers
+report what they observed; callers decide whether that observation is authoritative for the current
+cell
 epoch.
 """
 
@@ -44,7 +45,7 @@ class CleanupReceipt:
         requested_at: float,
         attempts: int = 1,
         detail: str = "",
-    ) -> "CleanupReceipt":
+    ) -> CleanupReceipt:
         if epoch < 1 or attempts < 1:
             raise ValueError("cleanup epoch/attempts must be positive")
         return cls(
@@ -86,7 +87,9 @@ class RepairLeaseStore:
 
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False)
+        self.db = sqlite3.connect(
+            path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False
+        )
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
@@ -139,7 +142,8 @@ class RepairLeaseStore:
         expires = now + ttl_s
         with self.db:
             cur = self.db.execute(
-                "UPDATE repair_leases SET expires_at=? WHERE lease_key=? AND owner=? AND lease_epoch=?",
+                "UPDATE repair_leases SET expires_at=? "
+                "WHERE lease_key=? AND owner=? AND lease_epoch=?",
                 (expires, lease.key, lease.owner, lease.epoch),
             )
         if cur.rowcount != 1:

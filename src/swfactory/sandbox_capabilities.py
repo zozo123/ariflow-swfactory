@@ -45,7 +45,7 @@ class SandboxLineage:
     policy_digest: str | None = None
     artifact_digests: tuple[str, ...] = field(default_factory=tuple)
 
-    def child(self, *, incarnation_id: str, provider: str | None = None) -> "SandboxLineage":
+    def child(self, *, incarnation_id: str, provider: str | None = None) -> SandboxLineage:
         return SandboxLineage(
             cell_id=self.cell_id,
             epoch=self.epoch,
@@ -82,7 +82,9 @@ def negotiate(
     return advertised
 
 
-def capability_document(provider: str, caps: SandboxCapabilities, **metadata: Any) -> dict[str, Any]:
+def capability_document(
+    provider: str, caps: SandboxCapabilities, **metadata: Any
+) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "provider": provider,

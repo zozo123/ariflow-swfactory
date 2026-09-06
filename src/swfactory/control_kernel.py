@@ -9,8 +9,9 @@ feature-specific SQLite helpers.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from swfactory.admission import Limits, Priority
 from swfactory.cleanup_receipt import CleanupReceipt, RepairLeaseStore
@@ -19,7 +20,8 @@ from swfactory.idempotency import MutationOutcome, OperationJournal, OperationRe
 
 
 class ControlKernel:
-    def __init__(self, root: Path, *, limits: Limits = Limits()):
+    def __init__(self, root: Path, *, limits: Limits | None = None):
+        limits = limits or Limits()
         root.mkdir(parents=True, exist_ok=True)
         self.root = root
         self.operations = OperationJournal(root / "operations.sqlite3")
@@ -124,7 +126,10 @@ class ControlKernel:
         )
 
     def record_cleanup(self, receipt: CleanupReceipt) -> dict[str, Any]:
-        """Return the canonical receipt document; persistence is the operation/evidence layer's job."""
+        """Return the canonical receipt document.
+
+        Persistence is the operation/evidence layer's job.
+        """
         return receipt.to_dict()
 
     def snapshot(self, *, limit: int = 100) -> dict[str, Any]:

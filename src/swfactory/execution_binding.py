@@ -7,8 +7,8 @@ creates a second scheduling authority.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from swfactory.sandbox_contract import CapabilityRequirement, ProviderDocument, select_provider
 from swfactory.work_executor import Cancellation, ExecutionReport, WorkExecutor
@@ -56,11 +56,7 @@ def choose_execution(
         provider = select_provider(providers, serial_requirement, preferred=preferred)
         parallel = False
         reason = "serial_fallback_missing_fork"
-    required = tuple(
-        name
-        for name, needed in requirement.__dict__.items()
-        if bool(needed)
-    )
+    required = tuple(name for name, needed in requirement.__dict__.items() if bool(needed))
     return provider, ExecutionDecision(provider.provider, parallel, reason, required)
 
 

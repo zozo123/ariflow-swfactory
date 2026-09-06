@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,9 @@ class Topology:
                     changed_any = True
         return tuple(module.name for module in self.modules if module.name in impacted)
 
-    def required_checks(self, changed: Iterable[str], *, require_full_suite: bool = False) -> tuple[str, ...]:
+    def required_checks(
+        self, changed: Iterable[str], *, require_full_suite: bool = False
+    ) -> tuple[str, ...]:
         impacted = set(self.impacted(changed))
         checks: list[str] = []
         for module in self.modules:

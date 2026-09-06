@@ -10,9 +10,10 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from swfactory.idempotency import MutationOutcome, OperationJournal, OperationRef
 
@@ -29,7 +30,9 @@ class ReconcileLeaseStore:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False)
+        self.db = sqlite3.connect(
+            path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False
+        )
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
@@ -48,7 +51,9 @@ class ReconcileLeaseStore:
         with self.lock:
             self.db.close()
 
-    def acquire(self, operation_key: str, owner: str, *, ttl_s: float = 30.0) -> ReconcileLease | None:
+    def acquire(
+        self, operation_key: str, owner: str, *, ttl_s: float = 30.0
+    ) -> ReconcileLease | None:
         if not owner.strip():
             raise ValueError("reconciler owner must be nonempty")
         now = time.time()

@@ -7,7 +7,8 @@ same authority/evidence root.
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from swfactory.cells import CellIdentity, CellStore
 
@@ -79,7 +80,9 @@ def bind_jobs(
                 raise ValueError(f"factory cell binding mismatch for mapped job {idx}")
             epoch = binding.get("epoch")
             if type(epoch) is not int or epoch < 1:
-                raise ValueError(f"factory cell binding epoch must be positive for mapped job {idx}")
+                raise ValueError(
+                    f"factory cell binding epoch must be positive for mapped job {idx}"
+                )
             policy_digest = binding.get("policy_digest")
             if policy_digest is not None and (
                 not isinstance(policy_digest, str) or not policy_digest.startswith("policy:")

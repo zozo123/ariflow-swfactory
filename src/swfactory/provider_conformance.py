@@ -8,6 +8,7 @@ from typing import Protocol
 
 class SandboxProvider(Protocol):
     name: str
+
     def create(self) -> str: ...
     def exec(self, sandbox_id: str, command: list[str]) -> tuple[int, str, str]: ...
     def remove(self, sandbox_id: str) -> None: ...
@@ -35,9 +36,11 @@ OPTIONAL_CHECKS = ("attach", "snapshot", "fork", "pause_resume", "network_policy
 
 def capability_report(provider: str, results: list[CheckResult]) -> dict:
     by_name = {result.name: result for result in results}
+
     def state(name: str) -> str:
         result = by_name.get(name)
         return "not_tested" if result is None else result.status
+
     return {
         "schema_version": 1,
         "provider": provider,

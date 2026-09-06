@@ -19,6 +19,7 @@ pub mod rollup;
 pub mod sanitize;
 pub mod snapshot;
 pub mod states;
+pub mod worker;
 
 pub use ids::{DeliveryId, GateId, IdError, JobId, RunRef};
 pub use model::{
@@ -28,3 +29,4 @@ pub use operator::{
     BackendCapabilities, ContractVersions, FleetSummary, LimitingDimension, OperationDebt,
     QueueEntry, QueuePressure, QueueSnapshot,
 };
+pub use worker::{WorkerBatch, WorkerReceipt, WorkerRole, MAX_WORKERS};

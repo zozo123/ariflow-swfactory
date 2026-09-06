@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -43,11 +43,13 @@ class EvidenceStore:
             if not path.is_file() or path.name == "manifest.json":
                 continue
             data = path.read_bytes()
-            artifacts.append({
-                "path": str(path.relative_to(cell)),
-                "bytes": len(data),
-                "sha256": hashlib.sha256(data).hexdigest(),
-            })
+            artifacts.append(
+                {
+                    "path": str(path.relative_to(cell)),
+                    "bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
         manifest = {
             "schema_version": 1,
             "cell_id": cell_id,
@@ -63,9 +65,15 @@ class EvidenceStore:
         timeline = []
         path = cell / "timeline.jsonl"
         if path.exists():
-            timeline = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+            timeline = [
+                json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line
+            ]
         manifest_path = cell / "manifest.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else None
+        manifest = (
+            json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest_path.exists()
+            else None
+        )
         return {"cell_id": cell_id, "timeline": timeline, "manifest": manifest}
 
     @staticmethod

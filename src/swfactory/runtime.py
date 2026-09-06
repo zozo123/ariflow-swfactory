@@ -16,7 +16,12 @@ from typing import TYPE_CHECKING, Any
 
 from swfactory.config import FACTORY_ROOT, Config, protected_globs
 from swfactory.models import StageError
-from swfactory.paths import normalize_relative_path, validate_git_ref, validate_repo, validate_run_id
+from swfactory.paths import (
+    normalize_relative_path,
+    validate_git_ref,
+    validate_repo,
+    validate_run_id,
+)
 from swfactory.sandbox import HOST_SANDBOXES, make_sandbox
 from swfactory.scm import make_scm
 from swfactory.stages import Ctx, seed_local_workdir

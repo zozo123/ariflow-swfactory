@@ -4,18 +4,16 @@
 //! client, auth path or timeout policy.
 
 use serde_json::json;
-use swf_domain::operator::{BackendCapabilities, FleetSummary, OperationDebt, QueueEntry, QueueSnapshot};
+use swf_domain::operator::{
+    BackendCapabilities, FleetSummary, OperationDebt, QueueEntry, QueueSnapshot,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::Result;
 use crate::factory::FactoryApi;
 
 impl FactoryApi {
-    pub async fn queue(
-        &self,
-        limit: u32,
-        cancel: &CancellationToken,
-    ) -> Result<QueueSnapshot> {
+    pub async fn queue(&self, limit: u32, cancel: &CancellationToken) -> Result<QueueSnapshot> {
         self.call("/queue", json!({"limit": limit}), cancel).await
     }
 
@@ -33,7 +31,8 @@ impl FactoryApi {
         limit: u32,
         cancel: &CancellationToken,
     ) -> Result<Vec<OperationDebt>> {
-        self.call("/operations", json!({"limit": limit}), cancel).await
+        self.call("/operations", json!({"limit": limit}), cancel)
+            .await
     }
 
     pub async fn operation_debt(
@@ -53,10 +52,7 @@ impl FactoryApi {
         self.call("/fleet", json!({}), cancel).await
     }
 
-    pub async fn capabilities(
-        &self,
-        cancel: &CancellationToken,
-    ) -> Result<BackendCapabilities> {
+    pub async fn capabilities(&self, cancel: &CancellationToken) -> Result<BackendCapabilities> {
         self.call("/compatibility", json!({}), cancel).await
     }
 }

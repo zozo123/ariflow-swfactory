@@ -124,7 +124,9 @@ impl BackendCapabilities {
             return Err("backend is not mutation-ready".to_string());
         }
         if !self.supports(feature) {
-            return Err(format!("backend does not advertise required feature {feature}"));
+            return Err(format!(
+                "backend does not advertise required feature {feature}"
+            ));
         }
         Ok(())
     }

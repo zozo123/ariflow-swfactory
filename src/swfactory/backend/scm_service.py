@@ -37,7 +37,9 @@ def operation(factory: Factory, path: str, body: dict[str, Any]) -> Any:
     raise Refused(404, "unknown backend SCM operation")
 
 
-def _managed_identity(factory: Factory, body: dict[str, Any]) -> tuple[dict[str, Any], MutationEnvelope]:
+def _managed_identity(
+    factory: Factory, body: dict[str, Any]
+) -> tuple[dict[str, Any], MutationEnvelope]:
     cell_id = text(body, "cell_id")
     epoch = body.get("epoch")
     if type(epoch) is not int or epoch < 1:
@@ -111,8 +113,16 @@ def _publish(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str
     def reconcile() -> MutationOutcome:
         rows = factory._gh(
             [
-                "pr", "list", "--head", branch, "--state", "open", "--limit", "1",
-                "--json", "url,body,headRefOid",
+                "pr",
+                "list",
+                "--head",
+                branch,
+                "--state",
+                "open",
+                "--limit",
+                "1",
+                "--json",
+                "url,body,headRefOid",
             ]
         )
         if not rows:
