@@ -19,9 +19,9 @@ use swf_adapters::traits::{
 use swf_app::attention::Attention;
 use swf_app::context::{show, show_json, Auth, Context, ContextStore};
 use swf_app::delivery::VerifyOpts;
-use swf_app::gates::{AnswerOpts, Decision};
+use swf_app::gates::{AnswerOpts, BatchOutcome, BatchReport, Decision, GateFilter, Selection};
 use swf_app::logs::LogOpts;
-use swf_app::ops::Ops;
+use swf_app::ops::{JobFilter, Ops};
 use swf_app::snapshot::CollectOpts;
 use swf_domain::evidence::Verdict;
 use swf_domain::ids::{GateId, JobId, RunRef};
@@ -47,6 +47,16 @@ struct FakeRuns {
     /// Drop every gate after this many `pending_gates` calls — someone else answered first.
     gates_vanish_after: Option<usize>,
     pending_calls: Mutex<usize>,
+    /// True when `pending_gates` must report that it stopped at its page bound.
+    gates_truncated: bool,
+    /// Gate ids whose `respond` answers 409: somebody else got there first.
+    conflicts: Vec<String>,
+    /// Gate ids whose `respond` fails outright.
+    broken: Vec<String>,
+    /// When true, any write at all is a test failure. A dry run is proved by construction.
+    panics_on_write: bool,
+    /// The issue each `(run, map_index)` answers, for the one filter that reads job rows.
+    issues: Vec<(String, i32, String)>,
 }
 
 impl FakeRuns {
@@ -142,13 +152,15 @@ impl Runs for FakeRuns {
             return Err(Self::boom("job_rows"));
         }
         let tasks = self.tasks_of(&format!("{}/{}", run.dag_id, run.run_id));
-        Ok(Page::whole(group_jobs(
-            &run.dag_id,
-            &run.run_id,
-            &tasks,
-            &[],
-            fallback,
-        )))
+        let mut rows = group_jobs(&run.dag_id, &run.run_id, &tasks, &[], fallback);
+        for row in &mut rows {
+            if let Some((_, _, issue)) = self.issues.iter().find(|(key, index, _)| {
+                *key == format!("{}/{}", run.dag_id, run.run_id) && *index == row.map_index
+            }) {
+                row.issue.clone_from(issue);
+            }
+        }
+        Ok(Page::whole(rows))
     }
 
     async fn pending_gates(&self, _c: &CancellationToken) -> AdapterResult<Page<Gate>> {
@@ -164,9 +176,12 @@ impl Runs for FakeRuns {
         if self.gates_vanish_after.is_some_and(|after| seen > after) {
             return Ok(Page::whole(Vec::new()));
         }
-        Ok(Page::whole(
-            self.gates.lock().map(|g| g.clone()).unwrap_or_default(),
-        ))
+        let rows = self.gates.lock().map(|g| g.clone()).unwrap_or_default();
+        Ok(if self.gates_truncated {
+            Page::partial(rows)
+        } else {
+            Page::whole(rows)
+        })
     }
 
     async fn logs(
@@ -192,11 +207,23 @@ impl Runs for FakeRuns {
         _c: &CancellationToken,
     ) -> AdapterResult<()> {
         self.record("respond");
-        if self.fails("respond") {
+        assert!(
+            !self.panics_on_write,
+            "a dry run wrote: respond({gate}) reached the adapter"
+        );
+        let id = gate.to_string();
+        if self.fails("respond") || self.conflicts.contains(&id) {
             return Err(AdapterError::from_status(
                 409,
                 "PATCH gate",
                 "already answered",
+            ));
+        }
+        if self.broken.contains(&id) {
+            return Err(AdapterError::from_status(
+                500,
+                "PATCH gate",
+                "the scheduler fell over",
             ));
         }
         self.responded
@@ -1177,4 +1204,651 @@ async fn with_clone_the_targets_own_test_command_is_re_run_from_the_published_br
         "the directory is an argument, never interpolated into the script"
     );
     assert!(shell.contains(&"pytest --junitxml=.factory/junit.xml".to_string()));
+}
+
+// ---------------------------------------------------------------- filtering and bulk answers
+
+/// A gate on `factory/r1` for one job index, parked or not according to the task fixture below.
+fn gate_at(dag: &str, run: &str, task: &str, index: i32) -> Gate {
+    Gate::new(
+        dag,
+        run,
+        task,
+        index,
+        format!("Approve {task} of job {index}?"),
+        "the evidence",
+        None,
+        vec!["Approve".into(), "Reject".into()],
+    )
+}
+
+/// Four gates over two DAGs, three of them parked and one still arming.
+///
+/// It is deliberately not uniform: every filter below has to be able to select a proper subset,
+/// and a fixture where every row matches everything proves nothing about a filter.
+fn a_board_of_gates() -> FakeRuns {
+    FakeRuns {
+        dags: vec!["factory".into(), "hotfix".into()],
+        runs: vec![
+            ("factory".to_string(), vec![run("factory", "r1", "running")]),
+            ("hotfix".to_string(), vec![run("hotfix", "h1", "running")]),
+        ],
+        tasks: vec![
+            (
+                "factory/r1".to_string(),
+                vec![
+                    TaskState::new("job.approve_plan", 0, Some("awaiting_input".into())),
+                    TaskState::new("job.approve_intent", 1, Some("awaiting_input".into())),
+                    TaskState::new("job.approve_plan", 2, Some("queued".into())),
+                ],
+            ),
+            (
+                "hotfix/h1".to_string(),
+                vec![TaskState::new(
+                    "job.approve_plan",
+                    0,
+                    Some("awaiting_input".into()),
+                )],
+            ),
+        ],
+        gates: Mutex::new(vec![
+            gate_at("factory", "r1", "job.approve_plan", 0),
+            gate_at("factory", "r1", "job.approve_intent", 1),
+            gate_at("factory", "r1", "job.approve_plan", 2),
+            gate_at("hotfix", "h1", "job.approve_plan", 0),
+        ]),
+        issues: vec![
+            ("factory/r1".to_string(), 0, "42".to_string()),
+            ("factory/r1".to_string(), 1, "43".to_string()),
+            ("factory/r1".to_string(), 2, "44".to_string()),
+            ("hotfix/h1".to_string(), 0, "42".to_string()),
+        ],
+        ..FakeRuns::default()
+    }
+}
+
+/// The gate ids a selection holds, in order, so a filter's answer is asserted as a set of names.
+fn selected_ids(selection: &Selection) -> Vec<String> {
+    selection
+        .rows
+        .iter()
+        .map(|row| row.gate.id().to_string())
+        .collect()
+}
+
+async fn select_with(ops: &Ops, filter: GateFilter) -> Selection {
+    ops.gates_selection(&filter, &CancellationToken::new())
+        .await
+        .expect("the gate list is readable")
+}
+
+#[tokio::test]
+async fn every_filter_narrows_and_two_of_them_narrow_twice() {
+    let ops = build_ops(Arc::new(a_board_of_gates()), None, None, None);
+
+    let all = select_with(&ops, GateFilter::default()).await;
+    assert_eq!(all.len(), 4, "no filter is every pending gate");
+
+    let by_dag = select_with(
+        &ops,
+        GateFilter {
+            dag: Some("hotfix".into()),
+            ..GateFilter::default()
+        },
+    )
+    .await;
+    assert_eq!(selected_ids(&by_dag), vec!["hotfix/h1#0:job.approve_plan"]);
+
+    // A blueprint *is* its DAG id, so the two spellings select the same set.
+    let by_blueprint = select_with(
+        &ops,
+        GateFilter {
+            blueprint: Some("hotfix".into()),
+            ..GateFilter::default()
+        },
+    )
+    .await;
+    assert_eq!(selected_ids(&by_blueprint), selected_ids(&by_dag));
+
+    // `plan`, `approve_plan` and `job.approve_plan` are one gate under three names.
+    for spelling in ["plan", "approve_plan", "job.approve_plan"] {
+        let by_gate = select_with(
+            &ops,
+            GateFilter {
+                gate: Some(spelling.into()),
+                ..GateFilter::default()
+            },
+        )
+        .await;
+        assert_eq!(by_gate.len(), 3, "{spelling} selected the wrong set");
+    }
+
+    let ready_only = select_with(
+        &ops,
+        GateFilter {
+            ready: true,
+            ..GateFilter::default()
+        },
+    )
+    .await;
+    assert_eq!(ready_only.len(), 3, "job 2 has not parked yet");
+
+    // Composed: each one narrows, none widens.
+    let composed = select_with(
+        &ops,
+        GateFilter {
+            dag: Some("factory".into()),
+            gate: Some("plan".into()),
+            ready: true,
+            ..GateFilter::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        selected_ids(&composed),
+        vec!["factory/r1#0:job.approve_plan"]
+    );
+
+    // Two filters that disagree select nothing at all rather than falling back to everything.
+    let contradictory = select_with(
+        &ops,
+        GateFilter {
+            dag: Some("factory".into()),
+            blueprint: Some("hotfix".into()),
+            ..GateFilter::default()
+        },
+    )
+    .await;
+    assert!(contradictory.is_empty());
+    assert!(!contradictory.truncated, "empty is not truncated");
+}
+
+#[tokio::test]
+async fn an_issue_filter_selects_by_the_job_a_gate_belongs_to() {
+    let airflow = Arc::new(a_board_of_gates());
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+
+    let by_issue = select_with(
+        &ops,
+        GateFilter {
+            issue: Some("42".into()),
+            ..GateFilter::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        selected_ids(&by_issue),
+        vec![
+            "factory/r1#0:job.approve_plan",
+            "hotfix/h1#0:job.approve_plan"
+        ],
+        "one issue across two targets is two jobs, and both of its gates are selected"
+    );
+    assert_eq!(
+        by_issue.rows[0].issue.as_deref(),
+        Some("42"),
+        "the issue that matched is reported, not merely used"
+    );
+
+    let with_dag = select_with(
+        &ops,
+        GateFilter {
+            issue: Some("42".into()),
+            dag: Some("factory".into()),
+            ..GateFilter::default()
+        },
+    )
+    .await;
+    assert_eq!(with_dag.len(), 1);
+
+    assert!(
+        select_with(
+            &ops,
+            GateFilter {
+                issue: Some("nobody".into()),
+                ..GateFilter::default()
+            }
+        )
+        .await
+        .is_empty(),
+        "an issue nothing answers selects nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_filter_is_applied_before_the_reads_it_would_otherwise_pay_for() {
+    // The whole point of filtering here rather than in `jq`: a DAG the operator excluded costs no
+    // task-state read, and the excluded run is never asked about at all.
+    let airflow = Arc::new(a_board_of_gates());
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let _ = select_with(
+        &ops,
+        GateFilter {
+            dag: Some("factory".into()),
+            ..GateFilter::default()
+        },
+    )
+    .await;
+    let calls = airflow.calls();
+    assert!(calls.contains(&"task_states:r1".to_string()));
+    assert!(
+        !calls.contains(&"task_states:h1".to_string()),
+        "a gate the filter excluded must not cost a read: {calls:?}"
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|c| c.starts_with("task_states"))
+            .count(),
+        1,
+        "one read per run, not one per gate: {calls:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_limit_stops_the_read_and_says_the_set_was_shortened() {
+    let airflow = Arc::new(a_board_of_gates());
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+
+    let bounded = select_with(
+        &ops,
+        GateFilter {
+            limit: Some(2),
+            ..GateFilter::default()
+        },
+    )
+    .await;
+    assert_eq!(bounded.len(), 2);
+    assert!(
+        bounded.truncated,
+        "a listing the limit cut must never look like a listing that was simply short"
+    );
+    assert!(
+        !airflow.calls().contains(&"task_states:h1".to_string()),
+        "the limit stops the loop rather than trimming its result"
+    );
+
+    let whole = select_with(
+        &ops,
+        GateFilter {
+            limit: Some(9),
+            ..GateFilter::default()
+        },
+    )
+    .await;
+    assert_eq!(whole.len(), 4);
+    assert!(!whole.truncated, "a limit nothing hit is not a truncation");
+}
+
+#[tokio::test]
+async fn a_page_bound_upstream_is_carried_into_the_selection() {
+    let airflow = Arc::new(FakeRuns {
+        gates_truncated: true,
+        ..a_board_of_gates()
+    });
+    let ops = build_ops(airflow, None, None, None);
+    let selection = select_with(&ops, GateFilter::default()).await;
+    assert_eq!(selection.len(), 4);
+    assert!(
+        selection.truncated,
+        "a read that stopped at its page bound is not the whole set, whatever the filter said"
+    );
+}
+
+#[tokio::test]
+async fn a_dry_run_answers_the_whole_set_and_writes_nothing() {
+    // The proof is structural: this adapter panics on any write at all, so a dry run that reached
+    // the PATCH would fail this test rather than merely disagree with an assertion about counts.
+    let airflow = Arc::new(FakeRuns {
+        panics_on_write: true,
+        ..a_board_of_gates()
+    });
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let filter = GateFilter::default();
+    let selection = select_with(&ops, filter.clone()).await;
+
+    let report = BatchReport::dry(&selection, Decision::Approve, &filter);
+    assert!(report.dry_run);
+    assert_eq!(report.matched(), 4);
+    assert_eq!(report.count(BatchOutcome::Planned), 3);
+    assert_eq!(report.count(BatchOutcome::Skipped), 1);
+    assert_eq!(report.exit_code(), 0);
+    assert_eq!(report.filter, "no filter: every pending gate");
+    assert!(
+        !airflow.calls().contains(&"respond".to_string()),
+        "a dry run must not even reach the write"
+    );
+    assert!(airflow.responded.lock().expect("lock").is_empty());
+}
+
+#[tokio::test]
+async fn one_gate_that_fails_never_abandons_the_rest() {
+    let airflow = Arc::new(FakeRuns {
+        broken: vec!["factory/r1#1:job.approve_intent".to_string()],
+        ..a_board_of_gates()
+    });
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let filter = GateFilter::default();
+    let selection = select_with(&ops, filter.clone()).await;
+    let report = ops
+        .gate_answer_all(
+            &selection,
+            Decision::Approve,
+            &filter,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a batch reports rather than fails");
+
+    assert_eq!(report.matched(), 4);
+    assert_eq!(report.count(BatchOutcome::Answered), 2);
+    assert_eq!(report.count(BatchOutcome::Failed), 1);
+    assert_eq!(report.count(BatchOutcome::Skipped), 1);
+    assert_eq!(
+        report.exit_code(),
+        1,
+        "something actually failed, so the shell has to hear about it"
+    );
+    let answered: Vec<String> = airflow
+        .responded
+        .lock()
+        .expect("lock")
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    assert_eq!(
+        answered,
+        vec![
+            "factory/r1#0:job.approve_plan",
+            "hotfix/h1#0:job.approve_plan"
+        ],
+        "the gates either side of the failure were still answered"
+    );
+    // Every gate keeps its own line, in the order it was selected.
+    let ids: Vec<String> = report
+        .items
+        .iter()
+        .map(|item| item.id.to_string())
+        .collect();
+    assert_eq!(ids, selected_ids(&selection));
+}
+
+#[tokio::test]
+async fn someone_else_answering_first_is_a_conflict_and_not_a_failure() {
+    let airflow = Arc::new(FakeRuns {
+        conflicts: vec!["factory/r1#0:job.approve_plan".to_string()],
+        ..a_board_of_gates()
+    });
+    let ops = build_ops(airflow, None, None, None);
+    let filter = GateFilter {
+        ready: true,
+        ..GateFilter::default()
+    };
+    let selection = select_with(&ops, filter.clone()).await;
+    let report = ops
+        .gate_answer_all(
+            &selection,
+            Decision::Reject,
+            &filter,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a batch reports rather than fails");
+
+    assert_eq!(report.count(BatchOutcome::Conflict), 1);
+    assert_eq!(report.count(BatchOutcome::Answered), 2);
+    assert_eq!(report.failures(), 0);
+    assert_eq!(
+        report.exit_code(),
+        0,
+        "in a shared control room a lost race is the system working"
+    );
+    let conflicted = report
+        .items
+        .iter()
+        .find(|item| item.outcome == BatchOutcome::Conflict)
+        .expect("the conflicted gate keeps its line");
+    assert!(
+        !conflicted.detail.is_empty(),
+        "a conflict says what happened"
+    );
+}
+
+#[tokio::test]
+async fn a_gate_that_has_not_parked_is_skipped_with_its_reason_and_never_forced() {
+    let airflow = Arc::new(a_board_of_gates());
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let filter = GateFilter::default();
+    let selection = select_with(&ops, filter.clone()).await;
+    let report = ops
+        .gate_answer_all(
+            &selection,
+            Decision::Approve,
+            &filter,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a batch reports rather than fails");
+
+    let skipped = report
+        .items
+        .iter()
+        .find(|item| item.outcome == BatchOutcome::Skipped)
+        .expect("the arming gate is reported, not dropped");
+    assert_eq!(skipped.id.to_string(), "factory/r1#2:job.approve_plan");
+    assert!(!skipped.ready);
+    assert!(
+        skipped.detail.contains("queued") && skipped.detail.contains("awaiting_input"),
+        "a skip has to say why it was skipped: {}",
+        skipped.detail
+    );
+    assert_eq!(
+        report.exit_code(),
+        0,
+        "a gate that is arming is not a failure"
+    );
+    let written: Vec<String> = airflow
+        .responded
+        .lock()
+        .expect("lock")
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    assert!(
+        !written.contains(&"factory/r1#2:job.approve_plan".to_string()),
+        "a batch has no --force: an unparked gate is never written to"
+    );
+}
+
+#[tokio::test]
+async fn a_batch_answers_more_than_one_gate_at_a_time_and_still_re_reads_each_one() {
+    let airflow = Arc::new(a_board_of_gates());
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let filter = GateFilter {
+        ready: true,
+        ..GateFilter::default()
+    };
+    let selection = select_with(&ops, filter.clone()).await;
+    let report = ops
+        .gate_answer_all(
+            &selection,
+            Decision::Approve,
+            &filter,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a batch reports rather than fails");
+
+    assert_eq!(report.count(BatchOutcome::Answered), 3);
+    let calls = airflow.calls();
+    let re_reads = calls.iter().filter(|c| *c == "pending_gates").count();
+    assert!(
+        re_reads >= 4,
+        "one read for the selection and one per gate before its own write: {calls:?}"
+    );
+    for item in &report.items {
+        assert!(
+            item.sightings >= 2,
+            "a bulk answer keeps the two-sighting rule: {item:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------- job and run listings
+
+/// Two jobs in two different states, each answering a different issue.
+fn a_board_of_jobs() -> FakeRuns {
+    FakeRuns {
+        issues: vec![
+            ("factory/r-running".to_string(), 0, "42".to_string()),
+            ("factory/r-done".to_string(), 0, "43".to_string()),
+        ],
+        ..airflow_with_two_runs()
+    }
+}
+
+#[tokio::test]
+async fn a_job_listing_narrows_by_state_issue_and_attention_and_says_when_it_was_cut() {
+    let ops = build_ops(Arc::new(a_board_of_jobs()), None, None, None);
+    let cancel = CancellationToken::new();
+
+    let all = ops.jobs_matching(&JobFilter::default(), &cancel).await;
+    assert_eq!(all.jobs.len(), 2);
+    assert!(!all.truncated);
+
+    let by_state = |state: &str| JobFilter {
+        state: Some(state.to_string()),
+        ..JobFilter::default()
+    };
+    assert_eq!(
+        ops.jobs_matching(&by_state("running"), &cancel)
+            .await
+            .jobs
+            .len(),
+        1
+    );
+    assert_eq!(
+        ops.jobs_matching(&by_state("success"), &cancel)
+            .await
+            .jobs
+            .len(),
+        1
+    );
+    assert!(ops
+        .jobs_matching(&by_state("failed"), &cancel)
+        .await
+        .jobs
+        .is_empty());
+
+    let by_issue = ops
+        .jobs_matching(
+            &JobFilter {
+                issue: Some("43".into()),
+                ..JobFilter::default()
+            },
+            &cancel,
+        )
+        .await;
+    assert_eq!(by_issue.jobs.len(), 1);
+    assert_eq!(by_issue.jobs[0].run_id, "r-done");
+
+    // The filters compose, and an issue in another state selects nothing rather than everything.
+    let composed = ops
+        .jobs_matching(
+            &JobFilter {
+                issue: Some("43".into()),
+                state: Some("running".into()),
+                ..JobFilter::default()
+            },
+            &cancel,
+        )
+        .await;
+    assert!(composed.jobs.is_empty());
+
+    let needs_a_person = ops
+        .jobs_matching(
+            &JobFilter {
+                attention: true,
+                ..JobFilter::default()
+            },
+            &cancel,
+        )
+        .await;
+    assert_eq!(needs_a_person.jobs.len(), 1, "only the job on a gate");
+    assert_eq!(needs_a_person.jobs[0].run_id, "r-running");
+
+    let bounded = ops
+        .jobs_matching(
+            &JobFilter {
+                limit: Some(1),
+                ..JobFilter::default()
+            },
+            &cancel,
+        )
+        .await;
+    assert_eq!(bounded.jobs.len(), 1);
+    assert!(bounded.truncated, "a listing the limit cut has to say so");
+}
+
+#[tokio::test]
+async fn a_dag_filter_on_jobs_narrows_the_read_and_not_just_the_table() {
+    // The assertion is about what was *not* called: the excluded DAG costs no round trip at all.
+    let airflow = Arc::new(a_board_of_gates());
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let listing = ops
+        .jobs_matching(
+            &JobFilter {
+                dag: Some("hotfix".into()),
+                ..JobFilter::default()
+            },
+            &CancellationToken::new(),
+        )
+        .await;
+    assert_eq!(listing.jobs.len(), 1);
+    let calls = airflow.calls();
+    assert!(calls.contains(&"job_rows:h1".to_string()));
+    assert!(
+        !calls.contains(&"job_rows:r1".to_string()),
+        "factory was excluded, so factory was never read: {calls:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_run_listing_narrows_by_state_and_reports_the_bound_it_stopped_at() {
+    let airflow = Arc::new(a_board_of_gates());
+    let ops = build_ops(airflow, None, None, None);
+    let cancel = CancellationToken::new();
+
+    let all = ops
+        .runs_matching("factory", 20, None, &cancel)
+        .await
+        .expect("list");
+    assert_eq!(all.runs.len(), 1);
+    assert!(
+        !all.truncated,
+        "one run out of a bound of twenty is the lot"
+    );
+
+    let matching = ops
+        .runs_matching("factory", 20, Some("running"), &cancel)
+        .await
+        .expect("list");
+    assert_eq!(matching.runs.len(), 1);
+    let other = ops
+        .runs_matching("factory", 20, Some("success"), &cancel)
+        .await
+        .expect("list");
+    assert!(
+        other.runs.is_empty(),
+        "a state nothing is in yields nothing"
+    );
+
+    let bounded = ops
+        .runs_matching("factory", 1, None, &cancel)
+        .await
+        .expect("list");
+    assert!(
+        bounded.truncated,
+        "a read that came back full may have left rows behind, and must not imply otherwise"
+    );
 }

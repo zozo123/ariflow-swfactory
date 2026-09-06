@@ -16,7 +16,7 @@ use chrono::{DateTime, Utc};
 use swf_app::attention::Attention;
 use swf_app::context::Context;
 use swf_app::delivery::Delivery;
-use swf_app::gates::{GateAnswer, GateReview};
+use swf_app::gates::{BatchOutcome, BatchReport, GateAnswer, GateReview};
 use swf_app::stack::StackStatus;
 use swf_app::submit::Submission;
 use swf_domain::evidence::DeliveryReport;
@@ -271,6 +271,91 @@ pub fn gate_answer(answer: &GateAnswer, actor: &str, term: &Term) -> String {
         );
     }
     out
+}
+
+/// `swf gates approve --all` / `swf gates reject --all`, and the dry run that precedes it.
+///
+/// The filter is echoed on the first line and the counts on the last, because those are the two
+/// facts that make a batch checkable after the event: what was asked for, and what it did. Every
+/// gate keeps its own line — a summary alone would hide which gate was the one that failed.
+pub fn batch(report: &BatchReport, actor: &str, term: &Term) -> String {
+    let verb = verb(report.decision);
+    let head = if report.dry_run {
+        term.head(&format!("dry run: nothing was written ({verb} as {actor})"))
+    } else {
+        term.head(&format!("{verb} as {actor}"))
+    };
+    let mut out = format!("{head}\nfilter  {}", report.filter);
+
+    if report.items.is_empty() {
+        let _ = write!(out, "\n\n{}", nothing("gates matched that filter"));
+    } else {
+        let show_issue = report.items.iter().any(|item| item.issue.is_some());
+        let mut table = if show_issue {
+            Table::new(["gate", "issue", "outcome", "why"])
+        } else {
+            Table::new(["gate", "outcome", "why"])
+        };
+        for item in &report.items {
+            let mut cells = vec![item.id.to_string()];
+            if show_issue {
+                cells.push(item.issue.clone().unwrap_or_else(|| "-".into()));
+            }
+            cells.push(outcome_word(item.outcome, term));
+            cells.push(item.detail.clone());
+            table.row(cells);
+        }
+        let _ = write!(out, "\n\n{}", table.render(term));
+    }
+
+    let counts = if report.dry_run {
+        format!(
+            "{} matched · {} would be answered · {} skipped",
+            report.matched(),
+            report.count(BatchOutcome::Planned),
+            report.count(BatchOutcome::Skipped)
+        )
+    } else {
+        format!(
+            "{} matched · {} answered · {} skipped · {} conflict · {} failed",
+            report.matched(),
+            report.count(BatchOutcome::Answered),
+            report.count(BatchOutcome::Skipped),
+            report.count(BatchOutcome::Conflict),
+            report.count(BatchOutcome::Failed)
+        )
+    };
+    let _ = write!(out, "\n\n{counts}");
+    if report.truncated {
+        // Its own line, and never folded into the counts: a batch over a shortened selection
+        // answered *a* set rather than *the* set, and that is the one fact a reader must not skim.
+        let _ = write!(
+            out,
+            "\n{}",
+            term.warn("the selection was truncated; matching gates outside it were not answered")
+        );
+    }
+    out
+}
+
+/// A batch outcome as a word first, coloured only to repeat what the word already says.
+fn outcome_word(outcome: BatchOutcome, term: &Term) -> String {
+    match outcome {
+        BatchOutcome::Answered => term.good(outcome.as_str()),
+        BatchOutcome::Planned => outcome.as_str().to_string(),
+        BatchOutcome::Skipped => term.dim(outcome.as_str()),
+        BatchOutcome::Conflict => term.warn(outcome.as_str()),
+        BatchOutcome::Failed => term.bad(outcome.as_str()),
+    }
+}
+
+/// `1 gate`, `12 gates` — a count that reads as a sentence in a question.
+pub fn count_of(n: usize, what: &str) -> String {
+    if n == 1 {
+        format!("{n} {what}")
+    } else {
+        format!("{n} {what}s")
+    }
 }
 
 /// `swf attention`
@@ -664,6 +749,96 @@ mod tests {
             text.starts_with("approve factory/manual__1[1] approve_plan as admin"),
             "{text}"
         );
+    }
+
+    fn batch_item(
+        id: &str,
+        outcome: swf_app::gates::BatchOutcome,
+        detail: &str,
+    ) -> swf_app::gates::BatchItem {
+        use swf_domain::ids::GateId;
+        swf_app::gates::BatchItem {
+            id: GateId::parse(id).expect("a gate id"),
+            gate: "approve_plan".into(),
+            issue: None,
+            ready: outcome != swf_app::gates::BatchOutcome::Skipped,
+            outcome,
+            detail: detail.into(),
+            revision: "abc123".into(),
+            sightings: 2,
+            kind: None,
+        }
+    }
+
+    #[test]
+    fn a_batch_report_says_what_it_did_to_every_gate_and_what_selected_them() {
+        use swf_app::gates::{BatchOutcome, BatchReport, Decision};
+        let report = BatchReport {
+            decision: Decision::Approve,
+            dry_run: false,
+            filter: "--dag factory --gate plan".into(),
+            truncated: false,
+            items: vec![
+                batch_item("factory/r1#0:plan", BatchOutcome::Answered, ""),
+                batch_item("factory/r1#1:plan", BatchOutcome::Skipped, "is not ready"),
+                batch_item(
+                    "factory/r1#2:plan",
+                    BatchOutcome::Conflict,
+                    "answered first",
+                ),
+            ],
+        };
+        let text = batch(&report, "admin", &plain());
+        assert!(text.contains("approve as admin"), "{text}");
+        assert!(text.contains("--dag factory --gate plan"), "{text}");
+        // Every gate keeps its own line: a summary alone would hide which one was which.
+        for id in ["factory/r1#0", "factory/r1#1", "factory/r1#2"] {
+            assert!(text.contains(id), "{id} is missing from {text}");
+        }
+        assert!(text.contains("is not ready"), "a skip says why: {text}");
+        assert!(
+            text.contains("3 matched · 1 answered · 1 skipped · 1 conflict · 0 failed"),
+            "{text}"
+        );
+        // Legible with no colour at all (§7): the words carry the state, not the escape codes.
+        assert!(!text.contains('\u{1b}'), "{text}");
+    }
+
+    #[test]
+    fn a_dry_run_says_it_wrote_nothing_and_a_shortened_batch_says_so_on_its_own_line() {
+        use swf_app::gates::{BatchOutcome, BatchReport, Decision};
+        let report = BatchReport {
+            decision: Decision::Reject,
+            dry_run: true,
+            filter: "--limit 1".into(),
+            truncated: true,
+            items: vec![batch_item("factory/r1#0:plan", BatchOutcome::Planned, "")],
+        };
+        let text = batch(&report, "admin", &plain());
+        assert!(text.starts_with("dry run: nothing was written"), "{text}");
+        assert!(text.contains("1 matched · 1 would be answered"), "{text}");
+        let last = text.lines().last().unwrap_or_default();
+        assert!(
+            last.contains("truncated") && last.contains("were not answered"),
+            "the truncation is its own line, not a clause in the counts: {text}"
+        );
+    }
+
+    #[test]
+    fn a_batch_that_matched_nothing_says_so_rather_than_printing_a_bare_zero() {
+        use swf_app::gates::{BatchReport, Decision};
+        let report = BatchReport {
+            decision: Decision::Approve,
+            dry_run: false,
+            filter: "--dag nope".into(),
+            truncated: false,
+            items: Vec::new(),
+        };
+        let text = batch(&report, "admin", &plain());
+        assert!(text.contains("(no gates matched that filter)"), "{text}");
+        assert_eq!(count_of(1, "gate"), "1 gate");
+        assert_eq!(count_of(0, "gate"), "0 gates");
+        assert_eq!(count_of(12, "gate"), "12 gates");
     }
 
     #[test]

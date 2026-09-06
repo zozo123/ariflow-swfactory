@@ -15,9 +15,9 @@ use std::sync::Arc;
 use chrono::Utc;
 use swf_app::context::{Auth, Context, ContextStore};
 use swf_app::delivery::VerifyOpts;
-use swf_app::gates::{AnswerOpts, Decision};
+use swf_app::gates::{AnswerOpts, BatchOutcome, BatchReport, Decision, GateFilter, Selection};
 use swf_app::logs::LogOpts;
-use swf_app::ops::{Ops, OpsError, Result};
+use swf_app::ops::{JobFilter, Ops, OpsError, Result};
 use swf_app::stack::StackAction;
 use swf_app::submit::SubmitRequest;
 use swf_domain::doctor;
@@ -27,8 +27,9 @@ use swf_domain::model::{Gate, JobRow, Run};
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::{
-    Cli, Command, ContextAddArgs, ContextCmd, DeliveriesCmd, GatesCmd, JobsCmd, LogsArgs,
-    MetricsArgs, RunsCmd, SandboxesCmd, StackCmd, SubmitArgs, VerifyArgs,
+    AnswerArgs, Cli, Command, ContextAddArgs, ContextCmd, DeliveriesCmd, GateFilterArgs, GatesCmd,
+    JobListArgs, JobsCmd, LogsArgs, MetricsArgs, RunsCmd, SandboxesCmd, StackCmd, SubmitArgs,
+    VerifyArgs,
 };
 use crate::exit::Outcome;
 use crate::json;
@@ -321,14 +322,27 @@ async fn attention_cmd(ctx: &Ctx) -> Result<Outcome> {
 async fn runs_cmd(ctx: &Ctx, cmd: &RunsCmd) -> Result<Outcome> {
     let ops = ctx.ops()?;
     match cmd {
-        RunsCmd::List { dag, limit } => {
+        RunsCmd::List { dag, state, limit } => {
             let dags = match dag {
                 Some(dag) => vec![dag.clone()],
                 None => dag_ids(ctx, &ops).await?,
             };
             let mut rows: Vec<Run> = Vec::new();
+            let mut truncated = false;
             for dag_id in &dags {
-                rows.extend(ops.runs_list(dag_id, *limit, &ctx.cancel).await?);
+                let listing = ops
+                    .runs_matching(dag_id, *limit, state.as_deref(), &ctx.cancel)
+                    .await?;
+                truncated = truncated || listing.truncated;
+                rows.extend(listing.runs);
+            }
+            if truncated {
+                // On stderr so the document stays a bare array (§C.4): a listing that was
+                // shortened must say so without changing shape under a `jq` that already works.
+                ctx.warn(&format!(
+                    "the run list stopped at its bound (--limit {limit} per DAG); \
+                     some runs are not shown"
+                ));
             }
             let docs: Vec<_> = rows.iter().map(json::run_row).collect();
             Ok(Outcome::new(
@@ -412,24 +426,18 @@ async fn job_rows(
 async fn jobs_cmd(ctx: &Ctx, cmd: &JobsCmd) -> Result<Outcome> {
     let ops = ctx.ops()?;
     match cmd {
-        JobsCmd::List { attention } => {
-            let snap = ops.snapshot_default(&ctx.cancel).await;
-            for error in &snap.errors {
+        JobsCmd::List(args) => {
+            let listing = ops.jobs_matching(&job_filter(args), &ctx.cancel).await;
+            for error in &listing.errors {
                 ctx.warn(&format!(
                     "source {} is unavailable: {}",
                     error.source, error.message
                 ));
             }
-            let waiting: Vec<String> = snap.gates.iter().map(|g| g.job().to_string()).collect();
-            let rows: Vec<JobRow> = snap
-                .jobs()
-                .filter(|job| {
-                    !attention
-                        || swf_domain::states::is_failed(&job.state)
-                        || waiting.iter().any(|id| *id == job.id().to_string())
-                })
-                .cloned()
-                .collect();
+            if listing.truncated {
+                ctx.warn("the job list was truncated; some jobs are not shown");
+            }
+            let rows: Vec<JobRow> = listing.jobs;
             let docs: Vec<_> = rows.iter().map(json::job_row).collect();
             Ok(Outcome::new(
                 render::jobs(&rows, &ctx.term),
@@ -462,6 +470,17 @@ async fn jobs_cmd(ctx: &Ctx, cmd: &JobsCmd) -> Result<Outcome> {
                 json::job_detail(&row, &gates, &url),
             ))
         }
+    }
+}
+
+/// The command line's job filters, as the operations layer's own type.
+fn job_filter(args: &JobListArgs) -> JobFilter {
+    JobFilter {
+        dag: args.dag.clone(),
+        state: args.state.clone(),
+        issue: args.issue.clone(),
+        attention: args.attention,
+        limit: args.limit,
     }
 }
 
@@ -543,8 +562,10 @@ fn task_argument(job: &JobId, task: &str) -> String {
 async fn gates_cmd(ctx: &Ctx, cmd: &GatesCmd) -> Result<Outcome> {
     let ops = ctx.ops()?;
     match cmd {
-        GatesCmd::List => {
-            let listing = ops.gates(&ctx.cancel).await?;
+        GatesCmd::List(args) => {
+            let listing = ops
+                .gates_matching(&gate_filter(&args.filter), &ctx.cancel)
+                .await?;
             if listing.truncated {
                 // Said on stderr so the document stays an array: hiding gates is the failure mode
                 // this product replaces, and a listing that lies by omission is worse than none.
@@ -569,13 +590,49 @@ async fn gates_cmd(ctx: &Ctx, cmd: &GatesCmd) -> Result<Outcome> {
     }
 }
 
-async fn answer(
-    ctx: &Ctx,
-    ops: &Ops,
-    args: &crate::cli::AnswerArgs,
-    decision: Decision,
-) -> Result<Outcome> {
-    let id = GateId::parse(&args.gate)?;
+/// The command line's gate filters, as the operations layer's own type.
+fn gate_filter(args: &GateFilterArgs) -> GateFilter {
+    GateFilter {
+        dag: args.dag.clone(),
+        blueprint: args.blueprint.clone(),
+        issue: args.issue.clone(),
+        gate: args.gate_name.clone(),
+        ready: args.ready,
+        limit: args.limit,
+    }
+}
+
+/// One gate by identity, or a whole filtered set with `--all`.
+async fn answer(ctx: &Ctx, ops: &Ops, args: &AnswerArgs, decision: Decision) -> Result<Outcome> {
+    let filter = gate_filter(&args.filter);
+    if args.all {
+        return answer_all(ctx, ops, args, decision, &filter).await;
+    }
+
+    // Every refusal below is written out rather than left to clap, because each one is a rule with
+    // a reason an operator deserves to read: a flag that was silently ignored here would be a flag
+    // whose absence changed which gates got answered.
+    if args.dry_run {
+        return Err(OpsError::usage(
+            "--dry-run describes a set; pass --all with the filters you mean",
+        )
+        .with_hint("swf gates approve --all --dag <id> --dry-run"));
+    }
+    if !filter.is_empty() {
+        return Err(OpsError::usage(
+            "--dag/--blueprint/--issue/--gate/--ready/--limit narrow --all; \
+             one gate is already named by its identity",
+        )
+        .with_hint("swf gates approve --all --dag <id> --dry-run"));
+    }
+    let Some(gate) = args.gate.as_deref() else {
+        return Err(OpsError::usage(
+            "name a gate to answer, or pass --all to answer a filtered set",
+        )
+        .with_hint("swf gates list"));
+    };
+
+    let id = GateId::parse(gate)?;
     let who = actor(ops.context());
     let verb = render::verb(decision);
     confirm(
@@ -597,6 +654,139 @@ async fn answer(
         render::gate_answer(&answered, &who, &ctx.term),
         json::gate_answer(&answered, &who),
     ))
+}
+
+/// Answer every gate a filter selects: select, show, confirm once, then write.
+///
+/// The order is the whole safety story. Selecting is a read, so it happens before the question and
+/// the question can therefore name the count and the filter that produced it; the writes happen
+/// only after an answer, and `--dry-run` reaches the report without this function ever calling the
+/// one method that writes.
+async fn answer_all(
+    ctx: &Ctx,
+    ops: &Ops,
+    args: &AnswerArgs,
+    decision: Decision,
+    filter: &GateFilter,
+) -> Result<Outcome> {
+    if args.gate.is_some() {
+        return Err(OpsError::usage("name one gate or pass --all, not both")
+            .with_hint("swf gates approve --all --dag <id> --dry-run"));
+    }
+    if args.force {
+        // The rule this refusal defends is in `swf-app`: forcing is a decision about one gate an
+        // operator has read, and it does not generalise to a set nobody has read. A batch that
+        // could force would answer gates inside the window that makes the scheduler fail them.
+        return Err(OpsError::usage(
+            "--force cannot be combined with --all: forcing is a decision about one gate you \
+             have read, and a batch answers only gates that are ready",
+        )
+        .with_hint("swf gates approve <gate> --force"));
+    }
+    if args.expect.is_some() {
+        return Err(OpsError::usage(
+            "--expect names one piece of evidence, so it cannot be combined with --all",
+        )
+        .with_hint("swf gates review <gate>"));
+    }
+
+    let who = actor(ops.context());
+    let verb = render::verb(decision);
+    let selection = ops.gates_selection(filter, &ctx.cancel).await?;
+    if selection.truncated {
+        // A batch over a shortened selection has answered *a* set, not *the* set, and the rest is
+        // invisible rather than merely unanswered. It is a warning and not a refusal because the
+        // operator may well mean exactly the set they bounded with --limit.
+        ctx.warn(
+            "the gate selection was truncated; some matching gates are not in it — \
+             narrow it with a filter before answering",
+        );
+    }
+
+    let report = if args.dry_run {
+        BatchReport::dry(&selection, decision, filter)
+    } else {
+        let ready = selection.ready_count();
+        if ready > 0 {
+            // Nothing has been written yet; a refusal here reaches no service at all.
+            confirm(&ctx.term, &batch_question(verb, &who, &selection, filter))?;
+        }
+        ops.gate_answer_all(&selection, decision, filter, &ctx.cancel)
+            .await?
+    };
+
+    let code = report.exit_code();
+    Ok(Outcome::new(
+        render::batch(&report, &who, &ctx.term),
+        batch_doc(&report, &who),
+    )
+    .with_code(code))
+}
+
+/// The one question a batch asks: how many, and what selected them.
+///
+/// Both halves are load-bearing. A count with no filter cannot be checked by the person answering
+/// it, and a filter with no count hides the blast radius.
+fn batch_question(verb: &str, who: &str, selection: &Selection, filter: &GateFilter) -> String {
+    let ready = selection.ready_count();
+    let arming = selection.len() - ready;
+    let tail = if arming > 0 {
+        format!(
+            " ({} matched, {arming} still arming and will be skipped)",
+            selection.len()
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "{verb} {} as {who}{tail}? filter: {}",
+        render::count_of(ready, "gate"),
+        filter.describe()
+    )
+}
+
+/// What a script reads back from a batch: one result per gate, and one summary.
+///
+/// It is built here rather than in `json.rs` because none of it is a domain type: every field is
+/// an outcome this command produced, and the array alone could not carry the summary a batch has
+/// to report — how many matched, how many were skipped, and whether the set was shortened.
+fn batch_doc(report: &BatchReport, actor: &str) -> serde_json::Value {
+    let results: Vec<serde_json::Value> = report
+        .items
+        .iter()
+        .map(|item| {
+            serde_json::json!({
+                "id": item.id.to_string(),
+                "job": item.id.job.to_string(),
+                "gate": item.gate,
+                "issue": item.issue,
+                "outcome": item.outcome.as_str(),
+                "answered": item.outcome == BatchOutcome::Answered,
+                "ready": item.ready,
+                "revision": item.revision,
+                "sightings": item.sightings,
+                "detail": item.detail,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "results": results,
+        "summary": {
+            "decision": render::verb(report.decision),
+            "chosen_option": report.decision.word(),
+            "actor": actor,
+            "filter": report.filter,
+            "dry_run": report.dry_run,
+            "matched": report.matched(),
+            "planned": report.count(BatchOutcome::Planned),
+            "answered": report.count(BatchOutcome::Answered),
+            "skipped": report.count(BatchOutcome::Skipped),
+            "conflict": report.count(BatchOutcome::Conflict),
+            "failed": report.count(BatchOutcome::Failed),
+            "truncated": report.truncated,
+            "exit_code": report.exit_code(),
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------- deliveries
@@ -889,6 +1079,140 @@ mod tests {
         assert_eq!(task_argument(&mapped, "job.setup"), "job.setup");
         let unmapped = JobId::new("factory", "r1", -1);
         assert_eq!(task_argument(&unmapped, "fan_out"), "fan_out");
+    }
+
+    /// The arguments of one `swf gates approve` invocation, defaulted to "one named gate".
+    fn answer_args(gate: Option<&str>) -> AnswerArgs {
+        AnswerArgs {
+            gate: gate.map(str::to_string),
+            expect: None,
+            force: false,
+            all: false,
+            dry_run: false,
+            filter: GateFilterArgs {
+                dag: None,
+                blueprint: None,
+                issue: None,
+                gate_name: None,
+                ready: false,
+                limit: None,
+            },
+        }
+    }
+
+    /// An operations layer with no adapters: every refusal below must be reached before one is
+    /// needed, which is exactly the property being asserted.
+    fn unconnected() -> Ops {
+        Ops::builder(Context::builtin()).build()
+    }
+
+    #[tokio::test]
+    async fn a_batch_refuses_to_be_forced_and_says_why_forcing_does_not_generalise() {
+        let ops = unconnected();
+        let args = AnswerArgs {
+            all: true,
+            force: true,
+            ..answer_args(None)
+        };
+        let err = answer(
+            &ctx(
+                &["swf", "gates", "approve", "--all", "--force"],
+                Term::plain(),
+            ),
+            &ops,
+            &args,
+            Decision::Approve,
+        )
+        .await
+        .expect_err("a set nobody has read must not be forced");
+        assert_eq!(err.exit_code(), 2);
+        assert!(err.message.contains("--force"), "{}", err.message);
+        assert!(
+            err.message.contains("one gate you have read"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn a_batch_refuses_the_flags_that_only_name_one_gate() {
+        let ops = unconnected();
+        let term = Term::plain();
+        let argv = ["swf", "gates", "approve", "--all"];
+
+        let with_gate = AnswerArgs {
+            all: true,
+            ..answer_args(Some("factory/r1#0:plan"))
+        };
+        let err = answer(&ctx(&argv, term), &ops, &with_gate, Decision::Approve)
+            .await
+            .expect_err("one gate or a set, never both");
+        assert_eq!(err.exit_code(), 2);
+
+        let with_expect = AnswerArgs {
+            all: true,
+            expect: Some("abc123".into()),
+            ..answer_args(None)
+        };
+        let err = answer(&ctx(&argv, term), &ops, &with_expect, Decision::Approve)
+            .await
+            .expect_err("a revision names one piece of evidence");
+        assert_eq!(err.exit_code(), 2);
+        assert!(err.message.contains("--expect"), "{}", err.message);
+    }
+
+    #[tokio::test]
+    async fn a_filter_without_all_is_refused_instead_of_quietly_ignored() {
+        // A flag that narrowed nothing would be a flag whose absence changed which gates were
+        // answered, and that is the difference between a filter and a footgun.
+        let ops = unconnected();
+        let term = Term::plain();
+        let filtered = AnswerArgs {
+            filter: GateFilterArgs {
+                dag: Some("factory".into()),
+                blueprint: None,
+                issue: None,
+                gate_name: None,
+                ready: false,
+                limit: None,
+            },
+            ..answer_args(Some("factory/r1#0:plan"))
+        };
+        let err = answer(
+            &ctx(&["swf", "gates", "approve", "x"], term),
+            &ops,
+            &filtered,
+            Decision::Approve,
+        )
+        .await
+        .expect_err("filters narrow --all");
+        assert_eq!(err.exit_code(), 2);
+
+        let dry = AnswerArgs {
+            dry_run: true,
+            ..answer_args(Some("factory/r1#0:plan"))
+        };
+        let err = answer(
+            &ctx(&["swf", "gates", "approve", "x"], term),
+            &ops,
+            &dry,
+            Decision::Approve,
+        )
+        .await
+        .expect_err("--dry-run describes a set");
+        assert_eq!(err.exit_code(), 2);
+
+        let nothing = answer_args(None);
+        let err = answer(
+            &ctx(&["swf", "gates", "approve"], term),
+            &ops,
+            &nothing,
+            Decision::Approve,
+        )
+        .await
+        .expect_err("name a gate or a set");
+        assert_eq!(err.exit_code(), 2);
+        assert!(err.message.contains("--all"), "{}", err.message);
     }
 
     #[tokio::test]

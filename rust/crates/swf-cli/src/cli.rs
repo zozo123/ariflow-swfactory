@@ -236,7 +236,11 @@ pub enum RunsCmd {
         #[arg(long, value_name = "ID")]
         dag: Option<String>,
 
-        /// How many runs per DAG.
+        /// Only runs in this state: queued, running, success, failed.
+        #[arg(long, value_name = "STATE")]
+        state: Option<String>,
+
+        /// How many runs to read per DAG. --state narrows what was read.
         #[arg(long, default_value_t = 20, value_name = "N")]
         limit: usize,
     },
@@ -268,11 +272,7 @@ pub enum RunsCmd {
 #[derive(Debug, Subcommand)]
 pub enum JobsCmd {
     /// Every mapped job this context can see.
-    List {
-        /// Only jobs that need a person: failed, or waiting on a gate.
-        #[arg(long)]
-        attention: bool,
-    },
+    List(JobListArgs),
 
     /// One job: identity, progress, tasks and the gates it is waiting on.
     Inspect {
@@ -304,7 +304,7 @@ pub struct LogsArgs {
 #[derive(Debug, Subcommand)]
 pub enum GatesCmd {
     /// Every gate waiting for an answer, and whether it can be answered yet.
-    List,
+    List(GateListArgs),
 
     /// The evidence for one gate, and the revision to hand back to `approve`.
     Review {
@@ -312,26 +312,116 @@ pub enum GatesCmd {
         gate: String,
     },
 
-    /// Approve one gate.
+    /// Approve one gate, or every gate a filter selects with --all.
+    ///
+    /// A batch answers only gates that are ready: one that has not parked yet is reported as
+    /// skipped, and there is no --force for a set. Run it with --dry-run first — that prints the
+    /// whole selection and writes nothing — then re-run the identical line with --dry-run removed.
     Approve(AnswerArgs),
 
-    /// Reject one gate.
+    /// Reject one gate, or every gate a filter selects with --all.
+    ///
+    /// The same rules as approve, and the same advice: --dry-run first, writes nothing, then the
+    /// identical line without it.
     Reject(AnswerArgs),
 }
 
+/// The filters that narrow a set of gates, shared by the listing and the bulk answer.
+///
+/// One struct for both so a listing an operator narrowed **is** the batch they are about to run.
+/// Two copies of these flags would eventually disagree, and the day they did, the disagreement
+/// would be discovered by a batch answering a gate nobody had read.
+#[derive(Debug, Args)]
+pub struct GateFilterArgs {
+    /// Only gates of this DAG.
+    #[arg(long, value_name = "ID")]
+    pub dag: Option<String>,
+
+    /// Only gates of this blueprint — the same set as --dag, named the way you submitted it.
+    #[arg(long, value_name = "NAME")]
+    pub blueprint: Option<String>,
+
+    /// Only gates whose job answers this issue. Costs an extra read per matched run.
+    #[arg(long, value_name = "REF")]
+    pub issue: Option<String>,
+
+    /// Only this gate: `intent`, `plan`, or a full `job.approve_*` task id.
+    #[arg(long = "gate", value_name = "NAME")]
+    pub gate_name: Option<String>,
+
+    /// Only gates that can be answered now, dropping the ones still arming.
+    #[arg(long)]
+    pub ready: bool,
+
+    /// At most this many gates. A set the limit cut says so, and never silently.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
+}
+
+/// `swf gates list`
+#[derive(Debug, Args)]
+pub struct GateListArgs {
+    /// Which gates to show.
+    #[command(flatten)]
+    pub filter: GateFilterArgs,
+}
+
+/// `swf jobs list`
+#[derive(Debug, Args)]
+pub struct JobListArgs {
+    /// Only jobs that need a person: failed, or waiting on a gate.
+    #[arg(long)]
+    pub attention: bool,
+
+    /// Only jobs of this DAG. The other DAGs are never read.
+    #[arg(long, value_name = "ID")]
+    pub dag: Option<String>,
+
+    /// Only jobs in this state: queued, running, success, failed, skipped.
+    #[arg(long, value_name = "STATE")]
+    pub state: Option<String>,
+
+    /// Only jobs answering this issue.
+    #[arg(long, value_name = "REF")]
+    pub issue: Option<String>,
+
+    /// At most this many jobs. A listing the limit cut says so.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
+}
+
 /// `swf gates approve|reject`
+///
+/// Either one gate by identity, or `--all` over a filtered set. `--dry-run` prints the whole set
+/// and writes nothing; run it first, read what it selected, then re-run the identical line without
+/// `--dry-run`.
 #[derive(Debug, Args)]
 pub struct AnswerArgs {
-    /// `dag/run#index:gate`.
-    pub gate: String,
+    /// `dag/run#index:gate`. Leave it out and pass --all to answer a whole set.
+    #[arg(value_name = "GATE")]
+    pub gate: Option<String>,
 
     /// The evidence revision `swf gates review` printed. A mismatch is a conflict, not a warning.
     #[arg(long, value_name = "REV")]
     pub expect: Option<String>,
 
     /// Answer a gate whose task has not parked yet. Doing so can make the scheduler fail it.
+    /// One gate only: it cannot be combined with --all.
     #[arg(long)]
     pub force: bool,
+
+    /// Answer every gate the filters select. Only gates that are ready are answered; the rest are
+    /// reported as skipped, and there is no --force for a set.
+    #[arg(long)]
+    pub all: bool,
+
+    /// Print exactly what --all would answer and write nothing. Run this first.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+
+    /// Which gates --all means.
+    #[command(flatten)]
+    pub filter: GateFilterArgs,
 }
 
 /// `swf deliveries …`
@@ -486,6 +576,115 @@ mod tests {
     fn submit_requires_an_issue() {
         assert!(Cli::try_parse_from(["swf", "submit"]).is_err());
         assert!(Cli::try_parse_from(["swf", "submit", "--issue", "42"]).is_ok());
+    }
+
+    #[test]
+    fn a_gate_answer_takes_either_an_identity_or_a_whole_filtered_set() {
+        // Both shapes have to parse; which combinations are *legal* is decided in `exec`, where
+        // the refusal can say why, rather than in a clap conflict nobody can explain.
+        let one = Cli::try_parse_from(["swf", "gates", "approve", "a/b#0:plan"]).expect("parse");
+        let Command::Gates(GatesCmd::Approve(args)) = one.command else {
+            panic!("expected gates approve");
+        };
+        assert_eq!(args.gate.as_deref(), Some("a/b#0:plan"));
+        assert!(!args.all);
+
+        let many = Cli::try_parse_from([
+            "swf",
+            "gates",
+            "reject",
+            "--all",
+            "--dag",
+            "factory",
+            "--blueprint",
+            "factory",
+            "--issue",
+            "42",
+            "--gate",
+            "plan",
+            "--limit",
+            "20",
+            "--dry-run",
+        ])
+        .expect("parse");
+        let Command::Gates(GatesCmd::Reject(args)) = many.command else {
+            panic!("expected gates reject");
+        };
+        assert!(args.all && args.dry_run);
+        assert!(args.gate.is_none());
+        assert_eq!(args.filter.dag.as_deref(), Some("factory"));
+        assert_eq!(args.filter.blueprint.as_deref(), Some("factory"));
+        assert_eq!(args.filter.issue.as_deref(), Some("42"));
+        assert_eq!(args.filter.gate_name.as_deref(), Some("plan"));
+        assert_eq!(args.filter.limit, Some(20));
+    }
+
+    #[test]
+    fn the_listings_take_the_filters_the_batch_takes() {
+        // A listing an operator narrowed has to *be* the batch they are about to run, so the
+        // filter flags are the same words on both.
+        let gates = Cli::try_parse_from([
+            "swf", "gates", "list", "--dag", "factory", "--gate", "intent", "--ready", "--limit",
+            "5",
+        ])
+        .expect("parse");
+        let Command::Gates(GatesCmd::List(args)) = gates.command else {
+            panic!("expected gates list");
+        };
+        assert!(args.filter.ready);
+        assert_eq!(args.filter.limit, Some(5));
+
+        let jobs = Cli::try_parse_from([
+            "swf",
+            "jobs",
+            "list",
+            "--dag",
+            "factory",
+            "--state",
+            "failed",
+            "--issue",
+            "42",
+            "--limit",
+            "10",
+            "--attention",
+        ])
+        .expect("parse");
+        let Command::Jobs(JobsCmd::List(args)) = jobs.command else {
+            panic!("expected jobs list");
+        };
+        assert!(args.attention);
+        assert_eq!(args.state.as_deref(), Some("failed"));
+        assert_eq!(args.issue.as_deref(), Some("42"));
+        assert_eq!(args.limit, Some(10));
+
+        let runs =
+            Cli::try_parse_from(["swf", "runs", "list", "--state", "running"]).expect("parse");
+        let Command::Runs(RunsCmd::List { state, limit, .. }) = runs.command else {
+            panic!("expected runs list");
+        };
+        assert_eq!(state.as_deref(), Some("running"));
+        assert_eq!(
+            limit, 20,
+            "the read stays bounded when nothing says otherwise"
+        );
+    }
+
+    #[test]
+    fn the_bulk_help_sends_a_careful_operator_to_the_dry_run_first() {
+        let approve = Cli::command()
+            .find_subcommand("gates")
+            .and_then(|gates| gates.find_subcommand("approve").cloned())
+            .map(|mut cmd| cmd.render_long_help().to_string())
+            .unwrap_or_default();
+        assert!(approve.contains("--dry-run"), "{approve}");
+        assert!(
+            approve.contains("writes nothing"),
+            "the help has to say the dry run is safe before it is trusted: {approve}"
+        );
+        assert!(
+            approve.contains("ready"),
+            "and that a batch answers only ready gates: {approve}"
+        );
     }
 
     #[test]

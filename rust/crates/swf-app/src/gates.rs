@@ -17,19 +17,20 @@
 //! did not see is the outcome this refuses to allow at all.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use swf_adapters::airflow::{GATE_APPROVE, GATE_REJECT};
 use swf_adapters::traits::Runs;
 use swf_domain::ids::{GateId, JobId};
-use swf_domain::model::{Gate, Snapshot, TaskState};
+use swf_domain::model::{Gate, JobRow, Snapshot, TaskState};
 use swf_domain::rollup::{job_state, stage_progress};
 use swf_domain::sanitize::{sanitize_block, sanitize_line};
 use swf_domain::states::is_gate_parked;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::ops::{OpsError, Result};
+use crate::ops::{ErrorKind, OpsError, Result};
 
 /// How long [`answer`] waits before its confirming re-read when it has only seen a gate once.
 ///
@@ -190,17 +191,9 @@ fn task_state_of(gate: &Gate, tasks: &[TaskState]) -> String {
 
 /// Every pending gate, with readiness established against the task states.
 pub async fn list(runs: &dyn Runs, cancel: &CancellationToken) -> Result<GateList> {
-    let page = runs.pending_gates(cancel).await?;
-    let mut gates = page.rows;
-    let mut cache: Vec<(String, Vec<TaskState>)> = Vec::new();
-    for gate in &mut gates {
-        let tasks = tasks_for(runs, &mut cache, &gate.dag_id, &gate.run_id, cancel).await;
-        gate.ready = is_ready(gate, &tasks);
-    }
-    Ok(GateList {
-        gates,
-        truncated: page.truncated,
-    })
+    Ok(select(runs, &GateFilter::default(), cancel)
+        .await?
+        .into_list())
 }
 
 /// Establish readiness for the gates of a snapshot that has already been collected.
@@ -352,7 +345,7 @@ pub async fn answer(
     let mut count = if ready { sightings.record(id) } else { 0 };
     if !ready && !opts.force {
         return Err(OpsError::operational(format!(
-            "{id} is not ready: its task instance is {state:?}, not awaiting_input. \
+            "{id} {NOT_READY}: its task instance is {state:?}, not awaiting_input. \
              Answering now would make the scheduler fail the gate"
         ))
         .with_hint("wait for the task to park, or pass --force if you accept the risk"));
@@ -379,7 +372,8 @@ pub async fn answer(
         }
         if !still_ready {
             return Err(OpsError::operational(format!(
-                "{id} stopped being ready while it was being confirmed (now {state:?})"
+                "{id} {NOT_READY} any more: it stopped being parked while it was \
+                 being confirmed (now {state:?})"
             )));
         }
         count = sightings.record(id);
@@ -460,6 +454,567 @@ pub fn job_of(gate: &Gate) -> JobId {
     gate.job()
 }
 
+// ---------------------------------------------------------------------------- selection
+
+/// Which gates an operator means, in the words the command line uses.
+///
+/// Every field **narrows** and none widens: an unmatched filter yields an empty selection rather
+/// than the whole factory. That is the only safe direction for a filter that is also the selector
+/// of a bulk write — a filter that fell back to "everything" on a typo would answer a hundred
+/// gates nobody asked about.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GateFilter {
+    /// One DAG id, exactly as Airflow spells it.
+    pub dag: Option<String>,
+    /// A blueprint name.
+    ///
+    /// A blueprint *is* its DAG id — `submit` triggers `blueprint.name` — so this is the same
+    /// selector spelled the way an operator who submitted the work thinks of it. Giving both is
+    /// legal and narrows twice, which is why two different names disagreeing selects nothing.
+    pub blueprint: Option<String>,
+    /// The issue reference the gate's job answers.
+    ///
+    /// A gate row does not carry its issue, so this is the one filter that has to read each
+    /// matched run's job rows; it is therefore only ever paid for when it was asked for.
+    pub issue: Option<String>,
+    /// A gate stage: `plan`, `approve_plan` and `job.approve_plan` all name the same gate.
+    pub gate: Option<String>,
+    /// Keep only gates that can be answered right now.
+    pub ready: bool,
+    /// At most this many gates. A selection the limit cut is reported truncated (rule 3).
+    pub limit: Option<usize>,
+}
+
+impl GateFilter {
+    /// True when nothing was asked for, so the selection is every pending gate.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The filter as the operator typed it, for a confirmation prompt and a report.
+    ///
+    /// It is echoed rather than summarised as a count on purpose: a person about to answer a
+    /// hundred gates has to be shown *what produced that number*, because the failure mode being
+    /// guarded against is a filter that means something other than what its author thought.
+    pub fn describe(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(dag) = &self.dag {
+            parts.push(format!("--dag {dag}"));
+        }
+        if let Some(blueprint) = &self.blueprint {
+            parts.push(format!("--blueprint {blueprint}"));
+        }
+        if let Some(issue) = &self.issue {
+            parts.push(format!("--issue {issue}"));
+        }
+        if let Some(gate) = &self.gate {
+            parts.push(format!("--gate {gate}"));
+        }
+        if self.ready {
+            parts.push("--ready".to_string());
+        }
+        if let Some(limit) = self.limit {
+            parts.push(format!("--limit {limit}"));
+        }
+        if parts.is_empty() {
+            "no filter: every pending gate".to_string()
+        } else {
+            parts.join(" ")
+        }
+    }
+
+    /// True when this DAG id survives `--dag` and `--blueprint`.
+    pub fn matches_dag(&self, dag_id: &str) -> bool {
+        let wanted = [self.dag.as_deref(), self.blueprint.as_deref()];
+        wanted.iter().flatten().all(|want| want.trim() == dag_id)
+    }
+
+    /// True when this task id is the gate `--gate` named.
+    pub fn matches_gate(&self, task_id: &str) -> bool {
+        match &self.gate {
+            None => true,
+            Some(want) => stage_of(want).eq_ignore_ascii_case(stage_of(task_id)),
+        }
+    }
+
+    /// True when this job's issue is the one `--issue` named.
+    ///
+    /// An issue that could not be established does **not** match: the filter selects a set that is
+    /// about to be answered, and "we could not tell" has to fall outside it.
+    pub fn matches_issue(&self, issue: Option<&str>) -> bool {
+        match &self.issue {
+            None => true,
+            Some(want) => issue.is_some_and(|have| have.trim().eq_ignore_ascii_case(want.trim())),
+        }
+    }
+
+    /// True when this filter needs the job rows, i.e. one extra read per run.
+    fn needs_issues(&self) -> bool {
+        self.issue.is_some()
+    }
+}
+
+/// The bare stage a gate name means: `job.approve_plan`, `approve_plan` and `plan` all give `plan`.
+///
+/// Written here rather than reusing `GateId::parse`'s expansion because this compares two names
+/// that may both be short, and neither of them is an identity.
+fn stage_of(name: &str) -> &str {
+    let tail = name.trim().rsplit('.').next().unwrap_or("").trim();
+    tail.strip_prefix("approve_").unwrap_or(tail)
+}
+
+/// One gate a filter matched, with the facts that decided whether it can be answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Selected {
+    /// The gate, `ready` already established against its own task instance.
+    pub gate: Gate,
+    /// That task instance's state, so a skipped gate can say *why* and not merely that it was.
+    pub task_state: String,
+    /// The issue this gate's job answers — `None` when nothing asked us to look it up.
+    pub issue: Option<String>,
+}
+
+/// What one filtered read of the gate list found, and whether it is the whole of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Selection {
+    /// The matching gates, in the order Airflow returned them.
+    pub rows: Vec<Selected>,
+    /// True when the page bound or the limit shortened this selection (rule 3).
+    pub truncated: bool,
+}
+
+impl Selection {
+    /// How many gates matched.
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// True when nothing matched.
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// How many of them can be answered now.
+    pub fn ready_count(&self) -> usize {
+        self.rows.iter().filter(|row| row.gate.ready).count()
+    }
+
+    /// The gates alone, for a listing.
+    pub fn into_list(self) -> GateList {
+        GateList {
+            gates: self.rows.into_iter().map(|row| row.gate).collect(),
+            truncated: self.truncated,
+        }
+    }
+}
+
+/// The gates a filter selects, with readiness established against the task states.
+///
+/// The cheap filters are applied to the gate rows **before** any per-run read, because that join
+/// is what a listing actually costs: one or two calls per distinct run. Paying it for gates the
+/// operator excluded is the "fetch ten thousand rows to discard nine thousand" this filter set
+/// exists to stop, and `--limit` stops the loop rather than trimming its result.
+pub async fn select(
+    runs: &dyn Runs,
+    filter: &GateFilter,
+    cancel: &CancellationToken,
+) -> Result<Selection> {
+    let page = runs.pending_gates(cancel).await?;
+    let candidates: Vec<Gate> = page
+        .rows
+        .into_iter()
+        .filter(|gate| filter.matches_dag(&gate.dag_id) && filter.matches_gate(&gate.task_id))
+        .collect();
+
+    let mut tasks_cache: Vec<(String, Vec<TaskState>)> = Vec::new();
+    let mut jobs_cache: Vec<(String, Vec<JobRow>)> = Vec::new();
+    let mut rows: Vec<Selected> = Vec::new();
+    let mut cut = false;
+
+    for gate in candidates {
+        if cancel.is_cancelled() {
+            return Err(OpsError::cancelled());
+        }
+        let tasks = tasks_for(runs, &mut tasks_cache, &gate.dag_id, &gate.run_id, cancel).await;
+        let issue = if filter.needs_issues() {
+            // Readiness still comes from the task states above: `job_rows` answers the issue, and
+            // a gate whose row is missing must not lose its readiness to a lookup it never needed.
+            issue_for(runs, &mut jobs_cache, &gate, cancel).await
+        } else {
+            None
+        };
+        if !filter.matches_issue(issue.as_deref()) {
+            continue;
+        }
+        let mut gate = gate;
+        gate.ready = is_ready(&gate, &tasks);
+        if filter.ready && !gate.ready {
+            continue;
+        }
+        let task_state = task_state_of(&gate, &tasks);
+        rows.push(Selected {
+            gate,
+            task_state,
+            issue,
+        });
+        if filter.limit.is_some_and(|limit| rows.len() > limit) {
+            // One row past the bound is how the limit is *known* to have cut something, rather
+            // than inferred from a count that happened to land on it.
+            rows.pop();
+            cut = true;
+            break;
+        }
+    }
+
+    Ok(Selection {
+        rows,
+        truncated: page.truncated || cut,
+    })
+}
+
+/// The issue one gate's job answers, reading each run's job rows at most once.
+async fn issue_for(
+    runs: &dyn Runs,
+    cache: &mut Vec<(String, Vec<JobRow>)>,
+    gate: &Gate,
+    cancel: &CancellationToken,
+) -> Option<String> {
+    let cache_key = key(&gate.dag_id, &gate.run_id);
+    if !cache.iter().any(|(k, _)| *k == cache_key) {
+        let run = swf_domain::ids::RunRef::new(&gate.dag_id, &gate.run_id);
+        // A run whose rows cannot be read has no issue we can prove, and `matches_issue` excludes
+        // it. Being wrong towards "not selected" is the only acceptable direction before a write.
+        let rows = runs
+            .job_rows(&run, &[], cancel)
+            .await
+            .map(|page| page.rows)
+            .unwrap_or_default();
+        cache.push((cache_key.clone(), rows));
+    }
+    cache
+        .iter()
+        .find(|(k, _)| *k == cache_key)
+        .and_then(|(_, rows)| rows.iter().find(|row| row.map_index == gate.map_index))
+        .map(|row| row.issue.clone())
+}
+
+// ---------------------------------------------------------------------------- answering a batch
+
+/// How many gates a batch answers at once.
+///
+/// Six is a compromise with two failure modes on either side of it. Every answer re-reads its own
+/// gate before the PATCH, so a serial loop over a hundred and twenty gates is a coffee break; a
+/// hundred simultaneous PATCHes against one scheduler is an outage of the batch's own making.
+pub const BATCH_CONCURRENCY: usize = 6;
+
+/// The words a readiness refusal carries.
+///
+/// A batch has to tell "this gate is not answerable yet" apart from "answering it went wrong",
+/// because only the second is a failure. The phrase is a constant so the two sites that write it
+/// and the one that recognises it cannot drift into disagreement over prose.
+const NOT_READY: &str = "is not ready";
+
+/// Where one gate's answer landed.
+///
+/// `Conflict` is deliberately not a failure: in a shared control room somebody else answering
+/// first is the system working, and a batch that exited non-zero for it would teach operators to
+/// ignore its exit code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchOutcome {
+    /// A dry run would have answered this gate. Nothing was written.
+    Planned,
+    /// Answered.
+    Answered,
+    /// Matched, but not answerable — nearly always a gate that has not parked yet.
+    Skipped,
+    /// Someone else answered it first, or it stopped being pending.
+    Conflict,
+    /// The write was attempted and went wrong.
+    Failed,
+}
+
+impl BatchOutcome {
+    /// The word the report and the `--json` document both use.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Planned => "planned",
+            Self::Answered => "answered",
+            Self::Skipped => "skipped",
+            Self::Conflict => "conflict",
+            Self::Failed => "failed",
+        }
+    }
+
+    /// True only for the outcome that means something actually went wrong.
+    pub fn is_failure(self) -> bool {
+        matches!(self, Self::Failed)
+    }
+}
+
+/// One gate's line in a batch report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchItem {
+    /// Which gate.
+    pub id: GateId,
+    /// The bare stage name, e.g. `approve_plan`.
+    pub gate: String,
+    /// The issue its job answers, when the filter made us read it.
+    pub issue: Option<String>,
+    /// Whether it was answerable when it was selected.
+    pub ready: bool,
+    /// What happened.
+    pub outcome: BatchOutcome,
+    /// Why, for anything that is not a plain answer. Empty otherwise.
+    pub detail: String,
+    /// The evidence revision that was answered, for an answered gate.
+    pub revision: String,
+    /// How many times the gate was seen parked before the write.
+    pub sightings: u32,
+    /// A failure's classification, so a batch that failed for one reason keeps that reason's exit
+    /// code instead of flattening a dead credential into a generic 1.
+    pub kind: Option<ErrorKind>,
+}
+
+impl BatchItem {
+    /// The line for a gate that was never a candidate for a write.
+    fn skipped(row: &Selected, detail: impl Into<String>) -> Self {
+        Self {
+            id: row.gate.id(),
+            gate: row.gate.short_name().to_string(),
+            issue: row.issue.clone(),
+            ready: row.gate.ready,
+            outcome: BatchOutcome::Skipped,
+            detail: sanitize_line(&detail.into()),
+            revision: String::new(),
+            sightings: 0,
+            kind: None,
+        }
+    }
+}
+
+/// What a batch did, or would do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchReport {
+    /// Approve or reject — one decision for the whole batch.
+    pub decision: Decision,
+    /// True when nothing was written.
+    pub dry_run: bool,
+    /// The filter that produced this set, echoed back.
+    pub filter: String,
+    /// True when the selection was shortened by the page bound or the limit.
+    pub truncated: bool,
+    /// One line per matched gate, in selection order.
+    pub items: Vec<BatchItem>,
+}
+
+impl BatchReport {
+    /// How many gates the filter matched.
+    pub fn matched(&self) -> usize {
+        self.items.len()
+    }
+
+    /// How many gates ended in one particular outcome.
+    pub fn count(&self, outcome: BatchOutcome) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.outcome == outcome)
+            .count()
+    }
+
+    /// How many gates actually went wrong.
+    pub fn failures(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.outcome.is_failure())
+            .count()
+    }
+
+    /// What the shell is told.
+    ///
+    /// Zero unless something failed — a skipped gate arms within seconds and a conflict means the
+    /// factory worked. When every failure shares one classification the batch keeps it, because a
+    /// script that sees `4` must still learn it needs a credential; a mixed batch is a plain
+    /// operational failure.
+    pub fn exit_code(&self) -> i32 {
+        let mut kinds = self
+            .items
+            .iter()
+            .filter(|item| item.outcome.is_failure())
+            .map(|item| item.kind);
+        let Some(first) = kinds.next() else {
+            return 0;
+        };
+        match first {
+            Some(kind) if kinds.all(|other| other == Some(kind)) => kind.exit_code(),
+            _ => 1,
+        }
+    }
+
+    /// What a dry run answers: the whole selection, and not one write.
+    ///
+    /// It is built from the same [`Selection`] the real batch consumes and marks the same gates
+    /// skipped for the same reasons, so "read this, then re-run it without `--dry-run`" is a
+    /// promise about one list rather than two.
+    pub fn dry(selection: &Selection, decision: Decision, filter: &GateFilter) -> Self {
+        let items = selection
+            .rows
+            .iter()
+            .map(|row| {
+                if row.gate.ready {
+                    BatchItem {
+                        outcome: BatchOutcome::Planned,
+                        revision: row.gate.current_revision(),
+                        ..BatchItem::skipped(row, String::new())
+                    }
+                } else {
+                    BatchItem::skipped(row, not_ready_reason(&row.task_state))
+                }
+            })
+            .collect();
+        Self {
+            decision,
+            dry_run: true,
+            filter: filter.describe(),
+            truncated: selection.truncated,
+            items,
+        }
+    }
+}
+
+/// Why a gate that matched cannot be answered, in one clause.
+fn not_ready_reason(task_state: &str) -> String {
+    format!("{NOT_READY}: its task instance is {task_state:?}, not awaiting_input")
+}
+
+/// Answer every selected gate, one outcome per gate, with a bounded number in flight.
+///
+/// Three rules are structural here rather than left to the caller. A gate that is not ready is
+/// never handed to [`answer`] at all — a batch has no equivalent of `--force`, because forcing is
+/// a decision about one gate somebody read and it does not generalise to a set nobody has. One bad
+/// gate cannot abandon the rest, because each answer is its own task and its own line in the
+/// report. And every gate is still re-read immediately before its own PATCH, since [`answer`] is
+/// the only writer: there is no bulk path that skips the re-validation a single answer performs.
+pub async fn answer_all(
+    runs: Arc<dyn Runs>,
+    sightings: Arc<Sightings>,
+    selection: &Selection,
+    decision: Decision,
+    filter: &GateFilter,
+    cancel: &CancellationToken,
+) -> BatchReport {
+    let mut slots: Vec<Option<BatchItem>> = vec![None; selection.rows.len()];
+    let mut queue: Vec<usize> = Vec::new();
+    for (index, row) in selection.rows.iter().enumerate() {
+        if row.gate.ready {
+            queue.push(index);
+        } else {
+            slots[index] = Some(BatchItem::skipped(row, not_ready_reason(&row.task_state)));
+        }
+    }
+
+    let mut running: JoinSet<(usize, BatchItem)> = JoinSet::new();
+    let mut next = 0usize;
+    loop {
+        while running.len() < BATCH_CONCURRENCY && next < queue.len() && !cancel.is_cancelled() {
+            let index = queue[next];
+            next += 1;
+            let row = &selection.rows[index];
+            let id = row.gate.id();
+            let gate = row.gate.short_name().to_string();
+            let issue = row.issue.clone();
+            let runs = Arc::clone(&runs);
+            let sightings = Arc::clone(&sightings);
+            let cancel = cancel.clone();
+            running.spawn(async move {
+                let outcome = answer(
+                    runs.as_ref(),
+                    sightings.as_ref(),
+                    &id,
+                    decision,
+                    &AnswerOpts::default(),
+                    &cancel,
+                )
+                .await;
+                (index, item_of(id, gate, issue, outcome))
+            });
+        }
+        let Some(joined) = running.join_next().await else {
+            break;
+        };
+        if let Ok((index, item)) = joined {
+            slots[index] = Some(item);
+        }
+    }
+
+    let interrupted = cancel.is_cancelled();
+    let items = slots
+        .into_iter()
+        .zip(selection.rows.iter())
+        .map(|(slot, row)| {
+            slot.unwrap_or_else(|| {
+                // A gate with no outcome was never written to, and saying "not answered" is the
+                // only honest thing left: the report may not have a hole where a gate was.
+                let why = if interrupted {
+                    "not answered: the batch was interrupted"
+                } else {
+                    "not answered: its answer did not complete"
+                };
+                BatchItem::skipped(row, why)
+            })
+        })
+        .collect();
+
+    BatchReport {
+        decision,
+        dry_run: false,
+        filter: filter.describe(),
+        truncated: selection.truncated,
+        items,
+    }
+}
+
+/// Turn one answer into its line, keeping a lost race apart from a failure.
+fn item_of(
+    id: GateId,
+    gate: String,
+    issue: Option<String>,
+    outcome: Result<GateAnswer>,
+) -> BatchItem {
+    let base = BatchItem {
+        id,
+        gate,
+        issue,
+        ready: true,
+        outcome: BatchOutcome::Answered,
+        detail: String::new(),
+        revision: String::new(),
+        sightings: 0,
+        kind: None,
+    };
+    match outcome {
+        Ok(answered) => BatchItem {
+            revision: answered.revision,
+            sightings: answered.sightings,
+            ..base
+        },
+        Err(err) => {
+            // A gate that vanished from the pending list between the selection and the write was
+            // answered by somebody else; both spellings of that are a conflict, not a failure.
+            let outcome = match err.kind {
+                ErrorKind::Conflict | ErrorKind::NotFound => BatchOutcome::Conflict,
+                _ if err.message.contains(NOT_READY) => BatchOutcome::Skipped,
+                _ => BatchOutcome::Failed,
+            };
+            BatchItem {
+                outcome,
+                detail: err.message,
+                kind: outcome.is_failure().then_some(err.kind),
+                ..base
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,6 +1088,161 @@ mod tests {
         assert_eq!(seen.count(&id), 2);
         seen.forget(&id);
         assert_eq!(seen.count(&id), 0);
+    }
+
+    fn item(outcome: BatchOutcome, kind: Option<ErrorKind>) -> BatchItem {
+        BatchItem {
+            id: gate().id(),
+            gate: "approve_plan".into(),
+            issue: None,
+            ready: true,
+            outcome,
+            detail: String::new(),
+            revision: String::new(),
+            sightings: 2,
+            kind,
+        }
+    }
+
+    fn report(items: Vec<BatchItem>) -> BatchReport {
+        BatchReport {
+            decision: Decision::Approve,
+            dry_run: false,
+            filter: String::new(),
+            truncated: false,
+            items,
+        }
+    }
+
+    #[test]
+    fn one_gate_is_the_same_gate_under_all_three_of_its_spellings() {
+        let filter = GateFilter {
+            gate: Some("plan".into()),
+            ..GateFilter::default()
+        };
+        for spelling in ["job.approve_plan", "approve_plan", "plan", "PLAN"] {
+            assert!(filter.matches_gate(spelling), "{spelling} is the plan gate");
+        }
+        assert!(!filter.matches_gate("job.approve_intent"));
+        // No gate filter at all matches every gate, rather than none.
+        assert!(GateFilter::default().matches_gate("job.approve_intent"));
+    }
+
+    #[test]
+    fn a_dag_and_a_blueprint_narrow_the_same_field_and_both_have_to_agree() {
+        let both = GateFilter {
+            dag: Some("factory".into()),
+            blueprint: Some("hotfix".into()),
+            ..GateFilter::default()
+        };
+        assert!(!both.matches_dag("factory"), "two filters both narrow");
+        assert!(!both.matches_dag("hotfix"));
+        let one = GateFilter {
+            blueprint: Some("factory".into()),
+            ..GateFilter::default()
+        };
+        assert!(one.matches_dag("factory"));
+        assert!(!one.matches_dag("factory-2"), "a prefix is not a match");
+    }
+
+    #[test]
+    fn an_issue_that_could_not_be_established_is_outside_the_set() {
+        let filter = GateFilter {
+            issue: Some("42".into()),
+            ..GateFilter::default()
+        };
+        assert!(filter.matches_issue(Some("42")));
+        assert!(filter.matches_issue(Some(" 42 ")));
+        assert!(!filter.matches_issue(Some("43")));
+        assert!(
+            !filter.matches_issue(None),
+            "a set about to be answered cannot include a row we could not check"
+        );
+        assert!(GateFilter::default().matches_issue(None));
+    }
+
+    #[test]
+    fn a_filter_echoes_itself_the_way_it_was_typed() {
+        assert_eq!(
+            GateFilter::default().describe(),
+            "no filter: every pending gate"
+        );
+        let filter = GateFilter {
+            dag: Some("factory".into()),
+            gate: Some("plan".into()),
+            ready: true,
+            limit: Some(20),
+            ..GateFilter::default()
+        };
+        assert_eq!(
+            filter.describe(),
+            "--dag factory --gate plan --ready --limit 20"
+        );
+        assert!(!filter.is_empty());
+        assert!(GateFilter::default().is_empty());
+    }
+
+    #[test]
+    fn a_batch_exits_zero_for_everything_that_is_not_a_failure() {
+        assert_eq!(report(Vec::new()).exit_code(), 0);
+        let fine = report(vec![
+            item(BatchOutcome::Answered, None),
+            item(BatchOutcome::Skipped, None),
+            item(BatchOutcome::Conflict, None),
+        ]);
+        assert_eq!(
+            fine.exit_code(),
+            0,
+            "a lost race and a gate still arming are both the system working"
+        );
+        assert_eq!(fine.count(BatchOutcome::Conflict), 1);
+        assert_eq!(fine.matched(), 3);
+        assert_eq!(fine.failures(), 0);
+    }
+
+    #[test]
+    fn a_batch_that_failed_for_one_reason_keeps_that_reasons_exit_code() {
+        // A script that sees 4 must know it needs a credential, and a batch every one of whose
+        // writes was rejected by the same credential still has exactly one reason.
+        let auth = report(vec![
+            item(BatchOutcome::Failed, Some(ErrorKind::Auth)),
+            item(BatchOutcome::Failed, Some(ErrorKind::Auth)),
+            item(BatchOutcome::Answered, None),
+        ]);
+        assert_eq!(auth.exit_code(), 4);
+
+        let mixed = report(vec![
+            item(BatchOutcome::Failed, Some(ErrorKind::Auth)),
+            item(BatchOutcome::Failed, Some(ErrorKind::Unreachable)),
+        ]);
+        assert_eq!(
+            mixed.exit_code(),
+            1,
+            "two reasons is an operational failure"
+        );
+    }
+
+    #[test]
+    fn every_outcome_reads_as_a_word_and_only_one_of_them_is_a_failure() {
+        let words = [
+            (BatchOutcome::Planned, "planned"),
+            (BatchOutcome::Answered, "answered"),
+            (BatchOutcome::Skipped, "skipped"),
+            (BatchOutcome::Conflict, "conflict"),
+            (BatchOutcome::Failed, "failed"),
+        ];
+        for (outcome, word) in words {
+            assert_eq!(outcome.as_str(), word);
+            assert_eq!(outcome.is_failure(), outcome == BatchOutcome::Failed);
+        }
+    }
+
+    #[test]
+    fn a_readiness_refusal_is_recognisable_to_the_batch_that_has_to_skip_it() {
+        // The batch tells "not answerable yet" from "went wrong" by this phrase, so the message
+        // and the recogniser are pinned together here rather than left to drift apart.
+        assert!(not_ready_reason("queued").contains(NOT_READY));
+        assert!(not_ready_reason("queued").contains("awaiting_input"));
     }
 
     #[test]
