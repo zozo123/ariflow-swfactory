@@ -1,0 +1,44 @@
+---
+source: crates/swf-tui/tests/render.rs
+expression: "draw(&model, Theme::mono(), 120, 40)"
+---
+swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ jobs 4 rows                                                  │ factory/manual__2026-03-14T09#0
+ 2 jobs          4 │dag      run              job issue  stage    state           │issue        142
+ 3 job detail      │factory  manual__2026-03- 0   142    approve_ ◆ awaiting_input│state        ◆ awaiting_input
+ 4 review          │factory  manual__2026-03- 1   143    build_an ▸ running       │stage        approve_plan
+ 5 deliveries    2 │hotfix   manual__2026-03- 0   sre-9  build_an ✗ failed        │
+ 6 infrastructure 7│hot┌ keys ─────────────────────────────────────────────────────────────────┐
+ 7 history         │   │ r / F5        refresh every source now                                │       ✓ success
+                   │   │ Tab / S-Tab   next / previous view                                    │lan    ◆ awaiting_input
+                   │   │ 1 - 7         go straight to a view                                   │
+                   │   │ j k / arrows  move the cursor                                         │
+                   │   │ g / G         first / last row                                        │       ◆ ready
+                   │   │ enter         open the selected job or gate                           │
+                   │   │ esc           back, or clear the filter                               │
+                   │   │ a             approve the selected gate                               │
+                   │   │ x             reject the gate — remove the sandbox on infrastructure  │
+                   │   │ t             trigger a blueprint with issue refs                     │
+                   │   │ s             mark the selected Airflow run failed                    │
+                   │   │ o             open the run or delivery in a browser                   │
+                   │   │ v             verify the selected delivery                            │
+                   │   │ L             fetch the selected task's log                           │
+                   │   │ l             show or hide the activity pane                          │
+                   │   │ /             filter the table                                        │
+                   │   │ :             command palette                                         │
+                   │   │ ?             this                                                    │
+                   │   │ q / ctrl-c    quit — remote work keeps running                        │
+                   │   │                                                                       │
+                   │   │ closing this window leaves every remote job running.                  │
+ activity ─────────────└───────────────────────────────────────────────────────────────────────┘────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+enter detail  t trigger  s stop  o open  L logs  r refresh  / search  : cmd  ? help  q quit

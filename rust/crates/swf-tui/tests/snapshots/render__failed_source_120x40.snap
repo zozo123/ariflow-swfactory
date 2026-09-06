@@ -1,0 +1,44 @@
+---
+source: crates/swf-tui/tests/render.rs
+expression: "draw(&model, Theme::mono(), 120, 40)"
+---
+swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)  ✗ github
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     4 │ deliveries 0 rows                                            │ nothing selected
+ 2 jobs          4 │no delivery pull requests carry the factory label yet.        │
+ 3 job detail      │                                                              │
+ 4 review          │                                                              │
+ 5 deliveries    0 │                                                              │
+ 6 infrastructure 7│                                                              │
+ 7 history         │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+09:30:00 github: gh: no such file or directory
+
+
+
+
+
+
+o open  v verify  r refresh  / search  : cmd  ? help  q quit

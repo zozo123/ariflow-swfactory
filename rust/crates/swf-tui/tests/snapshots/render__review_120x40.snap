@@ -1,0 +1,44 @@
+---
+source: crates/swf-tui/tests/render.rs
+expression: "draw(&model, Theme::mono(), 120, 40)"
+---
+swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ review                                                       │ factory/manual__2026-03-14T09#0:job.
+ 2 jobs          4 │gate         factory/manual__2026-03-14T09#0:job.approve_plan │approve_plan
+ 3 job detail      │job          factory/manual__2026-03-14T09#0                  │issue        142
+ 4 review          │stage        approve_plan                                     │state        ◆ awaiting_input
+ 5 deliveries    2 │job state    ◆ awaiting_input                                 │stage        approve_plan
+ 6 infrastructure 7│task state   ◆ awaiting_input  ◆ answerable                   │
+ 7 history         │revision     2916c986f955d863                                 │tasks
+                   │actor        admin                                            │job.spec            ✓ success
+                   │options      approve, reject                                  │job.approve_plan    ◆ awaiting_input
+                   │url                                                           │
+                   │https://airflow.example.com/dags/factory/runs/manual__2026-03-│gates
+                   │14T09                                                         │approve_plan        ◆ ready
+                   │                                                              │
+                   │evidence                                                      │
+                   │plan for issue 142: split the ingest worker                   │
+                   │three files change; the migration is reversible.              │
+                   │                                                              │
+                   │a approve  ·  x reject  ·  both re-read the gate before       │
+                   │writing                                                       │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+a approve  x reject  esc back  r refresh  / search  : cmd  ? help  q quit

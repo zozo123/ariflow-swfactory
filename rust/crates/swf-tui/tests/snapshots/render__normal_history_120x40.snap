@@ -1,0 +1,44 @@
+---
+source: crates/swf-tui/tests/render.rs
+expression: "draw(&model, Theme::mono(), 120, 40)"
+---
+swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ history 7 rows                                               │ runs
+ 2 jobs          4 │metric                 value                                  │value        48 (6 scripted)
+ 3 job detail      │runs                   48 (6 scripted)                        │
+ 4 review          │first-pass rate        75%                                    │
+ 5 deliveries    2 │mean build iterations  1.42                                   │
+ 6 infrastructure 7│p50 cycle time         612.5s                                 │
+ 7 history         │tests pass rate        94%                                    │
+                   │findings               blocker=1, major=4, minor=11, nit=23   │
+                   │total cost             $18.4213                               │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+r refresh  / search  : cmd  ? help  q quit

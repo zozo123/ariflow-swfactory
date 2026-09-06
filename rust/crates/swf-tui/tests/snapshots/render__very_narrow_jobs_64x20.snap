@@ -1,0 +1,24 @@
+---
+source: crates/swf-tui/tests/render.rs
+expression: "draw(&model, Theme::mono(), 64, 20)"
+---
+swf prod  ·  airflow https://airflow.example.com  ·  repo acme/w
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────
+ jobs 4 rows
+dag      run              job issue  stage      state
+factory  manual__2026-03- 0   142    approve_pl ◆ awaiting_input
+factory  manual__2026-03- 1   143    build_and_ ▸ running
+hotfix   manual__2026-03- 0   sre-9  build_and_ ✗ failed
+hotfix   manual__2026-03- 1   sre-10 deliver    ✓ success
+
+
+
+
+ activity ──────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+enter detail  t trigger  s stop  o open  L logs  r refresh  / se

@@ -1,0 +1,44 @@
+---
+source: crates/swf-tui/tests/render.rs
+expression: "draw(&model, Theme::mono(), 120, 40)"
+---
+swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ deliveries 2 rows                                            │ factory/142-manual2026
+ 2 jobs          4 │#     title                 checks                      state │branch       factory/142-manual2026
+ 3 job detail      │#512  factory: split the in 3 pass / 0 fail / 1 pending OPEN  │issue        142
+ 4 review          │#511  [BLOCKED] hotfix: ret 1 pass / 2 fail / 0 pending OPEN  │run          manual2026
+ 5 deliveries    2 │                                                              │state        OPEN
+ 6 infrastructure 7│                                                              │labels       factory, agent-authored
+ 7 history         │                                                              │checks       3 pass / 0 fail / 1
+                   │                                                              │pending
+                   │                                                              │blocked      no
+                   │                                                              │url
+                   │                                                              │https://github.com/acme/widgets/pull/
+                   │                                                              │512
+                   │                                                              │
+                   │                                                              │checks passing is not the same as
+                   │                                                              │independently verified — v runs the
+                   │                                                              │target's own tests from a fresh
+                   │                                                              │checkout and says which of the three
+                   │                                                              │claims it could prove.
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+o open  v verify  r refresh  / search  : cmd  ? help  q quit

@@ -1,0 +1,44 @@
+---
+source: crates/swf-tui/tests/render.rs
+expression: "draw(&model, Theme::mono(), 120, 40)"
+---
+swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ infrastructure 7 rows                                        │ sandbox:swf-ingest-1a2b3c4d
+ 2 jobs          4 │kind    name                 status        detail        age  │status       running
+ 3 job detail      │sandbox swf-ingest-1a2b3c4d  running       me@example.co 12m  │created by   me@example.com
+ 4 review          │sandbox swf-upload-9f8e7d6c  stopped       me@example.co 9h   │age          12m
+ 5 deliveries    2 │source  airflow              ✓ fresh       -             0s   │factory name yes
+ 6 infrastructure 7│source  gates                ✓ fresh       -             0s   │
+ 7 history         │source  github               ✓ fresh       -             0s   │x removes it. The provider is
+                   │source  islo                 ✓ fresh       -             0s   │re-listed immediately before the
+                   │source  metrics              ✓ fresh       -             0s   │delete and a sandbox that is not this
+                   │                                                              │owner's is refused.
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+x remove  r refresh  / search  : cmd  ? help  q quit
