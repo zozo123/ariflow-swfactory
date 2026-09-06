@@ -79,9 +79,7 @@ class ManagedGraph(BoundaryModel):
         layers: list[list[ManagedNode]] = []
         while remaining:
             layer = [
-                node
-                for node in self.nodes
-                if node.id in remaining and set(node.depends_on) <= done
+                node for node in self.nodes if node.id in remaining and set(node.depends_on) <= done
             ]
             if not layer:
                 raise ValueError("managed graph is cyclic")
@@ -96,9 +94,7 @@ class ManagedGraph(BoundaryModel):
         groups: list[list[str]] = []
         for layer in self.layers():
             candidates = [
-                node.id
-                for node in layer
-                if node.execution == "inside_stage" and node.parallel_safe
+                node.id for node in layer if node.execution == "inside_stage" and node.parallel_safe
             ]
             if len(candidates) > 1:
                 groups.append(candidates)

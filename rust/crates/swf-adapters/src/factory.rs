@@ -24,8 +24,8 @@ pub struct FactoryApi {
 
 impl FactoryApi {
     pub fn new(base: &str, token: String, timeout: Duration) -> Result<Self> {
-        let url = url::Url::parse(base)
-            .map_err(|_| AdapterError::refused("invalid backend URL"))?;
+        let url =
+            url::Url::parse(base).map_err(|_| AdapterError::refused("invalid backend URL"))?;
         let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
         if !(url.scheme() == "https" || (url.scheme() == "http" && loopback))
             || !url.username().is_empty()
@@ -39,7 +39,9 @@ impl FactoryApi {
         }
         if token.len() < 32 || token.chars().any(char::is_whitespace) {
             return Err(AdapterError::Auth {
-                detail: "set SWF_BACKEND_TOKEN to the backend's operator token (at least 32 characters)".into(),
+                detail:
+                    "set SWF_BACKEND_TOKEN to the backend's operator token (at least 32 characters)"
+                        .into(),
             });
         }
         let http = Client::builder()
@@ -80,8 +82,9 @@ impl FactoryApi {
                 .await
                 .map_err(|_| AdapterError::Unreachable {
                     what: "factory backend".into(),
-                    detail: "request failed; a mutation may have committed, inspect before retrying"
-                        .into(),
+                    detail:
+                        "request failed; a mutation may have committed, inspect before retrying"
+                            .into(),
                 })?;
             let status = response.status().as_u16();
             let value: Value = response.json().await.map_err(|_| AdapterError::Decode {
@@ -195,8 +198,7 @@ impl Deliveries for FactoryApi {
         let target: String = self
             .call("/deliveries/url", json!({"number": number}), cancel)
             .await?;
-        let url = url::Url::parse(&target)
-            .map_err(|_| AdapterError::refused("invalid PR URL"))?;
+        let url = url::Url::parse(&target).map_err(|_| AdapterError::refused("invalid PR URL"))?;
         if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
             return Err(AdapterError::refused("PR browser links must use HTTPS"));
         }

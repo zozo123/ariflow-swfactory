@@ -195,9 +195,7 @@ class Plan(BoundaryModel):
         layers: list[list[PlanTask]] = []
         while remaining:
             layer = [
-                node
-                for node in self.work
-                if node.id in remaining and set(node.depends_on) <= done
+                node for node in self.work if node.id in remaining and set(node.depends_on) <= done
             ]
             if not layer:
                 raise ValueError("work graph is cyclic")
@@ -319,9 +317,7 @@ class RunReport(BoundaryModel):
         ]
         for s in self.stages:
             if s.numbers:
-                rows.append(
-                    (f"  {s.stage}", ", ".join(f"{k}={v:g}" for k, v in s.numbers.items()))
-                )
+                rows.append((f"  {s.stage}", ", ".join(f"{k}={v:g}" for k, v in s.numbers.items())))
         width = max(len(k) for k, _ in rows)
         return "\n".join(f"{k.ljust(width)}  {v}" for k, v in rows)
 
