@@ -1,0 +1,49 @@
+name: finish-line-rust-tests
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'finish/managed-lifecycle-graphs' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: finish/managed-lifecycle-graphs
+      - name: Keep process-contract tests on explicit direct Airflow mode
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('rust/crates/swf-cli/tests/cli.rs')
+          source = path.read_text()
+          old = '.args(["context", "add", "t", "--airflow-url", url, "--use"])'
+          new = '.args(["context", "add", "t", "--direct", "--airflow-url", url, "--use"])'
+          if source.count(old) != 1:
+              raise SystemExit(f'expected exactly one connected() helper, found {source.count(old)}')
+          path.write_text(source.replace(old, new))
+          PY
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Verify CLI process contract
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml --all --check
+          cargo test --manifest-path rust/Cargo.toml -p swf-cli --test cli
+      - run: git diff --check
+      - name: Commit direct-mode test repair
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add rust/crates/swf-cli/tests/cli.rs
+          git commit -m 'Keep CLI process tests in explicit direct mode'
+          git push origin HEAD:finish/managed-lifecycle-graphs
