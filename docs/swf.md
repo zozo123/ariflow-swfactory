@@ -306,6 +306,77 @@ that identity into `approvals.json`. **The actor is the Airflow user the token b
 a name typed into `swf`. Use a personal token; a shared one makes every approval look like the same
 person.
 
+## Operating at scale
+
+Answering one gate is `swf gates review` then `swf gates approve`, and there is nothing to it. The
+day that hurts is the one with four blueprints, sixty runs and a hundred gates on the board, where
+the question stops being *how do I answer this gate* and becomes *which of these are mine, and can
+I answer that whole set at once without answering something I never read*. Four things make that
+answerable: filters that narrow a listing to the set you actually mean, a dry run that touches
+nothing, a bulk answer that refuses everything not ready, and a listing that says out loud when it
+has been shortened.
+
+### Narrow the listing before you read it
+
+The three listings that grow with the factory take filters, and the filters compose: each one
+narrows, none of them widens, and an unmatched filter yields an empty listing rather than
+everything.
+
+| Listing | Narrows by |
+| --- | --- |
+| `swf gates list` | FILTERS_GATES |
+| `swf jobs list` | FILTERS_JOBS |
+| `swf runs list` | FILTERS_RUNS |
+
+EXAMPLES_BLOCK
+
+Prefer a filter to a `jq` select for the set you are about to *answer*: the filters are the same
+selection `gates approve --all` applies, so a listing you narrowed with them is literally the batch
+you are about to run, while a `jq` pipeline is a second implementation that can disagree with it.
+`jq` is the right tool for shaping the output you keep.
+
+### Answer a batch, dry run first
+
+DRYRUN_PARA
+
+The rule to keep is mechanical rather than a matter of judgement: **run the line with `--dry-run`,
+read what it selected, then re-run the identical line with `--dry-run` removed.** Editing a filter
+between the two runs is precisely the mistake the dry run exists to catch, so change nothing else —
+not the limit, not the DAG, not the shell history entry. A batch is also a mutation, so on a
+non-TTY or with `--json` it needs `--yes` like every other answer.
+
+### Bulk answering only touches ready gates
+
+The readiness rule above is not relaxed for a batch; it matters more there. A person pressing `a`
+cannot realistically land inside the window between a HITL detail being created and its task
+deferring, but a loop over a hundred gates arrives faster than the scheduler does and hits that
+window repeatedly — and a gate answered inside it is *failed*, not queued. So a bulk answer selects
+only gates whose `ready` is true, reports the `⋯ arming` ones as skipped, and has no batch
+equivalent of `--force`: forcing is a decision about one gate you have read, and it does not
+generalise to a set you have not. A skipped gate is not lost — it arms within seconds and the next
+pass takes it.
+
+Nothing else about a single answer is dropped either. Each gate is re-read immediately before its
+own `PATCH`, so a gate another operator answered between the dry run and the batch is a per-gate
+conflict inside the report rather than a batch that aborts halfway through with no record of what
+it already did. `--expect` stays a single-gate flag for the same reason readiness does not
+generalise: a revision names one piece of evidence.
+
+### Telling a shortened listing from a short one
+
+Collection reads are paginated to exhaustion but bounded, and Airflow's cursor mode returns no
+total, so the only honest terminator is an empty page — which means a listing that hit its page cap
+cannot be recognised by counting rows. It is reported instead, and never by changing the shape of
+the answer: a `--json` listing stays a bare array and the warning goes to stderr
+(`the gate list was truncated; some gates are not shown`), so `swf gates list --json | jq` is
+unaffected and a person watching the terminal is told. In the TUI the same fact is the `⋯ truncated`
+badge in the header and, on Infrastructure, a `read stopped at its page bound — some rows are
+hidden` detail on the row of the source that hit it.
+
+Treat that warning as a stop sign in front of a batch. A bulk answer over a truncated listing has
+answered *a* set, not *the* set, and the remainder is invisible rather than merely unanswered.
+Narrow with a filter until the warning is gone, then dry run.
+
 ## Deliveries: three verdicts, never one tick
 
 Three different claims get called "it worked", and they have different forgers, so
@@ -330,20 +401,131 @@ or `inconclusive`.
 sends a message back over a bounded channel, so the screen cannot block on a dead service. The
 terminal is restored on normal exit, on error, on panic and on SIGINT/SIGTERM.
 
+Every frame on this page is pasted verbatim out of `swf-tui`'s snapshot tests
+(`rust/crates/swf-tui/tests/snapshots/`), so a screen that changes shape fails a test before it
+reaches the documentation. This is Jobs, rendered at 120 columns by 40 rows in the monochrome
+theme; the fence is 120 columns wide and is meant to scroll sideways rather than be wrapped to fit.
+
 ```text
-  prod · https://airflow.example.com · owner me@example.com · 12:00:05 · ✗ github
-┌───────────────┬────────────────────────────────────────────┬───────────────────────┐
-│ attention   3 │job                 issue stage   state     │factory/manual__…#1    │
-│▸jobs          │factory/…#0         42    build   ● running │issue 43               │
-│ job detail    │factory/…#1         43    plan    ◆ awaiting│target acme/widgets    │
-│ review      1 │hotfix/…#0          9     intent  ✗ failed  │◆ awaiting_input       │
-│ deliveries    │                                            │gate  approve_plan     │
-│ infrastructure│                                            │rev   a1c9f2           │
-│ history       │                                            │actor admin            │
-│               ├────────────────────────────────────────────┤                       │
-│               │12:00:41 -> approve factory/…#1 plan        │                       │
-└───────────────┴────────────────────────────────────────────┴───────────────────────┘
+swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ jobs 4 rows                                                  │ factory/manual__2026-03-14T09#0
+ 2 jobs          4 │dag      run              job issue  stage    state           │issue        142
+ 3 job detail      │factory  manual__2026-03- 0   142    approve_ ◆ awaiting_input│state        ◆ awaiting_input
+ 4 review          │factory  manual__2026-03- 1   143    build_an ▸ running       │stage        approve_plan
+ 5 deliveries    2 │hotfix   manual__2026-03- 0   sre-9  build_an ✗ failed        │
+ 6 infrastructure 7│hotfix   manual__2026-03- 1   sre-10 deliver  ✓ success       │tasks
+ 7 history         │                                                              │job.spec            ✓ success
+                   │                                                              │job.approve_plan    ◆ awaiting_input
+                   │                                                              │
+                   │                                                              │gates
+                   │                                                              │approve_plan        ◆ ready
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+enter detail  t trigger  s stop  o open  L logs  r refresh  / search  : cmd  ? help  q quit
 ```
+
+The left column is the view list, each view carrying the number of rows behind it — `attention 5`
+is legible from any other screen. The middle is the table that `/` filters; the right is the
+selected job: its identity, the tasks it has finished and the gates it is waiting on. Under them is
+this session's activity log, and the last line is the key map **for the current view**, not for the
+whole application.
+
+Two details on that screen are easy to read past.
+
+**Freshness is per source.** `refreshed 09:30:00 (0s ago)` is the last refresh *pass*, not a
+promise about the data behind it. Each source — `airflow`, `gates`, `github`, `islo`, `metrics` —
+carries its own `fetched_at`, and the header grows a badge the moment one of them falls behind the
+others: `◔ stale` as soon as **any single** source is older than three refresh intervals,
+`⋯ truncated` when a collection read stopped at its page bound, and one reverse-video `✗ github`
+per failing source, sorted so the header does not reshuffle between refreshes. So the quiet header
+above is a claim about every source at once, and the per-source stamps themselves are rows on
+Infrastructure (`source  github  ✓ fresh  -  0s`). It is worth learning because the failure it
+reports is otherwise silent: a `gh` that cannot authenticate leaves the Deliveries pane looking
+merely empty.
+
+**`◆ ready` is not `⋯ arming`.** In the gates block on the right, `approve_plan  ◆ ready` means
+that gate's task instance has been seen parked in `awaiting_input` on two consecutive polls, so an
+answer will land. A gate that exists but has not parked yet renders `⋯ arming`; pressing `a` on it
+notes `… is not answerable yet: its task is not parked` in the activity pane, and because the TUI
+never sends `force` the write comes back `refused` rather than going through. The wait is seconds
+and the race it avoids fails the gate outright — see
+[Gates](#gates-readiness-and-re-validation-before-every-write) for why.
+
+Review is the approval itself: the same gate with the evidence a person is being asked to sign for.
+
+```text
+swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ review                                                       │ factory/manual__2026-03-14T09#0:job.
+ 2 jobs          4 │gate         factory/manual__2026-03-14T09#0:job.approve_plan │approve_plan
+ 3 job detail      │job          factory/manual__2026-03-14T09#0                  │issue        142
+ 4 review          │stage        approve_plan                                     │state        ◆ awaiting_input
+ 5 deliveries    2 │job state    ◆ awaiting_input                                 │stage        approve_plan
+ 6 infrastructure 7│task state   ◆ awaiting_input  ◆ answerable                   │
+ 7 history         │revision     2916c986f955d863                                 │tasks
+                   │actor        admin                                            │job.spec            ✓ success
+                   │options      approve, reject                                  │job.approve_plan    ◆ awaiting_input
+                   │url                                                           │
+                   │https://airflow.example.com/dags/factory/runs/manual__2026-03-│gates
+                   │14T09                                                         │approve_plan        ◆ ready
+                   │                                                              │
+                   │evidence                                                      │
+                   │plan for issue 142: split the ingest worker                   │
+                   │three files change; the migration is reversible.              │
+                   │                                                              │
+                   │a approve  ·  x reject  ·  both re-read the gate before       │
+                   │writing                                                       │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+a approve  x reject  esc back  r refresh  / search  : cmd  ? help  q quit
+```
+
+`task state   ◆ awaiting_input  ◆ answerable` is that readiness fact again, spelled for someone
+about to press a key — the left half is Airflow's state, the right half is whether `swf` will send
+the answer at all. `revision 2916c986f955d863` is what goes back as `expect`, which makes the
+approval conditional on *this* evidence rather than merely on this gate, and the footer narrows to
+`a approve  x reject  esc back` because those are the only writes this screen has.
 
 Seven views: **Attention** (what needs a human), **Jobs**, **Job detail**, **Review**,
 **Deliveries**, **Infrastructure** (sandboxes and per-source health), **History** (the committed

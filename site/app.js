@@ -130,5 +130,70 @@ document.querySelectorAll(".copy-button").forEach((button) => {
   button.addEventListener("click", () => copyText(button));
 });
 
+/* The TUI frame player. The panels ship visible in the HTML, so the page reads as a stack of
+   frames with no script at all; everything below is the enhancement that collapses that stack to
+   one panel and gives it tabs. Nothing here fetches or generates a frame: the text on screen is
+   the snapshot output the markup already carries. */
+const tuiTabs = document.querySelector("#tui-tabs");
+const tuiNav = document.querySelector("#tui-nav");
+const tuiCount = document.querySelector("#tui-count");
+const tuiTabButtons = [...(tuiTabs?.querySelectorAll('[role="tab"]') ?? [])];
+const tuiPanels = tuiTabButtons.map((tab) =>
+  document.getElementById(tab.getAttribute("aria-controls")),
+);
+
+function showFrame(index, { focusTab = false } = {}) {
+  tuiTabButtons.forEach((tab, position) => {
+    const active = position === index;
+    const panel = tuiPanels[position];
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+    panel.hidden = !active;
+    panel.classList.remove("is-entering");
+    // Re-adding the class on the next paint is what restarts the fade on a repeat selection.
+    if (active && !reducedMotion) {
+      window.requestAnimationFrame(() => panel.classList.add("is-entering"));
+    }
+  });
+  if (tuiCount) tuiCount.textContent = `${index + 1} / ${tuiTabButtons.length}`;
+  if (focusTab) tuiTabButtons[index].focus();
+}
+
+function currentFrame() {
+  const index = tuiTabButtons.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+  return index === -1 ? 0 : index;
+}
+
+function stepFrame(delta, options) {
+  const total = tuiTabButtons.length;
+  showFrame((currentFrame() + delta + total) % total, options);
+}
+
+if (tuiTabButtons.length && tuiPanels.every(Boolean)) {
+  tuiTabs.hidden = false;
+  if (tuiNav) tuiNav.hidden = false;
+
+  tuiTabButtons.forEach((tab, index) => {
+    tab.addEventListener("click", () => showFrame(index));
+  });
+
+  // Arrow keys move between tabs and Home/End reach the ends: without them the strip is a row of
+  // buttons that only claims to be a tablist.
+  tuiTabs.addEventListener("keydown", (event) => {
+    const moves = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+    if (event.key in moves) stepFrame(moves[event.key], { focusTab: true });
+    else if (event.key === "Home") showFrame(0, { focusTab: true });
+    else if (event.key === "End") showFrame(tuiTabButtons.length - 1, { focusTab: true });
+    else return;
+    event.preventDefault();
+  });
+
+  document.querySelectorAll(".tui-step").forEach((button) => {
+    button.addEventListener("click", () => stepFrame(Number(button.dataset.tuiStep)));
+  });
+
+  showFrame(0);
+}
+
 const year = document.getElementById("year");
 if (year) year.textContent = String(new Date().getFullYear());

@@ -766,6 +766,340 @@ factory/DEMO-2-2212a01d  <span class="pass">verified</span>  yes       yes      
             </article>
           </div>
 
+          <div class="tui-player reveal">
+            <div class="tui-player-head">
+              <p class="micro-label">Recorded frames</p>
+              <h3>What <code>swf tui</code> actually paints.</h3>
+              <p class="tui-lede">
+                Six frames from the interface's own snapshot tests, pasted here byte for byte.
+                They carry no colour because the tests render through <code>Theme::mono()</code>,
+                which is the point: every state is a glyph and a word first, so the screen
+                survives a monochrome terminal, a screenshot in a ticket, and red/green colour
+                blindness.
+                <span class="tui-scroll-hint">These frames are 120 columns wide and scroll
+                sideways here; wrapping one would destroy it.</span>
+              </p>
+            </div>
+
+            <div class="tui-tabs" id="tui-tabs" role="tablist" aria-label="Interface frames" hidden>
+              <button type="button" role="tab" class="tui-tab"
+                id="tui-tab-attention" aria-controls="tui-frame-attention"
+                aria-selected="true" tabindex="0"
+                aria-label="Show frame: attention">attention</button>
+              <button type="button" role="tab" class="tui-tab"
+                id="tui-tab-jobs" aria-controls="tui-frame-jobs"
+                aria-selected="false" tabindex="-1"
+                aria-label="Show frame: jobs and job detail">jobs and job detail</button>
+              <button type="button" role="tab" class="tui-tab"
+                id="tui-tab-review" aria-controls="tui-frame-review"
+                aria-selected="false" tabindex="-1"
+                aria-label="Show frame: review">review</button>
+              <button type="button" role="tab" class="tui-tab"
+                id="tui-tab-confirm" aria-controls="tui-frame-confirm"
+                aria-selected="false" tabindex="-1"
+                aria-label="Show frame: confirm">confirm</button>
+              <button type="button" role="tab" class="tui-tab"
+                id="tui-tab-degraded" aria-controls="tui-frame-degraded"
+                aria-selected="false" tabindex="-1"
+                aria-label="Show frame: a source that failed">a source that failed</button>
+              <button type="button" role="tab" class="tui-tab"
+                id="tui-tab-narrow" aria-controls="tui-frame-narrow"
+                aria-selected="false" tabindex="-1"
+                aria-label="Show frame: jobs at 80x24">jobs at 80x24</button>
+            </div>
+
+            <div class="terminal tui-terminal">
+              <div class="terminal-bar">
+                <div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+                <span>swf tui</span>
+                <div class="tui-nav" id="tui-nav" hidden>
+                  <button type="button" class="tui-step" data-tui-step="-1" aria-label="Show the previous frame">&#8592;</button>
+                  <span class="tui-count" id="tui-count" aria-live="polite">6 frames</span>
+                  <button type="button" class="tui-step" data-tui-step="1" aria-label="Show the next frame">&#8594;</button>
+                </div>
+              </div>
+
+              <div class="tui-frames" id="tui-frames">
+                <section class="tui-frame" id="tui-frame-attention" role="tabpanel"
+                  aria-labelledby="tui-frame-attention-label" tabindex="0">
+                  <p class="tui-frame-head">
+                    <b id="tui-frame-attention-label">attention</b>
+                    <span class="tui-geom">120x40</span>
+                  </p>
+                  <p class="tui-frame-note">The screen that opens: only the things a person has to answer, one armed gate read in full beside the list.</p>
+                  <pre class="tui-screen" tabindex="0"><code>swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ attention 5 rows                                             │ factory/manual__2026-03-14T09#0:job.
+ 2 jobs          4 │kind    id                   detail       status         age  │approve_plan
+ 3 job detail      │gate    factory/manual__2026 plan for iss ◆ ready        4m   │job
+ 4 review          │gate    factory/manual__2026 intent for i ⋯ arming       20s  │factory/manual__2026-03-14T09#0
+ 5 deliveries    2 │failure hotfix/manual__2026- issue sre-9  ✗ failed       -    │gate         approve_plan
+ 6 infrastructure 7│deliver #511                 [BLOCKED] ho blocked, check -    │revision     2916c986f955d863
+ 7 history         │sandbox swf-upload-9f8e7d6c  running for  stopped        9h   │options      approve, reject
+                   │                                                              │actor        admin
+                   │                                                              │
+                   │                                                              │subject
+                   │                                                              │plan for issue 142: split the ingest
+                   │                                                              │worker
+                   │                                                              │
+                   │                                                              │evidence
+                   │                                                              │three files change; the migration is
+                   │                                                              │reversible.
+                   │                                                              │
+                   │                                                              │enter reviews it in full before
+                   │                                                              │answering
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+enter review  a approve  x reject  r refresh  / search  : cmd  ? help  q quit</code></pre>
+                </section>
+                <section class="tui-frame" id="tui-frame-jobs" role="tabpanel"
+                  aria-labelledby="tui-frame-jobs-label" tabindex="0">
+                  <p class="tui-frame-head">
+                    <b id="tui-frame-jobs-label">jobs and job detail</b>
+                    <span class="tui-geom">120x40</span>
+                  </p>
+                  <p class="tui-frame-note">Every mapped job in the pass; the right pane carries the selected job's tasks and the gates hanging off it.</p>
+                  <pre class="tui-screen" tabindex="0"><code>swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ jobs 4 rows                                                  │ factory/manual__2026-03-14T09#0
+ 2 jobs          4 │dag      run              job issue  stage    state           │issue        142
+ 3 job detail      │factory  manual__2026-03- 0   142    approve_ ◆ awaiting_input│state        ◆ awaiting_input
+ 4 review          │factory  manual__2026-03- 1   143    build_an ▸ running       │stage        approve_plan
+ 5 deliveries    2 │hotfix   manual__2026-03- 0   sre-9  build_an ✗ failed        │
+ 6 infrastructure 7│hotfix   manual__2026-03- 1   sre-10 deliver  ✓ success       │tasks
+ 7 history         │                                                              │job.spec            ✓ success
+                   │                                                              │job.approve_plan    ◆ awaiting_input
+                   │                                                              │
+                   │                                                              │gates
+                   │                                                              │approve_plan        ◆ ready
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+enter detail  t trigger  s stop  o open  L logs  r refresh  / search  : cmd  ? help  q quit</code></pre>
+                </section>
+                <section class="tui-frame" id="tui-frame-review" role="tabpanel"
+                  aria-labelledby="tui-frame-review-label" tabindex="0">
+                  <p class="tui-frame-head">
+                    <b id="tui-frame-review-label">review</b>
+                    <span class="tui-geom">120x40</span>
+                  </p>
+                  <p class="tui-frame-note">One gate opened whole: the evidence it was raised against, the revision, the actor, and the two answers it accepts.</p>
+                  <pre class="tui-screen" tabindex="0"><code>swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ review                                                       │ factory/manual__2026-03-14T09#0:job.
+ 2 jobs          4 │gate         factory/manual__2026-03-14T09#0:job.approve_plan │approve_plan
+ 3 job detail      │job          factory/manual__2026-03-14T09#0                  │issue        142
+ 4 review          │stage        approve_plan                                     │state        ◆ awaiting_input
+ 5 deliveries    2 │job state    ◆ awaiting_input                                 │stage        approve_plan
+ 6 infrastructure 7│task state   ◆ awaiting_input  ◆ answerable                   │
+ 7 history         │revision     2916c986f955d863                                 │tasks
+                   │actor        admin                                            │job.spec            ✓ success
+                   │options      approve, reject                                  │job.approve_plan    ◆ awaiting_input
+                   │url                                                           │
+                   │https://airflow.example.com/dags/factory/runs/manual__2026-03-│gates
+                   │14T09                                                         │approve_plan        ◆ ready
+                   │                                                              │
+                   │evidence                                                      │
+                   │plan for issue 142: split the ingest worker                   │
+                   │three files change; the migration is reversible.              │
+                   │                                                              │
+                   │a approve  ·  x reject  ·  both re-read the gate before       │
+                   │writing                                                       │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+a approve  x reject  esc back  r refresh  / search  : cmd  ? help  q quit</code></pre>
+                </section>
+                <section class="tui-frame" id="tui-frame-confirm" role="tabpanel"
+                  aria-labelledby="tui-frame-confirm-label" tabindex="0">
+                  <p class="tui-frame-head">
+                    <b id="tui-frame-confirm-label">confirm</b>
+                    <span class="tui-geom">120x40</span>
+                  </p>
+                  <p class="tui-frame-note">Approving asks first and names the revision it read, because an answer must not land on a gate that moved underneath it.</p>
+                  <pre class="tui-screen" tabindex="0"><code>swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ attention 5 rows                                             │ factory/manual__2026-03-14T09#0:job.
+ 2 jobs          4 │kind    id                   detail       status         age  │approve_plan
+ 3 job detail      │gate    factory/manual__2026 plan for iss ◆ ready        4m   │job
+ 4 review          │gate    factory/manual__2026 intent for i ⋯ arming       20s  │factory/manual__2026-03-14T09#0
+ 5 deliveries    2 │failure hotfix/manual__2026- issue sre-9  ✗ failed       -    │gate         approve_plan
+ 6 infrastructure 7│deliver #511                 [BLOCKED] ho blocked, check -    │revision     2916c986f955d863
+ 7 history         │sandbox swf-upload-9f8e7d6c  running for  stopped        9h   │options      approve, reject
+                   │                                                              │actor        admin
+                   │                                                              │
+                   │                                                              │subject
+                   │                                                              │plan for issue 142: split the ingest
+                   │                                                              │worker
+                   │                                                              │
+                   │                                                              │evidence
+           ┌ confirm ──────────────────────────────────────────────────────────────────────────────────────┐igration is
+           │Approve approve_plan of factory/manual__2026-03-14T09#0 as admin? (evidence 2916c986f955d863)  │
+           │                                                                                               │
+           │y confirm  ·  n cancel                                                                         │before
+           └───────────────────────────────────────────────────────────────────────────────────────────────┘
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+enter review  a approve  x reject  r refresh  / search  : cmd  ? help  q quit</code></pre>
+                </section>
+                <section class="tui-frame" id="tui-frame-degraded" role="tabpanel"
+                  aria-labelledby="tui-frame-degraded-label" tabindex="0">
+                  <p class="tui-frame-head">
+                    <b id="tui-frame-degraded-label">a source that failed</b>
+                    <span class="tui-geom">120x40</span>
+                  </p>
+                  <p class="tui-frame-note">With <code>gh</code> missing the header badges the dead source and the activity pane prints its error, rather than showing a confident empty table.</p>
+                  <pre class="tui-screen" tabindex="0"><code>swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)  ✗ github
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     4 │ deliveries 0 rows                                            │ nothing selected
+ 2 jobs          4 │no delivery pull requests carry the factory label yet.        │
+ 3 job detail      │                                                              │
+ 4 review          │                                                              │
+ 5 deliveries    0 │                                                              │
+ 6 infrastructure 7│                                                              │
+ 7 history         │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+09:30:00 github: gh: no such file or directory
+
+
+
+
+
+
+o open  v verify  r refresh  / search  : cmd  ? help  q quit</code></pre>
+                </section>
+                <section class="tui-frame" id="tui-frame-narrow" role="tabpanel"
+                  aria-labelledby="tui-frame-narrow-label" tabindex="0">
+                  <p class="tui-frame-head">
+                    <b id="tui-frame-narrow-label">jobs at 80x24</b>
+                    <span class="tui-geom">80x24</span>
+                  </p>
+                  <p class="tui-frame-note">The same view in a small terminal: the detail pane goes and columns truncate, so the rows still line up.</p>
+                  <pre class="tui-screen" tabindex="0"><code>swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ jobs 4 rows
+ 2 jobs          4 │dag      run            job issue  stage    state
+ 3 job detail      │factory  manual__2026-0 0   142    approve_ ◆ awaiting_input
+ 4 review          │factory  manual__2026-0 1   143    build_an ▸ running
+ 5 deliveries    2 │hotfix   manual__2026-0 0   sre-9  build_an ✗ failed
+ 6 infrastructure 7│hotfix   manual__2026-0 1   sre-10 deliver  ✓ success
+ 7 history         │
+                   │
+                   │
+                   │
+                   │
+                   │
+                   │
+                   │
+ activity ──────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+enter detail  t trigger  s stop  o open  L logs  r refresh  / search  : cmd  ? h</code></pre>
+                </section>
+              </div>
+
+              <div class="terminal-foot tui-foot">
+                <span>rust/crates/swf-tui/tests/snapshots</span><span>Theme::mono()</span>
+              </div>
+            </div>
+          </div>
+
           <div class="dag-chain reveal">
             <span class="micro-label">Who runs what</span>
             <code>swf (your terminal) → Airflow <b>/api/v2</b> → Airflow schedules → Python executes every stage</code>
