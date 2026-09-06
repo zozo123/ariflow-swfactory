@@ -1,0 +1,6 @@
+apiVersion: v2
+name: swfactory
+description: Software Factory backend and workers; Airflow and Postgres are external authorities.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
