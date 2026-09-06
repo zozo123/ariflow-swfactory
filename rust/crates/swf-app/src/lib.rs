@@ -8,6 +8,7 @@
 pub mod attention;
 pub mod cells;
 pub mod context;
+pub mod control_plane;
 pub mod delivery;
 pub mod doctor;
 pub mod gates;
