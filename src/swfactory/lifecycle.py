@@ -37,6 +37,7 @@ class ManagedGraph(BoundaryModel):
     issue_id: str
     scheduler: Literal["fixed-airflow-dag"] = "fixed-airflow-dag"
     fork_semantics: Literal["hint-only"] = "hint-only"
+    fork_evidence: Literal["lineage-required"] = "lineage-required"
     nodes: list[ManagedNode] = Field(min_length=1, max_length=80)
 
     @model_validator(mode="after")
@@ -131,6 +132,8 @@ def compile_graph(issue_id: str, plan: Plan) -> ManagedGraph:
     terminal work feeds the fixed reviewer. Review repair is represented as the real bounded
     improver loop inside the review stage. ``parallel_safe`` is only a fork hint until a sandbox
     backend advertises clone/fork semantics and the executor gains a deterministic merge protocol.
+    Native forks must preserve evidence identifiers and parent lineage; sibling results are not
+    independent merely because they ran in separate sandboxes.
     """
     validate_identifier(issue_id, field="issue_id")
     work = _work_nodes(plan)
@@ -205,8 +208,8 @@ def compile_graph(issue_id: str, plan: Plan) -> ManagedGraph:
                 title="Publish evidence and pull request",
                 stage="deliver",
                 execution="airflow_stage",
-                depends_on=["improve"],
-                condition="review=approved_after_optional_improve",
+                depends_on=["review"],
+                condition="review_stage=complete",
             ),
         ]
     )
