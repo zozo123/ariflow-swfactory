@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use swf_adapters::factory::FactoryApi;
-use swf_domain::operator::{BackendCapabilities, FleetSummary, OperationDebt, QueueEntry, QueueSnapshot};
+use swf_domain::operator::{
+    BackendCapabilities, FleetSummary, OperationDebt, QueueEntry, QueueSnapshot,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::context::Context;
@@ -34,7 +36,11 @@ impl OperatorOps {
         Ok(self.api.queue(limit as u32, cancel).await?)
     }
 
-    pub async fn queue_item(&self, work_id: &str, cancel: &CancellationToken) -> Result<QueueEntry> {
+    pub async fn queue_item(
+        &self,
+        work_id: &str,
+        cancel: &CancellationToken,
+    ) -> Result<QueueEntry> {
         validate_bounded_id(work_id, "work id")?;
         Ok(self.api.queue_item(work_id, cancel).await?)
     }
