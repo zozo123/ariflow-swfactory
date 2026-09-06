@@ -1863,6 +1863,68 @@ pre {
   font-size: 0.75rem;
 }
 
+/* Operator binary */
+
+.operate-terminal pre {
+  min-height: auto;
+  padding: 26px 28px 30px;
+}
+
+.operate-notes {
+  display: grid;
+  margin-top: 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.operate-note {
+  padding: clamp(24px, 3vw, 32px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(10, 15, 23, 0.62);
+}
+
+.operate-note h3 {
+  margin-top: 13px;
+  font-size: 1.08rem;
+}
+
+.operate-note > p:not(.micro-label) {
+  margin-top: 14px;
+  color: var(--text-soft);
+  font-size: 0.9rem;
+  line-height: 1.62;
+}
+
+.operate-note code {
+  color: var(--cyan);
+  font-size: 0.86em;
+}
+
+/* The key list is a legend for the interactive screen, so it reads as keys, not as prose. */
+.operate-keys {
+  display: flex;
+  margin-top: 18px;
+  padding: 0;
+  flex-wrap: wrap;
+  gap: 7px;
+  list-style: none;
+}
+
+.operate-keys li {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.operate-keys b {
+  color: var(--cyan);
+  font-weight: 500;
+}
+
 /* Closing + footer */
 
 .closing {
@@ -2242,6 +2304,10 @@ pre {
     width: 100%;
   }
 
+  .operate-notes {
+    grid-template-columns: 1fr;
+  }
+
   .closing {
     grid-template-columns: 1fr;
     align-content: center;
@@ -2519,4 +2585,28 @@ pre {
     transform: none;
     opacity: 1;
   }
+}
+
+/* The install one-liner sits between the section head and the demo terminal: it is the first
+   thing a reader can act on, so it gets its own breathing room rather than being folded into the
+   longer transcript below it. */
+.install-line {
+  margin: 0 0 2.5rem;
+}
+
+.install-lede {
+  margin: 0 0 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.install-terminal {
+  margin: 0;
+}
+
+.install-note {
+  margin: 0.9rem 0 0;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  opacity: 0.82;
 }

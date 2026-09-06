@@ -48,8 +48,11 @@ in `stages.py`. Details: README + docs/*.md.
   policy; it never changes the host. `SWF_TOOLSET_SBX_IMAGE` selects the factory-ready image.
   `SWF_TEST_LIVE_TOOLSET=1 uv run --no-sync pytest tests/test_toolset_live.py` exercises a real
   microVM with explicitly open networking; normal factory runs keep their restrictive spec.
-- `uv sync --group airflow --group astronomer-blueprint` — install the optional outer DAG
-  composer; `examples/astronomer-blueprint/` shows a `software_factory` step.
+- Release = push tag `v<pyproject version>` (a mismatch fails the gate before anything builds) and
+  a `## [X.Y.Z]` CHANGELOG section, which IS the body. `workflow_dispatch` dry-runs every leg and
+  publishes nothing. Assets: `swf-<v>-<target>.tar.gz` x4 + wheel + sdist + one `SHA256SUMS`;
+  completions come from the built binary, whose `--version` must equal `rust/Cargo.toml`'s
+  `[workspace.package]` — bump both. Install: docs/swf.md#install.
 
 ## Conventions
 - Python 3.12, `from __future__ import annotations`, type hints, docstrings that say WHY. Stdlib
@@ -107,5 +110,6 @@ in `stages.py`. Details: README + docs/*.md.
   with `sandbox=local`. A target without `factory.toml` is refused: never guess.
 - No Rust *inside a work cell* — the guard hook stays `python3`, and stage semantics stay
   `stages.py`; `rust/` is the operator's client only. No `CrabboxSandbox`, no `SandboxExecutor`, no
-  blueprint -> `line.toml` compiler. The Astronomer Blueprint bridge composes by triggering a
-  governed child DAG; it never recompiles or weakens the line. See docs/design.md.
+  blueprint -> `line.toml` compiler. The Astronomer Blueprint bridge (`uv sync --group airflow
+  --group astronomer-blueprint`, `examples/astronomer-blueprint/`) composes by triggering a governed
+  child DAG; it never recompiles or weakens the line. See docs/design.md.

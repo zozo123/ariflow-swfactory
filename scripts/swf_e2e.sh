@@ -283,10 +283,10 @@ EXPECTED_GATES=$(( ${#ISSUES[@]} * 2 * 2 ))   # issues x targets x (intent, plan
 
 say "swf jobs list"
 "$SWF" jobs list --json >"$WORK/jobs.json"
-"$SWF" jobs list
+"$SWF" jobs list | tee "$WORK/screen-jobs.txt"
 
 say "swf attention"
-"$SWF" attention
+"$SWF" attention | tee "$WORK/screen-attention.txt"
 
 say "swf jobs inspect (every job)"
 "$PY" -c "
@@ -311,6 +311,21 @@ head -5 "$WORK/logs.txt"
 # Same live server, same moment: the snapshot the Rust client renders and the one the Python
 # control room renders must describe the same factory. Volatile fields (timestamps, in-flight task
 # states) are normalised away; the identities, states, gates and issues are not.
+
+# ---------------------------------------------------------------- 5b. the interactive face
+#
+# Render snapshots prove the widgets draw correctly. They cannot prove that the binary takes a real
+# terminal over, paints THIS factory into it, answers a keystroke and gives the terminal back — so
+# that is done here, in a pty, against the server the rest of this script has been driving.
+
+say "swf tui (a real terminal, this live factory, then q)"
+# `2` is the jobs view. The default screen is `attention`, which on a healthy finished run is
+# correctly empty — asserting a run id against it would be asserting that something went wrong.
+"$PY" "$REPO/scripts/tui_smoke.py" --bin "$SWF" --key 2 \
+  --expect "$DAG_ID" --expect "demo/issue.md" --expect "success" \
+  --out "$WORK/tui-frame.txt" || fail "swf tui did not render, quit and restore the terminal"
+say "the frame swf tui painted"
+sed -n '1,26p' "$WORK/tui-frame.txt"
 
 say "swf snapshot == swfactory herd --once --json"
 "$SWF" snapshot --json >"$WORK/snapshot-rust.json"
