@@ -145,7 +145,8 @@ if [[ "$SNAPSHOT" == "1" ]]; then
 fi
 
 # ---------------------------------------------------------------- 6. verify
-log "uv run swfactory doctor"
-uv run swfactory doctor
+log "uv run swfactory doctor --repo $REPO --target-dir ${TARGET_DIR:-<root>}"
+uv run swfactory doctor --repo "$REPO" --target-dir "$TARGET_DIR" \
+  --agent claude --sandbox islo --scm github
 log "deploy/islo/knowledge.sh $REPO"
 "$FACTORY_ROOT/deploy/islo/knowledge.sh" "$REPO"

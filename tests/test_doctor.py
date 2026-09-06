@@ -76,13 +76,16 @@ def green(**over: str | None) -> FakeRunner:
         "gh auth status": GH_AUTH,
         "gh repo view zozo123/ariflow-swfactory --json name": '{"name":"ariflow-swfactory"}\n',
         "claude --version": "2.1.259 (Claude Code)\n",
+        "docker info --format {{.ServerVersion}}": "29.0.0\n",
     }
     base.update(over)
     return FakeRunner(base)
 
 
 def cfg(**kw: object) -> Config:
-    return Config(**{"issue": "doctor", "sandbox": "islo", **kw})  # type: ignore[arg-type]
+    return Config(  # type: ignore[arg-type]
+        **{"issue": "doctor", "sandbox": "islo", "agent": "claude", "scm": "github", **kw}
+    )
 
 
 def which_all(name: str) -> str | None:
@@ -118,8 +121,6 @@ def test_all_green_exit_zero() -> None:
         "islo snapshot",
         "gh auth",
         "gh repo",
-        "claude cli",
-        "srt",
         "blueprint",
         "factory.toml",
     ]
@@ -146,7 +147,7 @@ def test_table_and_json_shapes() -> None:
     checks = run_doctor(cfg(), green(), which=which_all, root=ROOT)
     text = table(checks)
     assert text.startswith("ok   islo cli")
-    assert text.rstrip().endswith("12 checks, 0 failed")
+    assert text.rstrip().endswith("10 checks, 0 failed")
     data = json.loads(doctor.to_json(checks))
     assert data[0] == {
         "name": "islo cli",
@@ -349,27 +350,64 @@ def test_gh_failures() -> None:
     assert not got["gh repo"].ok and "zozo123/ariflow-swfactory" in got["gh repo"].fix
 
 
-def test_claude_required_only_for_host_sandboxes() -> None:
+def test_claude_cli_is_required_only_when_it_runs_on_the_host() -> None:
     runner = green()
     runner.table.pop("claude --version")
-    islo = by_name(run_doctor(cfg(), runner, root=ROOT))["claude cli"]
-    assert not islo.ok and not islo.required and islo.status == "warn"
+    assert "claude cli" not in by_name(run_doctor(cfg(), runner, root=ROOT))
     srt = by_name(run_doctor(cfg(sandbox="srt"), runner, root=ROOT))["claude cli"]
     assert not srt.ok and srt.required and srt.status == "FAIL"
     assert exit_code(run_doctor(cfg(), runner, root=ROOT)) == 0
     assert exit_code(run_doctor(cfg(sandbox="srt"), runner, root=ROOT)) == 1
 
 
-def test_srt_is_info_only() -> None:
-    checks = run_doctor(cfg(), green(), which=which_none, root=ROOT)
+def test_srt_is_required_only_when_selected() -> None:
+    assert "srt" not in by_name(run_doctor(cfg(), green(), which=which_none, root=ROOT))
+    checks = run_doctor(cfg(sandbox="srt"), green(), which=which_none, root=ROOT)
     srt = by_name(checks)["srt"]
-    assert not srt.ok and not srt.required and srt.status == "warn"
-    assert exit_code(checks) == 0
-    assert "1 warnings" in table(checks)
+    assert not srt.ok and srt.required and srt.status == "FAIL"
+    assert exit_code(checks) == 1
+
+
+def test_each_sandbox_checks_only_its_provider() -> None:
+    docker_checks = by_name(run_doctor(cfg(sandbox="docker"), green(), root=ROOT))
+    assert docker_checks["docker daemon"].ok
+    assert "islo cli" not in docker_checks and "srt" not in docker_checks
+
+    seen: list[str] = []
+    toolset_checks = by_name(
+        run_doctor(
+            cfg(sandbox="toolset", toolset_backend="vendor.backend:Cell"),
+            green(),
+            root=ROOT,
+            toolset_loader=lambda name: seen.append(name) or object(),
+        )
+    )
+    assert toolset_checks["toolset backend"].ok
+    assert seen == ["vendor.backend:Cell"]
+
+    local = by_name(
+        run_doctor(
+            cfg(sandbox="local", allow_local_agent=True, agent="scripted", scm="local"),
+            green(),
+            root=ROOT,
+        )
+    )
+    assert local["local sandbox"].ok
+    assert "gh auth" not in local and "claude cli" not in local
+
+    islo_local_scm = by_name(run_doctor(cfg(scm="local"), green(), root=ROOT))
+    assert islo_local_scm["integration github"].ok
+    assert "gh auth" not in islo_local_scm
 
 
 def test_blueprint_and_factory_toml_failures(tmp_path: Path) -> None:
-    got = by_name(run_doctor(cfg(blueprint="nope", target_dir="elsewhere"), green(), root=tmp_path))
+    got = by_name(
+        run_doctor(
+            cfg(blueprint="nope", target_dir="elsewhere", scm="local"),
+            green(),
+            root=tmp_path,
+        )
+    )
     assert not got["blueprint"].ok and "blueprints/nope.toml" in got["blueprint"].fix
     assert not got["factory.toml"].ok and got["factory.toml"].detail.endswith(
         "factory.toml missing"
@@ -377,8 +415,28 @@ def test_blueprint_and_factory_toml_failures(tmp_path: Path) -> None:
     bad = tmp_path / "t"
     bad.mkdir()
     (bad / "factory.toml").write_text("[commands]\nlint = 'x'\n", encoding="utf-8")
-    ft = by_name(run_doctor(cfg(target_dir="t"), green(), root=tmp_path))["factory.toml"]
+    ft = by_name(run_doctor(cfg(target_dir="t", scm="local"), green(), root=tmp_path))[
+        "factory.toml"
+    ]
     assert not ft.ok and "[commands].test" in ft.detail
+
+
+def test_github_target_contract_is_read_from_the_remote_repo(tmp_path: Path) -> None:
+    endpoint = (
+        "gh api -H Accept: application/vnd.github.raw+json "
+        "repos/zozo123/ariflow-swfactory/contents/product/factory.toml?ref=main"
+    )
+    runner = green(**{endpoint: '[commands]\ntest = "make test"\n'})
+    result = by_name(run_doctor(cfg(target_dir="product"), runner, root=tmp_path))["factory.toml"]
+    assert result.ok
+    assert result.detail == ("zozo123/ariflow-swfactory@main:product/factory.toml test='make test'")
+    assert [
+        "gh",
+        "api",
+        "-H",
+        "Accept: application/vnd.github.raw+json",
+        "repos/zozo123/ariflow-swfactory/contents/product/factory.toml?ref=main",
+    ] in runner.calls
 
 
 def test_subprocess_runner_contract() -> None:
@@ -398,7 +456,7 @@ def test_cli_doctor_exit_codes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(ROOT)
     res = runner.invoke(app, ["doctor"])
     assert res.exit_code == 0, res.output
-    assert "12 checks, 0 failed" in res.output
+    assert "10 checks, 0 failed" in res.output
     assert "sandbox=islo" in res.output
 
     res = runner.invoke(app, ["doctor", "--json"])
@@ -419,3 +477,9 @@ def test_cli_doctor_broken_blueprint_still_reports(monkeypatch: pytest.MonkeyPat
     res = CliRunner().invoke(app, ["doctor", "--blueprint", "no-such-line"])
     assert res.exit_code == 1, res.output
     assert "FAIL blueprint" in res.output and "blueprints/no-such-line.toml" in res.output
+
+
+def test_cli_doctor_rejects_invalid_provider_choice() -> None:
+    res = CliRunner().invoke(app, ["doctor", "--sandbox", "spaceship"])
+    assert res.exit_code == 2
+    assert "config error" in res.output and "sandbox" in res.output

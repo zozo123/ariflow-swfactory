@@ -1,4 +1,4 @@
-"""``swfactory doctor``: pre-flight checks for the real (islo + GitHub + Claude) path.
+"""``swfactory doctor``: provider-aware, read-only pre-flight checks.
 
 Every check is a pure function of an injected *runner* (``argv -> stdout``, raising on a non-zero
 exit or a missing binary), a ``which`` lookup and a filesystem root, so the whole module is
@@ -16,7 +16,9 @@ Argv shapes (verified against ``islo 0.48.1`` and ``gh 2.83``)::
     islo snapshot ls --output json     # prints NOTHING (not "[]") when there are no snapshots
     gh auth status
     gh repo view <owner/name> --json name
-    claude --version
+    gh api -H Accept:application/vnd.github.raw+json repos/<repo>/contents/<path>?ref=<branch>
+    claude --version                 # local and srt Claude execution only
+    docker info --format {{.ServerVersion}}
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 from swfactory import blueprint as blueprint_mod
 from swfactory.config import FACTORY_ROOT, Config, TargetContract
@@ -35,6 +38,7 @@ from swfactory.sandbox import SRT_NPM_PACKAGE
 
 Runner = Callable[[Sequence[str]], str]
 Which = Callable[[str], str | None]
+ToolsetLoader = Callable[[str], object]
 
 # Hosts the deny-by-default gateway profile must allow for a factory run to work.
 GATEWAY_ALLOW_HOSTS = (
@@ -209,35 +213,53 @@ def _check_islo_auth(runner: Runner) -> tuple[Check, dict | None]:
     return Check("islo auth", True, who or "authenticated"), data
 
 
-def _check_integrations(runner: Runner, status: dict | None) -> list[Check]:
+def _check_integrations(
+    runner: Runner,
+    status: dict | None,
+    *,
+    github: bool,
+    claude: bool,
+) -> list[Check]:
     names = integration_names(status)
     source = "json"
     if names is None:
         text, err = _try(runner, ["islo", "status"])
         if text is None:
             missing = f"cannot read integrations: {err}"
-            return [
-                Check("integration github", False, missing, "islo login --tool github"),
-                Check("integration claude", False, missing, "islo login --tool claude"),
-            ]
+            checks = []
+            if github:
+                checks.append(
+                    Check("integration github", False, missing, "islo login --tool github")
+                )
+            if claude:
+                checks.append(
+                    Check("integration claude", False, missing, "islo login --tool claude")
+                )
+            return checks
         names, source = integration_names_from_text(text), "text"
     have = ", ".join(sorted(names)) or "none"
     gh_ok = "github" in names
     claude_ok = bool(names & _CLAUDE_INTEGRATIONS)
-    return [
-        Check(
-            "integration github",
-            gh_ok,
-            f"connected ({source})" if gh_ok else f"not connected; have: {have}",
-            "" if gh_ok else "islo login --tool github",
-        ),
-        Check(
-            "integration claude",
-            claude_ok,
-            f"connected ({source})" if claude_ok else f"not connected; have: {have}",
-            "" if claude_ok else "islo login --tool claude",
-        ),
-    ]
+    checks = []
+    if github:
+        checks.append(
+            Check(
+                "integration github",
+                gh_ok,
+                f"connected ({source})" if gh_ok else f"not connected; have: {have}",
+                "" if gh_ok else "islo login --tool github",
+            )
+        )
+    if claude:
+        checks.append(
+            Check(
+                "integration claude",
+                claude_ok,
+                f"connected ({source})" if claude_ok else f"not connected; have: {have}",
+                "" if claude_ok else "islo login --tool claude",
+            )
+        )
+    return checks
 
 
 def gateway_fix(profile: str) -> str:
@@ -355,16 +377,40 @@ def _check_claude(runner: Runner, *, required: bool) -> Check:
 
 def _check_srt(which: Which) -> Check:
     if which("srt"):
-        return Check("srt", True, "srt on PATH", required=False)
+        return Check("srt", True, "srt on PATH")
     if which("npx"):
-        return Check("srt", True, f"npx present (npx -y {SRT_NPM_PACKAGE})", required=False)
+        return Check("srt", True, f"npx present (npx -y {SRT_NPM_PACKAGE})")
     return Check(
         "srt",
         False,
-        "neither srt nor npx on PATH (only --sandbox srt needs them)",
+        "neither srt nor npx on PATH",
         f"npm i -g {SRT_NPM_PACKAGE}",
-        required=False,
     )
+
+
+def _check_docker(runner: Runner) -> Check:
+    out, err = _try(runner, ["docker", "info", "--format", "{{.ServerVersion}}"])
+    if out is None:
+        return Check(
+            "docker daemon",
+            False,
+            err,
+            "start Docker, then run: docker info",
+        )
+    return Check("docker daemon", True, f"server {out.strip() or 'reachable'}")
+
+
+def _check_toolset_backend(name: str, loader: ToolsetLoader) -> Check:
+    try:
+        loader(name)
+    except Exception as e:  # noqa: BLE001 - provider import failures are findings
+        return Check(
+            "toolset backend",
+            False,
+            str(e) or e.__class__.__name__,
+            "install the backend provider or set SWF_TOOLSET_BACKEND=package.module:Class",
+        )
+    return Check("toolset backend", True, f"{name!r} loads")
 
 
 def _check_blueprint(name: str) -> Check:
@@ -382,19 +428,52 @@ def _check_blueprint(name: str) -> Check:
     )
 
 
-def _check_factory_toml(target_dir: str, root: Path) -> Check:
+def _check_factory_toml(cfg: Config, runner: Runner, root: Path) -> Check:
+    target_dir = cfg.target_dir
     rel = Path(target_dir) / "factory.toml"
     path = rel if rel.is_absolute() else root / rel
     if not path.is_file() and not rel.is_absolute() and (FACTORY_ROOT / rel).is_file():
         path = FACTORY_ROOT / rel
     fix = f'add {rel} with [commands] test = "..." (the factory never guesses commands)'
-    if not path.is_file():
+    if path.is_file():
+        try:
+            contract = TargetContract.parse(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            return Check("factory.toml", False, f"{path}: {e}", fix)
+        return Check("factory.toml", True, f"{path} test={contract.test!r}")
+    if cfg.scm != "github":
         return Check("factory.toml", False, f"{path} missing", fix)
+
+    remote_path = rel.as_posix()
+    endpoint = (
+        f"repos/{cfg.repo}/contents/{quote(remote_path, safe='/')}"
+        f"?ref={quote(cfg.base_branch, safe='')}"
+    )
+    out, err = _try(
+        runner,
+        ["gh", "api", "-H", "Accept: application/vnd.github.raw+json", endpoint],
+    )
+    if out is None:
+        return Check(
+            "factory.toml",
+            False,
+            f"{cfg.repo}@{cfg.base_branch}:{remote_path} unavailable: {err}",
+            fix,
+        )
     try:
-        contract = TargetContract.parse(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        return Check("factory.toml", False, f"{path}: {e}", fix)
-    return Check("factory.toml", True, f"{path} test={contract.test!r}")
+        contract = TargetContract.parse(out)
+    except ValueError as e:
+        return Check(
+            "factory.toml",
+            False,
+            f"{cfg.repo}@{cfg.base_branch}:{remote_path}: {e}",
+            fix,
+        )
+    return Check(
+        "factory.toml",
+        True,
+        f"{cfg.repo}@{cfg.base_branch}:{remote_path} test={contract.test!r}",
+    )
 
 
 # ---------------------------------------------------------------- driver
@@ -406,8 +485,9 @@ def run_doctor(
     *,
     which: Which = shutil.which,
     root: Path | None = None,
+    toolset_loader: ToolsetLoader | None = None,
 ) -> list[Check]:
-    """Run every check for ``cfg`` and return them in display order. Never raises.
+    """Run only the checks required by ``cfg`` and return them in display order. Never raises.
 
     ``runner`` defaults to :func:`subprocess_runner` (resolved at call time so tests can patch
     the module attribute); ``which``/``root`` are the other injection points. When the islo CLI
@@ -416,30 +496,56 @@ def run_doctor(
     """
     runner = runner if runner is not None else subprocess_runner
     root = Path(root) if root is not None else Path.cwd()
-    checks = [_check_islo_cli(runner)]
-    if checks[0].ok:
-        auth, status = _check_islo_auth(runner)
-        checks.append(auth)
-        checks += _check_integrations(runner, status)
-        checks.append(_check_gateway(runner, cfg.gateway_profile))
-        checks.append(_check_environment(runner, cfg.islo_environment))
-        if cfg.islo_snapshot:
-            checks.append(_check_snapshot(runner, cfg.islo_snapshot))
+    if toolset_loader is None:
+        from swfactory.sandbox import load_toolset_backend
+
+        toolset_loader = load_toolset_backend
+
+    checks: list[Check] = []
+    if cfg.sandbox == "islo":
+        checks.append(_check_islo_cli(runner))
+        if checks[-1].ok:
+            auth, status = _check_islo_auth(runner)
+            checks.append(auth)
+            checks += _check_integrations(
+                runner,
+                status,
+                # Islo clones ``github://...`` even when delivery uses the local SCM adapter.
+                github=True,
+                claude=cfg.agent == "claude",
+            )
+            checks.append(_check_gateway(runner, cfg.gateway_profile))
+            checks.append(_check_environment(runner, cfg.islo_environment))
+            if cfg.islo_snapshot:
+                checks.append(_check_snapshot(runner, cfg.islo_snapshot))
+        else:
+            skipped = "skipped: islo CLI unavailable"
+            checks.append(Check("islo auth", False, skipped, "islo login"))
+            checks.append(Check("integration github", False, skipped, "islo login --tool github"))
+            if cfg.agent == "claude":
+                checks.append(
+                    Check("integration claude", False, skipped, "islo login --tool claude")
+                )
+            checks += [
+                Check("gateway profile", False, skipped, gateway_fix(cfg.gateway_profile)),
+                Check("islo environment", False, skipped, environment_fix(cfg.islo_environment)),
+            ]
+    elif cfg.sandbox == "srt":
+        checks.append(_check_srt(which))
+    elif cfg.sandbox == "docker":
+        checks.append(_check_docker(runner))
+    elif cfg.sandbox == "toolset":
+        checks.append(_check_toolset_backend(cfg.toolset_backend, toolset_loader))
     else:
-        skipped = "skipped: islo CLI unavailable"
-        checks += [
-            Check("islo auth", False, skipped, "islo login"),
-            Check("integration github", False, skipped, "islo login --tool github"),
-            Check("integration claude", False, skipped, "islo login --tool claude"),
-            Check("gateway profile", False, skipped, gateway_fix(cfg.gateway_profile)),
-            Check("islo environment", False, skipped, environment_fix(cfg.islo_environment)),
-        ]
-    checks.append(_check_gh_auth(runner))
-    checks.append(_check_gh_repo(runner, cfg.repo))
-    checks.append(_check_claude(runner, required=cfg.sandbox != "islo"))
-    checks.append(_check_srt(which))
+        checks.append(Check("local sandbox", True, "no external sandbox provider"))
+
+    if cfg.scm == "github":
+        checks.append(_check_gh_auth(runner))
+        checks.append(_check_gh_repo(runner, cfg.repo))
+    if cfg.agent == "claude" and cfg.sandbox in {"local", "srt"}:
+        checks.append(_check_claude(runner, required=True))
     checks.append(_check_blueprint(cfg.blueprint))
-    checks.append(_check_factory_toml(cfg.target_dir, root))
+    checks.append(_check_factory_toml(cfg, runner, root))
     return checks
 
 

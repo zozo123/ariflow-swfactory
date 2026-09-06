@@ -10,6 +10,9 @@ All notable changes to this project will be documented here. The format follows
 
 - Scheduled blueprints can declare `trigger.issues`; cron-created DAG runs use those issue inputs
   when no runtime configuration is present, while explicit run configuration still wins.
+- `swfactory doctor` now validates only the selected sandbox, agent, and SCM providers. It checks
+  Docker and Airflow Toolset backends directly, treats SRT as required when selected, and reads a
+  target repository's `factory.toml` through GitHub when it is not in the control checkout.
 
 ### Changed
 
@@ -21,11 +24,15 @@ All notable changes to this project will be documented here. The format follows
 - The hosted islo deployment now separates the factory control repository
   (`SWF_CONTROL_REPO`) from the product repository receiving webhooks and pull requests
   (`SWF_TARGET_REPO`). The previous `SWF_REPO` / `SWF_BRANCH` inputs remain compatible aliases.
+- GitHub workflows use the current Node 24 checkout action.
 
 ### Fixed
 
 - `TARGET_DIR=` now selects a repository-root target during islo bootstrap, matching the documented
   empty-directory behavior instead of falling back to `demo/target`.
+- The README's Docker rehearsal uses the shipped image and Compose file names.
+- The islo bootstrap preflight now checks the requested target repository and directory instead of
+  the demonstration target.
 
 ## [2.0.1] - 2026-09-06
 

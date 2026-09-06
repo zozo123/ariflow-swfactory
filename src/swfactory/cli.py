@@ -368,19 +368,43 @@ def doctor(
     blueprint: Annotated[
         str, typer.Option(help="blueprints/<name>.toml or a path whose sandbox/targets to check")
     ] = blueprint_mod.DEFAULT_BLUEPRINT,
+    repo: Annotated[str | None, typer.Option(help="owner/name of the target repo")] = None,
+    target_dir: Annotated[str | None, typer.Option(help="subdir in the target repo")] = None,
+    agent: Annotated[str, typer.Option(help="claude | scripted")] = "claude",
+    sandbox: Annotated[
+        str | None, typer.Option(help="local | islo | srt | docker | toolset")
+    ] = None,
+    scm: Annotated[str, typer.Option(help="local | github")] = "github",
+    allow_local_agent: Annotated[
+        bool, typer.Option(help="DEV: allow a real agent outside a sandbox")
+    ] = False,
     json_out: Annotated[bool, typer.Option("--json", help="machine-readable report")] = False,
 ) -> None:
-    """Pre-flight the real path: islo auth + integrations, gateway profile, environment,
-    snapshot, gh auth + repo, claude, srt, blueprint, factory.toml. Exit 1 on any failure."""
+    """Pre-flight the selected agent, sandbox, SCM, blueprint, and target contract."""
     from swfactory import doctor as doctor_mod
 
     try:
         bp = blueprint_mod.load(blueprint)
-        cfg = bp.config(bp.jobs({"issues": ["doctor"]})[0], run_id="doctor")
+        job = bp.jobs({"issues": ["doctor"]})[0]
     except (OSError, ValueError) as e:
         # A broken blueprint is itself a finding: report it with Config defaults instead of dying.
         typer.echo(f"blueprint error: {e}", err=True)
         cfg = Config(issue="doctor", blueprint=blueprint)
+    else:
+        try:
+            cfg = bp.config(
+                job,
+                run_id="doctor",
+                repo=repo,
+                target_dir=target_dir,
+                agent=agent,
+                sandbox=sandbox,
+                scm=scm,
+                allow_local_agent=allow_local_agent or None,
+            )
+        except ValueError as e:
+            typer.echo(f"config error: {e}", err=True)
+            raise typer.Exit(2) from e
     checks = doctor_mod.run_doctor(cfg)
     typer.echo(doctor_mod.to_json(checks) if json_out else doctor_mod.table(checks))
     raise typer.Exit(doctor_mod.exit_code(checks))

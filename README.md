@@ -151,7 +151,11 @@ the preflight:
 uv sync --group airflow
 gh auth status
 islo login && islo login --tool github && islo login --tool claude
-uv run swfactory doctor --blueprint your-product
+uv run swfactory doctor \
+  --blueprint your-product \
+  --agent claude \
+  --sandbox islo \
+  --scm github
 ```
 
 Start issue 42 and answer both approvals in the terminal:
@@ -189,10 +193,10 @@ network destinations required for its job.
 ### Local Docker rehearsal
 
 ```bash
-docker build -f deploy/docker/agent.Dockerfile -t swfactory-agent:local .
+docker build -f deploy/docker/sandbox.Dockerfile -t swfactory-sandbox:local .
 SWF_AGENT=claude SWF_SCM=github \
 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" GH_TOKEN="$GH_TOKEN" \
-docker compose -f deploy/docker/docker-compose.yml up -d
+docker compose -f deploy/docker/compose.yml up -d
 ```
 
 The stack binds to localhost. Production exposure needs TLS, webhook HMAC verification, durable

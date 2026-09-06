@@ -61,7 +61,7 @@ jobs:
     env:
       ANTHROPIC_API_KEY: ""   # proves the suite needs no key: overrides the workflow-level value
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6
         with: { python-version: "3.12" }
       - name: Install swfactory
@@ -92,7 +92,7 @@ jobs:
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         if: steps.gate.outputs.enabled == 'true'
       - uses: astral-sh/setup-uv@v6
         if: steps.gate.outputs.enabled == 'true'
@@ -160,7 +160,7 @@ jobs:
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         if: steps.gate.outputs.enabled == 'true'
       - uses: astral-sh/setup-uv@v6
         if: steps.gate.outputs.enabled == 'true'
@@ -177,7 +177,7 @@ jobs:
         run: uv sync
       - name: Preflight (islo auth + tool integrations, gateway profile, environment, snapshot)
         if: steps.gate.outputs.enabled == 'true'
-        run: uv run swfactory doctor --json
+        run: uv run swfactory doctor --agent claude --sandbox islo --scm local --json
       - name: Real factory run on demo/issue.md (claude agent in an islo MicroVM, local git remote)
         if: steps.gate.outputs.enabled == 'true'
         env:

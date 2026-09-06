@@ -119,8 +119,17 @@ def test_toolset_block_states_the_boundary_without_fake_provider_claims() -> Non
 
     assert "common-ai" in source and "SandboxBackend" in source
     assert "package.module:Class" in source
-    assert "Unsupported isolation policy stops the line" in source
-    assert "SandboxToolset is the command boundary, not the agent loop" in source
+    assert "The run stops when a required isolation policy is" in source
+    assert "The factory owns the issue-to-PR route" in source
+
+
+def test_homepage_copy_avoids_decorative_factory_jargon() -> None:
+    source, _ = parse_page("index.html")
+
+    assert "Work enters." in source and "Proof ships." in source
+    assert "signal-strip" not in source
+    assert "Not a concept diagram" not in source
+    assert "—" not in source and "–" not in source
 
 
 def test_astronomer_blueprint_bridge_is_visible_and_linked() -> None:
