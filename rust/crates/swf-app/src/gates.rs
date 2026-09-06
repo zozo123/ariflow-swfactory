@@ -913,6 +913,9 @@ pub async fn answer_all(
     }
 
     let mut running: JoinSet<(usize, BatchItem)> = JoinSet::new();
+    // Which gate each in-flight task is answering. A task that *panics* answers nothing at all, so
+    // the only way to give its gate an honest line is to know, from the outside, which gate it was.
+    let mut in_flight: Vec<(tokio::task::Id, usize)> = Vec::new();
     let mut next = 0usize;
     loop {
         while running.len() < BATCH_CONCURRENCY && next < queue.len() && !cancel.is_cancelled() {
@@ -925,7 +928,7 @@ pub async fn answer_all(
             let runs = Arc::clone(&runs);
             let sightings = Arc::clone(&sightings);
             let cancel = cancel.clone();
-            running.spawn(async move {
+            let handle = running.spawn(async move {
                 let outcome = answer(
                     runs.as_ref(),
                     sightings.as_ref(),
@@ -937,12 +940,33 @@ pub async fn answer_all(
                 .await;
                 (index, item_of(id, gate, issue, outcome))
             });
+            in_flight.push((handle.id(), index));
         }
-        let Some(joined) = running.join_next().await else {
-            break;
-        };
-        if let Ok((index, item)) = joined {
-            slots[index] = Some(item);
+        match running.join_next_with_id().await {
+            None => break,
+            Some(Ok((task, (index, item)))) => {
+                in_flight.retain(|(id, _)| *id != task);
+                slots[index] = Some(item);
+            }
+            Some(Err(err)) => {
+                // The task died mid-answer, which means this gate's write either did not happen or
+                // did and was never confirmed. Neither is "skipped": a batch that exited 0 over a
+                // gate whose fate it cannot state would be teaching operators to ignore its code.
+                let task = err.id();
+                if let Some(at) = in_flight.iter().position(|(id, _)| *id == task) {
+                    let (_, index) = in_flight.remove(at);
+                    let row = &selection.rows[index];
+                    slots[index] = Some(BatchItem {
+                        outcome: BatchOutcome::Failed,
+                        detail: sanitize_line(&format!(
+                            "the answer to this gate did not complete ({err}); \
+                             re-read it before assuming it was not written"
+                        )),
+                        kind: Some(ErrorKind::Operational),
+                        ..BatchItem::skipped(row, String::new())
+                    });
+                }
+            }
         }
     }
 

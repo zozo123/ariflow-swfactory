@@ -6,6 +6,7 @@
 //! fresh machine gets.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -57,6 +58,15 @@ struct FakeRuns {
     panics_on_write: bool,
     /// The issue each `(run, map_index)` answers, for the one filter that reads job rows.
     issues: Vec<(String, i32, String)>,
+    /// Gate ids whose `respond` times out: a write that got no answer at all.
+    times_out: Vec<String>,
+    /// Gate ids whose `respond` dies on the transport, before the service is reached.
+    unreachable: Vec<String>,
+    /// Gate ids whose answering *task* panics, so the batch is left with no outcome for them.
+    panics: Vec<String>,
+    /// How many writes are in flight now, and the most there have ever been at once.
+    in_flight: AtomicUsize,
+    peak_in_flight: AtomicUsize,
 }
 
 impl FakeRuns {
@@ -212,6 +222,17 @@ impl Runs for FakeRuns {
             "a dry run wrote: respond({gate}) reached the adapter"
         );
         let id = gate.to_string();
+        // A write holds its slot across an await, so a batch that fanned out without a bound shows
+        // up here as a peak rather than as a timing coincidence.
+        let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak_in_flight.fetch_max(now, Ordering::SeqCst);
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+
+        if self.panics.contains(&id) {
+            panic!("the task answering {id} died");
+        }
         if self.fails("respond") || self.conflicts.contains(&id) {
             return Err(AdapterError::from_status(
                 409,
@@ -225,6 +246,18 @@ impl Runs for FakeRuns {
                 "PATCH gate",
                 "the scheduler fell over",
             ));
+        }
+        if self.times_out.contains(&id) {
+            return Err(AdapterError::Timeout {
+                what: "PATCH gate".to_string(),
+                after: Duration::from_secs(30),
+            });
+        }
+        if self.unreachable.contains(&id) {
+            return Err(AdapterError::Unreachable {
+                what: "airflow".to_string(),
+                detail: "connection reset by peer".to_string(),
+            });
         }
         self.responded
             .lock()
@@ -1556,6 +1589,10 @@ async fn one_gate_that_fails_never_abandons_the_rest() {
         .iter()
         .map(|(id, _)| id.clone())
         .collect();
+    let mut answered = answered;
+    // Sorted: the batch answers concurrently, so *which* gates were written is the promise and the
+    // order they completed in is not.
+    answered.sort();
     assert_eq!(
         answered,
         vec![
@@ -1692,6 +1729,157 @@ async fn a_batch_answers_more_than_one_gate_at_a_time_and_still_re_reads_each_on
             "a bulk answer keeps the two-sighting rule: {item:?}"
         );
     }
+}
+
+/// Two hundred gates, every one of them parked. The shape a fan-out of twenty issues reaches.
+fn a_wall_of_gates(n: i32) -> FakeRuns {
+    let mut gates = Vec::new();
+    let mut tasks = Vec::new();
+    for index in 0..n {
+        gates.push(gate_at("factory", "r1", "job.approve_plan", index));
+        tasks.push(TaskState::new(
+            "job.approve_plan",
+            index,
+            Some("awaiting_input".into()),
+        ));
+    }
+    FakeRuns {
+        dags: vec!["factory".into()],
+        runs: vec![("factory".to_string(), vec![run("factory", "r1", "running")])],
+        tasks: vec![("factory/r1".to_string(), tasks)],
+        gates: Mutex::new(gates),
+        ..FakeRuns::default()
+    }
+}
+
+#[tokio::test]
+async fn a_filter_that_matched_everything_still_never_exceeds_the_concurrency_bound() {
+    // The failure this pins is an outage of the batch's own making: an unbounded fan-out over a
+    // filter that matched the whole factory would put two hundred simultaneous PATCHes on the one
+    // scheduler this tool exists to help operate. The bound is counted, not assumed.
+    let airflow = Arc::new(a_wall_of_gates(200));
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let filter = GateFilter::default();
+    let selection = select_with(&ops, filter.clone()).await;
+    assert_eq!(selection.ready_count(), 200);
+
+    let report = ops
+        .gate_answer_all(
+            &selection,
+            Decision::Approve,
+            &filter,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a batch reports rather than fails");
+    assert_eq!(report.count(BatchOutcome::Answered), 200);
+
+    let peak = airflow.peak_in_flight.load(Ordering::SeqCst);
+    assert!(
+        peak <= swf_app::gates::BATCH_CONCURRENCY,
+        "{peak} writes were in flight at once against a bound of {}",
+        swf_app::gates::BATCH_CONCURRENCY
+    );
+    assert!(
+        peak > 1,
+        "a bound that never reached two would be a serial loop wearing a batch's name"
+    );
+}
+
+#[tokio::test]
+async fn each_way_a_single_write_can_go_wrong_costs_only_its_own_gate() {
+    // 409 is the one that is not a failure; the other three are, and each keeps its own exit code
+    // when it is the only kind in the batch. All four leave the other gates answered.
+    let cases: [(&str, BatchOutcome, i32); 4] = [
+        ("conflict", BatchOutcome::Conflict, 0),
+        ("broken", BatchOutcome::Failed, 1),
+        ("timeout", BatchOutcome::Failed, 5),
+        ("unreachable", BatchOutcome::Failed, 5),
+    ];
+    let bad = "factory/r1#2:job.approve_plan".to_string();
+    for (which, expected, code) in cases {
+        let mut airflow = a_wall_of_gates(5);
+        match which {
+            "conflict" => airflow.conflicts = vec![bad.clone()],
+            "broken" => airflow.broken = vec![bad.clone()],
+            "timeout" => airflow.times_out = vec![bad.clone()],
+            _ => airflow.unreachable = vec![bad.clone()],
+        }
+        let airflow = Arc::new(airflow);
+        let ops = build_ops(Arc::clone(&airflow), None, None, None);
+        let filter = GateFilter::default();
+        let selection = select_with(&ops, filter.clone()).await;
+        let report = ops
+            .gate_answer_all(
+                &selection,
+                Decision::Approve,
+                &filter,
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("a batch reports rather than fails");
+
+        assert_eq!(report.matched(), 5, "{which}: every gate keeps its line");
+        assert_eq!(
+            report.count(BatchOutcome::Answered),
+            4,
+            "{which}: one bad write must not cost the other four"
+        );
+        assert_eq!(airflow.responded.lock().expect("lock").len(), 4, "{which}");
+        let item = report
+            .items
+            .iter()
+            .find(|item| item.id.to_string() == bad)
+            .expect("the failing gate has its own line");
+        assert_eq!(item.outcome, expected, "{which}: {item:?}");
+        assert_eq!(
+            report.exit_code(),
+            code,
+            "{which}: the exit code has to name the cause, not flatten it"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_answer_that_died_mid_write_is_a_failure_and_never_a_silent_zero() {
+    // A task that panics answered nothing *and* cannot say whether its PATCH landed. Reporting it
+    // as merely skipped would exit 0 over a gate whose fate the batch does not know, which is the
+    // one thing that would teach an operator to stop reading the exit code.
+    let airflow = Arc::new(FakeRuns {
+        panics: vec!["factory/r1#2:job.approve_plan".to_string()],
+        ..a_wall_of_gates(5)
+    });
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let filter = GateFilter::default();
+    let selection = select_with(&ops, filter.clone()).await;
+    let report = ops
+        .gate_answer_all(
+            &selection,
+            Decision::Approve,
+            &filter,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a batch reports rather than fails");
+
+    assert_eq!(
+        report.matched(),
+        5,
+        "no gate may be missing from the report"
+    );
+    assert_eq!(report.count(BatchOutcome::Answered), 4);
+    let item = report
+        .items
+        .iter()
+        .find(|item| item.id.to_string() == "factory/r1#2:job.approve_plan")
+        .expect("the dead task's gate still has a line");
+    assert_eq!(item.outcome, BatchOutcome::Failed, "{item:?}");
+    assert!(
+        item.detail.contains("did not complete"),
+        "and says the write's fate is unknown: {}",
+        item.detail
+    );
+    assert_ne!(report.exit_code(), 0, "a dead write task must not exit 0");
 }
 
 // ---------------------------------------------------------------- job and run listings
