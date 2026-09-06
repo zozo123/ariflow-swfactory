@@ -1,8 +1,12 @@
-"""Stabilized factory control-plane service.
+"""Factory control-plane service after liquid-development fan-in.
 
-Airflow is the only lifecycle scheduler. Factory Cells own durable issue×target identity and epoch
-fencing. This service owns external mutation authority, admission, recovery/evidence and the public
-operator API consumed by Rust.
+There is one authority chain:
+
+    Airflow schedules lifecycle -> Factory Cell fences identity/epoch -> backend owns external
+    mutations/admission/evidence -> Rust renders the backend contract.
+
+The service is deliberately storage/transport focused. It does not schedule work outside Airflow and
+it does not infer provider behavior from names.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -120,7 +125,6 @@ class Factory:
             return self.credentials.token()
 
     def airflow(self, method: str, path: str, body: dict | None) -> tuple[int, Any]:
-        """Bounded Airflow transport; mutating requests are never implicitly replayed."""
         url = self.airflow_url + "/api/v2" + path
         for attempt in range(2):
             token = self._credential(refresh=attempt > 0)
@@ -152,29 +156,9 @@ class Factory:
     def _checked_airflow(self, method: str, path: str, body: dict | None = None) -> Any:
         status, payload = self.airflow(method, path, body)
         if status >= 300:
-            outcome = "; mutation outcome may be unknown" if method != "GET" and status >= 500 else ""
-            raise Refused(status, f"Airflow rejected {method} (HTTP {status}){outcome}")
+            suffix = "; mutation outcome may be unknown" if method != "GET" and status >= 500 else ""
+            raise Refused(status, f"Airflow rejected {method} (HTTP {status}){suffix}")
         return payload
-
-    def _submission_id(self, line_name: str, jobs: list[dict[str, Any]], actor: str) -> str:
-        payload = {
-            "line": line_name,
-            "actor": actor,
-            "jobs": [
-                {
-                    "job_idx": int(job["job_idx"]),
-                    "repo": str(job["repo"]),
-                    "issue": str(job["issue"]),
-                    "dir": str(job.get("dir", "")),
-                    "base_branch": str(job.get("base_branch", "main")),
-                }
-                for job in jobs
-            ],
-        }
-        digest = hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-        return "submit_" + digest[:32]
 
     def _policy_digest(self, line_name: str, job: dict[str, Any]) -> str:
         return policy_digest_for_mapping(
@@ -187,6 +171,109 @@ class Factory:
                 "sandbox": str(job.get("sandbox", "configured")),
             }
         )
+
+    def _desired_epoch(self, job: dict[str, Any]) -> int:
+        cell_id = identity_for_job(job).stable_id()
+        try:
+            cell = self.cell_store.get(cell_id)
+        except KeyError:
+            return 1
+        epoch = int(cell["epoch"])
+        return epoch + 1 if cell["state"] in TERMINAL_STATES else epoch
+
+    def _submission_id(self, line_name: str, jobs: list[dict[str, Any]], actor: str) -> str:
+        payload = {
+            "line": line_name,
+            "actor": actor,
+            "jobs": [
+                {
+                    "job_idx": int(job["job_idx"]),
+                    "repo": str(job["repo"]),
+                    "issue": str(job["issue"]),
+                    "dir": str(job.get("dir", "")),
+                    "base_branch": str(job.get("base_branch", "main")),
+                    "desired_epoch": self._desired_epoch(job),
+                    "policy_digest": self._policy_digest(line_name, job),
+                }
+                for job in jobs
+            ],
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return "submit_" + digest[:32]
+
+    def _activate_bindings(
+        self,
+        line_name: str,
+        jobs: list[dict[str, Any]],
+        submission_id: str,
+        actor: str,
+        *,
+        recover_existing: bool,
+    ) -> list[dict[str, Any]]:
+        bindings: list[dict[str, Any]] = []
+        generation = os.getenv("SWF_GENERATION") or "stable"
+        for job in jobs:
+            identity = identity_for_job(job)
+            policy_digest = self._policy_digest(line_name, job)
+            if recover_existing:
+                try:
+                    cell = self.cell_store.get(identity.stable_id())
+                except KeyError as error:
+                    raise Refused(409, "active admission has no corresponding Factory Cell") from error
+                if cell["state"] in TERMINAL_STATES:
+                    raise Refused(409, "active admission points at a terminal Factory Cell")
+            else:
+                try:
+                    cell = self.cell_store.activate(identity, actor=f"backend:{actor}")
+                except CellBusy as error:
+                    raise Refused(409, str(error)) from error
+            try:
+                cell = self.cell_store.patch(
+                    cell["cell_id"],
+                    int(cell["epoch"]),
+                    f"policy:{submission_id}:{job['job_idx']}",
+                    policy_digest=policy_digest,
+                    factory_generation=generation,
+                )
+            except DuplicateOperation:
+                cell = self.cell_store.get(cell["cell_id"])
+            if cell.get("policy_digest") != policy_digest:
+                raise Refused(409, "active Factory Cell policy differs from retried submission")
+            bindings.append(
+                {
+                    "job_idx": int(job["job_idx"]),
+                    "cell_id": cell["cell_id"],
+                    "epoch": int(cell["epoch"]),
+                    "policy_digest": policy_digest,
+                    "factory_generation": cell.get("factory_generation") or generation,
+                }
+            )
+        return bindings
+
+    def _journal_airflow_unpause(self, authority: dict[str, Any], line_name: str, path: str) -> None:
+        ref = OperationRef.build(
+            authority["cell_id"], authority["epoch"], "airflow_unpause", line_name
+        )
+
+        def apply() -> dict[str, Any]:
+            payload = self._checked_airflow("PATCH", path, {"is_paused": False})
+            return payload if isinstance(payload, dict) else {"is_paused": False}
+
+        def reconcile() -> MutationOutcome:
+            status, payload = self.airflow("GET", path, None)
+            if status == 200 and isinstance(payload, dict):
+                if payload.get("is_paused") is False:
+                    return MutationOutcome("committed", payload, {"dag": line_name}, "DAG is unpaused")
+                return MutationOutcome(
+                    "definitely_absent", None, {"dag": line_name}, "DAG remains paused"
+                )
+            return MutationOutcome(
+                "ambiguous", None, {"dag": line_name, "status": status}, "DAG state unavailable"
+            )
+
+        self.control.mutate(ref, apply, replay_safe=True, reconcile=reconcile)
 
     def submit(self, body: dict[str, Any]) -> dict[str, Any]:
         line = self._line(text(body, "line"))
@@ -209,7 +296,11 @@ class Factory:
         jobs = list(line.jobs(conf))
         submission_id = self._submission_id(line.name, jobs, actor)
         repos = sorted({str(job["repo"]) for job in jobs})
-        repo_key = repos[0] if len(repos) == 1 else "multi:" + hashlib.sha256("\0".join(repos).encode()).hexdigest()[:16]
+        repo_key = (
+            repos[0]
+            if len(repos) == 1
+            else "multi:" + hashlib.sha256("\0".join(repos).encode()).hexdigest()[:16]
+        )
         decision = self.control.submit(
             work_id=submission_id,
             repo=repo_key,
@@ -229,34 +320,18 @@ class Factory:
                 "blueprint": {"name": line.name, "resolved": True},
             }
 
-        bindings: list[dict[str, Any]] = []
+        recover_existing = decision.reason == "duplicate_active"
         try:
-            for job in jobs:
-                cell = self.cell_store.activate(identity_for_job(job), actor=f"backend:{actor}")
-                policy_digest = self._policy_digest(line.name, job)
-                try:
-                    cell = self.cell_store.patch(
-                        cell["cell_id"],
-                        int(cell["epoch"]),
-                        f"policy:{submission_id}:{job['job_idx']}",
-                        policy_digest=policy_digest,
-                        factory_generation=os.getenv("SWF_GENERATION") or "stable",
-                    )
-                except DuplicateOperation:
-                    cell = self.cell_store.get(cell["cell_id"])
-                bindings.append(
-                    {
-                        "job_idx": int(job["job_idx"]),
-                        "cell_id": cell["cell_id"],
-                        "epoch": int(cell["epoch"]),
-                        "policy_digest": policy_digest,
-                    }
-                )
-        except CellBusy as error:
-            self.control.cancel_reservation(submission_id, reason="cell_busy")
-            raise Refused(409, str(error)) from error
+            bindings = self._activate_bindings(
+                line.name,
+                jobs,
+                submission_id,
+                actor,
+                recover_existing=recover_existing,
+            )
         except Exception:
-            self.control.cancel_reservation(submission_id, reason="activation_failed")
+            if not recover_existing:
+                self.control.cancel_reservation(submission_id, reason="activation_failed")
             raise
 
         authority = min(bindings, key=lambda row: row["cell_id"])
@@ -266,7 +341,7 @@ class Factory:
         conf["_factory_actor"] = actor
 
         path = "/dags/" + urllib.parse.quote(line.name, safe="")
-        self._checked_airflow("PATCH", path, {"is_paused": False})
+        self._journal_airflow_unpause(authority, line.name, path)
         dag_run_id = "swf__" + submission_id.removeprefix("submit_")
         dispatch_ref = OperationRef.build(
             authority["cell_id"], authority["epoch"], "airflow_dispatch", submission_id
@@ -315,32 +390,45 @@ class Factory:
         )
         run_id = result.get("dag_run_id") or result.get("run_id") or dag_run_id
         for binding in bindings:
-            try:
-                self.cell_store.patch(
-                    binding["cell_id"],
-                    binding["epoch"],
-                    f"airflow-bind:{run_id}:{binding['job_idx']}",
-                    state="queued",
-                    airflow_dag_id=line.name,
-                    airflow_run_id=run_id,
-                    map_index=binding["job_idx"],
+            current = self.cell_store.get(binding["cell_id"])
+            bound_now = False
+            if current["state"] == "dispatching":
+                try:
+                    self.cell_store.patch(
+                        binding["cell_id"],
+                        binding["epoch"],
+                        f"airflow-bind:{run_id}:{binding['job_idx']}",
+                        state="queued",
+                        airflow_dag_id=line.name,
+                        airflow_run_id=run_id,
+                        map_index=binding["job_idx"],
+                    )
+                    bound_now = True
+                except DuplicateOperation:
+                    pass
+            elif current.get("airflow_run_id") not in {None, run_id}:
+                raise Refused(409, "Factory Cell is bound to a different Airflow run")
+            if bound_now:
+                trace = TraceContext.for_cell(
+                    binding["cell_id"], binding["epoch"], "dispatch", run_id
                 )
-            except DuplicateOperation:
-                pass
-            trace = TraceContext.for_cell(binding["cell_id"], binding["epoch"], "dispatch", run_id)
-            envelope = MutationEnvelope(
-                cell_id=binding["cell_id"],
-                epoch=binding["epoch"],
-                operation_key=f"airflow-bind:{run_id}:{binding['job_idx']}",
-                policy_digest=binding["policy_digest"],
-                trace_id=trace.trace_id,
-                actor=actor,
-            )
-            self.evidence.mutation(
-                envelope,
-                kind="airflow_dispatch",
-                payload={"dag_id": line.name, "run_id": run_id, "map_index": binding["job_idx"]},
-            )
+                envelope = MutationEnvelope(
+                    cell_id=binding["cell_id"],
+                    epoch=binding["epoch"],
+                    operation_key=f"airflow-bind:{run_id}:{binding['job_idx']}",
+                    policy_digest=binding["policy_digest"],
+                    trace_id=trace.trace_id,
+                    actor=actor,
+                )
+                self.evidence.mutation(
+                    envelope,
+                    kind="airflow_dispatch",
+                    payload={
+                        "dag_id": line.name,
+                        "run_id": run_id,
+                        "map_index": binding["job_idx"],
+                    },
+                )
 
         return {
             "state": "submitted",
@@ -373,11 +461,19 @@ class Factory:
                 raise ValueError("only issues and installed targets can be submitted")
             submission = self.submit({"line": segments[1], **conf})
             if submission.get("state") != "submitted":
-                raise Refused(429, f"factory admission {submission.get('state')}: {submission.get('reason')}")
+                raise Refused(
+                    429,
+                    f"factory admission {submission.get('state')}: {submission.get('reason')}",
+                )
             return 201, {"dag_run_id": submission["run_id"]}
         if method == "PATCH" and len(segments) == 2 and body == {"is_paused": False}:
             return self.airflow(method, path, body)
-        if method == "PATCH" and len(segments) == 4 and segments[2] == "dagRuns" and body == {"state": "failed"}:
+        if (
+            method == "PATCH"
+            and len(segments) == 4
+            and segments[2] == "dagRuns"
+            and body == {"state": "failed"}
+        ):
             return self.airflow(method, path, body)
         if (
             method == "PATCH"
@@ -426,25 +522,24 @@ class Factory:
 
     def capabilities(self) -> dict[str, Any]:
         draining = os.getenv("SWF_DRAIN", "").lower() in {"1", "true", "yes"}
-        document = capability_document(
+        return capability_document(
             read_ready=True,
             storage_authoritative=True,
             schema_compatible=True,
             draining=draining,
             serving_generation=os.getenv("SWF_GENERATION") or "stable",
             draining_generation=(os.getenv("SWF_GENERATION") or "stable") if draining else None,
-        )
-        return document.to_dict()
+        ).to_dict()
 
     def fleet(self) -> dict[str, Any]:
         cells = self.cell_store.list(limit=1000)
         control = self.control.snapshot(limit=1000)
-        now = __import__("time").time()
         counts: dict[str, int] = {}
         generations: dict[str, int] = {}
         stale = 0
         orphaned = 0
         cleanup_debt = 0
+        now = time.time()
         for cell in cells:
             state = str(cell.get("state") or "unknown")
             counts[state] = counts.get(state, 0) + 1
@@ -482,37 +577,81 @@ class Factory:
         epoch = body.get("epoch")
         if type(epoch) is not int or epoch < 1:
             raise ValueError("epoch must be a positive integer")
-        state = text(body, "state", max_len=64)
-        allowed = {"queued", "running", "success", "failed", "cancelled", "rejected", "cleaned"}
-        if state not in allowed:
-            raise ValueError(f"state must be one of {sorted(allowed)}")
+        requested = text(body, "state", max_len=64)
+        if requested not in {"running", "success", "failed", "cancelled", "rejected", "cleaned"}:
+            raise ValueError("invalid lifecycle state")
+        operation_key = text(
+            {"operation_key": body.get("operation_key") or f"airflow:{requested}"},
+            "operation_key",
+            max_len=256,
+        )
         current = self._cell(cell_id)
-        try:
-            updated = self.cell_store.patch(
-                cell_id,
-                epoch,
-                f"lifecycle:{state}:{body.get('operation_key') or 'airflow'}",
-                state=state,
+        if int(current["epoch"]) != epoch:
+            raise Refused(409, f"stale Factory Cell epoch {epoch}; current epoch is {current['epoch']}")
+
+        if requested == "cleaned":
+            cleanup = {
+                "schema_version": 1,
+                "status": "converged",
+                "operation_key": operation_key,
+                "observed_at": time.time(),
+            }
+            try:
+                updated = self.cell_store.patch(
+                    cell_id,
+                    epoch,
+                    operation_key,
+                    cleanup=cleanup,
+                )
+            except DuplicateOperation:
+                updated = self._cell(cell_id)
+            released = (
+                self.control.release_cell(cell_id, epoch=epoch, state=str(updated["state"]))
+                if updated["state"] in TERMINAL_STATES
+                else []
             )
-        except DuplicateOperation:
-            updated = current
-        released = self.control.release_cell(cell_id, epoch=epoch, state=state)
+            next_state = updated["state"]
+        else:
+            old_state = str(current["state"])
+            if old_state in {"failed", "cancelled", "rejected", "cleaned"} and requested != old_state:
+                raise Refused(409, f"terminal Factory Cell cannot transition {old_state} -> {requested}")
+            if old_state == "success" and requested not in {"success", "failed"}:
+                raise Refused(409, f"Factory Cell cannot transition success -> {requested}")
+            if requested == "running" and old_state not in {"dispatching", "queued", "running"}:
+                raise Refused(409, f"Factory Cell cannot transition {old_state} -> running")
+            try:
+                updated = self.cell_store.patch(
+                    cell_id,
+                    epoch,
+                    operation_key,
+                    state=requested,
+                )
+            except DuplicateOperation:
+                updated = self._cell(cell_id)
+            released = (
+                self.control.release_cell(cell_id, epoch=epoch, state=requested)
+                if requested in TERMINAL_STATES
+                else []
+            )
+            next_state = requested
+
         self.evidence.append(
             cell_id=cell_id,
             epoch=epoch,
-            kind="lifecycle_transition",
-            payload={"from": current.get("state"), "to": state, "released_work": released},
+            kind="lifecycle_transition" if requested != "cleaned" else "cleanup",
+            payload={"from": current.get("state"), "requested": requested, "to": next_state, "released_work": released},
             policy_digest=updated.get("policy_digest"),
-            trace=TraceContext.for_cell(cell_id, epoch, "lifecycle", state),
+            trace=TraceContext.for_cell(cell_id, epoch, "lifecycle", operation_key),
         )
         return {"cell": updated, "released_work": released}
 
     def operation(self, path: str, body: dict[str, Any]) -> Any:
         if path == "/doctor":
+            caps = self.capabilities()
             checks = [
                 {"name": "factory backend", "status": "ok", "detail": "Python API v1", "required": True},
                 {"name": "factory cells", "status": "ok", "detail": f"durable CellStore schema v{SCHEMA_VERSION}", "required": True},
-                {"name": "mutation readiness", "status": "ok" if self.capabilities()["mutation_ready"] else "warn", "detail": self.capabilities(), "required": True},
+                {"name": "mutation readiness", "status": "ok" if caps["mutation_ready"] else "warn", "detail": caps, "required": True},
             ]
             try:
                 health = self._checked_airflow("GET", "/monitor/health")
@@ -557,8 +696,7 @@ class Factory:
             issues = body.get("issues") or []
             targets = body.get("targets") or []
             conf = {"issues": issues, **({"targets": targets} if targets else {})}
-            jobs = list(line.jobs(conf))
-            return build_preview(line=line.name, jobs=jobs).to_dict()
+            return build_preview(line=line.name, jobs=list(line.jobs(conf))).to_dict()
         if path == "/cells":
             return self.cell_store.list(limit=self._limit(body))
         if path == "/cells/inspect":
@@ -578,11 +716,17 @@ class Factory:
         if path == "/deliveries/prs":
             if not self.repo:
                 return []
-            return GitHubClient(self.repo).prs(label=text({"label": body.get("label", "factory")}, "label"), limit=self._limit(body))
+            return GitHubClient(self.repo).prs(
+                label=text({"label": body.get("label", "factory")}, "label"),
+                limit=self._limit(body),
+            )
         if path == "/deliveries/issues":
             if not self.repo:
                 return []
-            return GitHubClient(self.repo).issues(label=text({"label": body.get("label", "factory")}, "label"), limit=self._limit(body))
+            return GitHubClient(self.repo).issues(
+                label=text({"label": body.get("label", "factory")}, "label"),
+                limit=self._limit(body),
+            )
         if path == "/deliveries/head":
             rows = self._gh(["pr", "list", "--head", text(body, "branch"), "--state", "all", "--limit", "1", "--json", "url,state,title,labels,headRefOid,baseRefName"])
             if not rows:
