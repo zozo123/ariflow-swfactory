@@ -620,6 +620,8 @@ async fn verify_cmd(ctx: &Ctx, ops: &Ops, args: &VerifyArgs) -> Result<Outcome> 
         base_branch: args.base_branch.clone(),
         target_dir: args.target_dir.clone(),
         keep_checkout: args.keep,
+        origin: args.origin.clone(),
+        branch: args.branch.clone(),
         ..VerifyOpts::default()
     };
 

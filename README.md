@@ -10,6 +10,7 @@
   <a href="https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://airflow.apache.org/docs/apache-airflow/3.3.1/"><img alt="Airflow 3.3.1" src="https://img.shields.io/badge/Airflow-3.3.1-017CEE?logo=apacheairflow&logoColor=white" /></a>
   <a href="https://www.python.org/downloads/release/python-3120/"><img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" /></a>
+  <a href="docs/swf.md"><img alt="Rust 1.82" src="https://img.shields.io/badge/Rust-1.82-000000?logo=rust&logoColor=white" /></a>
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-D22128" /></a>
   <a href="https://skills.sh/zozo123/ariflow-swfactory/airflow-software-factory"><img alt="skills.sh" src="https://skills.sh/b/zozo123/ariflow-swfactory" /></a>
 </p>
@@ -275,9 +276,10 @@ rules, limited credentials, cleanup, and expiry. Read the
 
 1. **Send work.** Label an issue `factory:<route>`, comment `@factory run <route>`, trigger the DAG,
    or use the CLI.
-2. **Approve.** Read `intent.md` and `plan.md` in Airflow or run
-   `swfactory approve <dag_run_id> intent|plan`.
-3. **Watch.** Use `swfactory herd`, Airflow, and GitHub checks to follow active work.
+2. **Approve.** Read `intent.md` and `plan.md` in Airflow, or run `swf gates review` then
+   `swf gates approve`, or `swfactory approve <dag_run_id> intent|plan`.
+3. **Watch.** Use `swf attention`, `swf tui`, `swfactory herd`, Airflow, and GitHub checks to
+   follow active work.
 4. **Release.** Review the final patch and evidence, then merge through normal branch protection.
 5. **Improve.** Let `maintain` compare merged run metrics with `bands.yaml`; investigate incidents
    and admit useful proposals as new work orders.
@@ -285,6 +287,32 @@ rules, limited credentials, cleanup, and expiry. Read the
 Delivery metrics cover cycle time, iterations, first-pass verification, review findings, denied
 tools, and cost. Production health, security, customer impact, and business results can feed the
 same system by creating GitHub issues from the tools that already observe those signals.
+
+## Operate it from one binary
+
+`swf` is the operator's client: a single native executable that connects to a factory, submits work,
+shows every mapped job, answers approval gates, verifies deliveries and removes owned sandboxes,
+with an interactive screen over the same operations. It needs no Python, no `uv` and no virtualenv
+on the operator's machine, and it holds no authority — it reads Airflow's public API and re-reads
+every decision from the service that owns it before acting.
+
+```sh
+swf context add prod --airflow-url https://airflow.example.com --repo acme/widgets --use
+swf doctor                              # one line per readiness check, a fix: for every failure
+swf submit --issue 42                   # governed work to Airflow
+swf attention                           # approvals waiting, failures, blocked deliveries
+swf gates approve 'factory/manual__2026-09-06T08:04:02+00:00#1:plan'
+swf deliveries verify --clone           # re-derive the delivery instead of trusting the report
+swf tui                                 # the same operations, interactively
+```
+
+Every command answers `--json` with exactly one document on stdout, every diagnostic on stderr, and
+a stable exit code: 1 operational, 2 usage, 3 not found, 4 authentication, 5 unreachable, 6
+conflict. The config file stores the *name* of the environment variable holding a credential and
+never a value. `swf` runs no stage: Airflow schedules and Python executes, exactly as before. Read
+[docs/swf.md](docs/swf.md) for the full command table, the JSON contract, the key map and the
+security posture. Release tarballs are attached to each GitHub Release, one per platform, with a
+`SHA256SUMS` file.
 
 ## Grow useful information and remove noise
 
@@ -320,6 +348,8 @@ Compatibility is explicit:
 - Python `>=3.12,<3.13`
 - Apache Airflow `3.3.1`, with an upstream-main canary in CI
 - blueprint schema `version = 1`, read by swfactory `2.0.x`
+- the `swf` operator binary: Rust `1.82` or newer to build, prebuilt for macOS (Apple silicon and
+  Intel) and Linux (`x86_64` and `aarch64`)
 - GitHub delivery and a local Git remote for the keyless demo
 - target projects in any language whose contract can produce JUnit XML
 
@@ -339,6 +369,7 @@ lint, unit tests, the scripted end-to-end run, Airflow parity and smoke, and pac
 | `swfactory webhook serve` | route trusted GitHub events into Airflow |
 | `swfactory metrics` | aggregate committed run evidence |
 | `swfactory maintain` | detect metric drift and sweep owned sandboxes |
+| `swf` | the same connect, submit, watch, approve, and verify operations as one native binary, plus `swf tui` ([docs/swf.md](docs/swf.md)) |
 
 ## Install the factory skill
 
@@ -361,6 +392,7 @@ connecting a production repository.
 blueprints/        production routes and their limits
 dags/              generated Airflow DAGs, approvals, and maintenance
 src/swfactory/     runtime, stages, adapters, state, policy, and CLI
+rust/              the swf operator binary: domain, adapters, operations, TUI, CLI
 skills/            installable Airflow software factory skill
 deploy/docker/     local Airflow and Docker work-cell stack
 deploy/islo/       hosted control plane and MicroVM work cells
@@ -369,7 +401,7 @@ site/              GitHub Pages guide
 ```
 
 [Design and schema](docs/design.md) · [Docker](docs/docker.md) · [islo](docs/islo.md) ·
-[Factory floor](docs/herd.md) · [Evaluation](docs/evals.md) ·
+[Factory floor](docs/herd.md) · [swf binary](docs/swf.md) · [Evaluation](docs/evals.md) ·
 [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 Apache-2.0

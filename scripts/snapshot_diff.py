@@ -78,7 +78,9 @@ def norm(snapshot: dict[str, Any]) -> dict[str, Any]:
     ]
     return {
         "runs": sorted(runs, key=lambda r: (r["dag_id"], r["run_id"])),
-        "gates": sorted(gates, key=lambda g: (g["dag_id"], g["run_id"], g["task_id"], g["map_index"])),
+        "gates": sorted(
+            gates, key=lambda g: (g["dag_id"], g["run_id"], g["task_id"], g["map_index"])
+        ),
         "prs": sorted(prs, key=lambda p: p["number"]),
     }
 
@@ -98,7 +100,7 @@ def walk(path: str, a: Any, b: Any, out: list[str]) -> None:
     elif isinstance(a, list):
         if len(a) != len(b):
             out.append(f"{path}: python has {len(a)} entries, rust has {len(b)}")
-        for i, (x, y) in enumerate(zip(a, b)):
+        for i, (x, y) in enumerate(zip(a, b, strict=False)):
             walk(f"{path}[{i}]", x, y, out)
     elif a != b:
         out.append(f"{path}: python {a!r} vs rust {b!r}")
@@ -108,9 +110,10 @@ def main(argv: list[str]) -> int:
     if len(argv) != 3:
         print(__doc__, file=sys.stderr)
         return 2
-    python = norm(json.load(open(argv[1], encoding="utf-8")))
-    rust = json.load(open(argv[2], encoding="utf-8"))
-    rust = norm(rust)
+    with open(argv[1], encoding="utf-8") as fh:
+        python = norm(json.load(fh))
+    with open(argv[2], encoding="utf-8") as fh:
+        rust = norm(json.load(fh))
     problems: list[str] = []
     walk("snapshot", python, rust, problems)
     counts = (

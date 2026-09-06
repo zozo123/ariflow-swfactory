@@ -376,6 +376,17 @@ pub struct VerifyArgs {
     /// Keep the checkout afterwards, for someone who wants to look at it.
     #[arg(long)]
     pub keep: bool,
+
+    /// Where the published branch lives, when it is not a GitHub repository.
+    ///
+    /// `scm = "local"` publishes to a bare repository in the run directory. That branch is no less
+    /// delivered for never reaching a forge, so it must be verifiable the same way.
+    #[arg(long = "from", value_name = "REMOTE")]
+    pub origin: Option<String>,
+
+    /// The published branch, when there is no pull request to read it from.
+    #[arg(long, value_name = "REF")]
+    pub branch: Option<String>,
 }
 
 /// `swf sandboxes …`

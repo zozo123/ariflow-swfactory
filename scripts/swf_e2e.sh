@@ -38,9 +38,11 @@ ISSUES=("$@")
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/swf-e2e.XXXXXX")"
 export AIRFLOW_HOME="$WORK/airflow_home"
-# `swf` keeps its contexts under XDG. Pointing it at the work dir means this script can never
-# disturb — or be disturbed by — the operator's real ~/.config/swf/config.toml.
-export XDG_CONFIG_HOME="$WORK/config"
+# `$SWF_CONFIG` names the config file outright, so this script can never disturb — or be disturbed
+# by — the operator's real ~/.config/swf/config.toml. It deliberately does NOT move
+# XDG_CONFIG_HOME: `gh` reads its credentials from there, and hijacking it to isolate one tool
+# silently unauthenticates another. That cost this script a full run to learn.
+export SWF_CONFIG="$WORK/config/swf/config.toml"
 STANDALONE_LOG="$WORK/standalone.log"
 STANDALONE_PID=""
 
@@ -101,7 +103,7 @@ field() { "$PY" -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }
 # ---------------------------------------------------------------- work dir
 
 say "work dir $WORK"
-mkdir -p "$AIRFLOW_HOME" "$XDG_CONFIG_HOME" "$WORK/$(dirname "$TARGET_B")"
+mkdir -p "$AIRFLOW_HOME" "$(dirname "$SWF_CONFIG")" "$WORK/$(dirname "$TARGET_B")"
 cp -R "$REPO/demo/target" "$WORK/$TARGET_B"
 find "$WORK/$TARGET_B" \( -name __pycache__ -o -name .pytest_cache -o -name .venv \) -prune \
   -exec rm -rf {} + 2>/dev/null || true
@@ -178,7 +180,7 @@ say "swf context add $CONTEXT"
 "$SWF" context show --json >"$WORK/context.json"
 grep -q "$PASSWORD" "$WORK/context.json" &&
   fail "swf context show leaked the password — a context must never carry a secret"
-grep -q "$PASSWORD" "$XDG_CONFIG_HOME/swf/config.toml" &&
+grep -q "$PASSWORD" "$SWF_CONFIG" &&
   fail "swf wrote the password into its config file"
 "$SWF" context list
 
@@ -320,41 +322,46 @@ AIRFLOW_URL="$BASE" AIRFLOW_USER=admin AIRFLOW_PASSWORD="$PASSWORD" \
 # ---------------------------------------------------------------- 6. verify the deliveries
 
 say "swf deliveries verify (independent re-run from a clean checkout)"
-"$SWF" deliveries list --json >"$WORK/deliveries.json"
-"$SWF" deliveries list
-"$SWF" deliveries verify --all --clone --json >"$WORK/verified.json" ||
-  fail "swf deliveries verify"
-"$PY" - "$WORK/verified.json" <<'PY' || fail "not every delivery was independently verified"
-"""Every job must reach the strongest verdict: the published branch's tests were re-run here."""
+#
+# This line runs with `scm = local`, so the factory published each job's branch into a bare
+# repository inside that job's run directory rather than to GitHub. That is a real delivery and
+# it gets the real treatment: `swf` clones the branch from that remote into a fresh directory,
+# reads the contract out of the CHECKOUT, and re-runs the target's own test command there.
+# Nothing about the verdict is taken from the worker's workdir.
+VERIFIED=0
+while read -r job_id; do
+  [ -n "${job_id:-}" ] || continue
+  idx="${job_id##*#}"
+  run_id="$("$PY" -c "
+from swfactory.runtime import run_id_for
+print(run_id_for('$RUN_ID', int('$idx')))
+")"
+  remote="$WORK/.factory/$run_id/remote.git"
+  [ -d "$remote" ] || fail "job $idx published nothing: no $remote"
+  branch="$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/factory/*' | head -1)"
+  [ -n "$branch" ] || fail "job $idx has no factory/* branch in $remote"
+  printf 'verifying job %s: %s\n' "$idx" "$branch"
+  # A verdict short of `independently_verified` exits non-zero, and that is the answer, not an
+  # error: the report says which evidence row did not hold. So read the report either way and let
+  # it do the explaining — aborting on the exit code alone would hide the diagnosis.
+  "$SWF" deliveries verify "$branch" --from "$remote" --branch "$branch" --clone \
+    --repo "zozo123/ariflow-swfactory" --json >"$WORK/verify-$idx.json" \
+    2>"$WORK/verify-$idx.err" || true
+  "$PY" "$REPO/scripts/verify_report.py" "$WORK/verify-$idx.json" "$idx" || {
+    sed 's/^/    /' "$WORK/verify-$idx.err" >&2
+    fail "job $idx was not independently verified"
+  }
+  VERIFIED=$((VERIFIED + 1))
+done <"$WORK/job-ids.txt"
 
-import json
-import sys
-
-reports = json.load(open(sys.argv[1]))
-head = ["job", "branch", "workflow", "published", "verified", "tests"]
-rows = [
-    [
-        r["job"],
-        r.get("branch", "-"),
-        r["verdicts"]["workflow_succeeded"] and "yes" or "no",
-        r["verdicts"]["branch_published"] and "yes" or "no",
-        r["verdicts"]["independently_verified"] and "yes" or "no",
-        r.get("tests", "-"),
-    ]
-    for r in reports
-]
-width = [max(len(str(r[i])) for r in [head, *rows]) for i in range(len(head))]
-for row in [head, *rows]:
-    print("  ".join(str(c).ljust(w) for c, w in zip(row, width, strict=True)).rstrip())
-bad = [r for r in reports if not r["verdicts"]["independently_verified"]]
-for r in bad:
-    print(f"  NOT VERIFIED  {r['job']}: {r.get('why', '')}", file=sys.stderr)
-sys.exit(1 if bad or len(reports) < 4 else 0)
-PY
+EXPECTED_DELIVERIES=$(( ${#ISSUES[@]} * 2 ))
+[ "$VERIFIED" -eq "$EXPECTED_DELIVERIES" ] ||
+  fail "independently verified $VERIFIED deliveries, expected $EXPECTED_DELIVERIES"
+echo "$VERIFIED deliveries independently verified"
 
 if [ "$STATE" != "success" ]; then
   fail "run state=$STATE"
 fi
 say "OK: $DAG_ID green — ${#ISSUES[@]} issues x 2 targets, $answered gates answered through swf, \
-$(("${#ISSUES[@]}" * 2)) deliveries independently verified"
+$(( ${#ISSUES[@]} * 2 )) deliveries independently verified"
 echo "$RUN_ID"

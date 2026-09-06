@@ -312,30 +312,44 @@ pub fn find_blueprint(name_or_path: &str) -> Option<PathBuf> {
     None
 }
 
-/// `paths.validate_identifier`, which is what turns an issue reference into a branch name and an
-/// artifact directory.
+/// What `conf.issues` may hold, mirroring `Blueprint.jobs`:
 ///
-/// It is stricter than it looks for a reason: the value ends up in `factory/<issue>-<run>` and in
-/// `docs/factory/<issue>/`, so a `/` or a `..` here would be a path traversal three stages later.
+/// ```python
+/// issues.append(value if value.isdigit() else normalize_relative_path(value, field="conf.issues"))
+/// ```
+///
+/// An earlier version of this applied `paths.validate_identifier` here — the rule that governs the
+/// *derived* issue id, the one that becomes `factory/<issue>-<run>` and `docs/factory/<issue>/`.
+/// That rule forbids `/`, which silently made the factory's own documented entry point
+/// (`--issue demo/issue.md`, a path to a front-matter file) unsubmittable. The identifier rule
+/// still applies, but three stages later and to a value the factory derives, not to the reference
+/// an operator types. Validating the wrong layer is how a client refuses work the server would
+/// have accepted.
 pub fn validate_issue(value: &str) -> std::result::Result<(), String> {
-    let bad = || {
-        "issue must be 1-128 characters: letters, digits, '.', '_' or '-', \
-         starting with a letter or digit"
-            .to_string()
-    };
     if value.is_empty() || value.chars().count() > MAX_ISSUE_CHARS {
-        return Err(bad());
+        return Err(format!("issue must be 1-{MAX_ISSUE_CHARS} characters"));
     }
-    let mut chars = value.chars();
-    match chars.next() {
-        Some(first) if first.is_ascii_alphanumeric() => {}
-        _ => return Err(bad()),
+    // A bare issue number is the common case and needs no path reasoning at all.
+    if value.chars().all(|c| c.is_ascii_digit()) {
+        return Ok(());
     }
-    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') {
-        return Err(bad());
+    // Otherwise it is a path to an issue file, held to `normalize_relative_path`: it has to stay
+    // inside the checkout, and it has to be unambiguous on every platform that will read it.
+    let bad = |why: &str| format!("issue {value:?} must be an issue number or a path {why}");
+    if value.chars().any(|c| c.is_control()) {
+        return Err(bad("without control characters"));
     }
-    if value == "." || value == ".." {
-        return Err(bad());
+    if value.trim() != value || value.contains('\\') {
+        return Err(bad("that is a clean POSIX relative path"));
+    }
+    if value.starts_with('/') || value.chars().nth(1) == Some(':') {
+        return Err(bad("that is relative, not absolute"));
+    }
+    if value.split('/').any(|part| part == "..") {
+        return Err(bad("that stays inside its root"));
+    }
+    if value == "." || value.split('/').all(|p| p.is_empty() || p == ".") {
+        return Err(bad("that names a file"));
     }
     Ok(())
 }
@@ -345,26 +359,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_issue_reference_must_be_something_a_branch_name_can_hold() {
-        for good in ["42", "PROJ-17", "a.b_c-9", "Z"] {
-            assert!(validate_issue(good).is_ok(), "{good}");
+    fn an_issue_reference_is_a_number_or_a_path_to_an_issue_file() {
+        // The factory's own documented entry point is a path, and the demo and the stress line
+        // both submit one. A client that refuses these refuses the product.
+        for good in [
+            "42",
+            "demo/issue.md",
+            "demo/issue2.md",
+            "PROJ-17",
+            "a.b_c-9",
+            "docs/issues/deep/nested.md",
+        ] {
+            assert!(validate_issue(good).is_ok(), "{good} must be accepted");
         }
+        // Traversal and platform ambiguity stay refused: this value is joined onto a checkout.
         for bad in [
             "",
             ".",
             "..",
-            "-lead",
-            ".lead",
-            "has space",
-            "a/b",
             "../etc/passwd",
-            "sem;icolon",
-            "é",
+            "demo/../../etc/passwd",
+            "/etc/passwd",
+            "C:\\Windows",
+            "demo\\issue.md",
+            " demo/issue.md",
+            "demo/issue.md ",
         ] {
             assert!(validate_issue(bad).is_err(), "{bad:?} must be refused");
         }
         assert!(validate_issue(&"a".repeat(128)).is_ok());
         assert!(validate_issue(&"a".repeat(129)).is_err());
+    }
+
+    /// The Python is the authority on this, so pin the two branches of its own expression:
+    /// `value if value.isdigit() else normalize_relative_path(value, field="conf.issues")`.
+    #[test]
+    fn the_digit_branch_and_the_path_branch_match_the_python_expression() {
+        assert!(
+            validate_issue("007").is_ok(),
+            "a digit string never sees path rules"
+        );
+        assert!(
+            validate_issue("1/2").is_ok(),
+            "not all-digits, so it is judged as a path"
+        );
+        assert!(
+            validate_issue("..").is_err(),
+            "not all-digits, and traversal is refused"
+        );
     }
 
     #[test]

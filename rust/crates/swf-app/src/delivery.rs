@@ -161,6 +161,16 @@ pub struct VerifyOpts {
     pub workdir: Option<PathBuf>,
     /// Keep the checkout after the run, for someone who wants to look at it.
     pub keep_checkout: bool,
+    /// Where the published branch actually lives, when it is not a GitHub repository.
+    ///
+    /// `scm = "local"` publishes to a bare repository in the run directory rather than to a forge,
+    /// and that branch is no less delivered for it: the stress line, the demo and every hermetic
+    /// test produce exactly this shape. Without a way to name it, `verify --clone` could only ever
+    /// attest deliveries that reached GitHub, which would quietly redefine "independently
+    /// verified" as "verified if you paid for a forge".
+    pub origin: Option<String>,
+    /// The published branch, when there is no pull request to read it from.
+    pub branch: Option<String>,
 }
 
 impl Default for VerifyOpts {
@@ -173,6 +183,8 @@ impl Default for VerifyOpts {
             test_timeout: TEST_TIMEOUT,
             workdir: None,
             keep_checkout: false,
+            origin: None,
+            branch: None,
         }
     }
 }
@@ -228,14 +240,21 @@ pub async fn verify(
     // --- Verified: what this process re-derived from the branch itself. ---
     let mut tests = None;
     if opts.clone {
-        let repo = opts
-            .repo
-            .clone()
-            .or_else(|| context.repo.clone())
-            .ok_or_else(|| {
-                OpsError::operational("verification needs a repo; this context does not name one")
-                    .with_hint("swf deliveries verify … --repo owner/name")
-            })?;
+        // A named origin already says where to clone from, so it stands in for the repo: a
+        // local-remote delivery has no `owner/name` and does not need one.
+        let repo = match (
+            &opts.origin,
+            opts.repo.clone().or_else(|| context.repo.clone()),
+        ) {
+            (Some(_), named) => named.unwrap_or_default(),
+            (None, Some(named)) => named,
+            (None, None) => {
+                return Err(OpsError::operational(
+                    "verification needs a repo; this context does not name one",
+                )
+                .with_hint("swf deliveries verify … --repo owner/name (or --from <remote>)"))
+            }
+        };
         let (rerun, evidence) = rerun_tests(commands, &repo, &target, opts, cancel).await;
         checks.extend(rerun);
         tests = evidence;
@@ -504,13 +523,29 @@ fn published_checks(lookup: &PrLookup, target: &Target, opts: &VerifyOpts) -> Ve
             return out;
         }
         PrLookup::Missing => {
-            out.push(Evidence::fail(
-                "pr.exists",
-                EvidenceLevel::Published,
-                "no pull request has this branch as its head",
-                format!("a pull request whose head is {}", target.branch),
-                "none",
-            ));
+            // A delivery published to a named remote rather than to a forge is still published,
+            // and `scm = "local"` produces exactly that: the demo, the stress line and every
+            // hermetic run put the branch in a bare repository instead of on GitHub. Asking the
+            // forge about it and calling the "no" a failure would report every local delivery as
+            // unpublished — a verdict about where the branch is not, dressed up as a verdict about
+            // whether it exists. So when the operator named the origin, the forge's answer is
+            // simply not the question, and `branch.in_origin` (recorded by the clone, below)
+            // settles the level instead.
+            if opts.origin.is_some() {
+                out.push(Evidence::skipped(
+                    "pr.exists",
+                    EvidenceLevel::Published,
+                    "this delivery was published to a named remote, not to a forge",
+                ));
+            } else {
+                out.push(Evidence::fail(
+                    "pr.exists",
+                    EvidenceLevel::Published,
+                    "no pull request has this branch as its head",
+                    format!("a pull request whose head is {}", target.branch),
+                    "none",
+                ));
+            }
             return out;
         }
         PrLookup::Found(pr) => pr,
@@ -608,7 +643,14 @@ async fn rerun_tests(
     cancel: &CancellationToken,
 ) -> (Vec<Evidence>, Option<TestEvidence>) {
     let mut out = Vec::new();
-    if target.branch.is_empty() {
+    // `--branch` names the ref when there is no pull request to read it from; a forge delivery
+    // still takes it from the PR head, which is the only trustworthy source when one exists.
+    let branch = if target.branch.is_empty() {
+        opts.branch.clone().unwrap_or_default()
+    } else {
+        target.branch.clone()
+    };
+    if branch.is_empty() {
         out.push(Evidence::unavailable(
             "tests.rerun",
             EvidenceLevel::Verified,
@@ -643,7 +685,10 @@ async fn rerun_tests(
     };
     let checkout = scratch.path().join("checkout");
     let checkout_str = checkout.display().to_string();
-    let url = format!("https://github.com/{repo}.git");
+    let url = opts
+        .origin
+        .clone()
+        .unwrap_or_else(|| format!("https://github.com/{repo}.git"));
 
     let mut plan: Vec<Vec<String>> = vec![argv(&[
         "git",
@@ -663,7 +708,7 @@ async fn rerun_tests(
         "--depth",
         CLONE_DEPTH,
         "origin",
-        &target.branch,
+        &branch,
     ]));
     plan.push(argv(&[
         "git",
@@ -698,8 +743,17 @@ async fn rerun_tests(
     out.push(Evidence::pass(
         "branch.exists",
         EvidenceLevel::Verified,
-        format!("{} was cloned from {url}", target.branch),
+        format!("{branch} was cloned from {url}"),
     ));
+    if opts.origin.is_some() {
+        // Fetching the ref out of the remote is a stronger answer than any forge API gives: the
+        // branch is not merely reported to exist, its commits are now on this disk.
+        out.push(Evidence::pass(
+            "branch.in_origin",
+            EvidenceLevel::Published,
+            format!("{branch} was fetched from {url}"),
+        ));
+    }
 
     // The contract comes out of the checkout, never out of the operator's working copy: the point
     // of the exercise is that the branch says how to test itself.
