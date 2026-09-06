@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   format:
-    if: ${{ !contains(github.event.head_commit.message, 'chore: apply automated formatting') }}
+    if: "${{ !contains(github.event.head_commit.message, 'chore: apply automated formatting') }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
