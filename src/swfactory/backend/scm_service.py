@@ -2,7 +2,7 @@
 
 Airflow workers may construct a patch, but they never receive GitHub publication credentials. The
 backend validates the current cell epoch/policy, journals the logical publication and reconciles an
-ambiguous retry by observing the deterministic branch/PR before any replay.
+ambiguous retry by proving the desired patch digest is already attached to the deterministic PR.
 """
 
 from __future__ import annotations
@@ -13,13 +13,13 @@ from typing import Any
 
 from swfactory.idempotency import MutationOutcome, OperationRef
 from swfactory.lifecycle_evidence import TraceContext
-from swfactory.models import Issue
 from swfactory.scm import GitHubScm
 from swfactory.security_contract import MutationEnvelope
 
 from .service import Factory, Refused, text
 
 MAX_PATCH_BYTES = 12 * 1024 * 1024
+_MARKER_PREFIX = "<!-- swfactory-patch-sha256:"
 
 
 def operation(factory: Factory, path: str, body: dict[str, Any]) -> Any:
@@ -88,6 +88,8 @@ def _publish(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str
     if len(patch) > MAX_PATCH_BYTES:
         raise ValueError("patch exceeds backend publication limit")
     patch_digest = hashlib.sha256(patch).hexdigest()
+    marker = f"{_MARKER_PREFIX}{patch_digest} -->"
+    publish_body = pr_body.rstrip() + "\n\n" + marker + "\n"
     ref = OperationRef(
         envelope.cell_id,
         envelope.epoch,
@@ -100,26 +102,41 @@ def _publish(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str
             branch=branch,
             patch=patch,
             title=title,
-            body=pr_body,
+            body=publish_body,
             labels=labels,
             allowed_prefixes=allowed,
         )
         return {"url": url, "branch": branch, "patch_sha256": patch_digest}
 
     def reconcile() -> MutationOutcome:
-        existing = scm._open_pr_url(branch)
-        if existing:
+        rows = factory._gh(
+            [
+                "pr", "list", "--head", branch, "--state", "open", "--limit", "1",
+                "--json", "url,body,headRefOid",
+            ]
+        )
+        if not rows:
+            return MutationOutcome(
+                "definitely_absent",
+                None,
+                {"branch": branch},
+                "no open PR exists for deterministic branch",
+            )
+        row = rows[0]
+        observed_body = str(row.get("body") or "")
+        observed_url = str(row.get("url") or "")
+        if marker in observed_body:
             return MutationOutcome(
                 "committed",
-                {"url": existing, "branch": branch, "patch_sha256": patch_digest},
-                {"branch": branch, "url": existing},
-                "deterministic branch already has an open PR",
+                {"url": observed_url, "branch": branch, "patch_sha256": patch_digest},
+                {"branch": branch, "url": observed_url, "head": row.get("headRefOid")},
+                "PR carries the desired patch digest marker",
             )
         return MutationOutcome(
-            "definitely_absent",
+            "divergent",
             None,
-            {"branch": branch},
-            "no open PR exists for deterministic branch",
+            {"branch": branch, "url": observed_url, "head": row.get("headRefOid")},
+            "an open PR exists but does not prove the desired patch digest",
         )
 
     result = factory.control.mutate(ref, publish, replay_safe=True, reconcile=reconcile)
@@ -155,8 +172,10 @@ def _open_issue(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[
     def create() -> dict[str, Any]:
         return {"url": scm.open_issue(title=title, body=issue_body, labels=labels)}
 
-    # Issue creation cannot be proved absent from title alone, so an interrupted attempt is left
-    # in-doubt for the reconciler/operator instead of risking a duplicate issue.
     result = factory.control.mutate(ref, create, replay_safe=False, reconcile=None)
-    factory.evidence.mutation(envelope, kind="github_issue", payload={"url": result["url"], "title": title})
+    factory.evidence.mutation(
+        envelope,
+        kind="github_issue",
+        payload={"url": result["url"], "title": title},
+    )
     return result
