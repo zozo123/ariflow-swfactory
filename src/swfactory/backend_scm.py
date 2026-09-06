@@ -7,6 +7,7 @@ through the authenticated Python backend. No GH_TOKEN/GITHUB_TOKEN is needed in 
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import urllib.error
 import urllib.request
@@ -67,7 +68,8 @@ class BackendScm:
         labels: Sequence[str],
         allowed_prefixes: Sequence[str] | None = None,
     ) -> str:
-        operation_key = f"github_publish:{branch}"
+        patch_digest = hashlib.sha256(patch).hexdigest()
+        operation_key = f"github_publish:{branch}:{patch_digest[:24]}"
         value = self._post(
             "/scm/publish",
             {
@@ -88,8 +90,6 @@ class BackendScm:
         return url
 
     def open_issue(self, *, title: str, body: str, labels: Sequence[str]) -> str:
-        import hashlib
-
         digest = hashlib.sha256((title + "\0" + body).encode()).hexdigest()[:24]
         value = self._post(
             "/scm/open-issue",
@@ -149,5 +149,9 @@ class BackendScm:
             raise StageError("scm", "factory backend SCM returned invalid JSON") from error
         if status >= 300:
             detail = value.get("detail", f"HTTP {status}") if isinstance(value, dict) else f"HTTP {status}"
-            raise StageError("scm", f"factory backend SCM refused operation: {detail}", retryable=status >= 500)
+            raise StageError(
+                "scm",
+                f"factory backend SCM refused operation: {detail}",
+                retryable=status >= 500,
+            )
         return value
