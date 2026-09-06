@@ -76,7 +76,7 @@ def main() -> None:
     )
     replace(
         "src/swfactory/durable_admission.py",
-        '                "UPDATE admission_work SET sequence=?,updated_at=? WHERE work_id=? AND state=\'queued\'",',
+        "                \"UPDATE admission_work SET sequence=?,updated_at=? WHERE work_id=? AND state='queued'\",",
         '                "UPDATE admission_work SET sequence=?,updated_at=? "\n                "WHERE work_id=? AND state=\'queued\'",',
     )
     replace(
@@ -86,8 +86,8 @@ def main() -> None:
     )
     replace(
         "src/swfactory/lifecycle_evidence.py",
-        '''        if key in {\n            "repo",\n            "blueprint",\n            "generation",\n            "provider",\n            "stage",\n            "state",\n            "kind",\n            "result",\n        }:\n            if "cell_" in lower or "run_" in lower or len(value) > 128:\n                raise ValueError(f"metric label {key} appears high-cardinality")''',
-        '''        if key in {\n            "repo",\n            "blueprint",\n            "generation",\n            "provider",\n            "stage",\n            "state",\n            "kind",\n            "result",\n        } and ("cell_" in lower or "run_" in lower or len(value) > 128):\n            raise ValueError(f"metric label {key} appears high-cardinality")''',
+        """        if key in {\n            "repo",\n            "blueprint",\n            "generation",\n            "provider",\n            "stage",\n            "state",\n            "kind",\n            "result",\n        }:\n            if "cell_" in lower or "run_" in lower or len(value) > 128:\n                raise ValueError(f"metric label {key} appears high-cardinality")""",
+        """        if key in {\n            "repo",\n            "blueprint",\n            "generation",\n            "provider",\n            "stage",\n            "state",\n            "kind",\n            "result",\n        } and ("cell_" in lower or "run_" in lower or len(value) > 128):\n            raise ValueError(f"metric label {key} appears high-cardinality")""",
     )
     replace(
         "src/swfactory/trust_evidence.py",

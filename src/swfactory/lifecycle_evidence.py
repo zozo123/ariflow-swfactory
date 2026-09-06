@@ -1,7 +1,7 @@
 """Cell-scoped lifecycle evidence, deterministic tracing and cost ledger.
 
-This is the single write facade lifecycle code should converge on.  High-cardinality identifiers live
-in append-only evidence, not aggregate metric labels.
+This is the single write facade lifecycle code should converge on. High-cardinality identifiers
+live in append-only evidence, not aggregate metric labels.
 """
 
 from __future__ import annotations
@@ -281,6 +281,5 @@ def validate_metric_labels(labels: Mapping[str, str]) -> None:
             "state",
             "kind",
             "result",
-        }:
-            if "cell_" in lower or "run_" in lower or len(value) > 128:
-                raise ValueError(f"metric label {key} appears high-cardinality")
+        } and ("cell_" in lower or "run_" in lower or len(value) > 128):
+            raise ValueError(f"metric label {key} appears high-cardinality")

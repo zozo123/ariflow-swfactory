@@ -70,7 +70,8 @@ class SQLiteBackendStore:
             if expected_version is None:
                 try:
                     self.db.execute(
-                        "INSERT INTO backend_state(key,version,value_json,updated_at) VALUES(?,1,?,?)",
+                        "INSERT INTO backend_state(key,version,value_json,updated_at) "
+                        "VALUES(?,1,?,?)",
                         (key, payload, now),
                     )
                     return 1
@@ -78,7 +79,8 @@ class SQLiteBackendStore:
                     raise VersionConflict(key) from exc
             next_version = expected_version + 1
             cur = self.db.execute(
-                "UPDATE backend_state SET version=?,value_json=?,updated_at=? WHERE key=? AND version=?",
+                "UPDATE backend_state SET version=?,value_json=?,updated_at=? "
+                "WHERE key=? AND version=?",
                 (next_version, payload, now, key, expected_version),
             )
             if cur.rowcount != 1:
@@ -97,7 +99,8 @@ class SQLiteBackendStore:
             expires = now + ttl_s
             self.db.execute(
                 "INSERT INTO backend_leases(key,owner,epoch,expires_at) VALUES(?,?,?,?) "
-                "ON CONFLICT(key) DO UPDATE SET owner=excluded.owner,epoch=excluded.epoch,expires_at=excluded.expires_at",
+                "ON CONFLICT(key) DO UPDATE SET owner=excluded.owner,epoch=excluded.epoch,"
+                "expires_at=excluded.expires_at",
                 (key, owner, epoch, expires),
             )
         return Lease(key, owner, epoch, expires)

@@ -196,8 +196,9 @@ class DurableAdmission:
         now = time.time()
         with self.db:
             cur = self.db.execute(
-                """UPDATE admission_work SET state=?,reason='cell_terminal',terminal_at=?,updated_at=?
-                   WHERE work_id=? AND state='active' AND cell_id=? AND cell_epoch=?""",
+                "UPDATE admission_work SET state=?,reason='cell_terminal',"
+                "terminal_at=?,updated_at=? "
+                "WHERE work_id=? AND state='active' AND cell_id=? AND cell_epoch=?",
                 (state, now, now, work_id, cell_id, epoch),
             )
         if cur.rowcount != 1:
@@ -259,7 +260,8 @@ class DurableAdmission:
                 block = CapacityBlock("rate_limit", 1, 0, throttle)
             if block is not None:
                 self._set_limiting(item.work_id, block)
-                # Another class may still fit, so temporarily mark this sequence skipped for this pass.
+                # Another class may still fit, so temporarily mark this sequence
+                # skipped for this pass.
                 if not self._any_other_candidate(item.work_id):
                     break
                 self._defer_sequence(item.work_id)
@@ -331,7 +333,8 @@ class DurableAdmission:
     def _record_service(self, priority: Priority) -> None:
         with self.db:
             self.db.execute(
-                "UPDATE admission_fairness SET deficit=MAX(deficit-1,0),served=served+1 WHERE priority=?",
+                "UPDATE admission_fairness SET deficit=MAX(deficit-1,0),served=served+1 "
+                "WHERE priority=?",
                 (int(priority),),
             )
 
@@ -349,7 +352,8 @@ class DurableAdmission:
         seq = self._next_sequence()
         with self.db:
             self.db.execute(
-                "UPDATE admission_work SET sequence=?,updated_at=? WHERE work_id=? AND state='queued'",
+                "UPDATE admission_work SET sequence=?,updated_at=? "
+                "WHERE work_id=? AND state='queued'",
                 (seq, time.time(), work_id),
             )
 

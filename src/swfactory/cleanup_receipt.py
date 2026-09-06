@@ -1,7 +1,8 @@
 """Versioned cleanup receipts and bounded repair leases.
 
-Cleanup is a convergent external mutation, not a best-effort `close()` side effect.  Providers report
-what they observed; callers decide whether that observation is authoritative for the current cell
+Cleanup is a convergent external mutation, not a best-effort `close()` side effect. Providers
+report what they observed; callers decide whether that observation is authoritative for the current
+cell
 epoch.
 """
 
@@ -141,7 +142,8 @@ class RepairLeaseStore:
         expires = now + ttl_s
         with self.db:
             cur = self.db.execute(
-                "UPDATE repair_leases SET expires_at=? WHERE lease_key=? AND owner=? AND lease_epoch=?",
+                "UPDATE repair_leases SET expires_at=? "
+                "WHERE lease_key=? AND owner=? AND lease_epoch=?",
                 (expires, lease.key, lease.owner, lease.epoch),
             )
         if cur.rowcount != 1:

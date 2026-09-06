@@ -126,7 +126,10 @@ class ControlKernel:
         )
 
     def record_cleanup(self, receipt: CleanupReceipt) -> dict[str, Any]:
-        """Return the canonical receipt document; persistence is the operation/evidence layer's job."""
+        """Return the canonical receipt document.
+
+        Persistence is the operation/evidence layer's job.
+        """
         return receipt.to_dict()
 
     def snapshot(self, *, limit: int = 100) -> dict[str, Any]:

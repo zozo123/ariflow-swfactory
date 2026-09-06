@@ -726,7 +726,10 @@ class Factory:
                         "name": tool,
                         "status": "ok" if present else "warn",
                         "required": False,
-                        "detail": f"backend tool installed={present}, configured={configured}; credentials not probed",
+                        "detail": (
+                            f"backend tool installed={present}, configured={configured}; "
+                            "credentials not probed"
+                        ),
                         "fix": "" if present else f"install {tool} on the backend if needed",
                     }
                 )

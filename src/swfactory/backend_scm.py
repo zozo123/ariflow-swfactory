@@ -1,7 +1,8 @@
 """SCM adapter for backend-managed Airflow jobs.
 
-The worker can read local issue files itself, but numeric GitHub issue reads and all GitHub writes go
-through the authenticated Python backend. No GH_TOKEN/GITHUB_TOKEN is needed in the worker process.
+The worker can read local issue files itself, but numeric GitHub issue reads and all GitHub
+writes go through the authenticated Python backend. No GH_TOKEN/GITHUB_TOKEN is needed in the
+worker process.
 """
 
 from __future__ import annotations
