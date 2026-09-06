@@ -311,8 +311,23 @@ a stable exit code: 1 operational, 2 usage, 3 not found, 4 authentication, 5 unr
 conflict. The config file stores the *name* of the environment variable holding a credential and
 never a value. `swf` runs no stage: Airflow schedules and Python executes, exactly as before. Read
 [docs/swf.md](docs/swf.md) for the full command table, the JSON contract, the key map and the
-security posture. Release tarballs are attached to each GitHub Release, one per platform, with a
-`SHA256SUMS` file.
+security posture.
+
+Install it from any GitHub Release: one `swf-<version>-<target>.tar.gz` per platform — Apple silicon
+and Intel macOS, `x86_64` and `aarch64` Linux — each carrying the binary and bash, zsh and fish
+completions, plus a `SHA256SUMS` covering every asset. Verify the download, then put it on `$PATH`:
+
+```sh
+curl -fLO ".../releases/download/v2.1.0/swf-2.1.0-aarch64-apple-darwin.tar.gz"
+curl -fLO ".../releases/download/v2.1.0/SHA256SUMS"
+shasum -a 256 --ignore-missing -c SHA256SUMS
+tar xzf swf-2.1.0-aarch64-apple-darwin.tar.gz
+install -m 0755 swf-2.1.0-aarch64-apple-darwin/swf ~/.local/bin/swf
+```
+
+From a checkout instead: `cargo build --release --manifest-path rust/Cargo.toml`. Full instructions,
+including completions and the macOS quarantine flag, are in
+[docs/swf.md](docs/swf.md#install).
 
 ## Grow useful information and remove noise
 
@@ -347,7 +362,7 @@ Compatibility is explicit:
 
 - Python `>=3.12,<3.13`
 - Apache Airflow `3.3.1`, with an upstream-main canary in CI
-- blueprint schema `version = 1`, read by swfactory `2.0.x`
+- blueprint schema `version = 1`, read by swfactory `2.1.x`
 - the `swf` operator binary: Rust `1.82` or newer to build, prebuilt for macOS (Apple silicon and
   Intel) and Linux (`x86_64` and `aarch64`)
 - GitHub delivery and a local Git remote for the keyless demo
@@ -386,10 +401,24 @@ The public skill teaches an agent how to design, adopt, operate, and audit this 
 
 ## Evidence and project status
 
-The current release is `2.0.1`. [PR #2](https://github.com/zozo123/ariflow-swfactory/pull/2)
-records a blocked run; [PR #3](https://github.com/zozo123/ariflow-swfactory/pull/3) records a clean
-run that stopped at human merge. This project is alpha. Read [SECURITY.md](SECURITY.md) before
-connecting a production repository.
+The current release is `2.1.0`, the first to publish the `swf` operator binary.
+[PR #2](https://github.com/zozo123/ariflow-swfactory/pull/2) records a blocked run;
+[PR #3](https://github.com/zozo123/ariflow-swfactory/pull/3) records a clean run that stopped at
+human merge.
+
+Each figure below is printed by the command beside it, so a reader can re-derive it instead of
+believing it. The first three also run in CI on every pull request and every push to `main`; the
+fourth needs a live Airflow, so it is run by hand before a release.
+
+| Check | Re-derive it with | Result |
+|---|---|---|
+| Python suite | `uv run pytest -q` | 617 passed, 1 skipped |
+| Rust suite | `cargo test --manifest-path rust/Cargo.toml --workspace` | 452 passed |
+| Contract equivalence | `cargo test -p swf-domain --test contract -- --nocapture` | 123 cases over 8 fixture files, asserted in both languages |
+| Live acceptance | `scripts/swf_e2e.sh` | 2 issues × 2 targets, 8 approval gates, 4 deliveries verified from a fresh clone |
+
+This project is alpha. Read [SECURITY.md](SECURITY.md) before connecting a production
+repository.
 
 ## Repository map
 

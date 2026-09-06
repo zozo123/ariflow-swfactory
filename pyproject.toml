@@ -1,6 +1,6 @@
 [project]
 name = "swfactory"
-version = "2.0.1"
+version = "2.1.0"
 description = "Apache Airflow software factory: GitHub work orders become verified pull requests through isolated agent work cells and human release gates."
 readme = "README.md"
 license = "Apache-2.0"
@@ -36,7 +36,7 @@ Changelog = "https://github.com/zozo123/ariflow-swfactory/blob/main/CHANGELOG.md
 swfactory = "swfactory.cli:app"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.12"]
+dev = ["pytest>=8", "ruff>=0.12", "pyte>=0.8"]
 # Default: the latest Airflow RELEASE. `common-ai` ships Airflow's own sandbox toolset, so
 # `--sandbox toolset` works with the sbx backend (SWF_TOOLSET_BACKEND, default sbx) once the
 # `sbx` binary is on PATH; there is no --backend flag.

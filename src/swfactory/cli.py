@@ -383,7 +383,10 @@ def webhook_deliveries(
     limit: Annotated[int, typer.Option(min=1, max=1000)] = 50,
     as_json: Annotated[bool, typer.Option("--json", help="one JSON document")] = False,
 ) -> None:
-    """Inspect dispatch receipts; dispatched means Airflow accepted work, not that its run passed."""
+    """Inspect dispatch receipts.
+
+    "dispatched" means Airflow accepted the work, not that its run passed.
+    """
     import sqlite3
 
     queue = _webhook_inbox(inbox)

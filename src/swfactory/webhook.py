@@ -21,6 +21,7 @@ manager; ``POST /api/v2/dags/{dag_id}/dagRuns`` with ``TriggerDAGRunPostBody``).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import ipaddress
@@ -530,10 +531,10 @@ def make_handler(
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            try:
+            # An acknowledged-in-storage delivery survives a disconnected sender: the receipt is
+            # already durable, so failing to write the response body changes nothing that matters.
+            with contextlib.suppress(OSError):
                 self.wfile.write(data)
-            except OSError:
-                pass  # An acknowledged-in-storage delivery survives a disconnected sender.
             summary = doc.get("dag_id") or doc.get("error") or doc.get("event") or ""
             safe_delivery = re.sub(r"[^A-Za-z0-9_-]", "?", delivery)[:128]
             emit(f"webhook {self.command} -> {status} delivery={safe_delivery} {summary!r}")

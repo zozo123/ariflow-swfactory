@@ -49,6 +49,7 @@ Require these invariants:
 - review reads a baseline-to-HEAD diff and cannot approve around a blocker.
 - gates bind the approver, decision, timestamp, and exact artifact digest.
 - delivery accepts only reviewed commits plus orchestrator-owned evidence.
+- reported, published, and independently verified are recorded as three fields, never one.
 - rejected and blocked work remains visible; it is never relabeled as success.
 
 The swfactory blueprint defines one production route. Astronomer Blueprint can compose that route
@@ -82,23 +83,35 @@ Keep authoritative gate, baseline, review, and cost state outside the agent-writ
 delivery. Commit through the factory identity with run, stage, and agent provenance. The delivery
 credential stays in the orchestrator, never in the coding cell.
 
-## Operate the repository
+## Operate through one operations layer
+
+Every operator face — a script, a terminal UI, a chat responder, a monitoring probe — belongs over
+one shared operations layer that owns validation, readiness, and the write itself. A face that
+decides for itself is a second policy, and only one of two policies ever gets fixed. Read
+[references/operator-interface.md](references/operator-interface.md) before building or auditing
+one: it covers gate readiness, the three levels of delivery evidence, exit codes a script can trust,
+and paging a control plane that clamps `limit` without saying so.
 
 Prefer the repository's own commands and documentation over copied instructions:
 
 ```bash
 uv sync
-uv run swfactory doctor
+uv run swfactory doctor                            # readiness, before any live run
 uv run swfactory demo
 uv run swfactory run --blueprint factory --issue 42
-uv run swfactory herd
-uv run swfactory metrics
+uv run swfactory herd                              # the Python control room
 ```
 
+`swf` is the same factory from a native binary that needs no Python — `swf doctor`, `swf submit`,
+`swf attention`, `swf gates approve`, `swf deliveries verify --clone`, `swf tui`. Its commands and
+its keystrokes share one `Ops` layer (`rust/crates/swf-app/`), and `swf snapshot --json` must
+describe the same factory as `swfactory herd --once --json` — `scripts/snapshot_diff.py` diffs the
+two against one live server — so the two control rooms are held together by a diff rather than by
+intent. See `docs/swf.md`.
+
 For production, use Airflow's API or GitHub webhook path, keep approval tasks assigned, and retain
-Airflow logs plus the committed evidence chain. Use `swfactory doctor` before a live run. Do not run
-the real agent in the local sandbox unless the user explicitly accepts that development escape
-hatch.
+Airflow logs plus the committed evidence chain. Do not run the real agent in the local sandbox
+unless the user explicitly accepts that development escape hatch.
 
 ## Handle failure as product output
 
@@ -111,5 +124,6 @@ Classify failures before retrying:
 - stop before publication if the patch scope, artifact hashes, baseline, or workspace cleanliness
   cannot be proven.
 
-When reporting the result, state the route used, target, boundary, gate decisions, verification
-evidence, review disposition, PR URL if created, and anything intentionally not executed.
+When reporting the result, state the route used, target, boundary, gate decisions, review
+disposition, PR URL if created, and anything intentionally not executed. State verification
+evidence at the level it actually reaches — reported, published, or independently verified.

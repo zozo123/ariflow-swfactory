@@ -6,9 +6,23 @@ name: release
 # both checked before anything is built, so a mistyped or undocumented tag fails loudly and
 # leaves no half-made release behind. Re-running on an existing release also fails rather than
 # silently overwriting published artifacts; delete the release first if that is really the intent.
+#
+# The manual trigger exists because the alternative way to find out whether the four-target build
+# still works is to publish a release and watch it fail. A dry run takes the same path as a real
+# one — same gate, same builds, same archives, same SHA256SUMS — and diverges only at the last
+# step, where the assets go to the run's artifacts instead of to a release. Nothing is created,
+# uploaded or tagged. Untick `dry_run` only to finish a release whose tag already exists and whose
+# publish leg failed after the builds passed — and start that run from the tag itself, not from a
+# branch: the gate refuses to publish assets built from a commit the tag does not name.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Rehearse only: build and checksum every target, publish nothing"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -18,11 +32,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # The gate has run by the time anything else starts, so every later job can take the version
-    # it resolved instead of re-deriving it from the tag and disagreeing about the answer.
+    # it resolved instead of re-deriving it from the tag and disagreeing about the answer. `tag`
+    # is resolved here too: on a manual run GITHUB_REF_NAME is a branch, so a publish step that
+    # reads it directly would try to release a branch name.
     outputs:
       version: ${{ steps.notes.outputs.version }}
+      tag: ${{ steps.notes.outputs.tag }}
+      dry_run: ${{ steps.notes.outputs.dry_run }}
     env:
       GH_TOKEN: ${{ github.token }}
+      # `github.event.inputs.*` is defined (empty) on every event; the `inputs` context is not.
+      DRY_RUN_INPUT: ${{ github.event.inputs.dry_run }}
     steps:
       - uses: actions/checkout@v6
 
@@ -30,16 +50,37 @@ jobs:
         id: notes
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          case "$version" in
-            [0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1 ;;
-          esac
+
+          # A rehearsal that skipped the gate would not rehearse the gate, so a dry run resolves the
+          # version and extracts the CHANGELOG body exactly as a real one does, and every build,
+          # archive and checksum below is the same. Two things it cannot rehearse, because they are
+          # about a tag that does not exist yet: the tag/commit checks, and `gh release create`.
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$DRY_RUN_INPUT" != "false" ]; then
+            dry_run=true
+          else
+            dry_run=false
+          fi
 
           declared=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
-          if [ "$declared" != "$version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match pyproject version $declared; bump the version, commit, then re-tag"
-            exit 1
+          case "$declared" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::pyproject.toml version '$declared' is not X.Y.Z"; exit 1 ;;
+          esac
+
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            case "$version" in
+              [0-9]*.[0-9]*.[0-9]*) ;;
+              *) echo "::error::tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1 ;;
+            esac
+            if [ "$declared" != "$version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match pyproject version $declared; bump the version, commit, then re-tag"
+              exit 1
+            fi
+            tag="$GITHUB_REF_NAME"
+          else
+            version="$declared"
+            tag="v$version"
           fi
 
           # The CHANGELOG section between `## [X.Y.Z]` and the next `## [` heading.
@@ -54,12 +95,38 @@ jobs:
             exit 1
           fi
 
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "::error::release $GITHUB_REF_NAME already exists; delete it before re-running"
-            exit 1
+          if [ "$dry_run" = false ]; then
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "::error::release $tag already exists; delete it before re-running"
+              exit 1
+            fi
+            # A manual publish is not triggered by a tag push, so the tag it names may not exist.
+            # `gh release create --verify-tag` would discover that only in the last step, after
+            # four platforms have been built for nothing; it is cheaper to know here.
+            tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha 2>/dev/null || true)
+            if [ -z "$tagged" ]; then
+              echo "::error::tag $tag does not exist; git tag $tag && git push origin $tag"
+              exit 1
+            fi
+            # A tag push checks out the tag. A workflow_dispatch checks out the BRANCH it was
+            # started from, which can have moved on from — or never contained — the commit the tag
+            # names. Every job below builds from this checkout and the release is published under
+            # $tag, so without this the assets on a tag can come from a tree that tag never
+            # pointed at, quietly voiding "reproducible from the tag alone". `commits/$tag`
+            # dereferences annotated and lightweight tags alike, so compare the commit, not the ref.
+            if [ "$tagged" != "$GITHUB_SHA" ]; then
+              echo "::error::tag $tag is $tagged but this run builds $GITHUB_SHA; re-run this workflow from the tag, or push the tag at this commit"
+              exit 1
+            fi
+          else
+            echo "::notice::dry run for $version — every target is built and checksummed, nothing is published"
           fi
 
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "dry_run=$dry_run"
+          } >> "$GITHUB_OUTPUT"
           echo "Release body:"; cat "$notes"
 
       - uses: astral-sh/setup-uv@v6
@@ -105,6 +172,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -114,6 +183,18 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --manifest-path rust/Cargo.toml --release --locked -p swf-cli
+
+          # The archives are named from pyproject.toml, but the binary inside them carries
+          # rust/Cargo.toml's [workspace.package] version, and nothing else in this workflow
+          # compares the two. A forgotten workspace bump would therefore ship
+          # swf-2.1.0-<target>.tar.gz containing a `swf` that reports 2.0.1 — on every platform,
+          # discovered by an operator. This is the one leg that can run what it just built.
+          built=$(rust/target/release/swf --version | awk '{ print $NF }')
+          if [ "$built" != "$VERSION" ]; then
+            echo "::error::swf reports $built but this release is $VERSION; bump version in rust/Cargo.toml [workspace.package]"
+            exit 1
+          fi
+
           mkdir -p completions
           for shell in bash zsh fish; do
             rust/target/release/swf completions "$shell" > "completions/swf.$shell"
@@ -127,11 +208,12 @@ jobs:
 
   # One `swf` per platform an operator actually runs the factory from: Apple silicon and Intel
   # laptops, and the two Linux architectures the control plane is deployed on. Every leg builds
-  # from the tagged tree with --locked, so a released binary is reproducible from the tag alone.
-  # Both macOS slices come off one Apple-silicon runner because Apple's clang and SDK already
-  # cross-compile to x86_64; aarch64 Linux is the only leg that needs a foreign C toolchain, since
-  # ring is the one dependency here that compiles C. No `cross` container: the only thing that has
-  # to match is the target triple.
+  # from the tagged tree with --locked, so a released binary is reproducible from the tag alone
+  # and a drifting Cargo.lock fails the build instead of quietly resolving to something newer
+  # than what CI tested. Both macOS slices come off one Apple-silicon runner because Apple's clang
+  # and SDK already cross-compile to x86_64; aarch64 Linux is the only leg that needs a foreign C
+  # toolchain, since ring is the one dependency here that compiles C. No `cross` container: the
+  # only thing that has to match is the target triple.
   swf-binaries:
     needs: [release, swf-completions]
     timeout-minutes: 30
@@ -152,6 +234,9 @@ jobs:
       TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v6
+      # `targets:` is what installs the non-native std for this leg. Without it the two
+      # cross-compiled legs (x86_64 on an arm64 macOS runner, aarch64 on x86_64 Linux) fail at
+      # "can't find crate for `std`" rather than at link time.
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: "${{ matrix.target }}" }
       - uses: Swatinem/rust-cache@v2
@@ -160,9 +245,18 @@ jobs:
         with: { name: swf-completions, path: completions }
       - name: Install the aarch64 cross toolchain (ring compiles C; rustc needs a linker for it)
         if: matrix.cross_cc
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+          # Fail here if the package ever stops providing the prefixed driver, rather than in the
+          # build below with rustc's much vaguer "linker `aarch64-linux-gnu-gcc` not found".
+          aarch64-linux-gnu-gcc --version
       - name: Build swf for ${{ matrix.target }}
         env:
+          # rustc links with the host's cc unless told otherwise, and cc-rs compiles ring's C with
+          # the host's compiler unless told otherwise: without both of these the aarch64 leg
+          # builds x86_64 objects and dies at link. They are harmless on the other three legs,
+          # which never look at an aarch64-specific variable.
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
         run: >-
@@ -170,7 +264,15 @@ jobs:
           -p swf-cli --target "$TARGET"
       # A tarball, not a bare binary: it carries the executable bit through the GitHub CDN and
       # leaves room for the completions and the licence without a second asset per platform.
+      # The name is `swf-<version>-<target>.tar.gz` and the archive unpacks into a directory of
+      # the same name, so two versions or two platforms can sit in one download folder and be
+      # told apart, and so `tar xzf` never scatters files into the current directory.
       - name: Package swf-${{ needs.release.outputs.version }}-${{ matrix.target }}.tar.gz
+        env:
+          # macOS bsdtar otherwise records extended attributes (quarantine, provenance) that GNU
+          # tar reports as "Ignoring unknown extended header keyword" on every Linux extraction
+          # of a macOS-built archive.
+          COPYFILE_DISABLE: "1"
         run: |
           set -euo pipefail
           name="swf-$VERSION-$TARGET"
@@ -178,8 +280,14 @@ jobs:
           mkdir -p "$stage/completions"
           cp "rust/target/$TARGET/release/swf" "$stage/swf"
           cp LICENSE README.md "$stage/"
+          # The completions come from the swf-completions job, so a packaging change that dropped
+          # them would still produce a valid-looking tarball; naming all three explicitly means
+          # cp fails instead.
           cp completions/swf.bash completions/swf.zsh completions/swf.fish "$stage/completions/"
           tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/$name.tar.gz" "$name"
+          # What a rehearsal is for: the architecture of the thing actually built, and the full
+          # file list, printed for a leg nobody can execute on its own runner.
+          file "$stage/swf"
           tar -tzf "$RUNNER_TEMP/$name.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
@@ -191,6 +299,9 @@ jobs:
   # half-populated release behind — the same property the version gate gives the tag. Assets are
   # moved by their exact interpolated names rather than globbed in, so a version mismatch fails
   # here, loudly, instead of publishing a release that is quietly missing a platform.
+  #
+  # A dry run walks all of this — collects the same assets under the same names, writes the same
+  # SHA256SUMS, extracts the same release body — and stops one step short of `gh release create`.
   publish:
     needs: [release, swf-binaries]
     runs-on: ubuntu-latest
@@ -200,6 +311,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.release.outputs.version }}
+      TAG: ${{ needs.release.outputs.tag }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v4
@@ -220,7 +332,8 @@ jobs:
             mv "$RUNNER_TEMP/artifacts/swf-$VERSION-$target.tar.gz" release/
           done
           # SHA256SUMS is written outside the directory it describes, then moved in, so it can
-          # never end up listing itself.
+          # never end up listing itself. One file covers every asset, so a verifier runs
+          # `shasum -a 256 -c SHA256SUMS` once instead of comparing six digests by eye.
           (cd release && shasum -a 256 -- *) > "$RUNNER_TEMP/SHA256SUMS"
           mv "$RUNNER_TEMP/SHA256SUMS" release/
           cat release/SHA256SUMS
@@ -232,10 +345,21 @@ jobs:
             on && /^## \[/ { exit }
             on { print }
           ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+
+      # The two ways this job can end. Exactly one of them runs.
+      - name: Keep the would-be release assets on the run instead of publishing them
+        if: needs.release.outputs.dry_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ needs.release.outputs.version }}-dry-run
+          path: release/
+          if-no-files-found: error
+
       - name: Create the GitHub Release
+        if: needs.release.outputs.dry_run != 'true'
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$TAG" \
             --verify-tag \
             --title "swfactory $VERSION" \
             --notes-file "$RUNNER_TEMP/release-notes.md" \
