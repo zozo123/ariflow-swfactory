@@ -234,21 +234,31 @@ use.
 | `opensandbox` | pending upstream: [apache/airflow#71676](https://github.com/apache/airflow/pull/71676) |
 | `asciibox` | pending upstream: [apache/airflow#71725](https://github.com/apache/airflow/pull/71725) |
 
-A pending backend fails with a message naming its pull request, never an import crash. To run on
-Airflow's development head with the islo backend, one command:
+A pending backend fails with a message naming its pull request. Install the development stack with
+Node 22+, pnpm 10.28.1 and uv available:
 
 ```sh
-./scripts/airflow_main.sh          # apache/airflow@main + common.ai from apache/airflow#71672
-./scripts/airflow_main.sh --pypi   # apache/airflow@main + the released provider (sbx only)
-uv sync --group airflow            # back to the pinned release
+./scripts/airflow_main.sh          # all packages + both UIs from one apache/airflow@main commit
+./scripts/airflow_main.sh --islo   # explicitly overlay the experimental common.ai islo fork
+./scripts/airflow_main.sh --pypi   # upstream core with the released common.ai provider
+uv run --no-sync pytest
+SWF_AIRFLOW_NO_SYNC=1 scripts/stress_airflow.sh
+uv sync --group airflow           # intentionally return to the pinned release
 ```
 
-It is a script rather than a locked dependency group on purpose: locking a git dependency on the
-Airflow monorepo clones roughly a gigabyte and pins a commit that is stale the next day. The
-optional `airflow-main-sandbox-toolset` CI job installs the same stack inline (it does not execute
-this script, so the two are kept in step by hand). Honest scope: that job is configured to import
-the backends and run unit coverage; `ToolsetSandbox` coverage uses a fake backend, so it does not
-prove a real `sbx` or islo cell through the adapter.
+`AIRFLOW_REF=<commit>` reproduces a snapshot. The installer checks installed Git provenance and
+package dependencies so a same-version release wheel cannot silently stand in for main. Both CI
+jobs invoke this same script. The main job runs the full suite and a live scheduler with eight
+admin-attributed HITL approvals, per-job test results, and delivery artifacts. The islo fork job
+remains experimental. The live scheduler uses the local sandbox and local Git remotes.
+
+`SWF_TEST_LIVE_TOOLSET=1 uv run --no-sync pytest tests/test_toolset_live.py` separately tests a real
+sbx microVM's command transport, file roundtrip, failure exit codes and teardown. It explicitly
+requests open networking and does not test confinement or full factory execution inside the VM.
+Normal factory runs still send restrictive `SandboxSpec` requirements. The sbx provider needs
+`SWF_TOOLSET_SBX_HOST_NETWORK_POLICY=deny-all` to acknowledge an already-configured host policy;
+this setting does not configure the host. Set `SWF_TOOLSET_SBX_IMAGE` to a factory-ready image
+with Git, test tools and the agent; the upstream Python-only image is insufficient for those jobs.
 
 The supported stack stays pinned to `apache-airflow==3.3.1`: production should not track a dev
 branch, while the `airflow-main` canary is configured to expose upstream drift. The GitHub delivery

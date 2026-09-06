@@ -1040,3 +1040,27 @@ def test_toolset_surfaces_truncation_and_termination() -> None:
     res = sb.run("pytest")
     assert res.exit_code == 1 and res.timed_out is True
     assert "stdout truncated" in res.stderr and "sandbox terminated" in res.stderr
+
+
+@pytest.mark.parametrize("backend", ["sbx", "islo"])
+def test_toolset_sbx_policy_options_are_backend_specific(monkeypatch, backend):
+    seen = {}
+
+    def load(name, **kwargs):
+        seen.update(kwargs)
+        return FakeBackend()
+
+    monkeypatch.setattr(sandbox_mod, "load_toolset_backend", load)
+    cfg = Config(
+        issue="42",
+        sandbox="toolset",
+        toolset_backend=backend,
+        toolset_sbx_host_network_policy="deny-all",
+        toolset_sbx_image="factory-image:test",
+    )
+    make_sandbox(cfg, "42")
+    assert seen == (
+        {"host_network_policy": "deny-all", "image": "factory-image:test"}
+        if backend == "sbx"
+        else {}
+    )

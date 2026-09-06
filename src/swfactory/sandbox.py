@@ -1115,8 +1115,14 @@ def make_sandbox(
         repo_root = cfg.toolset_workdir.rstrip("/") or "/workspace/repo"
         target = normalize_relative_path(cfg.target_dir, field="target_dir", allow_empty=True)
         workdir = posixpath.join(repo_root, target) if target else repo_root
+        backend_kwargs = {}
+        if cfg.toolset_backend == "sbx":
+            backend_kwargs = {
+                "host_network_policy": cfg.toolset_sbx_host_network_policy,
+                "image": cfg.toolset_sbx_image,
+            }
         return ToolsetSandbox(
-            load_toolset_backend(cfg.toolset_backend),
+            load_toolset_backend(cfg.toolset_backend, **backend_kwargs),
             workdir=workdir,
             env={k: os.environ[k] for k in claude_env if k in os.environ},
             allow_egress_to=_dedupe([*cfg.srt_allowed_domains, *SRT_CLAUDE_DOMAINS, "github.com"]),

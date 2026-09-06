@@ -14,6 +14,7 @@
 # Env: SWF_APPROVE=auto  do NOT answer the gates — let `gates[].auto` default them to Approve,
 #                        which the ApprovalOperator only does after timeout_h (1 h). Slow on
 #                        purpose: that is the unattended backstop, not the fast path.
+#      SWF_AIRFLOW_NO_SYNC=1 use the installed Airflow main overlay without reinstalling release.
 #      SWF_STRESS_KEEP=1 keep the work dir (standalone home, run dirs, logs) after exit.
 #
 # No keys and no network: scripted agent, local sandbox, local git remote. Exit code is non-zero
@@ -74,7 +75,12 @@ trap cleanup EXIT
 # One `uv run` to materialise/locate the venv, then the venv's own binaries: nothing else in this
 # script holds uv's lock, so a long `airflow standalone` cannot block another `uv run` (or be
 # blocked by one).
-PY="$(uv run --project "$REPO" --group airflow python -c 'import sys; print(sys.executable)')"
+if [ "${SWF_AIRFLOW_NO_SYNC:-}" = "1" ]; then
+  PY="$(uv run --no-sync --project "$REPO" python -c 'import sys; print(sys.executable)')"
+else
+  PY="$(uv run --project "$REPO" --group airflow python -c 'import sys; print(sys.executable)')"
+fi
+"$PY" -c 'import airflow; print("Live E2E Airflow:", airflow.__version__)'
 BIN="$(dirname "$PY")"
 [ -x "$BIN/airflow" ] || {
   echo "no airflow in $BIN — run: uv sync --group airflow" >&2
@@ -166,6 +172,10 @@ sys.exit(0 if all(data.get(p, {}).get("status") == "healthy" for p in parts) els
   sleep 1
   i=$((i + 1))
 done
+
+# Source installs must serve real dashboard/login HTML, not merely start the REST API.
+curl -fsS "$BASE/" >"$WORK/dashboard.html"
+curl -fsS "$BASE/auth/login" >"$WORK/login.html"
 
 # `airflow standalone` writes the admin password on first boot. The gates are answered as that
 # user, so approvals.json records a real HITL `responded_by_user` instead of "auto".
@@ -329,6 +339,7 @@ DAG's tasks used, so a row that cannot be found is a real divergence and not a g
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -357,6 +368,13 @@ for job in bp.jobs({"issues": sys.argv[4:]}):
         missing.append(f"job {idx}: no pr.md in {run_dir}")
     if not metrics.get("tests_passed"):
         missing.append(f"job {idx}: tests_passed={metrics.get('tests_passed')}")
+    expected_gates = [("intent", "approve"), ("plan", "approve")]
+    if [(a.get("gate"), a.get("decision")) for a in approvals] != expected_gates:
+        missing.append(f"job {idx}: missing or incorrect gate decisions: {approvals}")
+    if os.environ.get("SWF_APPROVE") != "auto" and any(
+        a.get("actor") != "admin" for a in approvals
+    ):
+        missing.append(f"job {idx}: approvals were not recorded as admin: {approvals}")
     rows.append(
         [
             str(idx),

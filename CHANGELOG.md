@@ -8,6 +8,14 @@ All notable changes to this project will be documented here. The format follows
 
 ### Added
 
+- Reproducible Airflow-main installation with commit provenance checks and both web UIs built
+  from source. The upstream common.ai sandbox provider is now the default development provider;
+  `--islo` explicitly selects the experimental fork.
+- Main CI runs the complete suite and live scheduler/HITL E2E without reinstalling the release.
+  Live E2E now verifies gate decisions and admin attribution, not just DAG success.
+- Configurable sbx host policy declaration and factory image, plus an opt-in real microVM
+  file/command/cleanup test.
+
 - Scheduled blueprints can declare `trigger.issues`; cron-created DAG runs use those issue inputs
   when no runtime configuration is present, while explicit run configuration still wins.
 - `swfactory doctor` now validates only the selected sandbox, agent, and SCM providers. It checks
