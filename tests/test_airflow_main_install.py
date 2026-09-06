@@ -37,3 +37,39 @@ def test_upstream_sbx_rejects_undeclared_network_policy():
     with pytest.raises(base.SandboxTerminalError, match="host policy"):
         sandbox.ensure()
     assert sandbox.sandbox_id is None
+
+
+@pytest.mark.parametrize("bad_field", ["url", "commit_id"])
+def test_islo_provenance_rejects_wrong_provider(monkeypatch, bad_field):
+    upstream_commit, provider_commit = "a" * 40, "b" * 40
+    fork = "https://github.com/zozo123/airflow.git"
+
+    class Distribution:
+        version = "0.8.0"
+
+        def __init__(self, name):
+            self.name = name
+
+        def read_text(self, name):
+            is_provider = self.name == verify_module.PACKAGES[-1]
+            source = {
+                "url": fork if is_provider else "https://github.com/apache/airflow.git",
+                "vcs_info": {"commit_id": provider_commit if is_provider else upstream_commit},
+            }
+            if is_provider:
+                if bad_field == "url":
+                    source["url"] = "https://github.com/wrong/airflow.git"
+                else:
+                    source["vcs_info"]["commit_id"] = "c" * 40
+            return json.dumps(source)
+
+    monkeypatch.setattr(verify_module.metadata, "distribution", Distribution)
+    with pytest.raises(RuntimeError, match="apache-airflow-providers-common-ai"):
+        verify_module.verify(
+            "--islo", upstream_commit, provider_repo=fork, provider_commit=provider_commit
+        )
+
+
+def test_islo_provenance_requires_resolved_provider():
+    with pytest.raises(ValueError, match="resolved provider"):
+        verify_module.verify("--islo", "a" * 40)

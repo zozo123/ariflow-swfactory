@@ -176,6 +176,11 @@ done
 # Source installs must serve real dashboard/login HTML, not merely start the REST API.
 curl -fsS "$BASE/" >"$WORK/dashboard.html"
 curl -fsS "$BASE/auth/login" >"$WORK/login.html"
+for page in dashboard login; do
+  grep -Eqi '<!doctype html|<html[[:space:]>]' "$WORK/$page.html" || {
+    echo "$page did not return HTML" >&2; exit 1;
+  }
+done
 
 # `airflow standalone` writes the admin password on first boot. The gates are answered as that
 # user, so approvals.json records a real HITL `responded_by_user` instead of "auto".

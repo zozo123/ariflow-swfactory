@@ -247,7 +247,8 @@ uv sync --group airflow           # intentionally return to the pinned release
 ```
 
 `AIRFLOW_REF=<commit>` reproduces a snapshot. The installer checks installed Git provenance and
-package dependencies so a same-version release wheel cannot silently stand in for main. Both CI
+package dependencies so a same-version release wheel cannot silently stand in for main. The islo
+overlay also resolves `AI_PROVIDER_REF` once and verifies both its repository URL and commit. Both CI
 jobs invoke this same script. The main job runs the full suite and a live scheduler with eight
 admin-attributed HITL approvals, per-job test results, and delivery artifacts. The islo fork job
 remains experimental. The live scheduler uses the local sandbox and local Git remotes.

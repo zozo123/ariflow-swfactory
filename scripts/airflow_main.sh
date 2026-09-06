@@ -13,15 +13,20 @@ esac
 [ "$#" -le 1 ] || { echo "expected at most one option" >&2; exit 2; }
 AIRFLOW_REF="${AIRFLOW_REF:-main}"
 UPSTREAM=https://github.com/apache/airflow.git
-if [[ "$AIRFLOW_REF" =~ ^[0-9a-f]{40}$ ]]; then
-  AIRFLOW_COMMIT="$AIRFLOW_REF"
-else
-  AIRFLOW_COMMIT="$(git ls-remote "$UPSTREAM" "$AIRFLOW_REF" "refs/heads/$AIRFLOW_REF" \
-    "refs/tags/$AIRFLOW_REF" "refs/tags/$AIRFLOW_REF^{}" | sort -k2 | tail -1 | cut -f1)"
-fi
-[[ "$AIRFLOW_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
-  echo "cannot resolve Airflow ref: $AIRFLOW_REF" >&2; exit 1;
+resolve_commit() {
+  local repo="$1" ref="$2" commit
+  if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+    commit="$ref"
+  else
+    commit="$(git ls-remote "$repo" "$ref" "refs/heads/$ref" \
+      "refs/tags/$ref" "refs/tags/$ref^{}" | sort -k2 | tail -1 | cut -f1)"
+  fi
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "cannot resolve $repo ref: $ref" >&2; return 1;
+  }
+  printf '%s\n' "$commit"
 }
+AIRFLOW_COMMIT="$(resolve_commit "$UPSTREAM" "$AIRFLOW_REF")"
 export AIRFLOW_COMMIT
 APACHE="git+$UPSTREAM@$AIRFLOW_COMMIT"
 echo "Installing apache/airflow@$AIRFLOW_COMMIT ($MODE)"
@@ -36,9 +41,11 @@ uv pip install \
 if [ "$MODE" = --islo ]; then
   AI_PROVIDER_REPO="${AI_PROVIDER_REPO:-https://github.com/zozo123/airflow.git}"
   AI_PROVIDER_REF="${AI_PROVIDER_REF:-agent/add-islo-sandbox-backend}"
+  AI_PROVIDER_COMMIT="$(resolve_commit "$AI_PROVIDER_REPO" "$AI_PROVIDER_REF")"
+  export AI_PROVIDER_REPO AI_PROVIDER_COMMIT
   # The fork declares conflicting core URLs. Dependencies were installed from upstream above.
   uv pip install --no-deps \
-    "apache-airflow-providers-common-ai @ git+$AI_PROVIDER_REPO@$AI_PROVIDER_REF#subdirectory=providers/common/ai"
+    "apache-airflow-providers-common-ai @ git+$AI_PROVIDER_REPO@$AI_PROVIDER_COMMIT#subdirectory=providers/common/ai"
 elif [ "$MODE" = --pypi ]; then
   uv pip install --reinstall-package apache-airflow-providers-common-ai \
     apache-airflow-providers-common-ai
