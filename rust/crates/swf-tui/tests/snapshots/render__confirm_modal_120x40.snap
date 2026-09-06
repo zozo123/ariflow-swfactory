@@ -1,0 +1,44 @@
+---
+source: crates/swf-tui/tests/render.rs
+expression: "draw(&model, Theme::mono(), 120, 40)"
+---
+swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ attention 5 rows                                             │ factory/manual__2026-03-14T09#0:job.
+ 2 jobs          4 │kind    id                   detail       status         age  │approve_plan
+ 3 job detail      │gate    factory/manual__2026 plan for iss ◆ ready        4m   │job
+ 4 review          │gate    factory/manual__2026 intent for i ⋯ arming       20s  │factory/manual__2026-03-14T09#0
+ 5 deliveries    2 │failure hotfix/manual__2026- issue sre-9  ✗ failed       -    │gate         approve_plan
+ 6 infrastructure 7│deliver #511                 [BLOCKED] ho blocked, check -    │revision     2916c986f955d863
+ 7 history         │sandbox swf-upload-9f8e7d6c  running for  stopped        9h   │options      approve, reject
+                   │                                                              │actor        admin
+                   │                                                              │
+                   │                                                              │subject
+                   │                                                              │plan for issue 142: split the ingest
+                   │                                                              │worker
+                   │                                                              │
+                   │                                                              │evidence
+           ┌ confirm ──────────────────────────────────────────────────────────────────────────────────────┐igration is
+           │Approve approve_plan of factory/manual__2026-03-14T09#0 as admin? (evidence 2916c986f955d863)  │
+           │                                                                                               │
+           │y confirm  ·  n cancel                                                                         │before
+           └───────────────────────────────────────────────────────────────────────────────────────────────┘
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+enter review  a approve  x reject  r refresh  / search  : cmd  ? help  q quit

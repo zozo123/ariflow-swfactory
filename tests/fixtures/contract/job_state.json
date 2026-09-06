@@ -1,0 +1,283 @@
+{
+  "function": "job_state",
+  "doc": "job_state rolls one job's task states into one word: failure wins, then in-flight, then unfinished, then all-skipped, else success.",
+  "cases": [
+    {
+      "name": "empty",
+      "input": {
+        "tasks": []
+      },
+      "expected": "queued"
+    },
+    {
+      "name": "all_none_states",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": null
+          },
+          {
+            "task_id": "job.intent",
+            "map_index": 0,
+            "state": null
+          }
+        ]
+      },
+      "expected": "queued"
+    },
+    {
+      "name": "all_empty_string_states",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": ""
+          },
+          {
+            "task_id": "job.intent",
+            "map_index": 0,
+            "state": ""
+          }
+        ]
+      },
+      "expected": "queued"
+    },
+    {
+      "name": "failed_beats_running",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.intent",
+            "map_index": 0,
+            "state": "failed"
+          },
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "running"
+          }
+        ]
+      },
+      "expected": "failed"
+    },
+    {
+      "name": "upstream_failed_beats_success",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.a",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.b",
+            "map_index": 0,
+            "state": "upstream_failed"
+          }
+        ]
+      },
+      "expected": "failed"
+    },
+    {
+      "name": "failed_beats_skipped_and_none",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.a",
+            "map_index": 0,
+            "state": "skipped"
+          },
+          {
+            "task_id": "job.b",
+            "map_index": 0,
+            "state": null
+          },
+          {
+            "task_id": "job.c",
+            "map_index": 0,
+            "state": "failed"
+          }
+        ]
+      },
+      "expected": "failed"
+    },
+    {
+      "name": "awaiting_input_is_active",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.intent",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.approve_intent",
+            "map_index": 0,
+            "state": "awaiting_input"
+          },
+          {
+            "task_id": "job.deliver",
+            "map_index": 0,
+            "state": null
+          }
+        ]
+      },
+      "expected": "running"
+    },
+    {
+      "name": "deferred_is_active",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.approve_plan",
+            "map_index": 0,
+            "state": "deferred"
+          }
+        ]
+      },
+      "expected": "running"
+    },
+    {
+      "name": "up_for_reschedule_is_active",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.build_and_test",
+            "map_index": 0,
+            "state": "up_for_reschedule"
+          }
+        ]
+      },
+      "expected": "running"
+    },
+    {
+      "name": "entirely_skipped",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "skipped"
+          },
+          {
+            "task_id": "job.plan",
+            "map_index": 0,
+            "state": "skipped"
+          }
+        ]
+      },
+      "expected": "skipped"
+    },
+    {
+      "name": "skipped_plus_success_is_success",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "skipped"
+          },
+          {
+            "task_id": "job.deliver",
+            "map_index": 0,
+            "state": "success"
+          }
+        ]
+      },
+      "expected": "success"
+    },
+    {
+      "name": "removed_is_final",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "removed"
+          },
+          {
+            "task_id": "job.deliver",
+            "map_index": 0,
+            "state": "success"
+          }
+        ]
+      },
+      "expected": "success"
+    },
+    {
+      "name": "all_removed_is_success_not_skipped",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "removed"
+          },
+          {
+            "task_id": "job.plan",
+            "map_index": 0,
+            "state": "removed"
+          }
+        ]
+      },
+      "expected": "success"
+    },
+    {
+      "name": "unknown_state_alone_is_queued",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "banana"
+          }
+        ]
+      },
+      "expected": "queued"
+    },
+    {
+      "name": "unknown_state_with_final_is_running",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "banana"
+          },
+          {
+            "task_id": "job.plan",
+            "map_index": 0,
+            "state": "success"
+          }
+        ]
+      },
+      "expected": "running"
+    },
+    {
+      "name": "none_with_success_is_running",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.intent",
+            "map_index": 0,
+            "state": null
+          }
+        ]
+      },
+      "expected": "running"
+    }
+  ]
+}

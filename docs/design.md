@@ -294,12 +294,40 @@ To re-establish compatibility evidence for the current revision, run
 DAG checks. Return to the supported pin with `uv sync --group airflow`.
 
 
+## The swf binary
+
+`swf` is the operator interface: one native executable that connects to a factory environment,
+submits governed work, shows every mapped job, answers approval gates, verifies deliveries and
+removes owned sandboxes, with a Ratatui screen (`swf tui`) over the same operations. It is phases B
+through E of a migration — CLI, TUI, operations, packaging — and **not** a Rust runtime: the
+execution engine is still Python on Airflow and stays there.
+
+The workspace lives in `rust/` because the repository root is the Python package. Dependency
+direction is strictly `swf-cli -> swf-tui -> swf-app -> swf-adapters -> swf-domain`; `swf-domain`
+compiles with no async runtime at all, which is what makes the ported roll-ups testable against
+recorded fixtures. `swf` reads Airflow's public API only — never the metadata database — and writes
+exactly four things through it: a triggered DAG run, a gate response, a run marked failed, and a DAG
+unpaused.
+
+Two CI jobs keep the two implementations honest rather than merely both green. `rust` runs
+`cargo fmt --check`, `cargo clippy … -D warnings`, `cargo test --workspace` and the release build.
+`contract-equivalence` runs both halves of `tests/fixtures/contract/`: the pytest half asserts the
+Python function still produces the recorded answer, the cargo half asserts the Rust one does, in one
+job over one checkout — so regenerating a fixture to match a drifting implementation turns the other
+language red in the same run. `scripts/swf_e2e.sh` is the acceptance test: a live Airflow, two
+issues across two targets, eight authenticated approvals and four independently verified
+deliveries, with `swf` as the only thing that talks to Airflow after the boot.
+
+Full reference, including the exit-code table, the JSON contract, the key map and the security
+posture: [swf.md](swf.md).
+
 ## Versioning and release
 
 The distribution (`pyproject.toml` `version`, the git tag `vX.Y.Z`, the CHANGELOG heading) follows
 [semver](https://semver.org/spec/v2.0.0.html) over the surface a *user of the factory* depends on:
 the blueprint schema, the `SWF_*` / `Config` knobs, the `Sandbox` / `Agent` / `Scm` protocols, the
-CLI verbs and their flags, and the shape of the committed artifact chain (`plan.json`,
+CLI verbs and their flags — `swfactory`'s and `swf`'s alike, including `swf`'s `--json` document
+keys and its exit-code table — and the shape of the committed artifact chain (`plan.json`,
 `review.json`, `approvals.json`, `metrics.json`). A **breaking change** is therefore concrete: an
 existing `blueprints/*.toml` no longer loads, a `SWF_*` env var or `Config` field is removed or
 changes meaning, or a protocol method is added, removed or re-signatured so a third-party
@@ -337,10 +365,20 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md#release) for the exact commands.
   per-stage `SandboxExecutor`: running stage tasks as workers *inside* sandboxes would invert the
   trust boundary and require remote logging to get the audit trail back. The `Sandbox` protocol
   stays; the orchestrator stays the only actor with tokens.
-- **No Rust.** A prior live probe of an islo sandbox found `/usr/bin/python3`, so the Python hook
-  runs where it matters. Claude Code's explicit tool inventory and native path-scoped deny rules
-  are the primary gate (checked before hooks and not bypassable by hook output). A compiled guard
-  would add a musl cross-compile release pipeline and a binary download step for no new capability.
+- **The operator's client is Rust; the work cell is not.** This bullet used to read "No Rust", and
+  it argued exactly one case: a *compiled replacement for `.claude/hooks/swf_guard.py` inside an
+  islo sandbox*. That case is unchanged and still decided. A live probe of an islo sandbox found
+  `/usr/bin/python3` and no pip or uv, so the Python hook runs where it matters; Claude Code's
+  explicit tool inventory and native path-scoped deny rules are the primary gate (checked before
+  hooks and not bypassable by hook output); and a compiled guard would add a musl cross-compile
+  release pipeline and a binary download step for no new capability. What the old bullet never
+  asked is a different question: what an **operator** runs on their own laptop to drive the
+  factory. That is now `swf` ([swf.md](swf.md), `rust/`) — a native client of the same Airflow
+  `/api/v2`, `gh` and `islo` interfaces `control.py` drives, so connecting to a factory no longer
+  requires Python, uv or a virtualenv on the operator's machine. Nothing else moved: `stages.py`,
+  `runtime.py`, `agent.py` and the guard hook stay Python, because they run where Airflow and the
+  sandbox image already are, and a second implementation of stage semantics is the one migration
+  this project will not make.
 - **No `CrabboxSandbox`.** crabbox's `-artifact-glob` is SSH-lease-only, islo `-download` caps at
   one file <= 64 KiB, and rsync `sync.delete` would clobber the agent's remote edits, so "every
   provider as a Sandbox" cannot implement `read/write/exists/run`. crabbox stays the test-command
@@ -351,12 +389,16 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md#release) for the exact commands.
 - The default demo's scripted fixtures can be captured with `--record`; eval fixtures are authored
   acceptance contracts. Both are marked `agent=scripted` in `metrics.json`, and the terminal and
   PR body identify scripted execution.
-- Python + uv, stdlib where possible (`subprocess`, `tomllib`, `statistics`, `xml.etree`): the
-  factory is glue around `claude`, `islo`, `srt`, `docker`, `gh` and `git`. Every loop is bounded;
-  exhaustion is `StageError(kind="policy")` or a `factory:blocked` PR, never a retry.
+- The orchestrator is Python + uv, stdlib where possible (`subprocess`, `tomllib`, `statistics`,
+  `xml.etree`): the factory is glue around `claude`, `islo`, `srt`, `docker`, `gh` and `git`. Every
+  loop is bounded; exhaustion is `StageError(kind="policy")` or a `factory:blocked` PR, never a
+  retry. The operator binary is Rust for the reason above, and it is glue too — over the same
+  interfaces, with no engine of its own.
 - The `control.py` / `herd.py` split is deliberate: one module owns the clients (Airflow, `gh`,
   `islo`), the other is pure presentation. Fake-based coverage can exercise the whole TUI without
-  a network ([herd.md](herd.md)).
+  a network ([herd.md](herd.md)). `swf` repeats the split with a layer more: `swf-adapters` owns
+  the clients, `swf-app` owns the operations, and both `swf-cli` and `swf-tui` are renderers over
+  it — so a command and a keystroke cannot answer a gate differently.
 
 ## Known limits / accepted risks
 

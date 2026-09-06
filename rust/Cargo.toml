@@ -1,0 +1,52 @@
+# The `swf` operator binary: one native command over the whole factory, with a Ratatui interface
+# over the same operations. Airflow keeps scheduling, retries, mapped jobs and HITL gates; this
+# workspace is the operator's application code, and it holds no authority of its own — every
+# decision is re-read from the API before it is acted on (docs/swf.md).
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "2.0.1"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+repository = "https://github.com/zozo123/ariflow-swfactory"
+authors = ["swfactory contributors"]
+
+[workspace.dependencies]
+swf-domain = { path = "crates/swf-domain" }
+swf-adapters = { path = "crates/swf-adapters" }
+swf-app = { path = "crates/swf-app" }
+swf-tui = { path = "crates/swf-tui" }
+
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2"
+ratatui = "0.29"
+crossterm = "0.28"
+unicode-width = "0.2"
+directories = "6"
+futures-util = "0.3"
+async-trait = "0.1"
+tokio-util = "0.7"
+tempfile = "3"
+insta = "1"
+assert_cmd = "2"
+predicates = "3"
+wiremock = "0.6"
+
+# A single native binary is the product; strip it and optimise for size without giving up speed.
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
+panic = "abort"

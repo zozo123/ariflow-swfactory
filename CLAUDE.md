@@ -17,6 +17,15 @@ in `stages.py`. Details: README + docs/*.md.
   second line.
 - `uv run swfactory approve <dag_run_id> intent|plan [--reject] [--map-index <j>]`; `doctor
   [--json]` (exit 1 per red row, with a `fix:`); `metrics|maintain --root .`; `herd`; `webhook`.
+- `cargo test --manifest-path rust/Cargo.toml --workspace`, `cargo fmt`/`clippy -- -D warnings` —
+  the `swf` operator binary in `rust/` (docs/swf.md). It drives the same Airflow/`gh`/`islo`
+  interfaces as `control.py`; it runs no stage. `contract-equivalence` CI asserts both languages
+  produce `tests/fixtures/contract/`; `scripts/swf_e2e.sh` is the live acceptance test.
+- `swf context add <name> --airflow-url <url> --token-env VAR` (the config holds env var NAMES,
+  never values), then `doctor | submit --issue <n> | attention | jobs list | gates review|approve
+  <dag/run#i:gate> | deliveries verify --clone | snapshot --json | tui`. Exit codes are contract:
+  1 operational, 2 usage, 3 not found, 4 auth, 5 unreachable, 6 conflict. `runs stop` only marks
+  the Airflow run failed — it stops no process and removes no sandbox.
 - `uv run python -m swfactory.evals [--only <slug>] [--update-baseline]` — the eval suite in
   `demo/evals/**` scored against its `baseline.json`; a regression fails CI (docs/evals.md).
 - `uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py` — DAG tests;
@@ -91,6 +100,7 @@ in `stages.py`. Details: README + docs/*.md.
 - crabbox: never `-artifact-glob` (use `-download`), default provider `local-container` (islo needs
   the `ISLO_API_KEY` that `scrub_env` strips), `.crabbox.yaml` jobs are maps; `tests=crabbox` only
   with `sandbox=local`. A target without `factory.toml` is refused: never guess.
-- No Rust, no `CrabboxSandbox`, no `SandboxExecutor`, no blueprint -> `line.toml` compiler. The
-  Astronomer Blueprint bridge composes by triggering a governed child DAG; it never recompiles or
-  weakens the line. See docs/design.md.
+- No Rust *inside a work cell* — the guard hook stays `python3`, and stage semantics stay
+  `stages.py`; `rust/` is the operator's client only. No `CrabboxSandbox`, no `SandboxExecutor`, no
+  blueprint -> `line.toml` compiler. The Astronomer Blueprint bridge composes by triggering a
+  governed child DAG; it never recompiles or weakens the line. See docs/design.md.

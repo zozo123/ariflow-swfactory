@@ -1,0 +1,690 @@
+{
+  "function": "group_jobs",
+  "doc": "group_jobs buckets task instances by map_index, drops the unmapped row once any mapped task exists, and names each row's issue from fan_out or from an unambiguous single fallback.",
+  "cases": [
+    {
+      "name": "empty_tasks_yield_no_rows",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": []
+      },
+      "expected": []
+    },
+    {
+      "name": "only_unmapped_yields_one_placeholder",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": [
+          {
+            "task_id": "fan_out",
+            "map_index": -1,
+            "state": "running"
+          }
+        ]
+      },
+      "expected": [
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": -1,
+          "issue": "-",
+          "state": "running",
+          "tasks": [
+            {
+              "task_id": "fan_out",
+              "map_index": -1,
+              "state": "running"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "unmapped_dropped_once_mapped_exists",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": [
+          {
+            "task_id": "fan_out",
+            "map_index": -1,
+            "state": "success"
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          }
+        ]
+      },
+      "expected": [
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 0,
+          "issue": "-",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 0,
+              "state": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "gaps_in_indices_are_kept",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 5,
+            "state": "success"
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": null
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 2,
+            "state": "failed"
+          }
+        ]
+      },
+      "expected": [
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 0,
+          "issue": "-",
+          "state": "queued",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 0,
+              "state": null
+            }
+          ]
+        },
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 2,
+          "issue": "-",
+          "state": "failed",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 2,
+              "state": "failed"
+            }
+          ]
+        },
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 5,
+          "issue": "-",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 5,
+              "state": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "task_order_inside_a_bucket_is_input_order",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.intent",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.approve_intent",
+            "map_index": 0,
+            "state": "awaiting_input"
+          }
+        ]
+      },
+      "expected": [
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 0,
+          "issue": "-",
+          "state": "running",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 0,
+              "state": "success"
+            },
+            {
+              "task_id": "job.intent",
+              "map_index": 0,
+              "state": "success"
+            },
+            {
+              "task_id": "job.approve_intent",
+              "map_index": 0,
+              "state": "awaiting_input"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fan_out_shorter_than_the_job_list",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 1,
+            "state": "success"
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 2,
+            "state": "success"
+          }
+        ],
+        "fan_out": [
+          {
+            "issue": "42"
+          },
+          {
+            "issue": "43"
+          }
+        ]
+      },
+      "expected": [
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 0,
+          "issue": "42",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 0,
+              "state": "success"
+            }
+          ]
+        },
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 1,
+          "issue": "43",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 1,
+              "state": "success"
+            }
+          ]
+        },
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 2,
+          "issue": "-",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 2,
+              "state": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fan_out_null_entry_falls_back",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 1,
+            "state": "success"
+          }
+        ],
+        "fan_out": [
+          null,
+          {
+            "issue": "43"
+          }
+        ],
+        "fallback_issues": [
+          "99"
+        ]
+      },
+      "expected": [
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 0,
+          "issue": "99",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 0,
+              "state": "success"
+            }
+          ]
+        },
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 1,
+          "issue": "43",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 1,
+              "state": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fan_out_falsy_issue_falls_back",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 1,
+            "state": "success"
+          }
+        ],
+        "fan_out": [
+          {
+            "issue": 0
+          },
+          {
+            "issue": ""
+          }
+        ],
+        "fallback_issues": [
+          "7"
+        ]
+      },
+      "expected": [
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 0,
+          "issue": "7",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 0,
+              "state": "success"
+            }
+          ]
+        },
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 1,
+          "issue": "7",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 1,
+              "state": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fan_out_numeric_issue_is_stringified",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          }
+        ],
+        "fan_out": [
+          {
+            "issue": 42
+          }
+        ]
+      },
+      "expected": [
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 0,
+          "issue": "42",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 0,
+              "state": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fallback_of_zero_issues",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          }
+        ],
+        "fallback_issues": []
+      },
+      "expected": [
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 0,
+          "issue": "-",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 0,
+              "state": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fallback_of_one_issue",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 1,
+            "state": null
+          }
+        ],
+        "fallback_issues": [
+          "42"
+        ]
+      },
+      "expected": [
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 0,
+          "issue": "42",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 0,
+              "state": "success"
+            }
+          ]
+        },
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 1,
+          "issue": "42",
+          "state": "queued",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 1,
+              "state": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fallback_of_two_issues_is_ambiguous",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 1,
+            "state": null
+          }
+        ],
+        "fallback_issues": [
+          "42",
+          "43"
+        ]
+      },
+      "expected": [
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 0,
+          "issue": "-",
+          "state": "success",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 0,
+              "state": "success"
+            }
+          ]
+        },
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": 1,
+          "issue": "-",
+          "state": "queued",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 1,
+              "state": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "unmapped_placeholder_still_takes_the_fallback",
+      "input": {
+        "dag_id": "factory",
+        "run_id": "r1",
+        "tasks": [
+          {
+            "task_id": "fan_out",
+            "map_index": -1,
+            "state": "running"
+          }
+        ],
+        "fan_out": [
+          {
+            "issue": "42"
+          }
+        ],
+        "fallback_issues": [
+          "42"
+        ]
+      },
+      "expected": [
+        {
+          "dag_id": "factory",
+          "run_id": "r1",
+          "map_index": -1,
+          "issue": "42",
+          "state": "running",
+          "tasks": [
+            {
+              "task_id": "fan_out",
+              "map_index": -1,
+              "state": "running"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mixed_states_across_jobs",
+      "input": {
+        "dag_id": "hotfix",
+        "run_id": "manual__2026-09-03T08:04:02.456739+00:00",
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.deliver",
+            "map_index": 0,
+            "state": "failed"
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 1,
+            "state": "running"
+          },
+          {
+            "task_id": "job.setup",
+            "map_index": 2,
+            "state": "skipped"
+          }
+        ],
+        "fan_out": [
+          {
+            "issue": "42"
+          },
+          {
+            "issue": "43"
+          },
+          {
+            "issue": "44"
+          }
+        ]
+      },
+      "expected": [
+        {
+          "dag_id": "hotfix",
+          "run_id": "manual__2026-09-03T08:04:02.456739+00:00",
+          "map_index": 0,
+          "issue": "42",
+          "state": "failed",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 0,
+              "state": "success"
+            },
+            {
+              "task_id": "job.deliver",
+              "map_index": 0,
+              "state": "failed"
+            }
+          ]
+        },
+        {
+          "dag_id": "hotfix",
+          "run_id": "manual__2026-09-03T08:04:02.456739+00:00",
+          "map_index": 1,
+          "issue": "43",
+          "state": "running",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 1,
+              "state": "running"
+            }
+          ]
+        },
+        {
+          "dag_id": "hotfix",
+          "run_id": "manual__2026-09-03T08:04:02.456739+00:00",
+          "map_index": 2,
+          "issue": "44",
+          "state": "skipped",
+          "tasks": [
+            {
+              "task_id": "job.setup",
+              "map_index": 2,
+              "state": "skipped"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

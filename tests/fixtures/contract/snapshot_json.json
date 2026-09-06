@@ -1,0 +1,644 @@
+{
+  "function": "snapshot_json",
+  "doc": "snapshot_json is the herd snapshot_data document: key order, per-job stage frontiers, raw map_index, Python isoformat timestamps (+00:00, never Z) and insertion-ordered errors.",
+  "cases": [
+    {
+      "name": "empty_snapshot",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00+00:00"
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00+00:00",
+        "runs": [],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "null_collected_at",
+      "input": {
+        "snapshot": {
+          "collected_at": null
+        }
+      },
+      "expected": {
+        "collected_at": null,
+        "runs": [],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "naive_collected_at_is_stamped_utc",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00"
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00+00:00",
+        "runs": [],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "non_utc_offset_is_preserved",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T14:00:00+02:00"
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T14:00:00+02:00",
+        "runs": [],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "microseconds_render_six_digits",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00.123456+00:00"
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00.123456+00:00",
+        "runs": [],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "run_with_jobs_and_stages",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00+00:00",
+          "runs": [
+            {
+              "dag_id": "factory",
+              "run_id": "manual__2026-09-03T08:04:02.456739+00:00",
+              "state": "running",
+              "start": "2026-09-03T08:04:02.456739+00:00",
+              "end": null,
+              "conf": {
+                "issues": [
+                  "42",
+                  "43"
+                ]
+              },
+              "jobs": [
+                {
+                  "dag_id": "factory",
+                  "run_id": "r",
+                  "map_index": 0,
+                  "issue": "42",
+                  "state": "running",
+                  "tasks": [
+                    {
+                      "task_id": "job.setup",
+                      "map_index": 0,
+                      "state": "success"
+                    },
+                    {
+                      "task_id": "job.approve_plan",
+                      "map_index": 0,
+                      "state": "awaiting_input"
+                    }
+                  ]
+                },
+                {
+                  "dag_id": "factory",
+                  "run_id": "r",
+                  "map_index": 1,
+                  "issue": "43",
+                  "state": "failed",
+                  "tasks": [
+                    {
+                      "task_id": "job.setup",
+                      "map_index": 1,
+                      "state": "success"
+                    },
+                    {
+                      "task_id": "job.build_and_test",
+                      "map_index": 1,
+                      "state": "failed"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00+00:00",
+        "runs": [
+          {
+            "dag_id": "factory",
+            "run_id": "manual__2026-09-03T08:04:02.456739+00:00",
+            "state": "running",
+            "start": "2026-09-03T08:04:02.456739+00:00",
+            "end": null,
+            "issues": [
+              "42",
+              "43"
+            ],
+            "jobs": [
+              {
+                "map_index": 0,
+                "issue": "42",
+                "stage": "approve_plan",
+                "state": "running"
+              },
+              {
+                "map_index": 1,
+                "issue": "43",
+                "stage": "build_and_test:failed",
+                "state": "failed"
+              }
+            ]
+          }
+        ],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "collapsed_job_keeps_map_index_minus_one",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00+00:00",
+          "runs": [
+            {
+              "dag_id": "factory",
+              "run_id": "r-done",
+              "state": "success",
+              "start": null,
+              "end": "2026-09-03T09:00:00+00:00",
+              "conf": {
+                "issue": 7
+              },
+              "jobs": [
+                {
+                  "dag_id": "factory",
+                  "run_id": "r-done",
+                  "map_index": -1,
+                  "issue": "7",
+                  "state": "success",
+                  "tasks": []
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00+00:00",
+        "runs": [
+          {
+            "dag_id": "factory",
+            "run_id": "r-done",
+            "state": "success",
+            "start": null,
+            "end": "2026-09-03T09:00:00+00:00",
+            "issues": [
+              "7"
+            ],
+            "jobs": [
+              {
+                "map_index": -1,
+                "issue": "7",
+                "stage": "-",
+                "state": "success"
+              }
+            ]
+          }
+        ],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "conf_issues_non_list_yields_no_issues",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00+00:00",
+          "runs": [
+            {
+              "dag_id": "f",
+              "run_id": "r",
+              "state": "queued",
+              "start": null,
+              "end": null,
+              "conf": {
+                "issues": "42"
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00+00:00",
+        "runs": [
+          {
+            "dag_id": "f",
+            "run_id": "r",
+            "state": "queued",
+            "start": null,
+            "end": null,
+            "issues": [],
+            "jobs": []
+          }
+        ],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "conf_issue_zero_is_still_an_issue",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00+00:00",
+          "runs": [
+            {
+              "dag_id": "f",
+              "run_id": "r",
+              "state": "queued",
+              "start": null,
+              "end": null,
+              "conf": {
+                "issue": 0
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00+00:00",
+        "runs": [
+          {
+            "dag_id": "f",
+            "run_id": "r",
+            "state": "queued",
+            "start": null,
+            "end": null,
+            "issues": [
+              "0"
+            ],
+            "jobs": []
+          }
+        ],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "conf_issue_duplicates_are_not_appended_twice",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00+00:00",
+          "runs": [
+            {
+              "dag_id": "f",
+              "run_id": "r",
+              "state": "queued",
+              "start": null,
+              "end": null,
+              "conf": {
+                "issues": [
+                  42,
+                  "43"
+                ],
+                "issue": 42
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00+00:00",
+        "runs": [
+          {
+            "dag_id": "f",
+            "run_id": "r",
+            "state": "queued",
+            "start": null,
+            "end": null,
+            "issues": [
+              "42",
+              "43"
+            ],
+            "jobs": []
+          }
+        ],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "run_without_jobs",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00+00:00",
+          "runs": [
+            {
+              "dag_id": "f",
+              "run_id": "r",
+              "state": "queued",
+              "start": null,
+              "end": null,
+              "conf": {}
+            }
+          ]
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00+00:00",
+        "runs": [
+          {
+            "dag_id": "f",
+            "run_id": "r",
+            "state": "queued",
+            "start": null,
+            "end": null,
+            "issues": [],
+            "jobs": []
+          }
+        ],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "gates_with_and_without_a_dotted_task_id",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00+00:00",
+          "gates": [
+            {
+              "dag_id": "factory",
+              "run_id": "manual__1",
+              "task_id": "job.approve_plan",
+              "map_index": 1,
+              "subject": "Approve plan for #42",
+              "body": "b",
+              "created_at": "2026-09-03T11:59:00+00:00",
+              "options": [
+                "Approve",
+                "Reject"
+              ]
+            },
+            {
+              "dag_id": "factory",
+              "run_id": "manual__1",
+              "task_id": "approve_intent",
+              "map_index": -1,
+              "subject": "",
+              "body": "",
+              "created_at": null,
+              "options": null
+            }
+          ]
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00+00:00",
+        "runs": [],
+        "gates": [
+          {
+            "dag_id": "factory",
+            "run_id": "manual__1",
+            "task_id": "job.approve_plan",
+            "gate": "approve_plan",
+            "map_index": 1,
+            "subject": "Approve plan for #42",
+            "options": [
+              "Approve",
+              "Reject"
+            ],
+            "created_at": "2026-09-03T11:59:00+00:00"
+          },
+          {
+            "dag_id": "factory",
+            "run_id": "manual__1",
+            "task_id": "approve_intent",
+            "gate": "approve_intent",
+            "map_index": -1,
+            "subject": "",
+            "options": [],
+            "created_at": null
+          }
+        ],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "unicode_survives_the_document",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00+00:00",
+          "gates": [
+            {
+              "dag_id": "f",
+              "run_id": "r",
+              "task_id": "job.approve_intent",
+              "map_index": 0,
+              "subject": "café — 問題",
+              "body": "",
+              "created_at": null,
+              "options": []
+            }
+          ],
+          "prs": [
+            {
+              "number": 7,
+              "title": "fix: naïve retry",
+              "url": "https://example.com/7",
+              "labels": null,
+              "state": "OPEN",
+              "checks": "2 pass / 1 fail / 0 pending",
+              "head": "factory/42-r"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00+00:00",
+        "runs": [],
+        "gates": [
+          {
+            "dag_id": "f",
+            "run_id": "r",
+            "task_id": "job.approve_intent",
+            "gate": "approve_intent",
+            "map_index": 0,
+            "subject": "café — 問題",
+            "options": [],
+            "created_at": null
+          }
+        ],
+        "prs": [
+          {
+            "number": 7,
+            "title": "fix: naïve retry",
+            "url": "https://example.com/7",
+            "labels": [],
+            "state": "OPEN",
+            "checks": "2 pass / 1 fail / 0 pending",
+            "head": "factory/42-r"
+          }
+        ],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {}
+      }
+    },
+    {
+      "name": "sandboxes_and_metrics",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00+00:00",
+          "sandboxes": [
+            {
+              "name": "swf-42-abcd1234",
+              "status": "running",
+              "created_by": "me@example.com",
+              "created_at": "2026-09-03T10:00:00+00:00"
+            },
+            {
+              "name": "prod-db",
+              "status": "deleted",
+              "created_by": "",
+              "created_at": null
+            }
+          ],
+          "metrics": {
+            "runs": 2,
+            "scripted_runs": 0,
+            "first_pass_rate": 0.5,
+            "mean_iterations": 0.0,
+            "p50_cycle_s": 0.0,
+            "tests_pass_rate": 0.0,
+            "findings_by_severity": {
+              "blocker": 1,
+              "major": 0,
+              "minor": 0,
+              "nit": 0
+            },
+            "blockers": 1,
+            "total_cost_usd": 0.0
+          }
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00+00:00",
+        "runs": [],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [
+          {
+            "name": "swf-42-abcd1234",
+            "status": "running",
+            "created_by": "me@example.com",
+            "created_at": "2026-09-03T10:00:00+00:00"
+          },
+          {
+            "name": "prod-db",
+            "status": "deleted",
+            "created_by": "",
+            "created_at": null
+          }
+        ],
+        "metrics": {
+          "runs": 2,
+          "scripted_runs": 0,
+          "first_pass_rate": 0.5,
+          "mean_iterations": 0.0,
+          "p50_cycle_s": 0.0,
+          "tests_pass_rate": 0.0,
+          "findings_by_severity": {
+            "blocker": 1,
+            "major": 0,
+            "minor": 0,
+            "nit": 0
+          },
+          "blockers": 1,
+          "total_cost_usd": 0.0
+        },
+        "errors": {}
+      }
+    },
+    {
+      "name": "errors_keep_collect_insertion_order",
+      "input": {
+        "snapshot": {
+          "collected_at": "2026-09-03T12:00:00+00:00",
+          "errors": {
+            "airflow": "GET http://af:8080/api/v2/dags -> HTTP 503 down",
+            "airflow:factory/r-running": "boom",
+            "gates": "GET hitlDetails -> HTTP 500",
+            "github": "gh: not found",
+            "islo": "islo: not found",
+            "metrics": "no metrics root"
+          }
+        }
+      },
+      "expected": {
+        "collected_at": "2026-09-03T12:00:00+00:00",
+        "runs": [],
+        "gates": [],
+        "prs": [],
+        "sandboxes": [],
+        "metrics": {},
+        "errors": {
+          "airflow": "GET http://af:8080/api/v2/dags -> HTTP 503 down",
+          "airflow:factory/r-running": "boom",
+          "gates": "GET hitlDetails -> HTTP 500",
+          "github": "gh: not found",
+          "islo": "islo: not found",
+          "metrics": "no metrics root"
+        }
+      }
+    }
+  ]
+}

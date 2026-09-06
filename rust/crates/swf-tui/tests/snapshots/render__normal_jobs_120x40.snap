@@ -1,0 +1,44 @@
+---
+source: crates/swf-tui/tests/render.rs
+expression: "draw(&model, Theme::mono(), 120, 40)"
+---
+swf prod  ·  airflow https://airflow.example.com  ·  repo acme/widgets  ·  owner me@example.com
+actor admin  ·  refreshed 09:30:00 (0s ago)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1 attention     5 │ jobs 4 rows                                                  │ factory/manual__2026-03-14T09#0
+ 2 jobs          4 │dag      run              job issue  stage    state           │issue        142
+ 3 job detail      │factory  manual__2026-03- 0   142    approve_ ◆ awaiting_input│state        ◆ awaiting_input
+ 4 review          │factory  manual__2026-03- 1   143    build_an ▸ running       │stage        approve_plan
+ 5 deliveries    2 │hotfix   manual__2026-03- 0   sre-9  build_an ✗ failed        │
+ 6 infrastructure 7│hotfix   manual__2026-03- 1   sre-10 deliver  ✓ success       │tasks
+ 7 history         │                                                              │job.spec            ✓ success
+                   │                                                              │job.approve_plan    ◆ awaiting_input
+                   │                                                              │
+                   │                                                              │gates
+                   │                                                              │approve_plan        ◆ ready
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+                   │                                                              │
+ activity ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+09:30:00 watching prod at https://airflow.example.com
+
+
+
+
+
+
+
+enter detail  t trigger  s stop  o open  L logs  r refresh  / search  : cmd  ? help  q quit

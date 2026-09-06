@@ -1,0 +1,23 @@
+[package]
+name = "swf-tui"
+description = "The Ratatui factory: attention, jobs, evidence, approvals over the shared operations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+swf-domain.workspace = true
+swf-app.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+tokio.workspace = true
+unicode-width.workspace = true
+serde_json.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+insta.workspace = true

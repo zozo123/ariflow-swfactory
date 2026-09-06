@@ -1,0 +1,128 @@
+{
+  "function": "parse_issues",
+  "doc": "parse_issues splits an operator's comma-separated issue refs, trims Unicode whitespace and drops the empties a trailing comma leaves behind.",
+  "cases": [
+    {
+      "name": "empty_string",
+      "input": {
+        "text": ""
+      },
+      "expected": []
+    },
+    {
+      "name": "only_a_comma",
+      "input": {
+        "text": ","
+      },
+      "expected": []
+    },
+    {
+      "name": "only_commas",
+      "input": {
+        "text": ",,,"
+      },
+      "expected": []
+    },
+    {
+      "name": "only_spaces",
+      "input": {
+        "text": "   "
+      },
+      "expected": []
+    },
+    {
+      "name": "only_whitespace_between_commas",
+      "input": {
+        "text": " , \t , "
+      },
+      "expected": []
+    },
+    {
+      "name": "the_documented_example",
+      "input": {
+        "text": " 42, 43,,demo/issue.md "
+      },
+      "expected": [
+        "42",
+        "43",
+        "demo/issue.md"
+      ]
+    },
+    {
+      "name": "single_ref_no_comma",
+      "input": {
+        "text": "42"
+      },
+      "expected": [
+        "42"
+      ]
+    },
+    {
+      "name": "trailing_comma",
+      "input": {
+        "text": "42,,"
+      },
+      "expected": [
+        "42"
+      ]
+    },
+    {
+      "name": "tabs_and_newlines",
+      "input": {
+        "text": "\t42\n,\r\n43\f"
+      },
+      "expected": [
+        "42",
+        "43"
+      ]
+    },
+    {
+      "name": "non_breaking_space",
+      "input": {
+        "text": " 42 , 43"
+      },
+      "expected": [
+        "42",
+        "43"
+      ]
+    },
+    {
+      "name": "ideographic_space",
+      "input": {
+        "text": "　42　,　　"
+      },
+      "expected": [
+        "42"
+      ]
+    },
+    {
+      "name": "unicode_content_is_preserved",
+      "input": {
+        "text": " issue-café , 問題-7 "
+      },
+      "expected": [
+        "issue-café",
+        "問題-7"
+      ]
+    },
+    {
+      "name": "zero_width_space_is_not_whitespace",
+      "input": {
+        "text": "​42​"
+      },
+      "expected": [
+        "​42​"
+      ]
+    },
+    {
+      "name": "inner_spaces_survive",
+      "input": {
+        "text": " a b , c  d "
+      },
+      "expected": [
+        "a b",
+        "c  d"
+      ]
+    }
+  ]
+}
