@@ -544,19 +544,25 @@ impl Ops {
         cancel: &CancellationToken,
     ) -> Result<Submission> {
         if let Some(backend) = &self.backend {
-            let mut submitted: Submission = backend
-                .call(
-                    "/work-orders",
-                    serde_json::json!({
-                        "line": request.blueprint,
-                        "issues": request.issues,
-                        "targets": request.targets,
-                    }),
-                    cancel,
-                )
-                .await?;
+            let mut body = serde_json::json!({
+                "line": request.blueprint,
+                "issues": request.issues,
+                "targets": request.targets,
+            });
+            if let Some(actor) = request.origin_actor()? {
+                body["actor"] = serde_json::Value::String(actor);
+            }
+            let mut submitted: Submission = backend.call("/work-orders", body, cancel).await?;
             // The backend may see an internal Airflow hostname. Browser links use the context.
             submitted.url = self.runs()?.run_url(&submitted.run());
+            submitted.harness = request
+                .harness
+                .as_ref()
+                .map(|v| v.trim().to_ascii_lowercase());
+            submitted.factory_id = request
+                .factory_id
+                .as_ref()
+                .map(|v| v.trim().to_ascii_lowercase());
             return Ok(submitted);
         }
         crate::submit::submit(self.runs()?, request, cancel).await

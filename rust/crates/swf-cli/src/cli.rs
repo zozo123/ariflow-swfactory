@@ -234,6 +234,14 @@ pub struct SubmitArgs {
     #[arg(long = "target", value_name = "OWNER/NAME")]
     pub targets: Vec<String>,
 
+    /// AI harness that owns the outer agentic session (codex, claude, grok, custom).
+    #[arg(long, value_name = "NAME")]
+    pub harness: Option<String>,
+
+    /// Stable id for this outer factory session. Pair with --harness; reuse on retries.
+    #[arg(long, value_name = "ID")]
+    pub factory_id: Option<String>,
+
     /// Poll until the run reaches a final state before answering.
     #[arg(long)]
     pub wait: bool,

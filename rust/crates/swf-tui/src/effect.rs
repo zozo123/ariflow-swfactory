@@ -198,6 +198,8 @@ async fn perform(ops: Arc<Ops>, tx: Sender<Msg>, cancel: CancellationToken, effe
                 issues,
                 blueprint: dag_id,
                 targets: Vec::new(),
+                harness: None,
+                factory_id: None,
             };
             match ops.submit(&request, &cancel).await {
                 Ok(submission) => Some(Msg::Ok(format!(

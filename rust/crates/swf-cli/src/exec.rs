@@ -269,12 +269,23 @@ async fn doctor_cmd(ctx: &Ctx) -> Result<Outcome> {
 
 // ---------------------------------------------------------------------------- submit
 
+fn nonempty_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
 async fn submit_cmd(ctx: &Ctx, args: &SubmitArgs) -> Result<Outcome> {
     let ops = ctx.ops()?;
     let request = SubmitRequest {
         issues: args.issues.clone(),
         blueprint: args.blueprint.clone(),
         targets: args.targets.clone(),
+        harness: args.harness.clone().or_else(|| nonempty_env("SWF_HARNESS")),
+        factory_id: args
+            .factory_id
+            .clone()
+            .or_else(|| nonempty_env("SWF_FACTORY_ID")),
     };
     let submission = ops.submit(&request, &ctx.cancel).await?;
     let run = submission.run();
