@@ -1,0 +1,10 @@
+{
+  "schema_version":1,
+  "name":"one session with two distinct requests cannot double-own one cell",
+  "repo":"owner/repo",
+  "actions":[
+    {"op":"submit","session":"codex:a","issue":"302","request_id":"a1"},
+    {"op":"submit","session":"codex:a","issue":"302","request_id":"a2"}
+  ],
+  "expect":{"active_admissions":1,"queued_admissions":0,"cells":1,"active_cells":1,"busy":1,"stale":0,"duplicate_submissions":0,"duplicate_operations":0,"max_epoch":1}
+}
