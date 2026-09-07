@@ -20,7 +20,9 @@ use swf_adapters::traits::{
 use swf_app::attention::Attention;
 use swf_app::context::{show, show_json, Auth, Context, ContextStore};
 use swf_app::delivery::VerifyOpts;
-use swf_app::gates::{AnswerOpts, BatchOutcome, BatchReport, Decision, GateFilter, Selection};
+use swf_app::gates::{
+    AnswerOpts, BatchOutcome, BatchReport, Decision, GateFilter, Selection, CONFIRM_INTERVAL,
+};
 use swf_app::logs::LogOpts;
 use swf_app::ops::{JobFilter, Ops};
 use swf_app::snapshot::CollectOpts;
@@ -1568,6 +1570,7 @@ async fn one_gate_that_fails_never_abandons_the_rest() {
             &selection,
             Decision::Approve,
             &filter,
+            Some(Duration::ZERO),
             &CancellationToken::new(),
         )
         .await
@@ -1627,6 +1630,7 @@ async fn someone_else_answering_first_is_a_conflict_and_not_a_failure() {
             &selection,
             Decision::Reject,
             &filter,
+            Some(Duration::ZERO),
             &CancellationToken::new(),
         )
         .await
@@ -1662,6 +1666,7 @@ async fn a_gate_that_has_not_parked_is_skipped_with_its_reason_and_never_forced(
             &selection,
             Decision::Approve,
             &filter,
+            Some(Duration::ZERO),
             &CancellationToken::new(),
         )
         .await
@@ -1711,6 +1716,7 @@ async fn a_batch_answers_more_than_one_gate_at_a_time_and_still_re_reads_each_on
             &selection,
             Decision::Approve,
             &filter,
+            Some(Duration::ZERO),
             &CancellationToken::new(),
         )
         .await
@@ -1731,22 +1737,117 @@ async fn a_batch_answers_more_than_one_gate_at_a_time_and_still_re_reads_each_on
     }
 }
 
+/// The regression this file exists to keep fixed: a batch that sights a gate and answers it in the
+/// same breath.
+///
+/// `swf gates approve --all` reads the gate list to build its selection and then re-reads each
+/// gate inside `answer`, milliseconds later. Both reads describe the same instant of the world, so
+/// counting them as the two required sightings answered gates fractions of a second after their
+/// task instance parked — inside the window in which the scheduler is still reconciling the worker
+/// process that parked it. It then judges that process's `success` against a task it has just
+/// re-queued ("finished with state success, but the task instance's state attribute is queued"),
+/// marks the gate FAILED, and the job dies `upstream_failed` behind it. Time under observation is
+/// the rule; the count of reads is not.
+#[tokio::test(start_paused = true)]
+async fn a_batch_settles_from_the_first_sighting_and_not_from_the_read_that_follows_it() {
+    let airflow = Arc::new(a_board_of_gates());
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let filter = GateFilter {
+        ready: true,
+        ..GateFilter::default()
+    };
+    let started = tokio::time::Instant::now();
+    let selection = select_with(&ops, filter.clone()).await;
+    assert_eq!(selection.ready_count(), 3);
+
+    // `None` is exactly what `swf gates approve --all` passes: the product's own window.
+    let report = ops
+        .gate_answer_all(
+            &selection,
+            Decision::Approve,
+            &filter,
+            None,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a batch reports rather than fails");
+
+    assert_eq!(report.count(BatchOutcome::Answered), 3);
+    let waited = started.elapsed();
+    assert!(
+        waited >= CONFIRM_INTERVAL,
+        "the batch answered {waited:?} after it first saw the gates parked; \
+         the scheduler fails a gate answered inside {CONFIRM_INTERVAL:?}"
+    );
+    assert!(
+        waited < CONFIRM_INTERVAL * 2,
+        "a wave settles once, concurrently — not once per gate ({waited:?})"
+    );
+}
+
+/// The other half of the same rule: an operator who has had the gate on screen waits for nothing.
+///
+/// The settle is a window since the gate was FIRST seen parked, not a pause bolted onto the write,
+/// so a review followed by a decision that took longer than the window costs no delay at all.
+#[tokio::test(start_paused = true)]
+async fn a_gate_an_operator_has_been_looking_at_is_answered_with_no_pause_at_all() {
+    let airflow = Arc::new(airflow_with_two_runs());
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let cancel = CancellationToken::new();
+    let id = parked_gate().id();
+
+    let review = ops.gate_review(&id, &cancel).await.expect("review");
+    assert!(review.ready);
+    // The operator reads the evidence and makes up their mind.
+    tokio::time::sleep(CONFIRM_INTERVAL * 2).await;
+
+    let decided = tokio::time::Instant::now();
+    let answer = ops
+        .gate_answer(&id, Decision::Approve, &AnswerOpts::default(), &cancel)
+        .await
+        .expect("a gate that has been parked all along can be answered");
+    assert!(answer.sightings >= 2);
+    assert!(
+        decided.elapsed() < CONFIRM_INTERVAL,
+        "the window was already behind this gate; the write must not wait it out again \
+         (waited {:?})",
+        decided.elapsed()
+    );
+}
+
 /// Two hundred gates, every one of them parked. The shape a fan-out of twenty issues reaches.
 fn a_wall_of_gates(n: i32) -> FakeRuns {
+    a_wall_of_gates_across(1, n)
+}
+
+/// `runs` DAG runs with `per_run` parked gates each.
+///
+/// The split matters to what a batch may overlap: answers to different runs may go at once, and
+/// answers within one run may not, so a fixture that puts every gate in one run can only ever
+/// measure the serial case.
+fn a_wall_of_gates_across(runs: i32, per_run: i32) -> FakeRuns {
     let mut gates = Vec::new();
+    let mut run_rows = Vec::new();
     let mut tasks = Vec::new();
-    for index in 0..n {
-        gates.push(gate_at("factory", "r1", "job.approve_plan", index));
-        tasks.push(TaskState::new(
-            "job.approve_plan",
-            index,
-            Some("awaiting_input".into()),
-        ));
+    // Numbered from 1 so the single-run case keeps the id (`r1`) that the fixtures around it name.
+    for r in 1..=runs {
+        let run_id = format!("r{r}");
+        let mut per = Vec::new();
+        for index in 0..per_run {
+            gates.push(gate_at("factory", &run_id, "job.approve_plan", index));
+            per.push(TaskState::new(
+                "job.approve_plan",
+                index,
+                Some("awaiting_input".into()),
+            ));
+        }
+        run_rows.push(run("factory", &run_id, "running"));
+        tasks.push((format!("factory/{run_id}"), per));
     }
     FakeRuns {
         dags: vec!["factory".into()],
-        runs: vec![("factory".to_string(), vec![run("factory", "r1", "running")])],
-        tasks: vec![("factory/r1".to_string(), tasks)],
+        runs: vec![("factory".to_string(), run_rows)],
+        tasks,
         gates: Mutex::new(gates),
         ..FakeRuns::default()
     }
@@ -1757,7 +1858,7 @@ async fn a_filter_that_matched_everything_still_never_exceeds_the_concurrency_bo
     // The failure this pins is an outage of the batch's own making: an unbounded fan-out over a
     // filter that matched the whole factory would put two hundred simultaneous PATCHes on the one
     // scheduler this tool exists to help operate. The bound is counted, not assumed.
-    let airflow = Arc::new(a_wall_of_gates(200));
+    let airflow = Arc::new(a_wall_of_gates_across(40, 5));
     let ops = build_ops(Arc::clone(&airflow), None, None, None);
     let filter = GateFilter::default();
     let selection = select_with(&ops, filter.clone()).await;
@@ -1768,6 +1869,7 @@ async fn a_filter_that_matched_everything_still_never_exceeds_the_concurrency_bo
             &selection,
             Decision::Approve,
             &filter,
+            Some(Duration::ZERO),
             &CancellationToken::new(),
         )
         .await
@@ -1783,6 +1885,36 @@ async fn a_filter_that_matched_everything_still_never_exceeds_the_concurrency_bo
     assert!(
         peak > 1,
         "a bound that never reached two would be a serial loop wearing a batch's name"
+    );
+}
+
+#[tokio::test]
+async fn two_answers_to_the_same_run_never_overlap() {
+    // Airflow answered a second concurrent PATCH to one DAG run with HTTP 500 and failed the gate,
+    // which failed its job — seen on a live server, not theorised. Gates of one run are therefore
+    // answered one at a time; the batch's speed comes from overlapping DIFFERENT runs.
+    let airflow = Arc::new(a_wall_of_gates_across(1, 25));
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let filter = GateFilter::default();
+    let selection = select_with(&ops, filter.clone()).await;
+    assert_eq!(selection.ready_count(), 25);
+
+    let report = ops
+        .gate_answer_all(
+            &selection,
+            Decision::Approve,
+            &filter,
+            Some(Duration::ZERO),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a batch reports rather than fails");
+    assert_eq!(report.count(BatchOutcome::Answered), 25);
+
+    let peak = airflow.peak_in_flight.load(Ordering::SeqCst);
+    assert_eq!(
+        peak, 1,
+        "two writes were in flight against one run at once; that is the race that 500s"
     );
 }
 
@@ -1814,6 +1946,7 @@ async fn each_way_a_single_write_can_go_wrong_costs_only_its_own_gate() {
                 &selection,
                 Decision::Approve,
                 &filter,
+                Some(Duration::ZERO),
                 &CancellationToken::new(),
             )
             .await
@@ -1857,6 +1990,7 @@ async fn an_answer_that_died_mid_write_is_a_failure_and_never_a_silent_zero() {
             &selection,
             Decision::Approve,
             &filter,
+            Some(Duration::ZERO),
             &CancellationToken::new(),
         )
         .await

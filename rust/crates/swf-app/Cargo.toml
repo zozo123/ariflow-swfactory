@@ -25,3 +25,6 @@ tempfile.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 wiremock.workspace = true
+# `test-util` buys the paused clock: the gate settle window is three real seconds in production and
+# no seconds at all in a test that asserts it was actually waited out.
+tokio = { workspace = true, features = ["test-util"] }

@@ -584,9 +584,12 @@ impl Ops {
     ) -> Result<Selection> {
         let selection = crate::gates::select(self.runs()?, filter, cancel).await?;
         for row in selection.rows.iter().filter(|row| row.gate.ready) {
-            // Sighting a ready gate on a plain listing counts: it is what lets an operator who has
-            // been looking at the screen answer without waiting for a confirming poll — and what
-            // keeps a batch from paying a confirmation delay per gate for a set it just read.
+            // Sighting a ready gate on a listing STARTS its settle clock; it does not discharge
+            // it. That distinction is the whole rule: an operator who has had the gate on screen
+            // for a while answers with no pause at all, while a batch that selected the same gate
+            // a millisecond ago still waits out `CONFIRM_INTERVAL` from here. Treating this read
+            // as one of the two required sightings is what answered gates inside the window the
+            // scheduler fails them in.
             self.sightings.record(&row.gate.id());
         }
         Ok(selection)
@@ -617,11 +620,16 @@ impl Ops {
     /// The selection is taken as an argument rather than re-read here because the caller has to be
     /// able to show it — and be told to confirm it — between the read and the writes. A dry run is
     /// simply this method never being called.
+    ///
+    /// `settle` is the observation window each gate must have been parked for; `None` is
+    /// [`gates::CONFIRM_INTERVAL`](crate::gates::CONFIRM_INTERVAL), which is what the product
+    /// passes and what the tests shorten.
     pub async fn gate_answer_all(
         &self,
         selection: &Selection,
         decision: Decision,
         filter: &GateFilter,
+        settle: Option<Duration>,
         cancel: &CancellationToken,
     ) -> Result<BatchReport> {
         let runs = self.runs_shared()?;
@@ -631,6 +639,7 @@ impl Ops {
             selection,
             decision,
             filter,
+            settle,
             cancel,
         )
         .await)

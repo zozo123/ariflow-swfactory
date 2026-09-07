@@ -720,7 +720,8 @@ async fn answer_all(
             // Nothing has been written yet; a refusal here reaches no service at all.
             confirm(&ctx.term, &batch_question(verb, &who, &selection, filter))?;
         }
-        ops.gate_answer_all(&selection, decision, filter, &ctx.cancel)
+        // `None`: the product never shortens the settle window a gate has to sit parked for.
+        ops.gate_answer_all(&selection, decision, filter, None, &ctx.cancel)
             .await?
     };
 
