@@ -203,7 +203,11 @@ def scrub_env(env: Mapping[str, str]) -> dict[str, str]:
         for key, value in env.items()
         if key not in SCRUB_EXACT
         and not key.startswith(SCRUB_PREFIXES)
-        and not key.endswith(("_API_KEY", "_ACCESS_TOKEN", "_AUTH_TOKEN", "_PASSWORD", "_SECRET"))
+        # `_TOKEN` is the suffix this project's own credentials use — SWF_BACKEND_TOKEN and
+        # AIRFLOW_TOKEN both ended in it and both survived the scrub, which handed the operator's
+        # authority to the process running model-written code. The allow-list was written against
+        # other people's credential names and never checked against ours.
+        and not key.endswith(("_API_KEY", "_ACCESS_TOKEN", "_AUTH_TOKEN", "_TOKEN", "_PASSWORD", "_SECRET", "_KEY"))
     }
 
 

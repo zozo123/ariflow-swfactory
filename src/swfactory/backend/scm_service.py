@@ -27,7 +27,14 @@ def operation(factory: Factory, path: str, body: dict[str, Any]) -> Any:
         raise Refused(503, "SWF_REPO is not configured on the backend")
     scm = GitHubScm(factory.repo, text({"base": body.get("base_branch", "main")}, "base"))
     if path == "/scm/issue":
-        ref = text(body, "ref", max_len=128)
+        # `GitHubScm.fetch_issue` reads any non-numeric ref as a FILESYSTEM PATH — that is the
+        # documented local-demo behaviour (`--issue demo/issue.md`) and it is fine on a developer's
+        # own machine. Over the network it is not: this host holds GH_TOKEN and the Airflow
+        # credentials, so a path here reads the control plane's files and the response echoes back
+        # the resolved absolute path. The demo affordance does not cross the network boundary.
+        ref = text(body, "ref", max_len=128).strip()
+        if not ref.isdigit():
+            raise Refused(400, "ref must be an issue number over the API; a path is local-only")
         issue = scm.fetch_issue(ref)
         return issue.model_dump(mode="json")
     if path == "/scm/publish":
