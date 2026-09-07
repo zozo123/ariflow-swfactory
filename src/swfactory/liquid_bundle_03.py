@@ -1,7 +1,9 @@
 from swfactory.liquid_bundle_engine import BundleSpec, Concern, DomainSpec, execute
 
 BUNDLE = BundleSpec(
-    "liquid500-03", 355, 404,
+    "liquid500-03",
+    355,
+    404,
     (
         DomainSpec("repo-coordination", "authority", "repo_coordination"),
         DomainSpec("ci-topology", "workgraph", "ci_topology"),

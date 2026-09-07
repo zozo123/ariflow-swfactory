@@ -66,9 +66,7 @@ def sandbox_environment(context: SecurityContext) -> dict[str, str]:
 def policy_fingerprint(*, version: str, capabilities: frozenset[Capability], scopes: frozenset[str]) -> str:
     import hashlib
 
-    material = "\0".join(
-        [version, *(sorted(item.value for item in capabilities)), *(sorted(scopes))]
-    ).encode()
+    material = "\0".join([version, *(sorted(item.value for item in capabilities)), *(sorted(scopes))]).encode()
     return hashlib.sha256(material).hexdigest()
 
 

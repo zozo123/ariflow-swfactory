@@ -1,7 +1,9 @@
 from swfactory.liquid_bundle_engine import BundleSpec, Concern, DomainSpec, execute
 
 BUNDLE = BundleSpec(
-    "liquid400-04", 905, 954,
+    "liquid400-04",
+    905,
+    954,
     (
         DomainSpec("webhook-replay", "airflow", "webhook"),
         DomainSpec("intake-dedupe", "workgraph", "intake_policy"),

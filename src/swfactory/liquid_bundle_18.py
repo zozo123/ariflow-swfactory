@@ -1,7 +1,9 @@
 from swfactory.liquid_bundle_engine import BundleSpec, Concern, DomainSpec, execute
 
 BUNDLE = BundleSpec(
-    "liquid400-08", 1105, 1154,
+    "liquid400-08",
+    1105,
+    1154,
     (
         DomainSpec("fault-injection", "authority", "fault_evidence"),
         DomainSpec("benchmarks", "airflow", "evals"),

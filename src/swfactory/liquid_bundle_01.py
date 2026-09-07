@@ -1,7 +1,9 @@
 from swfactory.liquid_bundle_engine import BundleSpec, Concern, DomainSpec, execute
 
 BUNDLE = BundleSpec(
-    "liquid500-01", 255, 304,
+    "liquid500-01",
+    255,
+    304,
     (
         DomainSpec("cell-authority", "authority", "cells"),
         DomainSpec("airflow-lifecycle", "airflow", "airflow_binding"),

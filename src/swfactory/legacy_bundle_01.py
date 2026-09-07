@@ -24,8 +24,4 @@ AREAS = (
 
 def execute_matrix(*, cell_id: str, epoch: int) -> tuple[ExecutionIntent, ...]:
     TRANCHE.validate()
-    return tuple(
-        run(area, concern, cell_id=cell_id, epoch=epoch)
-        for area in AREAS
-        for concern in Concern
-    )
+    return tuple(run(area, concern, cell_id=cell_id, epoch=epoch) for area in AREAS for concern in Concern)

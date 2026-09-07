@@ -1,7 +1,9 @@
 from swfactory.liquid_bundle_engine import BundleSpec, Concern, DomainSpec, execute
 
 BUNDLE = BundleSpec(
-    "liquid400-07", 1055, 1104,
+    "liquid400-07",
+    1055,
+    1104,
     (
         DomainSpec("rollback", "workgraph", "generations"),
         DomainSpec("disaster-recovery", "recovery", "reconcile"),

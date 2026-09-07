@@ -1,7 +1,9 @@
 from swfactory.liquid_bundle_engine import BundleSpec, Concern, DomainSpec, execute
 
 BUNDLE = BundleSpec(
-    "liquid500-04", 405, 454,
+    "liquid500-04",
+    405,
+    454,
     (
         DomainSpec("contract-versioning", "authority", "contracts"),
         DomainSpec("evidence-ledger", "evidence", "evidence_store"),

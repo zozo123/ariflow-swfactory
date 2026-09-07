@@ -32,18 +32,9 @@ def compile_workgraph(nodes: Iterable[WorkNode], *, max_width: int = 7) -> WorkP
     emitted: set[str] = set()
     layers: list[tuple[str, ...]] = []
     while remaining:
-        ready = sorted(
-            node_id
-            for node_id in remaining
-            if set(rows[node_id].deps) <= emitted
-        )
+        ready = sorted(node_id for node_id in remaining if set(rows[node_id].deps) <= emitted)
         if not ready:
-            unknown = {
-                dep
-                for node_id in remaining
-                for dep in rows[node_id].deps
-                if dep not in rows
-            }
+            unknown = {dep for node_id in remaining for dep in rows[node_id].deps if dep not in rows}
             if unknown:
                 raise ValueError(f"unknown dependencies: {sorted(unknown)}")
             raise ValueError("workgraph contains a cycle")
