@@ -1,0 +1,3 @@
+interface:
+  display_name: "Software Factory Harness"
+  short_description: "Drive the Airflow software factory safely through the swf CLI"

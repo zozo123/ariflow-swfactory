@@ -1,15 +1,33 @@
 # Agent Skills
 
-This repository publishes an installable Agent Skill for operating and extending Airflow Software Factory.
+This repository publishes two installable Agent Skills for the Airflow Software Factory.
 
 ## Install
+
+Operate, extend, stabilize, or audit the factory:
 
 ```bash
 npx skills add https://github.com/zozo123/ariflow-swfactory --skill airflow-software-factory
 ```
 
-Direct skill source: [`airflow-software-factory/SKILL.md`](airflow-software-factory/SKILL.md).
+Drive the governed factory from an outer coding harness through `swf`:
 
-Catalog: https://skills.sh/zozo123/ariflow-swfactory/airflow-software-factory
+```bash
+npx skills add https://github.com/zozo123/ariflow-swfactory --skill swfactory
+```
 
-The skill is intentionally stored under `skills/`, one of the standard discovery locations used by the open `skills` CLI. Root `skills.sh.json` keeps repository grouping metadata synchronized with the published skill name.
+Install both:
+
+```bash
+npx skills add https://github.com/zozo123/ariflow-swfactory --skill airflow-software-factory --skill swfactory
+```
+
+Sources:
+- [`airflow-software-factory/SKILL.md`](airflow-software-factory/SKILL.md)
+- [`swfactory/SKILL.md`](swfactory/SKILL.md)
+
+Catalog pages:
+- https://skills.sh/zozo123/ariflow-swfactory/airflow-software-factory
+- https://skills.sh/zozo123/ariflow-swfactory/swfactory
+
+Both skills live under `skills/`, a standard discovery location used by the open `skills` CLI. Root `skills.sh.json` groups both published skill names so repository metadata matches CLI discovery.
