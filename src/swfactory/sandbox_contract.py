@@ -36,11 +36,7 @@ class CapabilityRequirement:
     exact_teardown: bool = True
 
     def missing(self, caps: SandboxCapabilities) -> tuple[str, ...]:
-        return tuple(
-            name
-            for name, needed in asdict(self).items()
-            if needed and not bool(getattr(caps, name, False))
-        )
+        return tuple(name for name, needed in asdict(self).items() if needed and not bool(getattr(caps, name, False)))
 
 
 @dataclass(frozen=True)
@@ -184,9 +180,7 @@ def islo_document(*, snapshot: bool = False, fork: bool = False) -> ProviderDocu
     )
 
 
-def provider_documents(
-    *, islo_snapshot: bool = False, islo_fork: bool = False
-) -> tuple[ProviderDocument, ...]:
+def provider_documents(*, islo_snapshot: bool = False, islo_fork: bool = False) -> tuple[ProviderDocument, ...]:
     return (
         local_document(),
         srt_document(),
@@ -207,8 +201,7 @@ def select_provider(
     compatible = [doc for doc in docs if not requirement.missing(doc.capabilities)]
     if not compatible:
         detail = {
-            doc.provider: requirement.missing(doc.capabilities)
-            for doc in sorted(docs, key=lambda item: item.provider)
+            doc.provider: requirement.missing(doc.capabilities) for doc in sorted(docs, key=lambda item: item.provider)
         }
         raise ValueError(f"no sandbox provider satisfies capability requirement: {detail}")
     return min(

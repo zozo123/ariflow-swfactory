@@ -126,9 +126,7 @@ def _finished_epoch(run: dict, path: Path) -> float:
         return 0.0
 
 
-def load_all(
-    root: Path, *, include_scripted: bool = True, newest_first: bool = False
-) -> list[dict]:
+def load_all(root: Path, *, include_scripted: bool = True, newest_first: bool = False) -> list[dict]:
     """Every ``**/docs/factory/*/metrics.json`` under ``root``, ordered by when the run finished.
 
     The single reader of the committed metrics: ``swfactory metrics`` aggregates them all

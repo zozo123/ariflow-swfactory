@@ -65,15 +65,9 @@ class EvidenceStore:
         timeline = []
         path = cell / "timeline.jsonl"
         if path.exists():
-            timeline = [
-                json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line
-            ]
+            timeline = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
         manifest_path = cell / "manifest.json"
-        manifest = (
-            json.loads(manifest_path.read_text(encoding="utf-8"))
-            if manifest_path.exists()
-            else None
-        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else None
         return {"cell_id": cell_id, "timeline": timeline, "manifest": manifest}
 
     @staticmethod

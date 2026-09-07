@@ -63,9 +63,7 @@ def inspect_run(root: Path, run_id: str, *, event_limit: int = 50) -> dict[str, 
             result["errors"][name] = str(error)
     try:
         recovery = state._path("recovery")
-        result["recovered_fragments"] = sorted(
-            path.name for path in recovery.glob("*.tail") if path.is_file()
-        )
+        result["recovered_fragments"] = sorted(path.name for path in recovery.glob("*.tail") if path.is_file())
     except (OSError, ValueError) as error:
         result["errors"]["recovery"] = str(error)
     return result

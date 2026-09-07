@@ -31,9 +31,7 @@ def _isolated_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(ROOT)
 
 
-def _run(
-    tmp_path: Path, fixtures: list[Path] = FIXTURES, approver=None, **overrides: object
-) -> tuple[RunReport, Path]:
+def _run(tmp_path: Path, fixtures: list[Path] = FIXTURES, approver=None, **overrides: object) -> tuple[RunReport, Path]:
     bp = load("factory")
     (job,) = bp.jobs({"issues": ["demo/issue.md"]})
     defaults: dict[str, object] = {
@@ -45,9 +43,7 @@ def _run(
     }
     cfg = bp.config(job, run_id="b10ck3r1", **{**defaults, **overrides})
     kw = {"approver": approver} if approver else {}
-    report = execute(
-        cfg, run_dir=tmp_path / "run", agent=ScriptedAgent(fixtures), blueprint=bp, **kw
-    )
+    report = execute(cfg, run_dir=tmp_path / "run", agent=ScriptedAgent(fixtures), blueprint=bp, **kw)
     return report, tmp_path
 
 
@@ -126,15 +122,11 @@ def test_rejected_gate_publishes_rejected_pr_with_durable_approval(tmp_path: Pat
     report, tmp = _run(tmp_path, approve="prompt", approver=_reject_intent)
     assert [s.stage for s in report.stages] == ["intent", "deliver"]
     assert report.stages[-1].status == "blocked" and report.stages[-1].numbers["rejected"] == 1
-    assert [(a.gate, a.decision, a.actor) for a in report.approvals] == [
-        ("intent", "reject", "alice")
-    ]
+    assert [(a.gate, a.decision, a.actor) for a in report.approvals] == [("intent", "reject", "alice")]
     assert report.tests_passed is False and report.pr_url
     art = tmp / "work" / ART
     approvals = json.loads((art / "approvals.json").read_text())
-    assert [(a["gate"], a["decision"], a["actor"]) for a in approvals] == [
-        ("intent", "reject", "alice")
-    ]
+    assert [(a["gate"], a["decision"], a["actor"]) for a in approvals] == [("intent", "reject", "alice")]
     assert json.loads((art / "metrics.json").read_text())["approvers"] == ["alice"]
     assert not (art / "spec.md").exists() and not (art / "plan.json").exists()
     pr = (tmp / "run" / "pr.md").read_text()
@@ -151,6 +143,4 @@ def test_rejected_gate_publishes_rejected_pr_with_durable_approval(tmp_path: Pat
     ).stdout.split()
     assert f"{ART}/approvals.json" in files and f"{ART}/metrics.json" in files
     assert f"{ART}/intent.md" in files and "tests/test_percent_change.py" not in files
-    assert json.loads((tmp / "run" / "report.json").read_text())["stages"][-1]["status"] == (
-        "blocked"
-    )
+    assert json.loads((tmp / "run" / "report.json").read_text())["stages"][-1]["status"] == ("blocked")

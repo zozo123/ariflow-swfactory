@@ -91,9 +91,7 @@ def reconcile_state(
     if current in _TERMINAL:
         return current
     if current == LifecycleState.SUCCESS and airflow_state not in {None, "success"}:
-        raise LifecycleConflict(
-            f"successful Cell cannot be reconciled with Airflow state {airflow_state}"
-        )
+        raise LifecycleConflict(f"successful Cell cannot be reconciled with Airflow state {airflow_state}")
     if approval_pending:
         return LifecycleState.WAITING_APPROVAL
     if airflow_state is None:

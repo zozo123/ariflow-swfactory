@@ -88,14 +88,10 @@ def subprocess_runner(argv: Sequence[str]) -> str:
     A missing binary raises ``FileNotFoundError`` (from ``subprocess``), which the checks report
     as "not found on PATH".
     """
-    proc = subprocess.run(
-        list(argv), capture_output=True, text=True, check=False, timeout=_COMMAND_TIMEOUT_S
-    )
+    proc = subprocess.run(list(argv), capture_output=True, text=True, check=False, timeout=_COMMAND_TIMEOUT_S)
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout).strip().splitlines()
-        raise DoctorCommandError(
-            f"{' '.join(argv)} exited {proc.returncode}: {err[0][:200] if err else ''}"
-        )
+        raise DoctorCommandError(f"{' '.join(argv)} exited {proc.returncode}: {err[0][:200] if err else ''}")
     return proc.stdout
 
 
@@ -146,10 +142,7 @@ def integration_names(status: object) -> set[str] | None:
         return None
     raw = status.get("integrations")
     if isinstance(raw, dict):  # {"github": {...}, "claude": {...}} or {"github": true}
-        raw = [
-            {"name": k, **(v if isinstance(v, dict) else {"connected": bool(v)})}
-            for k, v in raw.items()
-        ]
+        raw = [{"name": k, **(v if isinstance(v, dict) else {"connected": bool(v)})} for k, v in raw.items()]
     names: set[str] = set()
     for item in raw if isinstance(raw, list) else []:
         if isinstance(item, str):
@@ -160,9 +153,7 @@ def integration_names(status: object) -> set[str] | None:
         state = str(item.get("status") or item.get("state") or "").strip().lower()
         if state in _DISCONNECTED or item.get("connected") is False:
             continue
-        names.update(
-            str(item[k]).strip().lower() for k in _INTEGRATION_KEYS if isinstance(item.get(k), str)
-        )
+        names.update(str(item[k]).strip().lower() for k in _INTEGRATION_KEYS if isinstance(item.get(k), str))
     return names
 
 
@@ -195,9 +186,7 @@ def integration_names_from_text(text: str) -> set[str]:
 def _check_islo_cli(runner: Runner) -> Check:
     out, err = _try(runner, ["islo", "--version"])
     if out is None:
-        return Check(
-            "islo cli", False, err, "install islo >= 0.48 (https://islo.dev) and put it on PATH"
-        )
+        return Check("islo cli", False, err, "install islo >= 0.48 (https://islo.dev) and put it on PATH")
     return Check("islo cli", True, out.strip() or "present")
 
 
@@ -228,13 +217,9 @@ def _check_integrations(
             missing = f"cannot read integrations: {err}"
             checks = []
             if github:
-                checks.append(
-                    Check("integration github", False, missing, "islo login --tool github")
-                )
+                checks.append(Check("integration github", False, missing, "islo login --tool github"))
             if claude:
-                checks.append(
-                    Check("integration claude", False, missing, "islo login --tool claude")
-                )
+                checks.append(Check("integration claude", False, missing, "islo login --tool claude"))
             return checks
         names, source = integration_names_from_text(text), "text"
     have = ", ".join(sorted(names)) or "none"
@@ -279,14 +264,11 @@ def _check_gateway(runner: Runner, profile: str) -> Check:
     match = next((x for x in items if x.get("name") == profile), None)
     if match is None:
         have = ", ".join(_names(items)) or "none"
-        return Check(
-            "gateway profile", False, f"{profile!r} not found; have: {have}", gateway_fix(profile)
-        )
+        return Check("gateway profile", False, f"{profile!r} not found; have: {have}", gateway_fix(profile))
     action = str(match.get("default_action") or "").lower()
     internet = match.get("internet_enabled")
     detail = (
-        f"{profile!r} default_action={action or '?'} internet_enabled={internet} "
-        f"rules={match.get('rule_count', '?')}"
+        f"{profile!r} default_action={action or '?'} internet_enabled={internet} rules={match.get('rule_count', '?')}"
     )
     problems = []
     if action != "deny":
@@ -318,17 +300,12 @@ def _check_environment(runner: Runner, env: str) -> Check:
     names = _names(_items(_json(out)))
     if env not in names:
         have = ", ".join(names) or "none"
-        return Check(
-            "islo environment", False, f"{env!r} not found; have: {have}", environment_fix(env)
-        )
+        return Check("islo environment", False, f"{env!r} not found; have: {have}", environment_fix(env))
     return Check("islo environment", True, f"{env!r} present")
 
 
 def _check_snapshot(runner: Runner, snapshot: str) -> Check:
-    fix = (
-        "bake it: SNAPSHOT=1 deploy/islo/bootstrap.sh (docs/islo.md 'snapshot'), "
-        "or unset [sandbox] snapshot"
-    )
+    fix = "bake it: SNAPSHOT=1 deploy/islo/bootstrap.sh (docs/islo.md 'snapshot'), or unset [sandbox] snapshot"
     out, err = _try(runner, ["islo", "snapshot", "ls", "--output", "json"])
     if out is None:
         return Check("islo snapshot", False, err, fix)
@@ -342,9 +319,7 @@ def _check_snapshot(runner: Runner, snapshot: str) -> Check:
 def _check_gh_auth(runner: Runner) -> Check:
     out, err = _try(runner, ["gh", "auth", "status"])
     if out is None:
-        return Check(
-            "gh auth", False, err, "gh auth login  (or export GH_TOKEN=<swfactory-bot PAT>)"
-        )
+        return Check("gh auth", False, err, "gh auth login  (or export GH_TOKEN=<swfactory-bot PAT>)")
     account = re.search(r"Logged in to (\S+) account (\S+)", out)
     return Check("gh auth", True, f"{account.group(2)}@{account.group(1)}" if account else "ok")
 
@@ -417,14 +392,11 @@ def _check_blueprint(name: str) -> Check:
     try:
         bp = blueprint_mod.load(name)
     except (OSError, ValueError) as e:
-        return Check(
-            "blueprint", False, str(e), f"fix blueprints/{name}.toml (docs/design.md 'Blueprints')"
-        )
+        return Check("blueprint", False, str(e), f"fix blueprints/{name}.toml (docs/design.md 'Blueprints')")
     return Check(
         "blueprint",
         True,
-        f"{bp.name!r}: {' > '.join(bp.order)}; sandbox={bp.sandbox.kind}; "
-        f"targets={len(bp.targets)}",
+        f"{bp.name!r}: {' > '.join(bp.order)}; sandbox={bp.sandbox.kind}; targets={len(bp.targets)}",
     )
 
 
@@ -445,10 +417,7 @@ def _check_factory_toml(cfg: Config, runner: Runner, root: Path) -> Check:
         return Check("factory.toml", False, f"{path} missing", fix)
 
     remote_path = rel.as_posix()
-    endpoint = (
-        f"repos/{cfg.repo}/contents/{quote(remote_path, safe='/')}"
-        f"?ref={quote(cfg.base_branch, safe='')}"
-    )
+    endpoint = f"repos/{cfg.repo}/contents/{quote(remote_path, safe='/')}?ref={quote(cfg.base_branch, safe='')}"
     out, err = _try(
         runner,
         ["gh", "api", "-H", "Accept: application/vnd.github.raw+json", endpoint],
@@ -523,9 +492,7 @@ def run_doctor(
             checks.append(Check("islo auth", False, skipped, "islo login"))
             checks.append(Check("integration github", False, skipped, "islo login --tool github"))
             if cfg.agent == "claude":
-                checks.append(
-                    Check("integration claude", False, skipped, "islo login --tool claude")
-                )
+                checks.append(Check("integration claude", False, skipped, "islo login --tool claude"))
             checks += [
                 Check("gateway profile", False, skipped, gateway_fix(cfg.gateway_profile)),
                 Check("islo environment", False, skipped, environment_fix(cfg.islo_environment)),

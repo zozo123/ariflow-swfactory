@@ -13,9 +13,7 @@ import pytest
 
 from swfactory.sandbox import ToolsetSandbox, load_toolset_backend
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("SWF_TEST_LIVE_TOOLSET") != "1", reason="opt-in real sbx microVM test"
-)
+pytestmark = pytest.mark.skipif(os.environ.get("SWF_TEST_LIVE_TOOLSET") != "1", reason="opt-in real sbx microVM test")
 
 
 def test_real_sbx_roundtrip_and_teardown():

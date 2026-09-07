@@ -113,9 +113,7 @@ class FakeSandbox:
     name = "fake:work"
     workdir = "/work"
 
-    def __init__(
-        self, files: dict[str, str] | None = None, *, results: dict[str, RunResult] | None = None
-    ) -> None:
+    def __init__(self, files: dict[str, str] | None = None, *, results: dict[str, RunResult] | None = None) -> None:
         self.files: dict[str, str] = dict(files or {})
         self.results: dict[str, RunResult] = dict(results or {})
         self.commands: list[str] = []
@@ -257,9 +255,7 @@ def write_stage_log(tmp_path: Path, *records: dict) -> None:
 
 
 def git(*args: str, cwd: Path) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
-    ).stdout
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
 
 
 # ================================================================ 1. sandbox failure
@@ -325,9 +321,7 @@ def test_a_killed_command_in_the_build_loop_records_failed_evidence_and_retries(
     assert ei.value.kind == "sandbox" and ei.value.retryable is False
     assert "rc=124" in str(ei.value)
     assert agent.calls == [("build", 1)]
-    assert [(r["stage"], r["status"]) for r in stage_log(tmp_path)] == [
-        ("build_and_test", "failed")
-    ]
+    assert [(r["stage"], r["status"]) for r in stage_log(tmp_path)] == [("build_and_test", "failed")]
     assert not any(TEST_CMD in c for c in sb.commands)  # never tested a tree it could not stage
     with pytest.raises(StageError):  # the retry re-runs the stage instead of skipping it
         build_and_test(ctx)
@@ -395,9 +389,7 @@ def claude_sandbox(stage: str, raw: str, files: dict[str, str] | None = None) ->
     )
 
 
-@pytest.mark.parametrize(
-    ("subtype", "cost"), [("error_max_turns", 0.42), ("error_max_budget_usd", 2.0)]
-)
+@pytest.mark.parametrize(("subtype", "cost"), [("error_max_turns", 0.42), ("error_max_budget_usd", 2.0)])
 def test_an_agent_that_hits_its_own_limit_stops_the_stage_and_keeps_the_raw_envelope(
     tmp_path: Path, subtype: str, cost: float
 ) -> None:
@@ -579,9 +571,7 @@ def test_the_build_loop_stops_at_max_build_iterations_with_a_policy_error(tmp_pa
     assert not (tmp_path / "run" / "remote.git").exists()
 
 
-def deliver_sandbox(
-    *, patch: str, prefix: str = "", files: dict[str, str] | None = None
-) -> FakeSandbox:
+def deliver_sandbox(*, patch: str, prefix: str = "", files: dict[str, str] | None = None) -> FakeSandbox:
     """A sandbox that answers everything ``deliver`` asks git, handing back ``patch``."""
     return FakeSandbox(
         {"factory.toml": FACTORY_TOML, ".factory/base": "base0000\n", **(files or {})},
@@ -594,9 +584,7 @@ def deliver_sandbox(
     )
 
 
-APPROVED_REVIEW = (
-    json.dumps({"verdict": "approve", "findings": [], "dropped_nits": 0, "fixes": 0}) + "\n"
-)
+APPROVED_REVIEW = json.dumps({"verdict": "approve", "findings": [], "dropped_nits": 0, "fixes": 0}) + "\n"
 BLOCKED_REVIEW = (
     json.dumps(
         {
@@ -755,9 +743,7 @@ def test_a_corrupt_approvals_file_does_not_lose_the_gate_decision(tmp_path: Path
     )
 
     stored = json.loads(ctx.state.read_artifact(f"{ART}/approvals.json"))
-    assert [(a["gate"], a["decision"], a["actor"]) for a in stored] == [
-        ("intent", "reject", "alice")
-    ]
+    assert [(a["gate"], a["decision"], a["actor"]) for a in stored] == [("intent", "reject", "alice")]
     assert stored[0]["artifact_sha256"] == hashlib.sha256(intent_text.encode()).hexdigest()
     assert json.loads(sb.files[f"{ART}/approvals.json"]) == stored
 
@@ -803,10 +789,7 @@ def test_a_retry_of_a_rejected_run_republishes_the_same_branch_and_keeps_the_ref
     assert second.stages[-1].numbers["rejected"] == 1
     art = tmp_path / "work" / DEMO_ART
     assert not (art / "spec.md").exists() and not (art / "plan.json").exists()
-    decisions = [
-        (a["gate"], a["decision"], a["actor"])
-        for a in json.loads((art / "approvals.json").read_text())
-    ]
+    decisions = [(a["gate"], a["decision"], a["actor"]) for a in json.loads((art / "approvals.json").read_text())]
     assert decisions == [("intent", "reject", "alice")]
     pr = (tmp_path / "run" / "pr.md").read_text()
     assert pr.startswith("# [REJECTED] DEMO-1:")

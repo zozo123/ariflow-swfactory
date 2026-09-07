@@ -55,9 +55,7 @@ def run_ctx(ctx: Ctx, approver: Approver = cli_approver) -> RunReport:
     result = setup(ctx)
     print(f"{'setup':<16} {result.status:<8} {result.duration_s:6.1f}s  sandbox={ctx.sb.name}")
     report = run_pipeline(ctx, approver)
-    (ctx.run_dir / "report.json").write_text(
-        report.model_dump_json(indent=2) + "\n", encoding="utf-8"
-    )
+    (ctx.run_dir / "report.json").write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
     return report
 
 
@@ -88,9 +86,7 @@ def _load_blueprint(name_or_path: str) -> Blueprint:
         raise typer.Exit(2) from e
 
 
-def _run_jobs(
-    bp: Blueprint, issues: list[str], overrides: dict[str, Any], *, targets: list[str] | None = None
-) -> None:
+def _run_jobs(bp: Blueprint, issues: list[str], overrides: dict[str, Any], *, targets: list[str] | None = None) -> None:
     """Run every (issue x target) job of ``bp`` in sequence. ``overrides`` are the CLI flags the
     user passed (``None`` = not passed). Each job's report is printed as a table and written to
     ``.factory/<run_id>/report.json``. Exit 1 if any job blocks, fails its tests or errors."""
@@ -139,18 +135,14 @@ def run(
         list[str],
         typer.Option(help="GitHub issue number or path to a front-matter .md (repeatable)"),
     ],
-    blueprint: Annotated[
-        str, typer.Option(help="blueprints/<name>.toml or a path")
-    ] = blueprint_mod.DEFAULT_BLUEPRINT,
+    blueprint: Annotated[str, typer.Option(help="blueprints/<name>.toml or a path")] = blueprint_mod.DEFAULT_BLUEPRINT,
     target: Annotated[
         list[str] | None, typer.Option(help="only these blueprint targets (owner/name, repeatable)")
     ] = None,
     repo: Annotated[str | None, typer.Option(help="owner/name of the target repo")] = None,
     target_dir: Annotated[str | None, typer.Option(help="subdir the factory operates on")] = None,
     agent: Annotated[str | None, typer.Option(help="claude | scripted")] = None,
-    sandbox: Annotated[
-        str | None, typer.Option(help="local | islo | srt | docker | toolset")
-    ] = None,
+    sandbox: Annotated[str | None, typer.Option(help="local | islo | srt | docker | toolset")] = None,
     scm: Annotated[str | None, typer.Option(help="local | github")] = None,
     approve: Annotated[str | None, typer.Option(help="auto | prompt")] = None,
     tests: Annotated[str | None, typer.Option(help="sandbox | crabbox")] = None,
@@ -184,9 +176,7 @@ def run(
 
 @app.command()
 def demo(
-    real: Annotated[
-        bool, typer.Option(help="claude agent, islo sandbox, github scm, prompt")
-    ] = False,
+    real: Annotated[bool, typer.Option(help="claude agent, islo sandbox, github scm, prompt")] = False,
     agent: Annotated[str | None, typer.Option()] = None,
     sandbox: Annotated[str | None, typer.Option()] = None,
     scm: Annotated[str | None, typer.Option()] = None,
@@ -230,9 +220,7 @@ def demo(
 
 @app.command()
 def metrics(
-    root: Annotated[
-        Path, typer.Option(help="checkout to scan for docs/factory/*/metrics.json")
-    ] = Path("."),
+    root: Annotated[Path, typer.Option(help="checkout to scan for docs/factory/*/metrics.json")] = Path("."),
 ) -> None:
     """Summarise every committed run: first-pass rate, iterations, cycle time, findings, cost."""
     runs = metrics_mod.load_all(root)
@@ -266,9 +254,7 @@ def approve(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     typer.echo(f"PATCH {url}\n{json.dumps(payload)}")
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode(), headers=headers, method="PATCH"
-    )
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="PATCH")
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             typer.echo(f"{resp.status} {resp.read().decode()[:2000]}")
@@ -282,9 +268,7 @@ def approve(
 
 @app.command()
 def maintain(
-    bands: Annotated[Path, typer.Option(help="Response tiers (sigma bands).")] = (
-        FACTORY_ROOT / "bands.yaml"
-    ),
+    bands: Annotated[Path, typer.Option(help="Response tiers (sigma bands).")] = (FACTORY_ROOT / "bands.yaml"),
     root: Annotated[Path, typer.Option(help="Repo root with docs/factory/*/metrics.json")] = Path(),
     scm: Annotated[str, typer.Option(help="local|github")] = "local",
     sweep_ttl_s: Annotated[
@@ -301,13 +285,9 @@ def maintain(
     cfg = Config(issue="maintain", scm=scm, approve="auto")  # type: ignore[arg-type]
     run_dir = Path(".factory") / cfg.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    breaches = maintain_mod.run(
-        cfg, scm=make_scm(cfg, run_dir), agent=None, sb=None, bands_path=bands, root=root
-    )
+    breaches = maintain_mod.run(cfg, scm=make_scm(cfg, run_dir), agent=None, sb=None, bands_path=bands, root=root)
     for b in breaches:
-        typer.echo(
-            f"{b.action:8s} {b.metric}: {b.value:g} vs mean {b.mean:g}±{b.stdev:g} ({b.sigma}σ)"
-        )
+        typer.echo(f"{b.action:8s} {b.metric}: {b.value:g} vs mean {b.mean:g}±{b.stdev:g} ({b.sigma}σ)")
     if not breaches:
         typer.echo("no breaches")
     if sweep_ttl_s:
@@ -317,21 +297,15 @@ def maintain(
 
 # ---------------------------------------------------------------- local host-owned evidence
 
-state_app = typer.Typer(
-    help="Inspect saved host run evidence without reconnecting to sandboxes.", no_args_is_help=True
-)
+state_app = typer.Typer(help="Inspect saved host run evidence without reconnecting to sandboxes.", no_args_is_help=True)
 app.add_typer(state_app, name="state")
 
 
 @state_app.command("list")
 def state_list(
-    root: Annotated[Path, typer.Option(help="directory containing saved run directories")] = Path(
-        ".factory"
-    ),
+    root: Annotated[Path, typer.Option(help="directory containing saved run directories")] = Path(".factory"),
     limit: Annotated[int, typer.Option(min=1, max=1000)] = 50,
-    attention: Annotated[
-        bool, typer.Option(help="only interrupted, failed or damaged runs")
-    ] = False,
+    attention: Annotated[bool, typer.Option(help="only interrupted, failed or damaged runs")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="one JSON document")] = False,
 ) -> None:
     """List the most recently changed local runs, their ownership and recorded spend."""
@@ -346,10 +320,7 @@ def state_list(
         runs = [
             run
             for run in runs
-            if run["interrupted"]
-            or run["errors"]
-            or run["torn_tail_bytes"]
-            or run["last_event"] == "failed"
+            if run["interrupted"] or run["errors"] or run["torn_tail_bytes"] or run["last_event"] == "failed"
         ]
     if as_json:
         typer.echo(json.dumps({"runs": runs}))
@@ -377,9 +348,7 @@ def state_list(
 @state_app.command("inspect")
 def state_inspect(
     run_id: Annotated[str, typer.Argument(help="saved factory run ID")],
-    root: Annotated[Path, typer.Option(help="directory containing saved run directories")] = Path(
-        ".factory"
-    ),
+    root: Annotated[Path, typer.Option(help="directory containing saved run directories")] = Path(".factory"),
     events: Annotated[int, typer.Option(min=1, max=1000, help="recent operation records")] = 50,
 ) -> None:
     """Print identity, stage evidence, operation ownership and journal health as JSON."""
@@ -474,12 +443,8 @@ def _webhook_inbox(path: Path) -> DeliveryInbox:
 
 @webhook_app.command("deliveries")
 def webhook_deliveries(
-    inbox: Annotated[
-        Path, typer.Option(envvar="SWF_WEBHOOK_INBOX", help="receiver's SQLite database")
-    ] = DEFAULT_INBOX,
-    state: Annotated[
-        str | None, typer.Option(help="pending | dispatching | dispatched | dead")
-    ] = None,
+    inbox: Annotated[Path, typer.Option(envvar="SWF_WEBHOOK_INBOX", help="receiver's SQLite database")] = DEFAULT_INBOX,
+    state: Annotated[str | None, typer.Option(help="pending | dispatching | dispatched | dead")] = None,
     limit: Annotated[int, typer.Option(min=1, max=1000)] = 50,
     as_json: Annotated[bool, typer.Option("--json", help="one JSON document")] = False,
 ) -> None:
@@ -511,9 +476,7 @@ def webhook_deliveries(
 @webhook_app.command("inspect")
 def webhook_inspect(
     delivery_id: Annotated[str, typer.Argument(help="X-GitHub-Delivery identity")],
-    inbox: Annotated[
-        Path, typer.Option(envvar="SWF_WEBHOOK_INBOX", help="receiver's SQLite database")
-    ] = DEFAULT_INBOX,
+    inbox: Annotated[Path, typer.Option(envvar="SWF_WEBHOOK_INBOX", help="receiver's SQLite database")] = DEFAULT_INBOX,
 ) -> None:
     """Print one receipt and its frozen Airflow configuration as JSON."""
     import sqlite3
@@ -531,12 +494,8 @@ def webhook_inspect(
 
 @webhook_app.command("retry")
 def webhook_retry(
-    delivery_id: Annotated[
-        str, typer.Argument(help="dead dispatch to requeue after repairing cause")
-    ],
-    inbox: Annotated[
-        Path, typer.Option(envvar="SWF_WEBHOOK_INBOX", help="receiver's SQLite database")
-    ] = DEFAULT_INBOX,
+    delivery_id: Annotated[str, typer.Argument(help="dead dispatch to requeue after repairing cause")],
+    inbox: Annotated[Path, typer.Option(envvar="SWF_WEBHOOK_INBOX", help="receiver's SQLite database")] = DEFAULT_INBOX,
 ) -> None:
     """Requeue one dead delivery with the SAME run id. Does not rerun an existing Airflow job."""
     import sqlite3
@@ -581,9 +540,7 @@ def webhook_route(
         except (OSError, ValueError) as exc:
             typer.echo(f"webhook route rejected: {exc}", err=True)
             raise typer.Exit(2) from exc
-    typer.echo(
-        f"POST /api/v2/dags/{trigger.dag_id}/dagRuns {json.dumps(trigger.body(), sort_keys=True)}"
-    )
+    typer.echo(f"POST /api/v2/dags/{trigger.dag_id}/dagRuns {json.dumps(trigger.body(), sort_keys=True)}")
 
 
 @app.command()
@@ -594,13 +551,9 @@ def doctor(
     repo: Annotated[str | None, typer.Option(help="owner/name of the target repo")] = None,
     target_dir: Annotated[str | None, typer.Option(help="subdir in the target repo")] = None,
     agent: Annotated[str, typer.Option(help="claude | scripted")] = "claude",
-    sandbox: Annotated[
-        str | None, typer.Option(help="local | islo | srt | docker | toolset")
-    ] = None,
+    sandbox: Annotated[str | None, typer.Option(help="local | islo | srt | docker | toolset")] = None,
     scm: Annotated[str, typer.Option(help="local | github")] = "github",
-    allow_local_agent: Annotated[
-        bool, typer.Option(help="DEV: allow a real agent outside a sandbox")
-    ] = False,
+    allow_local_agent: Annotated[bool, typer.Option(help="DEV: allow a real agent outside a sandbox")] = False,
     json_out: Annotated[bool, typer.Option("--json", help="machine-readable report")] = False,
 ) -> None:
     """Pre-flight the selected agent, sandbox, SCM, blueprint, and target contract."""
@@ -637,22 +590,14 @@ def doctor(
 def herd(
     airflow_url: Annotated[str, typer.Option(envvar="AIRFLOW_URL")] = "http://localhost:8080",
     repo: Annotated[str | None, typer.Option(help="owner/name (default: blueprint target)")] = None,
-    owner: Annotated[
-        str | None, typer.Option(envvar="SWF_SANDBOX_OWNER", help="only this creator's sandboxes")
-    ] = None,
+    owner: Annotated[str | None, typer.Option(envvar="SWF_SANDBOX_OWNER", help="only this creator's sandboxes")] = None,
     token: Annotated[str | None, typer.Option(envvar="AIRFLOW_TOKEN", help="API JWT")] = None,
     username: Annotated[str | None, typer.Option(envvar="AIRFLOW_USER")] = None,
     password: Annotated[str | None, typer.Option(envvar="AIRFLOW_PASSWORD")] = None,
-    metrics_root: Annotated[Path, typer.Option(help="root with docs/factory/*/metrics.json")] = (
-        Path()
-    ),
+    metrics_root: Annotated[Path, typer.Option(help="root with docs/factory/*/metrics.json")] = (Path()),
     refresh_s: Annotated[float, typer.Option(help="auto-refresh interval")] = 5.0,
-    once: Annotated[
-        bool, typer.Option("--once", help="print one snapshot and exit, no TUI (CI, scripts)")
-    ] = False,
-    json_out: Annotated[
-        bool, typer.Option("--json", help="machine-readable snapshot (implies --once)")
-    ] = False,
+    once: Annotated[bool, typer.Option("--once", help="print one snapshot and exit, no TUI (CI, scripts)")] = False,
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable snapshot (implies --once)")] = False,
     approve_all: Annotated[
         bool,
         typer.Option(
@@ -660,9 +605,7 @@ def herd(
             help="answer every pending gate of the configured blueprints, then exit (no TUI)",
         ),
     ] = False,
-    reject: Annotated[
-        bool, typer.Option("--reject", help="with --approve-all: reject every pending gate")
-    ] = False,
+    reject: Annotated[bool, typer.Option("--reject", help="with --approve-all: reject every pending gate")] = False,
 ) -> None:
     """Control room: pending gates (approve/reject), runs and their jobs, PRs, own sandboxes,
     metrics. A TUI by default; `--once [--json]` prints one snapshot and `--approve-all

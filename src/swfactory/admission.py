@@ -53,9 +53,7 @@ class AdmissionController:
         self._sequence = 0
         self._active: dict[str, QueuedWork] = {}
 
-    def submit(
-        self, work_id: str, repo: str, actor: str, blueprint: str, priority: Priority
-    ) -> Decision:
+    def submit(self, work_id: str, repo: str, actor: str, blueprint: str, priority: Priority) -> Decision:
         if work_id in self._active or any(item.work_id == work_id for item in self._queue):
             return Decision(False, "duplicate")
         if self._capacity_for(repo, actor, blueprint):
@@ -91,15 +89,11 @@ class AdmissionController:
         ordered = sorted(self._queue)
         return {
             "active": [self._row(item, now) for item in self._active.values()],
-            "queued": [
-                dict(self._row(item, now), position=i + 1) for i, item in enumerate(ordered)
-            ],
+            "queued": [dict(self._row(item, now), position=i + 1) for i, item in enumerate(ordered)],
             "limits": self.limits.__dict__,
         }
 
-    def _item(
-        self, work_id: str, repo: str, actor: str, blueprint: str, priority: Priority
-    ) -> QueuedWork:
+    def _item(self, work_id: str, repo: str, actor: str, blueprint: str, priority: Priority) -> QueuedWork:
         self._sequence += 1
         return QueuedWork(priority, self._sequence, work_id, repo, actor, blueprint)
 

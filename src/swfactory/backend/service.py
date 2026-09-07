@@ -156,9 +156,7 @@ class Factory:
     def _checked_airflow(self, method: str, path: str, body: dict | None = None) -> Any:
         status, payload = self.airflow(method, path, body)
         if status >= 300:
-            suffix = (
-                "; mutation outcome may be unknown" if method != "GET" and status >= 500 else ""
-            )
+            suffix = "; mutation outcome may be unknown" if method != "GET" and status >= 500 else ""
             raise Refused(status, f"Airflow rejected {method} (HTTP {status}){suffix}")
         return payload
 
@@ -200,9 +198,7 @@ class Factory:
                 for job in jobs
             ],
         }
-        digest = hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return "submit_" + digest[:32]
 
     def _activate_bindings(
@@ -223,9 +219,7 @@ class Factory:
                 try:
                     cell = self.cell_store.get(identity.stable_id())
                 except KeyError as error:
-                    raise Refused(
-                        409, "active admission has no corresponding Factory Cell"
-                    ) from error
+                    raise Refused(409, "active admission has no corresponding Factory Cell") from error
                 if cell["state"] in TERMINAL_STATES:
                     raise Refused(409, "active admission points at a terminal Factory Cell")
             else:
@@ -256,12 +250,8 @@ class Factory:
             )
         return bindings
 
-    def _journal_airflow_unpause(
-        self, authority: dict[str, Any], line_name: str, path: str
-    ) -> None:
-        ref = OperationRef.build(
-            authority["cell_id"], authority["epoch"], "airflow_unpause", line_name
-        )
+    def _journal_airflow_unpause(self, authority: dict[str, Any], line_name: str, path: str) -> None:
+        ref = OperationRef.build(authority["cell_id"], authority["epoch"], "airflow_unpause", line_name)
 
         def apply() -> dict[str, Any]:
             payload = self._checked_airflow("PATCH", path, {"is_paused": False})
@@ -271,15 +261,9 @@ class Factory:
             status, payload = self.airflow("GET", path, None)
             if status == 200 and isinstance(payload, dict):
                 if payload.get("is_paused") is False:
-                    return MutationOutcome(
-                        "committed", payload, {"dag": line_name}, "DAG is unpaused"
-                    )
-                return MutationOutcome(
-                    "definitely_absent", None, {"dag": line_name}, "DAG remains paused"
-                )
-            return MutationOutcome(
-                "ambiguous", None, {"dag": line_name, "status": status}, "DAG state unavailable"
-            )
+                    return MutationOutcome("committed", payload, {"dag": line_name}, "DAG is unpaused")
+                return MutationOutcome("definitely_absent", None, {"dag": line_name}, "DAG remains paused")
+            return MutationOutcome("ambiguous", None, {"dag": line_name, "status": status}, "DAG state unavailable")
 
         self.control.mutate(ref, apply, replay_safe=True, reconcile=reconcile)
 
@@ -305,9 +289,7 @@ class Factory:
         submission_id = self._submission_id(line.name, jobs, actor)
         repos = sorted({str(job["repo"]) for job in jobs})
         repo_key = (
-            repos[0]
-            if len(repos) == 1
-            else "multi:" + hashlib.sha256("\0".join(repos).encode()).hexdigest()[:16]
+            repos[0] if len(repos) == 1 else "multi:" + hashlib.sha256("\0".join(repos).encode()).hexdigest()[:16]
         )
         decision = self.control.submit(
             work_id=submission_id,
@@ -351,9 +333,7 @@ class Factory:
         path = "/dags/" + urllib.parse.quote(line.name, safe="")
         self._journal_airflow_unpause(authority, line.name, path)
         dag_run_id = "swf__" + submission_id.removeprefix("submit_")
-        dispatch_ref = OperationRef.build(
-            authority["cell_id"], authority["epoch"], "airflow_dispatch", submission_id
-        )
+        dispatch_ref = OperationRef.build(authority["cell_id"], authority["epoch"], "airflow_dispatch", submission_id)
 
         def dispatch() -> dict[str, Any]:
             result = self._checked_airflow(
@@ -366,9 +346,7 @@ class Factory:
             return result
 
         def reconcile() -> MutationOutcome:
-            status, payload = self.airflow(
-                "GET", path + "/dagRuns/" + urllib.parse.quote(dag_run_id, safe=""), None
-            )
+            status, payload = self.airflow("GET", path + "/dagRuns/" + urllib.parse.quote(dag_run_id, safe=""), None)
             if status == 200 and isinstance(payload, dict):
                 return MutationOutcome(
                     "committed",
@@ -417,9 +395,7 @@ class Factory:
             elif current.get("airflow_run_id") not in {None, run_id}:
                 raise Refused(409, "Factory Cell is bound to a different Airflow run")
             if bound_now:
-                trace = TraceContext.for_cell(
-                    binding["cell_id"], binding["epoch"], "dispatch", run_id
-                )
+                trace = TraceContext.for_cell(binding["cell_id"], binding["epoch"], "dispatch", run_id)
                 envelope = MutationEnvelope(
                     cell_id=binding["cell_id"],
                     epoch=binding["epoch"],
@@ -476,12 +452,7 @@ class Factory:
             return 201, {"dag_run_id": submission["run_id"]}
         if method == "PATCH" and len(segments) == 2 and body == {"is_paused": False}:
             return self.airflow(method, path, body)
-        if (
-            method == "PATCH"
-            and len(segments) == 4
-            and segments[2] == "dagRuns"
-            and body == {"state": "failed"}
-        ):
+        if method == "PATCH" and len(segments) == 4 and segments[2] == "dagRuns" and body == {"state": "failed"}:
             return self.airflow(method, path, body)
         if (
             method == "PATCH"
@@ -495,15 +466,11 @@ class Factory:
                 {"chosen_options": ["Reject"], "params_input": {}},
             ):
                 raise ValueError("only explicit Approve or Reject answers are supported")
-            tasks = AirflowClient(
-                self.airflow_url, token=self._credential(), opener=self.opener.open
-            )
+            tasks = AirflowClient(self.airflow_url, token=self._credential(), opener=self.opener.open)
             states = tasks.task_states(segments[1], segments[3])
             index = int(segments[6])
             if not any(
-                t.task_id == segments[5]
-                and t.map_index == index
-                and t.state in {"awaiting_input", "deferred"}
+                t.task_id == segments[5] and t.map_index == index and t.state in {"awaiting_input", "deferred"}
                 for t in states
             ):
                 raise Refused(409, "gate is not waiting for operator input")
@@ -555,11 +522,7 @@ class Factory:
             counts[state] = counts.get(state, 0) + 1
             generation = str(cell.get("factory_generation") or "unknown")
             generations[generation] = generations.get(generation, 0) + 1
-            if (
-                state == "dispatching"
-                and not cell.get("airflow_run_id")
-                and now - float(cell["updated_at"]) > 300
-            ):
+            if state == "dispatching" and not cell.get("airflow_run_id") and now - float(cell["updated_at"]) > 300:
                 stale += 1
                 orphaned += 1
             if cell.get("compute") and not cell.get("cleanup") and state in TERMINAL_STATES:
@@ -601,9 +564,7 @@ class Factory:
         )
         current = self._cell(cell_id)
         if int(current["epoch"]) != epoch:
-            raise Refused(
-                409, f"stale Factory Cell epoch {epoch}; current epoch is {current['epoch']}"
-            )
+            raise Refused(409, f"stale Factory Cell epoch {epoch}; current epoch is {current['epoch']}")
 
         if requested == "cleaned":
             cleanup = {
@@ -629,13 +590,8 @@ class Factory:
             next_state = updated["state"]
         else:
             old_state = str(current["state"])
-            if (
-                old_state in {"failed", "cancelled", "rejected", "cleaned"}
-                and requested != old_state
-            ):
-                raise Refused(
-                    409, f"terminal Factory Cell cannot transition {old_state} -> {requested}"
-                )
+            if old_state in {"failed", "cancelled", "rejected", "cleaned"} and requested != old_state:
+                raise Refused(409, f"terminal Factory Cell cannot transition {old_state} -> {requested}")
             if old_state == "success" and requested not in {"success", "failed"}:
                 raise Refused(409, f"Factory Cell cannot transition success -> {requested}")
             if requested == "running" and old_state not in {"dispatching", "queued", "running"}:
@@ -650,9 +606,7 @@ class Factory:
             except DuplicateOperation:
                 updated = self._cell(cell_id)
             released = (
-                self.control.release_cell(cell_id, epoch=epoch, state=requested)
-                if requested in TERMINAL_STATES
-                else []
+                self.control.release_cell(cell_id, epoch=epoch, state=requested) if requested in TERMINAL_STATES else []
             )
             next_state = requested
 
@@ -727,8 +681,7 @@ class Factory:
                         "status": "ok" if present else "warn",
                         "required": False,
                         "detail": (
-                            f"backend tool installed={present}, configured={configured}; "
-                            "credentials not probed"
+                            f"backend tool installed={present}, configured={configured}; credentials not probed"
                         ),
                         "fix": "" if present else f"install {tool} on the backend if needed",
                     }

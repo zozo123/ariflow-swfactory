@@ -127,35 +127,24 @@ def apply_codeowners(modules: Iterable[ModuleInfo], text: str) -> tuple[ModuleIn
     return tuple(out)
 
 
-def snapshot(
-    modules: Iterable[ModuleInfo], workflows: Iterable[WorkflowImpact]
-) -> DiscoverySnapshot:
+def snapshot(modules: Iterable[ModuleInfo], workflows: Iterable[WorkflowImpact]) -> DiscoverySnapshot:
     modules = tuple(sorted(modules, key=lambda m: (m.root, m.name)))
     workflows = tuple(sorted(workflows, key=lambda w: w.workflow))
     payload = {"modules": [asdict(m) for m in modules], "workflows": [asdict(w) for w in workflows]}
-    digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return DiscoverySnapshot(1, modules, workflows, digest)
 
 
-def impacted_workflows(
-    changed_paths: Iterable[str], workflows: Iterable[WorkflowImpact]
-) -> tuple[str, ...]:
+def impacted_workflows(changed_paths: Iterable[str], workflows: Iterable[WorkflowImpact]) -> tuple[str, ...]:
     changed = tuple(sorted(set(changed_paths)))
     impacted: list[str] = []
     for workflow in sorted(workflows, key=lambda w: w.workflow):
         if workflow.conservative or not workflow.paths:
             impacted.append(workflow.workflow)
             continue
-        matched = any(
-            any(fnmatch.fnmatch(path, pattern) for pattern in workflow.paths) for path in changed
-        )
+        matched = any(any(fnmatch.fnmatch(path, pattern) for pattern in workflow.paths) for path in changed)
         ignored = (
-            all(
-                any(fnmatch.fnmatch(path, pattern) for pattern in workflow.paths_ignore)
-                for path in changed
-            )
+            all(any(fnmatch.fnmatch(path, pattern) for pattern in workflow.paths_ignore) for path in changed)
             if changed and workflow.paths_ignore
             else False
         )
@@ -164,9 +153,7 @@ def impacted_workflows(
     return tuple(impacted)
 
 
-def materialization_cache_key(
-    request: MaterializationRequest, *, toolchain: Mapping[str, str] | None = None
-) -> str:
+def materialization_cache_key(request: MaterializationRequest, *, toolchain: Mapping[str, str] | None = None) -> str:
     payload = {
         "source": request.source,
         "commit": request.commit,
@@ -177,12 +164,7 @@ def materialization_cache_key(
         "allow_partial": request.allow_partial,
         "toolchain": dict(sorted((toolchain or {}).items())),
     }
-    return (
-        "mat:"
-        + hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-    )
+    return "mat:" + hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def verify_materialization(
@@ -192,9 +174,7 @@ def verify_materialization(
     mode: str,
     fallback_reason: str | None = None,
 ) -> MaterializationReceipt:
-    required = tuple(
-        sorted(set(request.required_paths + request.protected_paths + request.control_paths))
-    )
+    required = tuple(sorted(set(request.required_paths + request.protected_paths + request.control_paths)))
     present: list[str] = []
     missing: list[str] = []
     for rel in required:

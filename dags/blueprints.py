@@ -87,9 +87,7 @@ def _cell_transition(job: dict[str, Any], state: str, context: dict[str, Any], s
     transition(
         job,
         state,
-        operation_key=(
-            f"airflow:{dag_run.run_id}:{int(job['job_idx'])}:{task_id}:{try_number}:{suffix}"
-        ),
+        operation_key=(f"airflow:{dag_run.run_id}:{int(job['job_idx'])}:{task_id}:{try_number}:{suffix}"),
     )
 
 
@@ -139,15 +137,13 @@ def _approve_task(name: str, stage: str, gate: dict[str, Any]) -> ApprovalOperat
     auto = bool(gate.get("auto", False)) or APPROVE_ENV_AUTO
     issue = "{{ ti.xcom_pull(task_ids='fan_out')[ti.map_index]['issue'] }}"
     preview = (
-        f"{{{{ (ti.xcom_pull(task_ids='{GROUP_ID}.{stage}', map_indexes=ti.map_index) or {{}})"
-        ".get('preview', '') }}"
+        f"{{{{ (ti.xcom_pull(task_ids='{GROUP_ID}.{stage}', map_indexes=ti.map_index) or {{}}).get('preview', '') }}}}"
     )
     assigned = [str(u) for u in gate.get("assigned") or []]
     return GateOperator(
         task_id=f"approve_{stage}",
         subject=f"[{name}] approve {gate['artifact']} for {issue}",
-        body=f"Run {{{{ dag_run.run_id }}}} · job {{{{ ti.map_index }}}} · `{gate['artifact']}`\n\n"
-        + preview,
+        body=f"Run {{{{ dag_run.run_id }}}} · job {{{{ ti.map_index }}}} · `{gate['artifact']}`\n\n" + preview,
         defaults=ApprovalOperator.APPROVE if auto else None,
         response_timeout=timedelta(hours=int(gate.get("timeout_h", 24))),
         assigned_users=[{"id": u, "name": u} for u in assigned] or None,
@@ -165,9 +161,7 @@ def _record_task(name: str, stage: str):
         from swfactory.stages import record_approval
 
         ti = context["ti"]
-        response = (
-            ti.xcom_pull(task_ids=f"{GROUP_ID}.approve_{stage}", map_indexes=ti.map_index) or {}
-        )
+        response = ti.xcom_pull(task_ids=f"{GROUP_ID}.approve_{stage}", map_indexes=ti.map_index) or {}
         chosen = (response.get("chosen_options") or [ApprovalOperator.APPROVE])[0]
         approval = Approval(
             gate=stage,

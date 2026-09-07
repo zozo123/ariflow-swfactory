@@ -75,9 +75,7 @@ FAILED_TASK_STATES = frozenset({"failed", "upstream_failed"})
 FINAL_TASK_STATES = FAILED_TASK_STATES | frozenset({"success", "skipped", "removed"})
 
 _CHECK_PASS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
-_CHECK_FAIL = frozenset(
-    {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"}
-)
+_CHECK_FAIL = frozenset({"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"})
 
 
 class ControlError(RuntimeError):
@@ -297,9 +295,7 @@ def _exec(runner: Runner, argv: Sequence[str]) -> str:
     """Run ``argv`` and return stdout; a non-zero exit raises :class:`ControlError`."""
     argv = list(argv)
     try:
-        proc = runner(
-            argv, capture_output=True, text=True, check=False, timeout=_SUBPROCESS_TIMEOUT_S
-        )
+        proc = runner(argv, capture_output=True, text=True, check=False, timeout=_SUBPROCESS_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError) as e:
         raise ControlError(f"{argv[0]}: {e}") from e
     if proc.returncode != 0:
@@ -498,9 +494,7 @@ class AirflowClient:
         Unbounded on purpose: a run's task count is ``fan_out`` x stages, so a wide run is
         several pages and a client that reads one page reports a job as never having started.
         """
-        tis = self._paged(
-            f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}/taskInstances", "task_instances"
-        )
+        tis = self._paged(f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}/taskInstances", "task_instances")
         return [
             TaskState(
                 task_id=str(ti.get("task_id", "")),
@@ -530,9 +524,7 @@ class AirflowClient:
                 return []
         return [v for v in value if isinstance(v, dict)] if isinstance(value, list) else []
 
-    def job_rows(
-        self, dag_id: str, run_id: str, *, fallback_issues: Sequence[str] = ()
-    ) -> list[JobRow]:
+    def job_rows(self, dag_id: str, run_id: str, *, fallback_issues: Sequence[str] = ()) -> list[JobRow]:
         """One row per job of ``run_id``: task instances grouped by ``map_index``, issue named.
 
         Two reads: ``taskInstances`` (the states, paged) and ``fan_out``'s XCom (the issues).
@@ -551,9 +543,7 @@ class AirflowClient:
         Paged like the rest: this route is unfiltered by DAG, so a busy factory outruns one page
         and the hidden gates are the ones nobody answers.
         """
-        gates = self._paged(
-            "/dags/~/dagRuns/~/hitlDetails", "hitl_details", query={"response_received": "false"}
-        )
+        gates = self._paged("/dags/~/dagRuns/~/hitlDetails", "hitl_details", query={"response_received": "false"})
         return [_gate_from(h) for h in gates]
 
     # -- writes
@@ -586,9 +576,7 @@ class AirflowClient:
 
     def stop_run(self, dag_id: str, run_id: str) -> dict:
         """Mark a run failed (``PATCH dagRuns/{run_id} {"state": "failed"}``)."""
-        return self._api(
-            "PATCH", f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}", body={"state": "failed"}
-        )
+        return self._api("PATCH", f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}", body={"state": "failed"})
 
     # -- links
 
@@ -781,9 +769,7 @@ class MetricsSource:
 class RunSource(Protocol):
     def list_dags(self, tag: str = ...) -> list[str]: ...
     def list_runs(self, dag_id: str, limit: int = ...) -> list[Run]: ...
-    def job_rows(
-        self, dag_id: str, run_id: str, *, fallback_issues: Sequence[str] = ...
-    ) -> list[JobRow]: ...
+    def job_rows(self, dag_id: str, run_id: str, *, fallback_issues: Sequence[str] = ...) -> list[JobRow]: ...
     def pending_gates(self) -> list[Gate]: ...
 
 
@@ -838,9 +824,7 @@ def collect(
                 run.jobs = [collapsed_job(run)]
                 continue
             try:
-                run.jobs = airflow.job_rows(run.dag_id, run.run_id, fallback_issues=run.issues) or [
-                    collapsed_job(run)
-                ]
+                run.jobs = airflow.job_rows(run.dag_id, run.run_id, fallback_issues=run.issues) or [collapsed_job(run)]
             except Exception as e:  # noqa: BLE001
                 snap.errors[f"airflow:{run.dag_id}/{run.run_id}"] = str(e)
                 run.jobs = [collapsed_job(run)]

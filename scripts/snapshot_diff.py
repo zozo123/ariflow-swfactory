@@ -78,9 +78,7 @@ def norm(snapshot: dict[str, Any]) -> dict[str, Any]:
     ]
     return {
         "runs": sorted(runs, key=lambda r: (r["dag_id"], r["run_id"])),
-        "gates": sorted(
-            gates, key=lambda g: (g["dag_id"], g["run_id"], g["task_id"], g["map_index"])
-        ),
+        "gates": sorted(gates, key=lambda g: (g["dag_id"], g["run_id"], g["task_id"], g["map_index"])),
         "prs": sorted(prs, key=lambda p: p["number"]),
     }
 

@@ -58,9 +58,7 @@ def _env(home: Path) -> dict[str, str]:
 
 
 def _run(argv: list[str], *, cwd: Path, env: dict[str, str], timeout: int) -> str:
-    proc = subprocess.run(
-        argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout, check=False
-    )
+    proc = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout, check=False)
     tail = f"{proc.stdout[-4000:]}\n{proc.stderr[-4000:]}"
     assert proc.returncode == 0, f"{argv[-2:]} rc={proc.returncode}\n{tail}"
     return proc.stdout + proc.stderr
@@ -105,8 +103,6 @@ def test_approvals_recorded_as_auto(smoke: dict) -> None:
     assert [a["decision"] for a in approvals] == ["approve", "approve"]
     assert [a["actor"] for a in approvals] == ["auto", "auto"]
     assert (run_dir / "pr.md").is_file()  # deliver published to the local bare remote
-    metrics = json.loads(
-        (run_dir / "work" / "docs" / "factory" / "DEMO-1" / "metrics.json").read_text("utf-8")
-    )
+    metrics = json.loads((run_dir / "work" / "docs" / "factory" / "DEMO-1" / "metrics.json").read_text("utf-8"))
     assert metrics["agent"] == "scripted" and metrics["tests_passed"] is True
     assert metrics["approvers"] == ["auto", "auto"]

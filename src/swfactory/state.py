@@ -241,10 +241,7 @@ class RunState:
                 not isinstance(record, dict)
                 or not isinstance(record.get("event"), str)
                 or record["event"] not in {"started", "completed", "failed", "interrupted"}
-                or any(
-                    not isinstance(record.get(key), str)
-                    for key in ("attempt_id", "operation", "started_at")
-                )
+                or any(not isinstance(record.get(key), str) for key in ("attempt_id", "operation", "started_at"))
             ):
                 raise JournalCorruption(f"invalid operation record at {self.root}:{index}")
         return records

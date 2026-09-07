@@ -131,9 +131,7 @@ def _job_row_json(row: JobRow) -> dict:
         "map_index": row.map_index,
         "issue": row.issue,
         "state": row.state,
-        "tasks": [
-            {"task_id": t.task_id, "map_index": t.map_index, "state": t.state} for t in row.tasks
-        ],
+        "tasks": [{"task_id": t.task_id, "map_index": t.map_index, "state": t.state} for t in row.tasks],
     }
 
 
@@ -243,8 +241,6 @@ def test_case_names_are_unique(path: Path) -> None:
     assert len(names) >= 8, f"{path.name} has {len(names)} cases; the contract wants at least 8"
 
 
-@pytest.mark.parametrize(
-    ("function", "case_name", "case"), CASES, ids=[f"{f}-{n}" for f, n, _ in CASES]
-)
+@pytest.mark.parametrize(("function", "case_name", "case"), CASES, ids=[f"{f}-{n}" for f, n, _ in CASES])
 def test_python_still_matches_the_contract(function: str, case_name: str, case: dict) -> None:
     assert DISPATCH[function](case["input"]) == case["expected"], case_name

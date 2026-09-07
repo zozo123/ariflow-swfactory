@@ -26,16 +26,11 @@ class CompatibilityWindow:
     current: ContractVersion
 
     def accepts(self, other: ContractVersion) -> bool:
-        return (
-            self.minimum.major == other.major == self.current.major
-            and self.minimum <= other <= self.current
-        )
+        return self.minimum.major == other.major == self.current.major and self.minimum <= other <= self.current
 
     def negotiate(self, offered: ContractVersion) -> ContractVersion:
         if not self.accepts(offered):
-            raise IncompatibleContract(
-                f"{self.component}: offered {offered}, supported {self.minimum}..{self.current}"
-            )
+            raise IncompatibleContract(f"{self.component}: offered {offered}, supported {self.minimum}..{self.current}")
         return min(offered, self.current)
 
 
@@ -61,9 +56,7 @@ class GenerationStamp:
         }
 
 
-def adjacent_generation_compatible(
-    parent: GenerationStamp, child: GenerationStamp
-) -> tuple[bool, tuple[str, ...]]:
+def adjacent_generation_compatible(parent: GenerationStamp, child: GenerationStamp) -> tuple[bool, tuple[str, ...]]:
     failures = []
     for field in ("backend", "cell", "artifact", "operator"):
         a = getattr(parent, field)

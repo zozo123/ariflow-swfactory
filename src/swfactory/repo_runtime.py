@@ -47,15 +47,10 @@ class RepositoryTopology:
                 sorted(
                     workflow.workflow
                     for workflow in self.workflows
-                    if any(
-                        _glob_under(root, workflow.paths, workflow.paths_ignore)
-                        for root in module.roots
-                    )
+                    if any(_glob_under(root, workflow.paths, workflow.paths_ignore) for root in module.roots)
                 )
             )
-            modules.append(
-                Module(module.name, module.roots, module.depends_on, checks or module.checks)
-            )
+            modules.append(Module(module.name, module.roots, module.depends_on, checks or module.checks))
         return Topology(tuple(modules))
 
     def owners_for(self, path: str) -> tuple[str, ...]:
@@ -282,9 +277,7 @@ def _materialize_once(repo_url: str, plan: MaterializationPlan, destination: Pat
 
 def _verify_checkout(destination: Path, base_sha: str, required: Iterable[str]) -> None:
     observed = _run(["git", "-C", str(destination), "rev-parse", "HEAD"], capture=True).strip()
-    expected = _run(
-        ["git", "-C", str(destination), "rev-parse", f"{base_sha}^{{commit}}"], capture=True
-    ).strip()
+    expected = _run(["git", "-C", str(destination), "rev-parse", f"{base_sha}^{{commit}}"], capture=True).strip()
     if observed != expected:
         raise MaterializationError(f"checkout head {observed} != expected {expected}")
     missing = [path for path in required if not (destination / path).exists()]
@@ -315,9 +308,7 @@ def quarantine_cache(path: Path, validation: CacheValidation, quarantine_root: P
     target = quarantine_root / f"{path.name}.{suffix}.bad"
     os.replace(path, target)
     metadata = target.with_suffix(target.suffix + ".json")
-    metadata.write_text(
-        json.dumps(asdict(validation), indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    metadata.write_text(json.dumps(asdict(validation), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return target
 
 
@@ -353,9 +344,7 @@ def _glob_under(root: str, paths: Iterable[str], ignored: Iterable[str]) -> bool
     root = _norm(root).lstrip("./")
     path_patterns = tuple(paths)
     ignore_patterns = tuple(ignored)
-    if path_patterns and not any(
-        fnmatch.fnmatchcase(root, _glob_root(pattern)) for pattern in path_patterns
-    ):
+    if path_patterns and not any(fnmatch.fnmatchcase(root, _glob_root(pattern)) for pattern in path_patterns):
         return False
     return not any(fnmatch.fnmatchcase(root, _glob_root(pattern)) for pattern in ignore_patterns)
 

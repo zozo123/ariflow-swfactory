@@ -172,9 +172,7 @@ class DeliveryInbox:
         }
         now = time.time()
         with self._connect(write=True) as db:
-            row = db.execute(
-                "SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)
-            ).fetchone()
+            row = db.execute("SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)).fetchone()
             if row is not None:
                 old = self._delivery(row)
                 if old.payload_sha256 != digest or old.repository != repository:
@@ -204,9 +202,7 @@ class DeliveryInbox:
                     now,
                 ),
             )
-            row = db.execute(
-                "SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)
-            ).fetchone()
+            row = db.execute("SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)).fetchone()
             return self._delivery(row), True
 
     def claim(self, *, lease_s: float = 120, max_attempts: int = 12) -> Delivery | None:
@@ -237,9 +233,7 @@ class DeliveryInbox:
                    WHERE delivery_id=?""",
                 (uuid.uuid4().hex, now + lease_s, now, row["delivery_id"]),
             )
-            row = db.execute(
-                "SELECT * FROM deliveries WHERE delivery_id=?", (row["delivery_id"],)
-            ).fetchone()
+            row = db.execute("SELECT * FROM deliveries WHERE delivery_id=?", (row["delivery_id"],)).fetchone()
             return self._delivery(row)
 
     def complete(self, delivery: Delivery) -> bool:
@@ -280,9 +274,7 @@ class DeliveryInbox:
     def retry(self, delivery_id: str) -> Delivery:
         """Explicitly reopen a dead dispatch; preserve the run id and lifetime attempt count."""
         with self._connect(write=True) as db:
-            row = db.execute(
-                "SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)
-            ).fetchone()
+            row = db.execute("SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)).fetchone()
             if row is None:
                 raise KeyError(delivery_id)
             if row["state"] != "dead":
@@ -293,16 +285,12 @@ class DeliveryInbox:
                    updated_at=?, lease_token=NULL, lease_until=0 WHERE delivery_id=?""",
                 (now, now, delivery_id),
             )
-            row = db.execute(
-                "SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)
-            ).fetchone()
+            row = db.execute("SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)).fetchone()
             return self._delivery(row)
 
     def get(self, delivery_id: str) -> Delivery:
         with self._connect() as db:
-            row = db.execute(
-                "SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)
-            ).fetchone()
+            row = db.execute("SELECT * FROM deliveries WHERE delivery_id=?", (delivery_id,)).fetchone()
         if row is None:
             raise KeyError(delivery_id)
         return self._delivery(row)
@@ -323,8 +311,7 @@ class DeliveryInbox:
     def summary(self) -> dict[str, Any]:
         with self._connect() as db:
             rows = db.execute(
-                "SELECT state, count(*) AS count, min(created_at) AS oldest "
-                "FROM deliveries GROUP BY state"
+                "SELECT state, count(*) AS count, min(created_at) AS oldest FROM deliveries GROUP BY state"
             ).fetchall()
         counts = dict.fromkeys(STATES, 0)
         oldest = time.time()

@@ -89,8 +89,7 @@ def validate_mutation_policy(envelope: MutationEnvelope, current_policy_digest: 
     envelope.validate()
     if envelope.policy_digest != current_policy_digest:
         raise PermissionError(
-            "mutation policy digest is stale; refuse external side effect until the cell "
-            "is reactivated"
+            "mutation policy digest is stale; refuse external side effect until the cell is reactivated"
         )
 
 

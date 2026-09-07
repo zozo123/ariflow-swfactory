@@ -50,12 +50,8 @@ class CanonicalPolicy:
             "schema_version": self.schema_version,
             "repo": self.repo.strip(),
             "target": self.target.strip(),
-            "protected_paths": sorted(
-                set(path.strip() for path in self.protected_paths if path.strip())
-            ),
-            "allowed_domains": sorted(
-                set(domain.strip().lower() for domain in self.allowed_domains if domain.strip())
-            ),
+            "protected_paths": sorted(set(path.strip() for path in self.protected_paths if path.strip())),
+            "allowed_domains": sorted(set(domain.strip().lower() for domain in self.allowed_domains if domain.strip())),
             "sandbox_provider": self.sandbox_provider,
             "sandbox_credentials": sorted(set(self.sandbox_credentials)),
             "publication_backend_only": self.publication_backend_only,
@@ -63,9 +59,7 @@ class CanonicalPolicy:
         }
 
     def digest(self) -> str:
-        payload = json.dumps(
-            self.canonical_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
-        )
+        payload = json.dumps(self.canonical_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False)
         return "policy:" + hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -109,9 +103,7 @@ class CredentialGrant:
     def validate_for(self, audience: str, *, now: float | None = None) -> None:
         now = time.time() if now is None else now
         if self.audience != audience:
-            raise PermissionError(
-                f"credential {self.name!r} is scoped to {self.audience!r}, not {audience!r}"
-            )
+            raise PermissionError(f"credential {self.name!r} is scoped to {self.audience!r}, not {audience!r}")
         if self.expires_at is not None and self.expires_at <= now:
             raise PermissionError(f"credential {self.name!r} has expired")
 
@@ -183,9 +175,7 @@ def assert_publication_credentials_backend_only(
 ) -> None:
     leaked = sorted(name for name in publication_names if name in sandbox_environment)
     if leaked:
-        raise PermissionError(
-            "publication credentials crossed into sandbox trust zone: " + ", ".join(leaked)
-        )
+        raise PermissionError("publication credentials crossed into sandbox trust zone: " + ", ".join(leaked))
 
 
 def policy_digest_for_mapping(policy: Mapping[str, Any]) -> str:

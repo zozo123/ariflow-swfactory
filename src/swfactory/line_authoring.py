@@ -72,9 +72,7 @@ def preview_fanout(issues: Iterable[str], targets: Iterable[str]) -> dict:
     }
 
 
-def _risk_flags(
-    old: dict[str, StageSpec], new: dict[str, StageSpec], removed: list[str]
-) -> list[str]:
+def _risk_flags(old: dict[str, StageSpec], new: dict[str, StageSpec], removed: list[str]) -> list[str]:
     flags = [f"removed_stage:{name}" for name in removed]
     for name in set(old).intersection(new):
         if old[name].gate and not new[name].gate:

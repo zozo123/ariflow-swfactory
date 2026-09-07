@@ -53,9 +53,7 @@ class Config(BaseSettings):
 
         def operational(source: PydanticBaseSettingsSource):
             def load() -> dict[str, object]:
-                return {
-                    key: value for key, value in source().items() if key not in IDENTITY_SETTINGS
-                }
+                return {key: value for key, value in source().items() if key not in IDENTITY_SETTINGS}
 
             return load
 

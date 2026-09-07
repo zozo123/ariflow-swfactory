@@ -197,9 +197,7 @@ def check(ev: Eval, report: RunReport, workdir: Path) -> list[str]:
     return out
 
 
-def _bound(
-    stage: str, key: str, limit: int | None, numbers: dict[str, dict[str, float]]
-) -> list[str]:
+def _bound(stage: str, key: str, limit: int | None, numbers: dict[str, dict[str, float]]) -> list[str]:
     """One ``max_*`` expectation: the stage must have run, and its counter stay within ``limit``.
 
     An upper bound, not an equality: a change that reaches the same outcome in fewer build
@@ -280,9 +278,7 @@ def _top_level_names(tree: ast.Module) -> tuple[set[str], list[str] | None]:
             targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
             names.update(targets)
             if "__all__" in targets and isinstance(node.value, ast.List | ast.Tuple):
-                dunder_all = [
-                    e.value for e in node.value.elts if isinstance(e, ast.Constant) and e.value
-                ]
+                dunder_all = [e.value for e in node.value.elts if isinstance(e, ast.Constant) and e.value]
     return names, dunder_all
 
 
@@ -323,9 +319,7 @@ def score(results: Sequence[EvalOutcome]) -> dict[str, Any]:
     return {
         "passed": sum(1 for r in results if r.passed),
         "total": len(results),
-        "evals": {
-            r.id: {"slug": r.slug, "passed": r.passed, "failures": r.failures} for r in results
-        },
+        "evals": {r.id: {"slug": r.slug, "passed": r.passed, "failures": r.failures} for r in results},
     }
 
 
@@ -381,9 +375,7 @@ def run_one(
     try:
         issue_path = ev.issue_path.resolve().relative_to(FACTORY_ROOT.resolve()).as_posix()
     except ValueError as e:
-        raise ValueError(
-            f"eval issue must live below the factory asset root: {ev.issue_path}"
-        ) from e
+        raise ValueError(f"eval issue must live below the factory asset root: {ev.issue_path}") from e
     job = bp.jobs({"issues": [issue_path]})[0]  # the blueprint's first target
     cfg = bp.config(
         job,

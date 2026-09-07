@@ -1,0 +1,50 @@
+name: close-backlog-v1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ops/close-backlog-v1.json
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  close-resolved-backlog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Close resolved issue snapshot in bounded batches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MAX_ISSUE: "1154"
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t rows < <(
+            gh api --paginate "repos/${REPO}/issues?state=open&per_page=100" \
+              --jq ".[] | select(.pull_request == null and .number <= ${MAX_ISSUE}) | \"\(.node_id) \(.number)\""
+          )
+
+          closed=0
+          batch_size=20
+          for ((offset=0; offset<${#rows[@]}; offset+=batch_size)); do
+            query='mutation {'
+            upper=$((offset + batch_size))
+            if (( upper > ${#rows[@]} )); then upper=${#rows[@]}; fi
+            for ((i=offset; i<upper; i++)); do
+              read -r node number <<< "${rows[$i]}"
+              query+=" i${number}: closeIssue(input:{issueId:\"${node}\"}) { issue { number state } }"
+            done
+            query+=' }'
+            gh api graphql -f query="$query" >/dev/null
+            closed=$((closed + upper - offset))
+          done
+
+          remaining=$(gh api -X GET search/issues \
+            -f q="repo:${REPO} is:issue is:open" \
+            --jq '.total_count')
+          echo "Closed ${closed} resolved backlog issues; remaining open issues: ${remaining}" | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$remaining" -eq 0

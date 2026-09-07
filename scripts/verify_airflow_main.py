@@ -16,9 +16,7 @@ PACKAGES = (
 )
 
 
-def verify(
-    mode: str, commit: str, *, provider_repo: str | None = None, provider_commit: str | None = None
-) -> None:
+def verify(mode: str, commit: str, *, provider_repo: str | None = None, provider_commit: str | None = None) -> None:
     if mode == "--islo" and (not provider_repo or not provider_commit):
         raise ValueError("--islo requires the resolved provider repository and commit")
     for name in PACKAGES:
@@ -32,8 +30,7 @@ def verify(
             actual != expected_commit or source.get("url") != expected_repo
         ):
             raise RuntimeError(
-                f"{name}: expected apache/airflow or selected provider "
-                f"{expected_repo}@{expected_commit}, got {source}"
+                f"{name}: expected apache/airflow or selected provider {expected_repo}@{expected_commit}, got {source}"
             )
         print(f"{name} {dist.version}: {actual or 'release wheel'}")
 

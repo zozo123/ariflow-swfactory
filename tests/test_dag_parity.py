@@ -99,9 +99,7 @@ def _linear_order(dag) -> list[str]:
     setup task as well) and appended last after checking it hangs off the final task."""
     roots = [t for t in dag.tasks if not t.upstream_task_ids]
     assert [t.task_id for t in roots] == ["fan_out"]
-    heads = [
-        t for t in dag.tasks if t.upstream_task_ids == {"fan_out"} and t.task_id != "job.teardown"
-    ]
+    heads = [t for t in dag.tasks if t.upstream_task_ids == {"fan_out"} and t.task_id != "job.teardown"]
     assert [t.task_id for t in heads] == ["job.setup"], [t.task_id for t in heads]
     order, current = ["fan_out"], heads[0]
     for _ in range(len(dag.tasks)):
@@ -361,15 +359,11 @@ def test_record_task_persists_rejection_then_skips_the_line(
         record({"job_idx": 0}, ti=_Ti(rejected), dag_run=dag_run)
     art = tmp_path / "work" / "docs" / "factory" / "DEMO-1"
     approvals = json.loads((art / "approvals.json").read_text())
-    assert [(a["gate"], a["decision"], a["actor"]) for a in approvals] == [
-        (stage, "reject", "alice")
-    ]
+    assert [(a["gate"], a["decision"], a["actor"]) for a in approvals] == [(stage, "reject", "alice")]
     assert approvals[0]["artifact_sha256"] == hashlib.sha256(f"# {stage}\n".encode()).hexdigest()
 
     # A later decision replaces the same gate entry, so task retries cannot duplicate approvals.
-    out = record(
-        {"job_idx": 0}, ti=_Ti({**rejected, "chosen_options": ["Approve"]}), dag_run=dag_run
-    )
+    out = record({"job_idx": 0}, ti=_Ti({**rejected, "chosen_options": ["Approve"]}), dag_run=dag_run)
     assert (out["decision"], out["actor"]) == ("approve", "alice")
     ti = _Ti(None)
     out = record({"job_idx": 0}, ti=ti, dag_run=dag_run)
@@ -390,12 +384,8 @@ def test_run_ids_are_hex8_and_stable(blueprints_mod) -> None:
         maintain_mod.run_id_for(airflow_run_id),
     ):
         assert len(rid) == 8 and int(rid, 16) >= 0
-        Config(issue="maintain", run_id=rid, agent="claude", sandbox="islo").sandbox_name(
-            "maintain"
-        )
-    assert blueprints_mod.run_id_for(airflow_run_id, 0) != blueprints_mod.run_id_for(
-        airflow_run_id, 1
-    )
+        Config(issue="maintain", run_id=rid, agent="claude", sandbox="islo").sandbox_name("maintain")
+    assert blueprints_mod.run_id_for(airflow_run_id, 0) != blueprints_mod.run_id_for(airflow_run_id, 1)
     assert maintain_mod.run_id_for(airflow_run_id) == maintain_mod.run_id_for(airflow_run_id)
 
 
@@ -446,11 +436,7 @@ def test_dag_modules_do_not_import_swfactory_at_parse_time() -> None:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         top_level = [n for n in tree.body if isinstance(n, ast.Import | ast.ImportFrom)]
         for node in top_level:
-            names = (
-                [node.module or ""]
-                if isinstance(node, ast.ImportFrom)
-                else [a.name for a in node.names]
-            )
+            names = [node.module or ""] if isinstance(node, ast.ImportFrom) else [a.name for a in node.names]
             assert not any(n.startswith("swfactory") for n in names), f"{path.name}: {names}"
         text = path.read_text(encoding="utf-8")
         for line in text.splitlines():

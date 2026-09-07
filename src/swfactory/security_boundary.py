@@ -33,14 +33,9 @@ class WorkPolicy:
 
     def allows_path(self, path: str) -> bool:
         normalized = path.replace("\\", "/").lstrip("./")
-        if any(
-            normalized == d or normalized.startswith(d.rstrip("/") + "/") for d in self.denied_paths
-        ):
+        if any(normalized == d or normalized.startswith(d.rstrip("/") + "/") for d in self.denied_paths):
             return False
-        return any(
-            normalized == a or normalized.startswith(a.rstrip("/") + "/")
-            for a in self.allowed_paths
-        )
+        return any(normalized == a or normalized.startswith(a.rstrip("/") + "/") for a in self.allowed_paths)
 
 
 @dataclass(frozen=True)
@@ -54,9 +49,7 @@ class CredentialEnvelope:
         return self.audience == zone
 
 
-def sandbox_environment(
-    credentials: Iterable[CredentialEnvelope], base: dict[str, str]
-) -> dict[str, str]:
+def sandbox_environment(credentials: Iterable[CredentialEnvelope], base: dict[str, str]) -> dict[str, str]:
     """Return a sandbox env that excludes control-plane/publication credentials."""
     out = dict(base)
     for cred in credentials:
@@ -67,10 +60,7 @@ def sandbox_environment(
 
 def redact(value):
     if isinstance(value, dict):
-        return {
-            key: "[REDACTED]" if _SECRET_KEYS.search(str(key)) else redact(item)
-            for key, item in value.items()
-        }
+        return {key: "[REDACTED]" if _SECRET_KEYS.search(str(key)) else redact(item) for key, item in value.items()}
     if isinstance(value, list):
         return [redact(item) for item in value]
     if isinstance(value, tuple):

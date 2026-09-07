@@ -56,9 +56,7 @@ def dedupe(proposal: WorkProposal, existing: Iterable[ExistingWork]) -> int | No
     return None
 
 
-def triage(
-    proposal: WorkProposal, *, auto_create: bool, allowed_kinds: set[WorkKind] | None = None
-) -> dict:
+def triage(proposal: WorkProposal, *, auto_create: bool, allowed_kinds: set[WorkKind] | None = None) -> dict:
     allowed_kinds = allowed_kinds or set(WorkKind)
     if proposal.kind not in allowed_kinds:
         return {"decision": "reject", "reason": "kind_not_allowed"}
