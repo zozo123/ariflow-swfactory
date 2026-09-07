@@ -1,7 +1,0 @@
-{
-  "schema_version": 1,
-  "max_issue_number": 1154,
-  "expected_open_snapshot": 1081,
-  "trigger": "one-shot-on-main-path-addition",
-  "reason": "All pre-Liquid, Liquid500, and Liquid400 issue families have been consolidated into canonical implementation bundles before final stabilization."
-}
