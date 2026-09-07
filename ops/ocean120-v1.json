@@ -1,0 +1,29 @@
+{
+  "wave": "Ocean120",
+  "domains": [
+    {"id":"D01","slug":"pressure-routing","objective":"Turn queue pressure into deterministic admission and routing signals without creating a second scheduler.","owner":"authority"},
+    {"id":"D02","slug":"viscosity-backpressure","objective":"Damp oscillation under burst load with bounded backpressure, hysteresis, and fair recovery.","owner":"airflow"},
+    {"id":"D03","slug":"turbulence-detection","objective":"Detect unstable retry, cancellation, and queue interactions before they amplify across Cells.","owner":"evidence"},
+    {"id":"D04","slug":"vorticity-work-stealing","objective":"Rebalance stranded capacity without violating Cell ownership, epoch fencing, or Airflow authority.","owner":"workgraph"},
+    {"id":"D05","slug":"boundary-layer-admission","objective":"Define explicit trust and capacity boundaries at intake, provider, tenant, and execution edges.","owner":"security"},
+    {"id":"D06","slug":"incompressible-cell-conservation","objective":"Conserve durable work identity across retries, sandbox replacement, takeover, and publication.","owner":"recovery"},
+    {"id":"D07","slug":"flux-accounting","objective":"Account for work, evidence, artifacts, cost, and external mutations as observable flow across boundaries.","owner":"evidence"},
+    {"id":"D08","slug":"reynolds-regime-switching","objective":"Switch control behavior predictably between laminar, pressured, turbulent, and choked operating regimes.","owner":"airflow"},
+    {"id":"D09","slug":"cavitation-retry-collapse","objective":"Stop retry storms caused by ambiguous external results, transient provider loss, and stale observations.","owner":"recovery"},
+    {"id":"D10","slug":"wave-propagation-events","objective":"Propagate state changes and wakeups without duplicate scheduling, event storms, or hidden mutation authority.","owner":"authority"},
+    {"id":"D11","slug":"eddy-cache-locality","objective":"Exploit local reuse and warm execution while preserving correctness, tenant isolation, and eviction evidence.","owner":"operator"},
+    {"id":"D12","slug":"dissipation-entropy-collapse","objective":"Continuously collapse duplicate abstractions, dead branches, stale state, and stabilization debt.","owner":"operator"}
+  ],
+  "concerns": [
+    {"id":"C01","name":"canonical invariant","slice":"Define stable identities, units, ownership, and a machine-checkable invariant."},
+    {"id":"C02","name":"durable persistence","slice":"Persist the control state crash-safely with explicit schema/version migration semantics."},
+    {"id":"C03","name":"versioned API","slice":"Expose the signal and decision through a versioned backend contract with deterministic refusal."},
+    {"id":"C04","name":"Airflow runtime integration","slice":"Integrate the control signal into Airflow-owned lifecycle orchestration without delegated scheduling."},
+    {"id":"C05","name":"operator surface","slice":"Expose deterministic CLI/TUI inspection, explanation, and repair actions."},
+    {"id":"C06","name":"security boundary","slice":"Apply least privilege, tenant isolation, trust-zone checks, and fail-closed policy behavior."},
+    {"id":"C07","name":"failure recovery","slice":"Specify cancellation, stale-writer, retry, timeout, ambiguous-result, and restart behavior."},
+    {"id":"C08","name":"scale pressure","slice":"Bound queues, concurrency, fairness, hysteresis, and overload behavior under sustained pressure."},
+    {"id":"C09","name":"evidence and SLO","slice":"Record signals, decisions, latency, cost, refusals, and repair outcomes as retained evidence."},
+    {"id":"C10","name":"entropy collapse","slice":"Provide E2E stabilization that deletes superseded control paths and proves one surviving authority."}
+  ]
+}
