@@ -60,6 +60,10 @@ jobs:
       # first try, with no way to raise it short of shipping a new binary. Lower it back toward
       # the default if this job stays green for a month; raise it if it does not.
       SWF_GATE_SETTLE_SECS: "8"
+      # stress_airflow counts sightings at 3-second polling intervals. Four sightings are the
+      # first point at which >=8 seconds have actually elapsed (0, 3, 6, 9); two sightings are
+      # only ~3 seconds apart and reproduced a stale executor event on this runner.
+      SWF_STRESS_SETTLE_POLLS: "4"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -145,6 +149,7 @@ jobs:
       - name: Live scheduler, mapped jobs and authenticated approval gates
         env:
           SWF_AIRFLOW_NO_SYNC: "1"
+          SWF_STRESS_SETTLE_POLLS: "4"
         run: scripts/stress_airflow.sh
 
   airflow-main-sandbox-toolset:
