@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "name": "same issue on different targets creates independent cells",
+  "repo": "owner/repo",
+  "actions": [
+    {"op":"submit","session":"codex:a","issue":"280","target":"services/api","request_id":"a"},
+    {"op":"submit","session":"claude:b","issue":"280","target":"services/web","request_id":"b"}
+  ],
+  "expect": {"active_admissions":2,"queued_admissions":0,"cells":2,"active_cells":2,"busy":0,"stale":0,"duplicate_submissions":0,"duplicate_operations":0,"max_epoch":1}
+}
