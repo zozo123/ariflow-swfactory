@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "three independent harnesses run three cells on one repo",
+  "repo": "owner/repo",
+  "actions": [
+    {"op": "submit", "session": "codex:a", "issue": "211", "request_id": "a"},
+    {"op": "submit", "session": "claude:b", "issue": "212", "request_id": "b"},
+    {"op": "submit", "session": "custom:c", "issue": "213", "request_id": "c"}
+  ],
+  "expect": {"active_admissions": 3, "queued_admissions": 0, "cells": 3, "active_cells": 3, "busy": 0, "stale": 0, "duplicate_submissions": 0, "duplicate_operations": 0, "max_epoch": 1}
+}

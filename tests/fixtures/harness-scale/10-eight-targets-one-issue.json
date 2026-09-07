@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "name": "one issue across eight targets fills eight independent cells",
+  "repo": "owner/repo",
+  "actions": [
+    {"op":"submit","session":"codex:a","issue":"290","target":"target-0","request_id":"r0"},
+    {"op":"submit","session":"codex:a","issue":"290","target":"target-1","request_id":"r1"},
+    {"op":"submit","session":"codex:a","issue":"290","target":"target-2","request_id":"r2"},
+    {"op":"submit","session":"codex:a","issue":"290","target":"target-3","request_id":"r3"},
+    {"op":"submit","session":"codex:a","issue":"290","target":"target-4","request_id":"r4"},
+    {"op":"submit","session":"codex:a","issue":"290","target":"target-5","request_id":"r5"},
+    {"op":"submit","session":"codex:a","issue":"290","target":"target-6","request_id":"r6"},
+    {"op":"submit","session":"codex:a","issue":"290","target":"target-7","request_id":"r7"}
+  ],
+  "expect": {"active_admissions":8,"queued_admissions":0,"cells":8,"active_cells":8,"busy":0,"stale":0,"duplicate_submissions":0,"duplicate_operations":0,"max_epoch":1}
+}

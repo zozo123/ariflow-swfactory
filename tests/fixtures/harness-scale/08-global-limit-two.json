@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "global limit admits two and queues the third",
+  "repo": "owner/repo",
+  "limits": {"global_active": 2},
+  "actions": [
+    {"op":"submit","session":"codex:a","issue":"270","request_id":"a"},
+    {"op":"submit","session":"claude:b","issue":"271","request_id":"b"},
+    {"op":"submit","session":"custom:c","issue":"272","request_id":"c"}
+  ],
+  "expect": {"active_admissions":2,"queued_admissions":1,"cells":2,"active_cells":2,"busy":0,"stale":0,"duplicate_submissions":0,"duplicate_operations":0,"max_epoch":1}
+}

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "name": "same harness with two factory ids runs two cells",
+  "repo": "owner/repo",
+  "actions": [
+    {"op": "submit", "session": "codex:a", "issue": "201", "request_id": "a"},
+    {"op": "submit", "session": "codex:b", "issue": "202", "request_id": "b"}
+  ],
+  "expect": {
+    "active_admissions": 2,
+    "queued_admissions": 0,
+    "cells": 2,
+    "active_cells": 2,
+    "busy": 0,
+    "stale": 0,
+    "duplicate_submissions": 0,
+    "duplicate_operations": 0,
+    "max_epoch": 1
+  }
+}
