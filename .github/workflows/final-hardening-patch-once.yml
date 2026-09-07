@@ -1,0 +1,53 @@
+name: final-hardening-patch-once
+
+on:
+  push:
+    branches: [hardening/final-open-issues]
+    paths: [.github/workflows/final-hardening-patch-once.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-format-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/final-open-issues
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: "rustfmt, clippy" }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "rust" }
+      - run: uv sync
+      - name: Apply final hardening patch
+        run: uv run python scripts/final_hardening_patch_once.py
+      - name: Canonical formatting
+        run: |
+          uv run ruff check --fix .
+          uv run ruff format .
+          cargo fmt --manifest-path rust/Cargo.toml --all
+          git diff --check
+      - name: Targeted Python checks
+        run: >-
+          uv run pytest
+          tests/test_backend_runtime_contract.py
+          tests/test_backend_service_contract.py
+          tests/test_harness_scale_scenarios.py
+      - name: Targeted Rust backend adapter checks
+        run: cargo test --manifest-path rust/Cargo.toml -p swf-adapters --test factory
+      - name: Docs template guard
+        run: '! grep -R -n -E "FILTERS_[A-Z]+|EXAMPLES_BLOCK|DRYRUN_PARA" docs'
+      - name: Remove one-shot helpers
+        run: rm -f scripts/final_hardening_patch_once.py .github/workflows/final-hardening-patch-once.yml
+      - name: Commit verified patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Finish backend hardening, live E2E, and operator docs'
+          git push origin HEAD:hardening/final-open-issues
