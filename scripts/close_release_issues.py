@@ -13,10 +13,10 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 
-def fail(message: str) -> "NoReturn":
+def fail(message: str) -> NoReturn:
     print(f"error: {message}", file=sys.stderr)
     raise SystemExit(2)
 
@@ -26,8 +26,7 @@ def gh_json(*args: str) -> dict[str, Any]:
         ["gh", "api", *args],
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if proc.returncode != 0:
         fail(proc.stderr.strip() or f"gh api failed: {' '.join(args)}")
