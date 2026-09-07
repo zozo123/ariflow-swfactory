@@ -12,6 +12,7 @@
   <a href="pyproject.toml"><img alt="Airflow 3.3.1 pinned" src="https://img.shields.io/badge/Airflow-3.3.1-017CEE?logo=apacheairflow&logoColor=white" /></a>
   <a href="pyproject.toml"><img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-orange" /></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-D22128" /></a>
+  <a href="https://skills.sh/zozo123/ariflow-swfactory"><img alt="skills.sh" src="https://skills.sh/b/zozo123/ariflow-swfactory" /></a>
 </p>
 
 <p align="center">
@@ -19,6 +20,7 @@
   <a href="https://zozo123.github.io/ariflow-swfactory/#factory-demo">Interactive demo</a> ·
   <a href="OPERATIONS.md">Deployment guide</a> ·
   <a href="docs/swf.md">CLI &amp; TUI</a> ·
+  <a href="#agent-skill">Agent skill</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
@@ -32,6 +34,26 @@ the change. People approve the intent and plan, then decide what to merge.
 Use it when you need repeatable agent workflows across repositories, visible approval queues,
 and enough evidence to understand why a change was delivered or blocked. The project is **alpha**;
 start with the local replay and a repository you can use for evaluation.
+
+## Agent skill
+
+Install the factory as an agent skill through Vercel's open `skills` ecosystem:
+
+```sh
+npx skills add zozo123/ariflow-swfactory --skill airflow-software-factory
+```
+
+Or use it without installing:
+
+```sh
+npx skills use zozo123/ariflow-swfactory@airflow-software-factory
+```
+
+[Browse **airflow-software-factory** on skills.sh](https://skills.sh/zozo123/ariflow-swfactory/airflow-software-factory) ·
+[Read the skill source](skills/airflow-software-factory/SKILL.md)
+
+The skill lives at the standard `skills/airflow-software-factory/SKILL.md` discovery path, so the
+Vercel `skills` CLI can find it directly from this repository.
 
 ## Why a software factory?
 
@@ -292,6 +314,8 @@ To give a coding assistant the repository's adoption and operation instructions,
 ```sh
 npx skills add zozo123/ariflow-swfactory --skill airflow-software-factory
 ```
+
+[Browse it on skills.sh](https://skills.sh/zozo123/ariflow-swfactory/airflow-software-factory).
 
 Contributions are welcome: follow [CONTRIBUTING.md](CONTRIBUTING.md) and the
 [review contract](REVIEW.md). Licensed under [Apache 2.0](LICENSE).

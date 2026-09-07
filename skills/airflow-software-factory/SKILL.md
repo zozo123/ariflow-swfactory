@@ -1,6 +1,6 @@
 ---
 name: airflow-software-factory
-description: Design, configure, operate, extend, stabilize, or audit an Apache Airflow software factory that turns GitHub work orders into reviewed pull requests. Use for production routes, approval gates, coding-agent work cells, bounded work graphs, recovery, evidence chains, operator surfaces, sandbox boundaries, CI/CD, and factory deployment while preserving Airflow as the sole lifecycle scheduler.
+description: "Operate and extend an Apache Airflow software factory for coding agents: turn GitHub issues and work orders into tested, reviewed pull requests with human approval gates, durable Factory Cells, sandbox isolation, bounded work graphs, recovery, evidence and provenance, CI/CD, and Rust/Python operator surfaces. Use when adopting, configuring, running, debugging, deploying, auditing, or improving swfactory, factory.toml, Airflow blueprints, GitHub publication, agent sandboxes, or agentic software-delivery workflows. Keep Airflow as the sole lifecycle scheduler."
 ---
 
 # Airflow software factory
@@ -20,11 +20,19 @@ WORK ORDER -> ROUTE -> INTENT GATE -> SPEC -> PLAN GATE -> WORK CELL
                                                      CONTINUOUS IMPROVEMENT
 ```
 
-Install this skill from the public repository with:
+Install this skill from the public repository with Vercel's open `skills` CLI:
 
 ```bash
-npx skills add https://github.com/zozo123/ariflow-swfactory --skill airflow-software-factory
+npx skills add zozo123/ariflow-swfactory --skill airflow-software-factory
 ```
+
+Use it without installing:
+
+```bash
+npx skills use zozo123/ariflow-swfactory@airflow-software-factory
+```
+
+Browse the public listing at `https://skills.sh/zozo123/ariflow-swfactory/airflow-software-factory`.
 
 ## Choose the job
 
