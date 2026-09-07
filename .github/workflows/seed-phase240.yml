@@ -1,0 +1,71 @@
+name: seed-phase240
+
+on:
+  push:
+    branches: [ocean/navier-stokes]
+    paths:
+      - ops/phase240-v1.json
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Create Phase240 issue matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=ops/phase240-v1.json
+          domains=$(jq '.domains | length' "$manifest")
+          concerns=$(jq '.concerns | length' "$manifest")
+          test "$domains" -eq 24
+          test "$concerns" -eq 10
+
+          created=0
+          skipped=0
+          for ((di=0; di<domains; di++)); do
+            did=$(jq -r ".domains[$di].id" "$manifest")
+            slug=$(jq -r ".domains[$di].slug" "$manifest")
+            objective=$(jq -r ".domains[$di].objective" "$manifest")
+            owner=$(jq -r ".domains[$di].owner" "$manifest")
+            for ((ci=0; ci<concerns; ci++)); do
+              cid=$(jq -r ".concerns[$ci].id" "$manifest")
+              concern=$(jq -r ".concerns[$ci].name" "$manifest")
+              slice=$(jq -r ".concerns[$ci].slice" "$manifest")
+              key="[Phase240/${did}-${cid}]"
+              title="${key} ${slug}: ${concern}"
+
+              if gh issue list --repo "$REPO" --state all --search "${key} in:title" --limit 20 --json title \
+                --jq ".[] | select(.title == \"${title}\") | .title" | grep -q .; then
+                skipped=$((skipped + 1))
+                continue
+              fi
+
+              body=$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n%s\n' \
+                "**Phase domain:** ${slug}" \
+                "**Objective:** ${objective}" \
+                "**Owner lane:** ${owner}" \
+                "**Engineering slice:** ${slice}" \
+                "### Acceptance" \
+                "- Apache Airflow remains the only lifecycle scheduling authority." \
+                "- Durable Factory Cell identity and positive epoch survive all phase changes." \
+                "- External mutations remain idempotent, fenced, or read-only." \
+                "- GAS/LIQUID/MIXED/SUPERCRITICAL states remain explicitly non-promotable to main." \
+                "- Pressure, retry, cancellation, authority overlap, and recovery are observable." \
+                "- Operator/API/evidence views agree on phase and refusal reason." \
+                "- Entropy may expand now; crystallization is deferred to one final explicit gate." \
+                "- Superseded control paths are marked for later dissipation, not silently stacked." \
+                "Parent wave: Phase240 multiphase stress system.")
+              gh issue create --repo "$REPO" --title "$title" --body "$body" >/dev/null
+              created=$((created + 1))
+            done
+          done
+          echo "Phase240 created=${created} skipped=${skipped}" >> "$GITHUB_STEP_SUMMARY"
