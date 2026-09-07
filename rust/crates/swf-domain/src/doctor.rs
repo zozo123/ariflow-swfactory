@@ -331,3 +331,48 @@ mod tests {
         assert_eq!(serde_json::from_str::<Check>(&text).ok(), Some(check));
     }
 }
+
+#[cfg(test)]
+mod backend_contract {
+    use super::*;
+
+    /// The rows `POST /v1/doctor` really builds must deserialize into [`Check`].
+    ///
+    /// They did not: the route emitted `status` and no `ok`, so every row failed to parse, the
+    /// console discarded the whole response and reported one invented failure blaming the
+    /// operator's credentials. Nothing tested the two schemas against each other, which is exactly
+    /// how a producer and its consumer drift apart while both look correct in isolation.
+    #[test]
+    fn the_backend_doctor_payload_parses_into_checks() {
+        let payload = r#"[
+          {"name":"factory backend","ok":true,"status":"ok","detail":"Python API v1","required":true},
+          {"name":"mutation readiness","ok":false,"status":"warn","detail":"mutation_ready=False","required":true},
+          {"name":"airflow auth","ok":true,"status":"ok","required":true},
+          {"name":"gh","ok":true,"status":"ok","required":false,"detail":"installed","fix":""}
+        ]"#;
+        let checks: Vec<Check> = serde_json::from_str(payload).expect("backend rows must parse");
+        assert_eq!(checks.len(), 4);
+        assert!(checks[0].ok, "a passing row must read as passing");
+        assert!(!checks[1].ok, "a warn row must not read as passing");
+        assert_eq!(
+            checks[2].detail, "",
+            "an absent detail defaults, it does not fail"
+        );
+        assert!(
+            !checks[3].required,
+            "an informational row must parse as informational, or `doctor` fails its exit \
+             code over a missing optional tool"
+        );
+    }
+
+    /// A row carrying only `status` is the shape that broke it. Pin the failure so nobody
+    /// "simplifies" the producer back into it.
+    #[test]
+    fn a_row_without_ok_is_refused_rather_than_silently_passing() {
+        let legacy = r#"[{"name":"factory backend","status":"ok","detail":"v1","required":true}]"#;
+        assert!(
+            serde_json::from_str::<Vec<Check>>(legacy).is_err(),
+            "status alone must not deserialize: that is the bug this pins"
+        );
+    }
+}
