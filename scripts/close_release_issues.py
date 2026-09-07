@@ -66,9 +66,7 @@ def load_manifest(path: Path) -> tuple[str, list[int]]:
 
     expected_count = raw.get("expected_count")
     if type(expected_count) is not int or expected_count != len(issues):
-        fail(
-            f"expected_count={expected_count!r} does not match explicit issue count={len(issues)}"
-        )
+        fail(f"expected_count={expected_count!r} does not match explicit issue count={len(issues)}")
 
     return release_id.strip(), sorted(issues)
 
