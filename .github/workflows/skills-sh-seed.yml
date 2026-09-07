@@ -25,3 +25,17 @@ jobs:
             --global \
             --yes
           npx --yes skills list --global --agent codex
+
+      - name: Probe canonical skills.sh pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          for url in \
+            https://skills.sh/zozo123/ariflow-swfactory \
+            https://skills.sh/zozo123/ariflow-swfactory/airflow-software-factory \
+            https://skills.sh/zozo123/ariflow-swfactory/swfactory
+          do
+            code=$(curl -L -sS -o /tmp/page -w '%{http_code}' "$url")
+            title=$(grep -o -m1 '<title>[^<]*' /tmp/page | sed 's/<title>//' || true)
+            echo "$code $url $title"
+          done
