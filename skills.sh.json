@@ -1,0 +1,10 @@
+{
+  "$schema": "https://skills.sh/schemas/skills.sh.schema.json",
+  "groupings": [
+    {
+      "title": "Airflow Software Factory",
+      "description": "Operate, extend, stabilize, and audit the Airflow-governed software delivery factory.",
+      "skills": ["airflow-software-factory"]
+    }
+  ]
+}
