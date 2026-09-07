@@ -1,0 +1,71 @@
+name: seed-statmech360
+
+on:
+  push:
+    branches: [ocean/navier-stokes]
+    paths:
+      - ops/statmech360-v1.json
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+      - name: Create StatMech360 issue matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=ops/statmech360-v1.json
+          domains=$(jq '.domains | length' "$manifest")
+          concerns=$(jq '.concerns | length' "$manifest")
+          test "$domains" -eq 36
+          test "$concerns" -eq 10
+
+          created=0
+          skipped=0
+          for ((di=0; di<domains; di++)); do
+            did=$(jq -r ".domains[$di].id" "$manifest")
+            slug=$(jq -r ".domains[$di].slug" "$manifest")
+            objective=$(jq -r ".domains[$di].objective" "$manifest")
+            owner=$(jq -r ".domains[$di].owner" "$manifest")
+            for ((ci=0; ci<concerns; ci++)); do
+              cid=$(jq -r ".concerns[$ci].id" "$manifest")
+              concern=$(jq -r ".concerns[$ci].name" "$manifest")
+              slice=$(jq -r ".concerns[$ci].slice" "$manifest")
+              key="[StatMech360/${did}-${cid}]"
+              title="${key} ${slug}: ${concern}"
+
+              if gh issue list --repo "$REPO" --state all --search "${key} in:title" --limit 20 --json title \
+                --jq ".[] | select(.title == \"${title}\") | .title" | grep -q .; then
+                skipped=$((skipped + 1))
+                continue
+              fi
+
+              body=$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n%s\n' \
+                "**StatMech domain:** ${slug}" \
+                "**Objective:** ${objective}" \
+                "**Owner lane:** ${owner}" \
+                "**Engineering slice:** ${slice}" \
+                "### Acceptance" \
+                "- Apache Airflow remains the sole lifecycle scheduling authority." \
+                "- Factory Cell identity and positive epoch are conserved across all modeled operators." \
+                "- Creation may add explicit alternatives; annihilation may remove only superseded unreferenced state." \
+                "- Operator algebra cannot directly mutate GitHub, provider state, or release authority." \
+                "- Ensemble and criticality metrics are deterministic, inspectable, and evidence-backed." \
+                "- GAS/LIQUID/MIXED/SUPERCRITICAL remain non-promotable to main." \
+                "- Stress may increase entropy; final crystallization remains deferred." \
+                "- Superseded abstractions are candidates for later deterministic dissipation." \
+                "Parent wave: StatMech360 operator/ensemble stress system.")
+              gh issue create --repo "$REPO" --title "$title" --body "$body" >/dev/null
+              created=$((created + 1))
+            done
+          done
+          echo "StatMech360 created=${created} skipped=${skipped}" >> "$GITHUB_STEP_SUMMARY"
