@@ -1,4 +1,0 @@
-interface:
-  display_name: "Airflow Software Factory"
-  short_description: "Operate governed Airflow software-factory work"
-  brand_color: "#017CEE"
