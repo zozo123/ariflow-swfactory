@@ -66,13 +66,17 @@ jobs:
         run: cargo test --manifest-path rust/Cargo.toml -p swf-adapters --test factory
       - name: Docs template guard
         run: '! grep -R -n -E "FILTERS_[A-Z]+|EXAMPLES_BLOCK|DRYRUN_PARA" docs'
-      - name: Remove one-shot workflow
-        run: rm -f .github/workflows/final-hardening-patch-once.yml
-      - name: Commit verified patch
+      - name: Push verified non-workflow product diff
         run: |
+          # The Actions token can push ordinary repository files but GitHub intentionally refuses
+          # workflow-file mutations without workflows permission. Revert only workflow paths here;
+          # the authenticated connector lands those exact deltas after this verified commit.
+          git checkout -- .github/workflows/ci.yml
+          git checkout -- .github/workflows/final-hardening-patch-once.yml
+          git checkout -- .github/workflows/hardening-format-once.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git diff --cached --check
-          git commit -m 'Finish backend hardening, live E2E, and operator docs'
+          git commit -m 'Finish backend hardening and operator docs'
           git push origin HEAD:hardening/final-open-issues
