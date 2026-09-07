@@ -859,3 +859,52 @@ async fn the_runs_adapter_is_the_trait_object_that_ops_will_hold() {
         format!("{}/dags/factory/runs/manual__x%3A1", server.uri())
     );
 }
+
+/// The server's clock, learned from the `Date` header every HTTP response already carries.
+///
+/// It exists so that "has this gate existed long enough to answer?" is a subtraction of two
+/// readings of one clock — the server stamps `created_at`, and the server says what time it is —
+/// rather than of two different machines' clocks. It is deliberately read off responses the client
+/// was making anyway: an extra round trip to ask the time would be a round trip per gate.
+#[tokio::test]
+async fn the_servers_own_clock_is_learned_from_the_responses_it_already_sends() {
+    let server = MockServer::start().await;
+    let api = client(&server);
+    assert!(
+        api.server_now().is_none(),
+        "a client that has not called anything has not seen a clock, and must not invent one"
+    );
+
+    // Two hours ahead of this machine, which is the shape of the failure the header exists to
+    // absorb: a server in another timezone-configured container, or one whose clock has drifted.
+    let theirs = chrono::Utc::now() + chrono::TimeDelta::hours(2);
+    Mock::given(any())
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header(
+                    "date",
+                    theirs
+                        .format("%a, %d %b %Y %H:%M:%S GMT")
+                        .to_string()
+                        .as_str(),
+                )
+                .set_body_json(json!({"status": "healthy"})),
+        )
+        .mount(&server)
+        .await;
+
+    api.health(&CancellationToken::new())
+        .await
+        .expect("the probe answers");
+
+    let observed = api.server_now().expect("one response taught it the clock");
+    let error = (observed.with_timezone(&chrono::Utc) - theirs)
+        .num_milliseconds()
+        .abs();
+    assert!(
+        error < 2_000,
+        "the server's clock reads {observed}, theirs is {theirs} — {error} ms apart. The header \
+         has one-second resolution and names a moment before we received it, so a small negative \
+         error is expected; anything larger means it was not parsed."
+    );
+}

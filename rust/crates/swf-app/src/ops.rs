@@ -584,11 +584,11 @@ impl Ops {
     ) -> Result<Selection> {
         let selection = crate::gates::select(self.runs()?, filter, cancel).await?;
         for row in selection.rows.iter().filter(|row| row.gate.ready) {
-            // Sighting a ready gate on a listing STARTS its settle clock; it does not discharge
-            // it. That distinction is the whole rule: an operator who has had the gate on screen
-            // for a while answers with no pause at all, while a batch that selected the same gate
-            // a millisecond ago still waits out `CONFIRM_INTERVAL` from here. Treating this read
-            // as one of the two required sightings is what answered gates inside the window the
+            // A sighting never discharges the settle window; it only records that this process
+            // has now looked. The window itself is the gate's age by the server's own
+            // `created_at` (see `gates::age_of`), and this table is the fallback clock for a gate
+            // the server did not stamp. Treating this read as one of the two required sightings —
+            // as the first version of the batch did — is what answered gates inside the window the
             // scheduler fails them in.
             self.sightings.record(&row.gate.id());
         }
@@ -621,9 +621,12 @@ impl Ops {
     /// able to show it — and be told to confirm it — between the read and the writes. A dry run is
     /// simply this method never being called.
     ///
-    /// `settle` is the observation window each gate must have been parked for; `None` is
-    /// [`gates::CONFIRM_INTERVAL`](crate::gates::CONFIRM_INTERVAL), which is what the product
-    /// passes and what the tests shorten.
+    /// `settle` is the window each gate must have existed for; `None` is
+    /// [`gates::settle_window`](crate::gates::settle_window) — [`CONFIRM_INTERVAL`] unless
+    /// [`SETTLE_ENV`] widens it — which is what the product passes and what the tests shorten.
+    ///
+    /// [`CONFIRM_INTERVAL`]: crate::gates::CONFIRM_INTERVAL
+    /// [`SETTLE_ENV`]: crate::gates::SETTLE_ENV
     pub async fn gate_answer_all(
         &self,
         selection: &Selection,

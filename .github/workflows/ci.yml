@@ -47,6 +47,18 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 45
+    # `swf` reads pull requests through `gh`, which refuses to run in Actions without a token and
+    # would otherwise degrade the delivery half of the run into "source github is unavailable".
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # The gate settle window, widened for this runner without rebuilding the binary. `swf`
+      # defaults to 5 s, measured against a laptop's scheduler; a two-core runner reconciles a
+      # parked worker more slowly AND ripens gates faster (36 s here against ~110 s on a laptop),
+      # and answering inside that reconciliation fails the gate. The knob exists because the
+      # previous fix was a compiled-in 3 s that went nine local runs green and failed here on the
+      # first try, with no way to raise it short of shipping a new binary. Lower it back toward
+      # the default if this job stays green for a month; raise it if it does not.
+      SWF_GATE_SETTLE_SECS: "8"
     steps:
       - uses: actions/checkout@v6
         with:

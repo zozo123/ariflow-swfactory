@@ -48,15 +48,26 @@ script hits it roughly once per dozen gates, which is exactly often enough to be
 flakiness. `scripts/stress_airflow.sh` paid for this in a hand-tuned settle.
 
 Model it instead. `rust/crates/swf-app/src/gates.rs` gives every gate a `ready` flag, true only when
-its own task instance is parked in `awaiting_input` — and, because one poll can catch the transition
-early, seen so on two consecutive polls. Answering an unready gate is refused unless forced, and the
+its own task instance is parked in `awaiting_input`, and the write is preceded by a read that was
+not the one that selected the gate. Answering an unready gate is refused unless forced, and the
 refusal names the failing condition. A run the client could not read leaves every gate of it
 unready, which is the safe direction to be wrong in.
 
+Readiness is necessary and not sufficient: the window closes when the *scheduler* has finished
+reconciling the worker that parked the task, which is after the task instance already reads
+`awaiting_input`. So a gate must also have **existed** for `CONFIRM_INTERVAL` (5 s;
+`SWF_GATE_SETTLE_SECS` raises it for a slower deployment without a rebuild). Measure that age with
+the server's own `created_at` stamp and a server-derived now, never with a stopwatch this process
+started — a local clock measures when *you* happened to look, so it resets on every invocation,
+ignores a gate that has been open for a minute, and degenerates into a `sleep` tuned to the fastest
+machine anyone runs it on. That version passed nine local runs and failed on the first CI runner.
+Keep the local stopwatch only as the fallback for a resource the server did not stamp, and let one
+unreadable timestamp degrade one item rather than refuse the batch around it.
+
 Generalise to any create-then-park lifecycle: a resource that exists before it accepts work needs a
-readiness predicate, not a tuned delay. Then make the write survive a lost race — re-read the
-subject just before mutating it, and report "another operator got there first" as a distinct
-conflict outcome rather than a crash or, worse, a silent overwrite.
+readiness predicate plus a server-anchored age, not a tuned delay. Then make the write survive a
+lost race — re-read the subject just before mutating it, and report "another operator got there
+first" as a distinct conflict outcome rather than a crash or, worse, a silent overwrite.
 
 ## Name the claim you are making
 

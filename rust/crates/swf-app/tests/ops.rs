@@ -69,6 +69,49 @@ struct FakeRuns {
     /// How many writes are in flight now, and the most there have ever been at once.
     in_flight: AtomicUsize,
     peak_in_flight: AtomicUsize,
+    /// The server's own clock, when this fake has one. `None` is an adapter that has never seen
+    /// one — which is every fixture written before gates carried a server stamp, and is what keeps
+    /// the fallback path under test.
+    clock: Option<FakeClock>,
+    /// How long the scheduler needs to reconcile a parked worker. A `respond` inside that window
+    /// answers the way the real one does: the gate is FAILED, not answered.
+    danger: Option<Duration>,
+    /// Every write, with the age the *server* would have said the gate had at that instant. This
+    /// is the measurement the whole settle rule exists to control.
+    write_ages: Mutex<Vec<(String, Duration)>>,
+}
+
+/// A server clock that moves with tokio's, so a paused-time test and the "server" agree.
+///
+/// `chrono::Utc::now()` does not advance under `start_paused`, so a fake that used it would report
+/// a gate as the same age before and after a settle the test believes it slept through. Anchoring
+/// to `tokio::time::Instant` makes the fake server's clock the same clock the code under test
+/// sleeps on, which is the only way a virtual-time test can measure a real rule.
+struct FakeClock {
+    epoch: swf_domain::model::Timestamp,
+    started: tokio::time::Instant,
+}
+
+impl FakeClock {
+    fn start() -> Self {
+        Self {
+            // A fixed instant, so a failure message names a time and not "whenever you ran this".
+            epoch: "2026-09-07T09:00:00+00:00"
+                .parse()
+                .expect("a literal timestamp"),
+            started: tokio::time::Instant::now(),
+        }
+    }
+
+    fn now(&self) -> swf_domain::model::Timestamp {
+        self.epoch
+            + chrono::TimeDelta::from_std(self.started.elapsed()).expect("a test-length span")
+    }
+
+    /// The stamp a gate created `ago` before now would carry.
+    fn stamp(&self, ago: Duration) -> swf_domain::model::Timestamp {
+        self.now() - chrono::TimeDelta::from_std(ago).expect("a test-length span")
+    }
 }
 
 impl FakeRuns {
@@ -93,6 +136,24 @@ impl FakeRuns {
         }
     }
 
+    /// The gate's age by this fake's server clock, or `None` when it has neither clock nor stamp.
+    fn age_of(&self, id: &GateId) -> Option<Duration> {
+        let now = self.clock.as_ref()?.now();
+        let gates = self.gates.lock().ok()?;
+        gates
+            .iter()
+            .find(|g| g.id() == *id)
+            .and_then(|g| g.age_at(now))
+    }
+
+    /// Every write this fake took, with the age the server would have said the gate had.
+    fn write_ages(&self) -> Vec<(String, Duration)> {
+        self.write_ages
+            .lock()
+            .map(|w| w.clone())
+            .unwrap_or_default()
+    }
+
     fn tasks_of(&self, key: &str) -> Vec<TaskState> {
         self.tasks
             .iter()
@@ -104,6 +165,10 @@ impl FakeRuns {
 
 #[async_trait]
 impl Runs for FakeRuns {
+    fn server_now(&self) -> Option<swf_domain::model::Timestamp> {
+        self.clock.as_ref().map(FakeClock::now)
+    }
+
     async fn list_dags(&self, _tag: &str, _c: &CancellationToken) -> AdapterResult<Page<String>> {
         self.record("list_dags");
         if self.fails("list_dags") {
@@ -224,6 +289,34 @@ impl Runs for FakeRuns {
             "a dry run wrote: respond({gate}) reached the adapter"
         );
         let id = gate.to_string();
+        // What the SERVER would say this gate's age is at the instant of the write. Recorded for
+        // every write, and judged against `danger` below, because "the write landed outside the
+        // window" is the only claim about this race worth asserting.
+        let age = self.age_of(gate);
+        if let Some(age) = age {
+            self.write_ages
+                .lock()
+                .expect("lock")
+                .push((id.clone(), age));
+        }
+        if let (Some(age), Some(danger)) = (age, self.danger) {
+            if age < danger {
+                // Exactly what a real scheduler does: it reconciles the executor event of the
+                // worker that parked this task after the answer has already re-queued it, decides
+                // the process finished success against a queued task instance, and marks the gate
+                // FAILED. It does not refuse the PATCH — that is why this failure was invisible
+                // until someone read the scheduler log.
+                return Err(AdapterError::from_status(
+                    500,
+                    "PATCH gate",
+                    &format!(
+                        "answered {age:?} after it was created, inside the {danger:?} the \
+                         scheduler needs: finished with state success, but the task instance's \
+                         state attribute is queued. Marking task as FAILED"
+                    ),
+                ));
+            }
+        }
         // A write holds its slot across an await, so a batch that fanned out without a bound shows
         // up here as a peak rather than as a timing coincidence.
         let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
@@ -539,6 +632,305 @@ fn build_ops(
         builder = builder.metrics(metrics);
     }
     builder.build()
+}
+
+// -------------------------------------------------- the server's stamp, not our stopwatch
+
+/// One parked gate whose HITL detail the server stamped `age` ago.
+///
+/// `danger` makes this fake behave the way the real scheduler does: a PATCH that arrives before
+/// the gate has existed that long does not get refused, it gets *accepted and then failed*, which
+/// is why the original race was invisible until someone read the scheduler log.
+fn a_gate_stamped(age: Duration, danger: Option<Duration>) -> FakeRuns {
+    let clock = FakeClock::start();
+    let mut gate = gate_at("factory", "r1", "job.approve_plan", 0);
+    gate.created_at = Some(clock.stamp(age));
+    FakeRuns {
+        dags: vec!["factory".into()],
+        runs: vec![("factory".to_string(), vec![run("factory", "r1", "running")])],
+        tasks: vec![(
+            "factory/r1".to_string(),
+            vec![TaskState::new(
+                "job.approve_plan",
+                0,
+                Some("awaiting_input".into()),
+            )],
+        )],
+        gates: Mutex::new(vec![gate]),
+        clock: Some(clock),
+        danger,
+        ..FakeRuns::default()
+    }
+}
+
+fn the_only_gate() -> GateId {
+    gate_at("factory", "r1", "job.approve_plan", 0).id()
+}
+
+/// A gate the server stamped a moment ago is not written to, however many times we have read it.
+///
+/// This is the half of the rule a local stopwatch can also get right, and it is here so that the
+/// stronger test below cannot pass by disabling the window altogether.
+#[tokio::test(start_paused = true)]
+async fn a_gate_the_server_stamped_a_moment_ago_is_not_written_to_yet() {
+    let airflow = Arc::new(a_gate_stamped(Duration::ZERO, Some(CONFIRM_INTERVAL)));
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let started = tokio::time::Instant::now();
+
+    let answer = ops
+        .gate_answer(
+            &the_only_gate(),
+            Decision::Approve,
+            &AnswerOpts::default(),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a gate that is parked is answerable, once it is old enough");
+
+    assert!(answer.sightings >= 2);
+    let ages = airflow.write_ages();
+    assert_eq!(ages.len(), 1, "exactly one write: {ages:?}");
+    assert!(
+        ages[0].1 >= CONFIRM_INTERVAL,
+        "the PATCH landed {:?} after the server created the gate, inside the {CONFIRM_INTERVAL:?} \
+         the scheduler needs to reconcile the worker that parked it",
+        ages[0].1
+    );
+    assert!(
+        started.elapsed() >= CONFIRM_INTERVAL,
+        "a brand-new gate pays the window: {:?}",
+        started.elapsed()
+    );
+}
+
+/// The half a local stopwatch gets *wrong*: a gate that has existed for ten minutes waits for
+/// nothing, even though this process has never seen it before.
+///
+/// This is the whole point of anchoring to `created_at`. Under the previous rule the window was
+/// counted from this process's first sighting, so every fresh `swf gates approve` invocation
+/// restarted it from zero and slept the full interval no matter how long the gate had been open —
+/// a flat `sleep` wearing a window's clothes. Here the settle is already behind the gate, the
+/// re-read before the write still happens, and nothing is slept.
+#[tokio::test(start_paused = true)]
+async fn a_gate_the_server_stamped_long_ago_is_answered_without_an_artificial_wait() {
+    let airflow = Arc::new(a_gate_stamped(
+        Duration::from_secs(600),
+        Some(CONFIRM_INTERVAL),
+    ));
+    // A brand-new `Ops`, so its sighting table is empty: this models a fresh `swf` process, which
+    // is exactly what the e2e's poll loop runs on every pass.
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let started = tokio::time::Instant::now();
+
+    let answer = ops
+        .gate_answer(
+            &the_only_gate(),
+            Decision::Approve,
+            &AnswerOpts::default(),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a gate the server says is ten minutes old is answerable now");
+
+    assert!(
+        answer.sightings >= 2,
+        "the read that precedes the write is not optional: {answer:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "a gate that has been open for ten minutes must not be slept over again ({:?})",
+        started.elapsed()
+    );
+    assert_eq!(airflow.write_ages().len(), 1);
+}
+
+/// One unreadable stamp degrades one gate, and never refuses the batch around it.
+///
+/// The adapter tolerates a HITL detail with no `created_at` — an older Airflow, a row the API
+/// abbreviated — and so must this rule. The gate with no stamp falls back to the sighting clock
+/// and pays the window; the two the server stamped an hour ago do not; all three are answered.
+#[tokio::test(start_paused = true)]
+async fn a_gate_the_server_never_stamped_falls_back_and_does_not_refuse_the_batch() {
+    let clock = FakeClock::start();
+    let mut gates = Vec::new();
+    let mut tasks = Vec::new();
+    for index in 0..3 {
+        let mut gate = gate_at("factory", "r1", "job.approve_plan", index);
+        // Job 1 is the one the server told us nothing about.
+        gate.created_at = (index != 1).then(|| clock.stamp(Duration::from_secs(3600)));
+        gates.push(gate);
+        tasks.push(TaskState::new(
+            "job.approve_plan",
+            index,
+            Some("awaiting_input".into()),
+        ));
+    }
+    let airflow = Arc::new(FakeRuns {
+        dags: vec!["factory".into()],
+        runs: vec![("factory".to_string(), vec![run("factory", "r1", "running")])],
+        tasks: vec![("factory/r1".to_string(), tasks)],
+        gates: Mutex::new(gates),
+        clock: Some(clock),
+        ..FakeRuns::default()
+    });
+    let ops = build_ops(Arc::clone(&airflow), None, None, None);
+    let filter = GateFilter::default();
+    let selection = select_with(&ops, filter.clone()).await;
+    let started = tokio::time::Instant::now();
+
+    let report = ops
+        .gate_answer_all(
+            &selection,
+            Decision::Approve,
+            &filter,
+            None,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a batch reports rather than fails");
+
+    assert_eq!(
+        report.count(BatchOutcome::Answered),
+        3,
+        "one gate with no server stamp must not cost the other two their answers: {report:?}"
+    );
+    assert!(
+        started.elapsed() >= CONFIRM_INTERVAL,
+        "the unstamped gate still settles, on the fallback clock ({:?})",
+        started.elapsed()
+    );
+    assert!(
+        started.elapsed() < CONFIRM_INTERVAL * 2,
+        "and the batch settles once, not once per gate ({:?})",
+        started.elapsed()
+    );
+}
+
+/// The CI shape: gates ripening within a second of each other, answered by a *new process* each
+/// pass, against a scheduler that fails anything written inside its reconciliation window.
+///
+/// This is the run that broke the previous fix. The laptop takes ~110 s to complete the end-to-end
+/// scenario and a two-core CI runner takes 36 s, so on CI the gates ripen in rapid succession and
+/// the loaded scheduler reconciles more slowly, not less. The two effects push the same way. So
+/// this fixture compresses the wave to eight gates arriving 400 ms apart, polls them the way
+/// `scripts/swf_e2e.sh` does — a fresh `Ops`, and therefore an empty sighting table, on every pass,
+/// because every pass of that loop is a fresh `swf` process — and asserts the only thing that
+/// actually matters: every PATCH landed outside the window, measured by the server's own clock.
+#[tokio::test(start_paused = true)]
+async fn gates_ripening_in_rapid_succession_are_still_written_to_outside_the_window() {
+    const RUNS: i32 = 4;
+    const PER_RUN: i32 = 2;
+    const ARRIVAL: Duration = Duration::from_millis(400);
+    // How long this fake scheduler needs to reconcile a parked worker. Four seconds is chosen to
+    // sit BETWEEN the three the old constant allowed and the five the new one does: it is a
+    // scheduler slower than the laptop the old number was fitted to, which is exactly what the CI
+    // runner turned out to be. Under the previous rule — three seconds counted from this process's
+    // first sighting, restarted on every pass — a write landed at 3 s plus however late the poll
+    // was, which is inside this window and is the failure that has to stay fixed.
+    let danger = Duration::from_secs(4);
+
+    let mut run_rows = Vec::new();
+    let mut tasks = Vec::new();
+    for r in 1..=RUNS {
+        let run_id = format!("r{r}");
+        run_rows.push(run("factory", &run_id, "running"));
+        tasks.push((
+            format!("factory/{run_id}"),
+            (0..PER_RUN)
+                .map(|index| {
+                    TaskState::new("job.approve_plan", index, Some("awaiting_input".into()))
+                })
+                .collect::<Vec<_>>(),
+        ));
+    }
+    let airflow = Arc::new(FakeRuns {
+        dags: vec!["factory".into()],
+        runs: vec![("factory".to_string(), run_rows)],
+        tasks,
+        // No gate exists yet: they are created as their tasks park, which is what a run does.
+        gates: Mutex::new(Vec::new()),
+        clock: Some(FakeClock::start()),
+        danger: Some(danger),
+        ..FakeRuns::default()
+    });
+
+    // The factory, ripening. Each gate is stamped by the server at the instant it is created.
+    let ripening = {
+        let airflow = Arc::clone(&airflow);
+        tokio::spawn(async move {
+            for r in 1..=RUNS {
+                for index in 0..PER_RUN {
+                    tokio::time::sleep(ARRIVAL).await;
+                    let clock = airflow.clock.as_ref().expect("a stamped fixture");
+                    let mut gate = gate_at("factory", &format!("r{r}"), "job.approve_plan", index);
+                    gate.created_at = Some(clock.now());
+                    airflow.gates.lock().expect("lock").push(gate);
+                }
+            }
+        })
+    };
+
+    let expected = usize::try_from(RUNS * PER_RUN).expect("a small count");
+    let mut answered = 0usize;
+    let mut passes = 0;
+    while answered < expected && passes < 60 {
+        passes += 1;
+        // A fresh process every pass: new `Ops`, new sighting table, no memory of the last look.
+        let ops = build_ops(Arc::clone(&airflow), None, None, None);
+        let filter = GateFilter {
+            ready: true,
+            ..GateFilter::default()
+        };
+        let selection = select_with(&ops, filter.clone()).await;
+        if selection.ready_count() > 0 {
+            let report = ops
+                .gate_answer_all(
+                    &selection,
+                    Decision::Approve,
+                    &filter,
+                    None,
+                    &CancellationToken::new(),
+                )
+                .await
+                .expect("a batch reports rather than fails");
+            for item in &report.items {
+                assert_ne!(
+                    item.outcome,
+                    BatchOutcome::Failed,
+                    "the scheduler failed a gate this batch answered: {item:?}"
+                );
+            }
+            answered += report.count(BatchOutcome::Answered);
+            // Answered gates leave the pending list, the way Airflow's does.
+            let done: Vec<GateId> = report
+                .items
+                .iter()
+                .filter(|item| item.outcome == BatchOutcome::Answered)
+                .map(|item| item.id.clone())
+                .collect();
+            airflow
+                .gates
+                .lock()
+                .expect("lock")
+                .retain(|gate| !done.contains(&gate.id()));
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    ripening.await.expect("the factory finished ripening");
+
+    assert_eq!(
+        answered, expected,
+        "every gate was answered in {passes} passes"
+    );
+    let ages = airflow.write_ages();
+    assert_eq!(ages.len(), expected, "one write per gate: {ages:?}");
+    for (id, age) in &ages {
+        assert!(
+            *age >= danger,
+            "{id} was written to {age:?} after the server created it — inside the {danger:?} in \
+             which the scheduler is still reconciling the worker that parked it"
+        );
+    }
 }
 
 // ---------------------------------------------------------------- per-source degradation

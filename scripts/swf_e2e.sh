@@ -14,6 +14,9 @@
 # Env: SWF_E2E_KEEP=1        keep the work dir (standalone home, run dirs, logs, config) after exit
 #      SWF_AIRFLOW_NO_SYNC=1 use an installed Airflow main overlay instead of the pinned release
 #      SWF_BIN=<path>        an already-built `swf` (default: cargo build --release in rust/)
+#      SWF_GATE_SETTLE_SECS  how long a gate must have existed before `swf` will answer it
+#                            (default 5). Raise it on a machine whose scheduler reconciles slowly
+#                            — a small CI runner — and read the failure it prevents below.
 #
 # No keys and no network: scripted agent, local sandbox, local git remote. Exit code is non-zero if
 # any gate could not be answered through `swf`, any job's evidence is missing, any delivery fails
@@ -236,6 +239,15 @@ echo "run $DAG_ID/$RUN_ID"
 # BEFORE the task defers; answering inside that window makes the scheduler fail the gate. A human
 # cannot hit a sub-second window, a polling script can — so this readiness rule, not a sleep, is
 # what keeps the harness's speed from being mistaken for a factory bug.
+#
+# Readiness alone is not enough, because the window closes when the SCHEDULER has finished
+# reconciling the worker that parked the task, which is after the task instance already reads
+# `awaiting_input`. `swf` therefore also refuses to answer a gate that has not existed for
+# $SWF_GATE_SETTLE_SECS (default 5) by the SERVER's own `created_at` stamp. Note what that means
+# for this loop: every pass below is a fresh `swf` process with no memory of the last one, so a
+# rule counted from the client's own first sighting would restart from zero on every pass and
+# become a flat sleep. Counted from the server's stamp, a gate that ripened during the sleep on
+# line "sleep 3" is already past the window and costs this loop nothing.
 
 say "polling; answering every ready gate as admin through swf (in batches)"
 #
@@ -272,10 +284,46 @@ wrote = [r for r in rows if r.get("outcome") == "answered"]
 print(f"  dry run: planned {len(planned)} gate(s), answered {len(wrote)}")
 sys.exit(0 if planned and not wrote else 1)
 PYEOF
-      still="$("$SWF" gates list --dag "$DAG_ID" --ready --json | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')"
-      [ "$still" = "$ready" ] ||
-        fail "the dry run changed the world: $ready ready gates before, $still after"
-      echo "  the same $still gates are still waiting — the dry run wrote nothing"
+      # Check the IDENTITIES, not the count. Gates ripen continuously — on a fast runner a
+      # fourth can park while the dry run is still printing the first three — so a changed count
+      # proves nothing and an equal count would have been luck. What must hold is that every gate
+      # the dry run said it WOULD answer is still sitting there unanswered.
+      "$SWF" gates list --dag "$DAG_ID" --ready --json >"$WORK/after-dry-run.json"
+      "$PY" - "$WORK/dry-run.json" "$WORK/after-dry-run.json" <<'PYEOF' || fail "the dry run answered a gate"
+"""Every gate the dry run planned must still be pending afterwards."""
+
+import json
+import sys
+
+report = json.load(open(sys.argv[1]))
+rows = report if isinstance(report, list) else report.get("results", report.get("gates", []))
+planned = {r["id"] for r in rows if r.get("outcome") == "planned"}
+still = {g["id"] for g in json.load(open(sys.argv[2]))}
+answered = planned - still
+print(f"  {len(planned & still)}/{len(planned)} planned gates still waiting after the dry run")
+for gate in sorted(answered):
+    print(f"    a dry run answered {gate}", file=sys.stderr)
+sys.exit(1 if answered else 0)
+PYEOF
+
+      # The settle window is measured from the server's own `created_at` on the HITL detail. If
+      # that field ever stops arriving — an Airflow rename, a proxy that strips it — `swf` quietly
+      # falls back to its weaker per-process clock and every run here would still pass while the
+      # rule it is supposed to prove had stopped being enforced. Assert the input, not just the
+      # outcome.
+      "$SWF" gates list --dag "$DAG_ID" --ready --json >"$WORK/ready.json" ||
+        fail "swf gates list --ready --json"
+      "$PY" - "$WORK/ready.json" <<'PYEOF' || fail "a ready gate reached swf with no server created_at"
+import json
+import sys
+
+rows = json.load(open(sys.argv[1]))
+missing = [r.get("id", r.get("gate", "?")) for r in rows if not r.get("created_at")]
+if missing:
+    print("  no server created_at on: " + ", ".join(map(str, missing)), file=sys.stderr)
+    raise SystemExit(1)
+print(f"  all {len(rows)} ready gate(s) carry a server created_at — the settle window is anchored")
+PYEOF
       dry_run_checked=1
     fi
 

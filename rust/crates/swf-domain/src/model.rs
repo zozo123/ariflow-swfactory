@@ -517,6 +517,29 @@ impl Gate {
         Self::revision_of(&self.subject, &self.body)
     }
 
+    /// How long this gate has existed, according to the clock that stamped it.
+    ///
+    /// This is the *only* measure of a gate's age that does not depend on when this process
+    /// happened to look. [`Gate::created_at`] is written by the server when the operator task
+    /// creates the HITL detail — a beat before that task defers — so `now - created_at` bounds
+    /// the window in which the scheduler is still reconciling the worker process that parked it,
+    /// no matter how many processes have polled, whether a dry run went first, or how long the
+    /// poll interval is. A wall clock started at *our* first sighting measures none of that.
+    ///
+    /// `None` means the server did not stamp one, or the stamp did not parse: the caller must
+    /// have another rule for that gate rather than treat "unknown" as "old". A `created_at` in
+    /// the future (clock skew between the stamping server and `now`) reads as zero, which is the
+    /// safe direction to be wrong in — a gate that looks brand new is waited out, not written to.
+    pub fn age_at(&self, now: Timestamp) -> Option<std::time::Duration> {
+        let created = self.created_at?;
+        // `to_std` refuses a negative span, which is exactly the `created_at` in the future case.
+        Some(
+            now.signed_duration_since(created)
+                .to_std()
+                .unwrap_or(std::time::Duration::ZERO),
+        )
+    }
+
     /// The bare stage name an operator recognises: `job.approve_plan` -> `approve_plan`.
     /// This is the `gate` key of the snapshot JSON.
     pub fn short_name(&self) -> &str {

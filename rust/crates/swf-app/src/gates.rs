@@ -14,10 +14,21 @@
 //! reconciling the worker process that parked it. A task instance can read `awaiting_input` while
 //! the executor event for that same process is still in the scheduler's queue — answer there and
 //! the response re-queues the task under an event that is about to be judged stale, and the gate
-//! is marked failed. So a gate must be seen parked at **two moments at least
-//! [`CONFIRM_INTERVAL`] apart** (`00-architecture.md` §C.3). Two *reads* are not two moments: a
-//! selection and the re-read that follows it milliseconds later are one observation of the world
-//! made twice, and counting them as two is exactly how a gate gets answered inside the window.
+//! is marked failed. So a gate may only be answered once it has **existed for at least
+//! [`CONFIRM_INTERVAL`]** (`00-architecture.md` §C.3), and the clock that says so is the server's
+//! own `created_at` stamp on the HITL detail — not a stopwatch this process started.
+//!
+//! That distinction is the whole rule, and it was learned twice. Two *reads* are not two moments:
+//! a selection and the re-read that follows it milliseconds later are one observation of the world
+//! made twice, and counting them as two answered gates fractions of a second after they parked.
+//! But a stopwatch started at our own FIRST sighting is barely better — it measures when this
+//! process happened to look, so it resets on every new `swf` invocation, ignores a gate that has
+//! been open for a minute, and turns into a flat `sleep` that has to be tuned to the fastest
+//! machine anyone runs it on. It was tuned to a laptop and failed on the first CI runner. The
+//! operator task creates the HITL detail a beat *before* it defers, so `created_at` is a
+//! server-anchored measure of exactly the window that matters: immune to our poll timing, to how
+//! many processes have looked, and to whether a dry run went first. The sighting table below is
+//! still kept, and is still the rule for a gate whose `created_at` the server did not give us.
 //!
 //! **Re-validation.** [`answer`] re-reads the gate immediately before the PATCH and refuses if it
 //! has been answered meanwhile, or if the evidence the operator read has moved under them. Another
@@ -41,17 +52,72 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ops::{ErrorKind, OpsError, Result};
 
-/// How long a gate must have been under observation, parked, before it may be answered.
+/// How long a gate must have existed, and been parked, before it may be answered.
 ///
 /// This is a window and not a pause for luck. The scheduler marks a HITL task failed when it
 /// reconciles the executor event of the worker process that parked it *after* the response has
 /// already re-queued the task ("finished with state success, but the task instance's state
-/// attribute is queued"). On a live standalone that lag was measured at up to ~0.9 s; three
-/// seconds was sufficient locally, but the live hosted-runner harness still reproduced a stale
-/// executor event after three seconds. Five seconds is the conservative default now. It costs a
-/// scripted approval one pause; it costs an interactive one nothing at all,
-/// because the TUI sighted the gate on a refresh long before the operator pressed a key.
+/// attribute is queued").
+///
+/// **Why five seconds.** The reconciliation lag itself was measured at up to ~0.9 s on a live
+/// standalone. The previous value was three seconds, and three seconds is measurably not enough
+/// — a hosted runner reproduced a stale executor event at three seconds independently of the
+/// laptop evidence below, which is also the clearest argument that no constant compiled into a
+/// client can be right everywhere:
+/// with the window counted from this process's first sighting, a laptop run answered its gates
+/// 3.175 s after they parked and went nine end-to-end runs green — and the same binary failed a
+/// gate on its first CI run, on a two-core runner that completes the same scenario in 36 s where
+/// the laptop takes ~110 s. A loaded scheduler reconciles more slowly than the one the number was
+/// fitted to, so the honest reading of that pair is that the true lag has a tail well past 3 s and
+/// no laptop measurement bounds it. Five is >5x the lag that *was* measured and 1.6x the margin
+/// that held on a laptop.
+///
+/// **Why raising it is nearly free now.** The window is counted from the server's own
+/// `Gate::created_at`, not from when we looked, so every gate that ripened while a polling loop
+/// slept — which is most of them, since gates ripen in waves and each pass sleeps seconds — is
+/// already past the window and pays nothing. What is left to pay is the remainder for a gate that
+/// was created moments ago, once, concurrently, for a whole wave. An interactive answer pays
+/// nothing at all: the TUI sighted the gate long before the operator pressed a key.
+///
+/// [`SETTLE_ENV`] overrides it, because no constant compiled into a binary can be right for every
+/// deployment and the CI failure above is the proof.
 pub const CONFIRM_INTERVAL: Duration = Duration::from_secs(5);
+
+/// The environment variable that overrides [`CONFIRM_INTERVAL`], in seconds (fractions allowed).
+///
+/// It exists so a deployment whose scheduler reconciles more slowly than this laptop-measured
+/// default — a small CI runner, a busy shared cluster — can widen the window **without a
+/// rebuild**. That is not hypothetical: the previous constant was green nine times locally and
+/// failed on the first CI run, and there was no way to raise it short of shipping a new binary.
+///
+/// An unparseable or negative value is ignored rather than obeyed: silently answering gates with
+/// no settle at all because someone typed `SWF_GATE_SETTLE_SECS=fast` is the one outcome worse
+/// than the default being wrong.
+pub const SETTLE_ENV: &str = "SWF_GATE_SETTLE_SECS";
+
+/// The settle window in force: [`SETTLE_ENV`] if it names a usable number, else
+/// [`CONFIRM_INTERVAL`].
+pub fn settle_window() -> Duration {
+    settle_from_env().unwrap_or(CONFIRM_INTERVAL)
+}
+
+/// The window [`SETTLE_ENV`] asks for, if it asks for one this code will honour.
+pub fn settle_from_env() -> Option<Duration> {
+    parse_settle(&std::env::var(SETTLE_ENV).ok()?)
+}
+
+/// Read one [`SETTLE_ENV`] value. Split out from the environment so it can be tested without one.
+///
+/// `Some(Duration::ZERO)` is a legal answer: an operator who sets `0` is disabling the window
+/// deliberately, which is theirs to do. Nonsense is not — every unusable spelling answers `None`
+/// so the caller falls back to [`CONFIRM_INTERVAL`] rather than to no window at all.
+fn parse_settle(raw: &str) -> Option<Duration> {
+    let secs: f64 = raw.trim().parse().ok()?;
+    if !secs.is_finite() || secs < 0.0 {
+        return None;
+    }
+    Duration::try_from_secs_f64(secs).ok()
+}
 
 /// How many times a gate must be seen parked before it may be answered.
 ///
@@ -150,9 +216,12 @@ struct Sighting {
 
 /// What one observation of a gate establishes.
 ///
-/// `settled` is the load-bearing half. A gate observed twice inside a millisecond has a `count` of
-/// two and has established nothing: both reads can be answered by the same instant of the world,
-/// and that instant can be inside the window in which answering fails the gate.
+/// `settled` is the fallback clock, used only for a gate the server did not stamp a `created_at`
+/// on. It is weaker than the stamp on purpose and in a knowable way: it measures time since *this
+/// process* first looked, so it resets on every invocation and never reports a gate as older than
+/// this process is. A gate observed twice inside a millisecond has a `count` of two and has
+/// established nothing: both reads can be answered by the same instant of the world, and that
+/// instant can be inside the window in which answering fails the gate.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Seen {
     /// How many times this gate has now been observed parked.
@@ -357,8 +426,9 @@ pub struct AnswerOpts {
     pub expect: Option<String>,
     /// Skip the readiness rule. Say so in the output — this is the flag that can fail a gate.
     pub force: bool,
-    /// How long a gate must have been observed parked before the write. `None` uses
-    /// [`CONFIRM_INTERVAL`]; the tests are the only caller with a reason to shorten it.
+    /// How long a gate must have existed before the write. `None` uses [`settle_window`], which
+    /// is [`CONFIRM_INTERVAL`] unless [`SETTLE_ENV`] widens it; the tests are the only caller with
+    /// a reason to shorten it.
     pub confirm_delay: Option<Duration>,
 }
 
@@ -409,15 +479,16 @@ pub async fn answer(
         .with_hint("wait for the task to park, or pass --force if you accept the risk"));
     }
 
-    let settle = opts.confirm_delay.unwrap_or(CONFIRM_INTERVAL);
+    let settle = opts.confirm_delay.unwrap_or_else(settle_window);
+    let age = age_of(runs, &gate, seen);
     let mut count = seen.count;
-    if ready && !opts.force && (count < REQUIRED_SIGHTINGS || seen.settled < settle) {
-        // What has to elapse is time under observation, not reads. `seen.settled` is measured from
-        // the FIRST sighting — the listing or the review that put this gate in front of somebody —
-        // so an operator who has been watching the gate waits for nothing, and a batch that
-        // selected it a millisecond ago waits out the rest of the window rather than mistaking its
-        // own selection for a second look at the world.
-        let wait = settle.saturating_sub(seen.settled);
+    if ready && !opts.force && (count < REQUIRED_SIGHTINGS || age < settle) {
+        // What has to elapse is the gate's own age, not our reads and not our stopwatch. `age` is
+        // counted from the server's `created_at` where there is one, so a gate that ripened while
+        // a polling loop slept is already past the window and waits for nothing, while one created
+        // moments ago waits out the remainder rather than letting its own selection pass for a
+        // second look at the world.
+        let wait = settle.saturating_sub(age);
         if !wait.is_zero() {
             tokio::select! {
                 biased;
@@ -425,6 +496,15 @@ pub async fn answer(
                 () = tokio::time::sleep(wait) => {}
             }
         }
+        // The re-read confirms identity, evidence and readiness — not the age. The age is
+        // computed once, above, on purpose: `read` makes HTTP calls, each of which re-learns the
+        // server clock from a `Date` header with one-second resolution, so an age recomputed here
+        // can legitimately read up to a second *younger* than the one we just waited out. A
+        // re-check would then refuse on that jitter rather than on anything that changed. The
+        // exposure this leaves is narrow and bounded: an operator task that retried and created a
+        // fresh HITL detail with the same identity during our own settle window, whose new detail
+        // is therefore younger than it looks. `is_ready` still has to hold on the re-read, and the
+        // window is the same one that gate would have paid on the next pass.
         let (again, still_ready, state) = read(runs, id, cancel).await?;
         let now_revision =
             Gate::revision_of(&sanitize_line(&again.subject), &sanitize_block(&again.body));
@@ -451,6 +531,31 @@ pub async fn answer(
         forced: opts.force,
         sightings: count,
     })
+}
+
+/// How long this gate has existed, by the best clock available for it.
+///
+/// The order is deliberate and each step is weaker than the one before:
+///
+/// 1. The server's `created_at` against the server's own clock, learned from the `Date` header of
+///    the responses this adapter has already received ([`Runs::server_now`]). Both halves come
+///    from the same machine, so the subtraction is a real elapsed time.
+/// 2. The server's `created_at` against **our local clock**, when this adapter has never seen a
+///    server clock (a fake in a test, an adapter that does not implement it). This subtracts two
+///    different clocks and is not exact: it is wrong by however far the two hosts have drifted. It
+///    is still much better than the alternative, because NTP-managed hosts drift by milliseconds
+///    where the sighting clock below is wrong by however long ago this process started — and the
+///    error is bounded and symmetric, where the sighting clock's error is always in the unsafe
+///    direction on a fresh process. A host whose clock is minutes ahead of Airflow's would answer
+///    early; that deployment is already unable to read its own run timestamps, and
+///    [`SETTLE_ENV`] is the lever for it.
+/// 3. Time since we first sighted the gate parked, when the server stamped no `created_at` or the
+///    stamp did not parse. One unreadable timestamp must degrade one gate, never refuse a batch.
+fn age_of(runs: &dyn Runs, gate: &Gate, seen: Seen) -> Duration {
+    let now = runs
+        .server_now()
+        .unwrap_or_else(|| chrono::Utc::now().fixed_offset());
+    gate.age_at(now).unwrap_or(seen.settled)
 }
 
 /// Re-read one gate and its task instance. The read that stands between a review and a write.
@@ -957,11 +1062,11 @@ fn not_ready_reason(task_state: &str) -> String {
 /// gate cannot abandon the rest, because each answer is its own task and its own line in the
 /// report. Every gate is still re-read immediately before its own PATCH, since [`answer`] is the
 /// only writer: there is no bulk path that skips the re-validation a single answer performs. And
-/// every gate still settles for [`CONFIRM_INTERVAL`] counted from the moment it was FIRST seen
-/// parked — the selection that produced this batch is that moment, not a discharge of it, so a
-/// wave of gates selected together settles once, concurrently, and not once per gate.
+/// every gate still settles for [`CONFIRM_INTERVAL`] counted from the server's own `created_at`
+/// — the selection that produced this batch does not discharge that window, and a wave of gates
+/// created together settles once, concurrently, and not once per gate.
 ///
-/// `settle` overrides that window; `None` is [`CONFIRM_INTERVAL`] and is what the product passes.
+/// `settle` overrides that window; `None` is [`settle_window`] and is what the product passes.
 pub async fn answer_all(
     runs: Arc<dyn Runs>,
     sightings: Arc<Sightings>,
@@ -1213,6 +1318,42 @@ mod tests {
     fn a_gate_with_no_task_instance_at_all_is_not_ready() {
         assert!(!is_ready(&gate(), &[]));
         assert_eq!(task_state_of(&gate(), &[]), "unknown");
+    }
+
+    /// The window has to be raisable on a deployment that reconciles more slowly than the laptop
+    /// the default was measured on — that is what the CI failure proved — and it has to refuse
+    /// nonsense, because falling back to the default is survivable and answering with no window at
+    /// all is the bug this whole module exists to prevent.
+    #[test]
+    fn the_settle_window_is_overridable_and_refuses_nonsense() {
+        assert_eq!(parse_settle("8"), Some(Duration::from_secs(8)));
+        assert_eq!(parse_settle(" 12.5 "), Some(Duration::from_millis(12_500)));
+        // Explicitly asking for no window is an operator's decision to make.
+        assert_eq!(parse_settle("0"), Some(Duration::ZERO));
+        for bad in ["", "fast", "-1", "3s", "NaN", "inf"] {
+            assert_eq!(
+                parse_settle(bad),
+                None,
+                "{bad:?} must fall back, not disarm"
+            );
+        }
+    }
+
+    /// The measure that replaced the stopwatch: a gate's age comes from the server's own stamp.
+    #[test]
+    fn a_gates_age_is_read_from_the_stamp_the_server_wrote() {
+        let now = chrono::Utc::now().fixed_offset();
+        let mut gate = gate();
+
+        // No stamp is a real state of the world, and it must be distinguishable from "brand new".
+        assert_eq!(gate.age_at(now), None);
+
+        gate.created_at = Some(now - chrono::TimeDelta::seconds(30));
+        assert_eq!(gate.age_at(now), Some(Duration::from_secs(30)));
+
+        // A stamp in the future is clock skew, and reads as brand new — the safe direction.
+        gate.created_at = Some(now + chrono::TimeDelta::seconds(30));
+        assert_eq!(gate.age_at(now), Some(Duration::ZERO));
     }
 
     #[test]
