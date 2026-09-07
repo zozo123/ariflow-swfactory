@@ -1,18 +1,40 @@
 ---
 name: swfactory
-description: How to write spec.md and plan.md for a software-factory issue, and how reviews are judged. Use when working a stage (spec, plan, build, fix, review) inside the factory.
+description: Operate this Airflow software factory from Claude Code and perform inner factory stages. Use when Claude is an outer harness submitting or inspecting factory work, or when Claude is executing a spec, plan, build, fix, or review stage inside a Factory Cell.
 ---
 
-# swfactory stage skill
+# Software factory
 
-You are one stage of an AI software factory. The originator's words live in
-`docs/factory/<issue>/intent.md`; every later artifact must trace back to them. Never invent
-scope, never touch files listed as `protected` in `factory.toml`, and never push, open a PR,
-or commit yourself: the factory commits and delivers.
+First determine which side of the factory boundary you are on.
 
-## spec.md shape (matches the `spec` stage prompt)
+## Outer harness mode
 
-```
+Use this mode when the user is driving the repository from Claude Code and wants the factory to do
+work. Submit through the governed factory; do not create a parallel lifecycle loop.
+
+1. Choose one stable factory-session id and reuse it for retries and multiple issues in this Claude
+   session.
+2. Submit with `scripts/swf_harness.sh claude <factory-id> --issue <issue> [submit args...]`.
+3. Inspect progress and evidence through normal `swf` operator commands.
+4. Answer human gates only when explicitly authorized.
+5. Leave stage scheduling to Apache Airflow and publication to the factory.
+
+Never pass backend/service credentials into stage sandboxes. Never silently drop harness/session
+identity; fail if the configured submission path cannot preserve it. Read `docs/harnesses.md` for
+examples shared with Codex, Grok, and custom harnesses.
+
+## Inner stage mode
+
+Use this mode when the factory launched you as one stage of a durable Factory Cell. Treat the
+originator's words in `docs/factory/<issue>/intent.md` as the source of scope. Never invent scope,
+never touch files listed as `protected` in `factory.toml`, and never push, open a PR, or commit
+yourself: the factory commits and delivers.
+
+### spec.md
+
+Write:
+
+```text
 # spec.md
 ## Requirements       numbered R1, R2, ...; each testable in one assertion and traceable to intent.md
                       ("percent_change(100, 125) == 0.25"); include error cases, edge conditions,
@@ -22,13 +44,12 @@ or commit yourself: the factory commits and delivers.
 ## Open questions     anything ambiguous in the intent, with the assumption you are making
 ```
 
-Rules: every requirement maps to at least one test in plan.md; no code and no scope beyond the
-intent; read the repository instead of guessing what it does; keep under one page; output only the
-document (no preamble).
+Map every requirement to at least one test in plan.md. Add no code and no scope beyond the intent.
+Read the repository instead of guessing. Keep the spec under one page and output only the document.
 
-## plan.md / plan.json shape
+### plan.md / plan.json
 
-plan.json is the typed source (`Plan` schema); plan.md is rendered from it.
+Treat `plan.json` as the typed source (`Plan` schema) and `plan.md` as its rendering.
 
 ```json
 {
@@ -39,16 +60,15 @@ plan.json is the typed source (`Plan` schema); plan.md is rendered from it.
 }
 ```
 
-Rules: `files` is the complete list the diff may touch (plan fidelity is checked by the review
-pass, not by you); `steps` are ordered and each is one commit's worth of work; `tests` name real
-test functions; list `risks` honestly, `[]` is acceptable.
+Make `files` the complete list the diff may touch. Keep `steps` ordered and one commit's worth of
+work each. Name real test functions in `tests`. List risks honestly; `[]` is acceptable.
 
-## Review
+### Review
 
-Read `REVIEW.md` at the target root before reviewing and follow it literally: five passes in
-order (correctness, tests, security, plan fidelity, style), severities
-blocker/major/minor/nit, a nit cap (3 by default; the factory enforces the blueprint's value in
-code and drops the rest), `verdict` is `request_changes` iff any blocker. Return only the JSON
-contract it specifies. Files under `docs/factory/**`, lockfiles and generated files are not
-reviewed for style. A fix that answers a blocker must keep the test suite green: a red suite
-after a fix is itself a blocker.
+Read `REVIEW.md` at the target root and follow it literally. Run the five passes in order:
+correctness, tests, security, plan fidelity, style. Use severities blocker/major/minor/nit and obey
+the configured nit cap. Set `verdict` to `request_changes` iff any blocker exists. Return only the
+JSON contract `REVIEW.md` specifies.
+
+Do not style-review `docs/factory/**`, lockfiles, or generated files. Keep the test suite green after
+a fix; a red suite introduced by the fix is itself a blocker.
