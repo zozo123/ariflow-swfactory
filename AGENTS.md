@@ -27,4 +27,18 @@ retries from the same session; use a different id for an independent session.
 - Never pass backend/service credentials into stage sandboxes.
 - If harness identity cannot be preserved, fail rather than silently submit as an anonymous actor.
 
+## Parallel physics/control models
+
+The repository intentionally evaluates multiple advisory models over the same Cell trajectory:
+hydrodynamics, phase transitions, equilibrium and non-equilibrium statistical mechanics,
+information theory, critical phenomena, control theory, complex reaction/protein networks,
+runaway-chain/nuclear criticality, discrete operator algebra, and high-assurance safety analysis.
+
+These models may disagree. Preserve that disagreement as evidence; do not average away a hard
+failure. They may recommend expand/mix/hold/throttle/repair/isolate/crystallize, but **none of them
+owns lifecycle scheduling or external mutation authority**. Hard Cell/epoch/security/evidence rules
+win before any statistical score. Read `docs/physics-operating-model.md` before extending these
+models, and use `src/swfactory/physics_registry.py` plus `src/swfactory/physics_fusion.py` rather than
+creating a competing control framework.
+
 For concrete Codex/Claude/Grok/custom examples, read `docs/harnesses.md`.
