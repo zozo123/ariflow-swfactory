@@ -33,6 +33,42 @@ jobs:
           uv run --group airflow pytest
           tests/test_dag_parity.py tests/test_dag_smoke.py tests/test_dag_stress.py
 
+  # The only job that answers a REAL approval gate against a REAL scheduler. Every other job
+  # proves a piece works; `dag.test()` cannot resolve HITL tasks at all (tests/test_dag_smoke.py
+  # marks them success with `--mark-success-pattern`), so the product's central behaviour was
+  # untested until this existed. It is not hypothetical: a race in `swf gates approve` failed four
+  # of five of these runs while all eight CI jobs stayed green (#1199, fixed in #1198).
+  #
+  # Both harnesses run, and the pair is the point. When the Rust one failed and the Python one
+  # passed on the same server, that is what proved the fault was in the client rather than in the
+  # factory — a single harness could not have told those apart.
+  #
+  # continue-on-error while its timing is learned on a slower runner than a laptop; promote it to
+  # blocking once it has been green for two weeks, the same way srt-smoke and docker-smoke were.
+  live-gate-e2e:
+    if: github.event_name == 'push' || github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "rust" }
+      - run: uv sync --group airflow
+      - name: swf drives a live Airflow end to end (2 issues x 2 targets, 8 gates, 4 deliveries)
+        run: bash scripts/swf_e2e.sh
+      - name: the Python control room answers the same gates on the same shape of run
+        run: bash scripts/stress_airflow.sh
+      - name: Keep the evidence when it fails
+        if: failure()
+        run: |
+          # The scheduler log says WHY a gate failed; without it a red run is just a red run.
+          find "${TMPDIR:-/tmp}" -maxdepth 2 -name 'standalone.log' -newermt '-1 hour' \
+            -exec sh -c 'echo "== $1"; tail -200 "$1"' _ {} \; 2>/dev/null || true
+
   srt-smoke:
     if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-24.04
