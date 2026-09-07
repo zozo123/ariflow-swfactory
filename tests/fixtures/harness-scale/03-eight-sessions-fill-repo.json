@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "name": "eight sessions fill the default same-repo concurrency window",
+  "repo": "owner/repo",
+  "actions": [
+    {"op":"submit","session":"custom:s0","issue":"220","request_id":"r0"},
+    {"op":"submit","session":"custom:s1","issue":"221","request_id":"r1"},
+    {"op":"submit","session":"custom:s2","issue":"222","request_id":"r2"},
+    {"op":"submit","session":"custom:s3","issue":"223","request_id":"r3"},
+    {"op":"submit","session":"custom:s4","issue":"224","request_id":"r4"},
+    {"op":"submit","session":"custom:s5","issue":"225","request_id":"r5"},
+    {"op":"submit","session":"custom:s6","issue":"226","request_id":"r6"},
+    {"op":"submit","session":"custom:s7","issue":"227","request_id":"r7"}
+  ],
+  "expect": {"active_admissions":8,"queued_admissions":0,"cells":8,"active_cells":8,"busy":0,"stale":0,"duplicate_submissions":0,"duplicate_operations":0,"max_epoch":1}
+}
