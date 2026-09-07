@@ -1,0 +1,3 @@
+interface:
+  display_name: "Airflow Software Factory"
+  short_description: "Run and extend the Airflow-governed software delivery factory"
