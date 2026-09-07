@@ -92,12 +92,8 @@ def validate_release() -> ReleaseSummary:
     _assert_contiguous_spans(spans, label="Liquid issue")
 
     issue_count = sum(bundle.issue_end - bundle.issue_start + 1 for bundle in bundles)
-    liquid500 = sum(
-        bundle.issue_end - bundle.issue_start + 1 for bundle in bundles if bundle.source == "Liquid500"
-    )
-    liquid400 = sum(
-        bundle.issue_end - bundle.issue_start + 1 for bundle in bundles if bundle.source == "Liquid400"
-    )
+    liquid500 = sum(bundle.issue_end - bundle.issue_start + 1 for bundle in bundles if bundle.source == "Liquid500")
+    liquid400 = sum(bundle.issue_end - bundle.issue_start + 1 for bundle in bundles if bundle.source == "Liquid400")
     if issue_count != EXPECTED_LIQUID_ISSUES:
         raise ValueError(f"expected {EXPECTED_LIQUID_ISSUES} Liquid issues, found {issue_count}")
     if liquid500 != EXPECTED_LIQUID500_ISSUES or liquid400 != EXPECTED_LIQUID400_ISSUES:
