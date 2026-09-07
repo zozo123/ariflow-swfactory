@@ -581,10 +581,18 @@ pub fn submission(sub: &Submission) -> String {
             sub.blueprint.name
         ),
     };
-    fields(&[
+    let mut pairs = vec![
         ("run", format!("{}/{}", sub.dag_id, sub.run_id)),
         ("issues", joined(&sub.issues)),
         ("blueprint", blueprint),
+    ];
+    if let Some(harness) = &sub.harness {
+        pairs.push(("harness", harness.clone()));
+    }
+    if let Some(factory_id) = &sub.factory_id {
+        pairs.push(("factory", factory_id.clone()));
+    }
+    pairs.extend([
         (
             "jobs",
             sub.jobs
@@ -592,7 +600,8 @@ pub fn submission(sub: &Submission) -> String {
                 .unwrap_or_else(|| "-".into()),
         ),
         ("url", sub.url.clone()),
-    ])
+    ]);
+    fields(&pairs)
 }
 
 /// `swf stack up | down | status`

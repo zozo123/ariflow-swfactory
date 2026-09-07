@@ -38,6 +38,8 @@ pub const FILE_ALIASES: &[(&str, &str)] = &[("factory", "default")];
 
 /// The longest an issue reference may be, and the character set it may use.
 const MAX_ISSUE_CHARS: usize = 128;
+const MAX_HARNESS_CHARS: usize = 48;
+const MAX_FACTORY_ID_CHARS: usize = 64;
 
 /// What an operator asked the factory to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +50,10 @@ pub struct SubmitRequest {
     pub blueprint: String,
     /// Repositories to override the blueprint's targets with.
     pub targets: Vec<String>,
+    /// AI harness that opened this factory session (codex, claude, grok, custom).
+    pub harness: Option<String>,
+    /// Stable id for one outer harness session. Reuse it for retries from that session.
+    pub factory_id: Option<String>,
 }
 
 impl Default for SubmitRequest {
@@ -56,6 +62,8 @@ impl Default for SubmitRequest {
             issues: Vec::new(),
             blueprint: DEFAULT_BLUEPRINT.to_string(),
             targets: Vec::new(),
+            harness: None,
+            factory_id: None,
         }
     }
 }
@@ -72,6 +80,59 @@ impl SubmitRequest {
             ..Self::default()
         }
     }
+
+    /// Backend admission actor for an AI-harness-owned factory session.
+    ///
+    /// The pair is all-or-nothing: accepting half an identity would make replay/dedupe ambiguous.
+    /// It is deliberately encoded into the existing backend actor field, so old backends keep
+    /// working while the current backend gains distinct admission/idempotency identity per session.
+    pub fn origin_actor(&self) -> Result<Option<String>> {
+        let harness = clean_origin_component(
+            self.harness.as_deref(),
+            "harness",
+            MAX_HARNESS_CHARS,
+        )?;
+        let factory_id = clean_origin_component(
+            self.factory_id.as_deref(),
+            "factory id",
+            MAX_FACTORY_ID_CHARS,
+        )?;
+        match (harness, factory_id) {
+            (None, None) => Ok(None),
+            (Some(harness), Some(factory_id)) => {
+                Ok(Some(format!("harness:{harness}:{factory_id}")))
+            }
+            _ => Err(OpsError::usage(
+                "--harness and --factory-id must be supplied together",
+            )
+            .with_hint(
+                "swf submit --harness claude --factory-id claude-session-1 --issue 42",
+            )),
+        }
+    }
+}
+
+fn clean_origin_component(
+    raw: Option<&str>,
+    field: &str,
+    max_chars: usize,
+) -> Result<Option<String>> {
+    let Some(raw) = raw else { return Ok(None) };
+    let value = raw.trim();
+    if value.is_empty() || value.chars().count() > max_chars {
+        return Err(OpsError::usage(format!(
+            "{field} must be 1-{max_chars} characters",
+        )));
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(OpsError::usage(format!(
+            "{field} may contain only ASCII letters, digits, dot, underscore and hyphen",
+        )));
+    }
+    Ok(Some(value.to_ascii_lowercase()))
 }
 
 /// Which blueprint a submission ran against, and whether it could be read here.
@@ -102,6 +163,12 @@ pub struct Submission {
     /// How many jobs this run should fan out into, when the blueprint could be read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jobs: Option<usize>,
+    /// Originating AI harness, when this came through the governed backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    /// Stable outer factory-session id, when this came through the governed backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory_id: Option<String>,
 }
 
 impl Submission {
@@ -117,6 +184,12 @@ pub async fn submit(
     request: &SubmitRequest,
     cancel: &CancellationToken,
 ) -> Result<Submission> {
+    if request.origin_actor()?.is_some() {
+        return Err(OpsError::usage(
+            "AI harness identity requires factory-backend mode; direct Airflow cannot preserve it",
+        )
+        .with_hint("configure a context with --backend-url and SWF_BACKEND_TOKEN"));
+    }
     let issues = clean_issues(&request.issues)?;
     check_targets(&request.targets)?;
 
@@ -133,6 +206,8 @@ pub async fn submit(
         issues,
         blueprint,
         jobs,
+        harness: None,
+        factory_id: None,
     })
 }
 
@@ -478,4 +553,28 @@ mod tests {
         assert_eq!(names, vec!["a.toml", "b.toml"], "sorted, non-recursive");
         assert!(blueprint_paths(Path::new("/nope/nope")).is_empty());
     }
+
+    #[test]
+    fn harness_origin_is_paired_validated_and_stable() {
+        let mut request = SubmitRequest::for_issues(["42"]);
+        assert_eq!(request.origin_actor().expect("legacy"), None);
+
+        request.harness = Some("Claude".into());
+        let missing = request.origin_actor().expect_err("pair required");
+        assert_eq!(missing.exit_code(), 2);
+
+        request.factory_id = Some("Session-17".into());
+        assert_eq!(
+            request.origin_actor().expect("origin").as_deref(),
+            Some("harness:claude:session-17")
+        );
+        assert_eq!(
+            request.origin_actor().expect("replay").as_deref(),
+            Some("harness:claude:session-17")
+        );
+
+        request.factory_id = Some("not/a/session".into());
+        assert!(request.origin_actor().is_err());
+    }
+
 }
