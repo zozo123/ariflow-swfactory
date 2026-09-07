@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "scope": ["src/swfactory/liquid_*.py", "src/swfactory/legacy_*.py"],
+  "reason": "Canonical Ruff formatting before final main fan-in"
+}
