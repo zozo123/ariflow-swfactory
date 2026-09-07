@@ -4,6 +4,18 @@ Thanks for helping make the factory safer and more useful. Changes should preser
 boundary: an agent may produce code and patches, but only the orchestrator may hold GitHub
 credentials or publish changes.
 
+## Development phase mechanics
+
+High-concurrency work in this repository follows the phase model in
+[docs/phase-mechanics.md](docs/phase-mechanics.md): **GAS -> LIQUID -> MIXED -> SUPERCRITICAL -> SOLID**.
+
+The operational rule is simple: maximize useful entropy before convergence, stress competing
+implementations aggressively, and crystallize only once. `main` is the solid phase. No exploratory,
+mixed, or supercritical branch is promoted there until duplicate authorities are collapsed,
+generated work is resolved or explicitly rejected with evidence, required checks are green, and
+the exact candidate head preserves Airflow scheduling, durable Cell identity, epoch fencing, and
+retained evidence.
+
 ## Development setup
 
 swfactory targets Python 3.12 and uses [uv](https://docs.astral.sh/uv/).
