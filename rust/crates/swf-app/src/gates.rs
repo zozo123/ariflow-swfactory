@@ -47,11 +47,11 @@ use crate::ops::{ErrorKind, OpsError, Result};
 /// reconciles the executor event of the worker process that parked it *after* the response has
 /// already re-queued the task ("finished with state success, but the task instance's state
 /// attribute is queued"). On a live standalone that lag was measured at up to ~0.9 s; three
-/// seconds is the interval `scripts/stress_airflow.sh` — the reference harness that does not
-/// produce this failure — leaves between the poll that first sees a gate parked and the poll that
-/// answers it. It costs a scripted approval one pause; it costs an interactive one nothing at all,
+/// seconds was sufficient locally, but the live hosted-runner harness still reproduced a stale
+/// executor event after three seconds. Five seconds is the conservative default now. It costs a
+/// scripted approval one pause; it costs an interactive one nothing at all,
 /// because the TUI sighted the gate on a refresh long before the operator pressed a key.
-pub const CONFIRM_INTERVAL: Duration = Duration::from_secs(3);
+pub const CONFIRM_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How many times a gate must be seen parked before it may be answered.
 ///
@@ -982,6 +982,14 @@ pub async fn answer_all(
     }
 
     let mut running: JoinSet<(usize, BatchItem)> = JoinSet::new();
+    // A 200 from one HITL PATCH means the API accepted the response; it does not mean the
+    // scheduler has finished reconciling that task before the next mapped gate in the same run is
+    // re-queued. Keep the per-run lock briefly after a successful write. Test callers that pass a
+    // zero/short settle override inherit a zero/short cooldown, so deterministic unit tests stay
+    // fast while the product default protects hosted schedulers.
+    let run_write_cooldown = settle
+        .unwrap_or(CONFIRM_INTERVAL)
+        .min(Duration::from_secs(1));
     // Which gate each in-flight task is answering. A task that *panics* answers nothing at all, so
     // the only way to give its gate an honest line is to know, from the outside, which gate it was.
     let mut in_flight: Vec<(tokio::task::Id, usize)> = Vec::new();
@@ -1029,6 +1037,13 @@ pub async fn answer_all(
                     &cancel,
                 )
                 .await;
+                if outcome.is_ok() && !run_write_cooldown.is_zero() {
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => {}
+                        () = tokio::time::sleep(run_write_cooldown) => {}
+                    }
+                }
                 (index, item_of(id, gate, issue, outcome))
             });
             in_flight.push((handle.id(), index));
