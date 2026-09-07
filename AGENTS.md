@@ -15,7 +15,7 @@ approvals, evidence, retries, and cleanup.
 Give every outer harness session a stable identity and reuse it for retries from that session:
 
 ```bash
-scripts/swf-harness.sh --harness codex --factory-id codex-session-17 --issue 1201
+bash scripts/swf-harness.sh --harness codex --factory-id codex-session-17 --issue 1201
 ```
 
 Or set the identity once in the harness environment and submit repeatedly:
