@@ -1,6 +1,6 @@
 ---
 name: airflow-software-factory
-description: Operate and extend an Apache Airflow software factory for coding agents: turn GitHub issues and work orders into tested, reviewed pull requests with human approval gates, durable Factory Cells, sandbox isolation, bounded work graphs, recovery, evidence and provenance, CI/CD, and Rust/Python operator surfaces. Use when adopting, configuring, running, debugging, deploying, auditing, or improving swfactory, factory.toml, Airflow blueprints, GitHub publication, agent sandboxes, or agentic software-delivery workflows. Keep Airflow as the sole lifecycle scheduler.
+description: "Operate and extend an Apache Airflow software factory for coding agents: turn GitHub issues and work orders into tested, reviewed pull requests with human approval gates, durable Factory Cells, sandbox isolation, bounded work graphs, recovery, evidence and provenance, CI/CD, and Rust/Python operator surfaces. Use when adopting, configuring, running, debugging, deploying, auditing, or improving swfactory, factory.toml, Airflow blueprints, GitHub publication, agent sandboxes, or agentic software-delivery workflows. Keep Airflow as the sole lifecycle scheduler."
 ---
 
 # Airflow software factory
