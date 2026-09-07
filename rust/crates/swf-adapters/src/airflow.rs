@@ -30,14 +30,16 @@
 //! 7).
 
 use std::fmt::Write as _;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Map, Value};
 use swf_domain::ids::{GateId, JobId, RunRef};
-use swf_domain::model::{Gate, JobRow, Run, TaskState};
+use swf_domain::model::{Gate, JobRow, Run, TaskState, Timestamp};
 use swf_domain::rollup::group_jobs;
 use swf_domain::sanitize::sanitize_line;
 use tokio::sync::Mutex;
@@ -55,6 +57,12 @@ pub const TOKEN_PATH: &str = "/auth/token";
 
 /// The tag the shipped blueprints carry.
 pub const DEFAULT_DAG_TAG: &str = "swfactory";
+
+/// The sentinel [`AirflowApi::skew_ms`] holds until a response carries a `Date` header.
+///
+/// A sentinel rather than `Option` because the field is an atomic: `i64::MIN` is 292 million years
+/// of skew, which is not a clock difference any deployment can produce.
+const NO_SKEW: i64 = i64::MIN;
 
 /// The task whose XCom lists the jobs a run fanned out into.
 pub const FAN_OUT_TASK_ID: &str = "fan_out";
@@ -108,6 +116,13 @@ pub struct AirflowApi {
     /// The minted JWT. A `Mutex` and not an `RwLock` because the point is to serialise *minting*:
     /// twenty panes refreshing at once must produce one token request, not twenty.
     token: Arc<Mutex<Option<String>>>,
+    /// Server clock minus local clock, in milliseconds, as of the last response that carried a
+    /// `Date` header. [`NO_SKEW`] means no response has ever carried one.
+    ///
+    /// Shared and atomic because every call updates it and [`AirflowApi::server_now`] is a `&self`
+    /// read from anywhere: a relaxed store of one `i64` is the whole synchronisation this needs,
+    /// since a reader that sees the previous observation is off by the age of one HTTP call.
+    skew_ms: Arc<AtomicI64>,
 }
 
 impl AirflowApi {
@@ -133,6 +148,7 @@ impl AirflowApi {
             auth,
             timeout,
             token: Arc::new(Mutex::new(None)),
+            skew_ms: Arc::new(AtomicI64::new(NO_SKEW)),
         })
     }
 
@@ -280,6 +296,10 @@ impl AirflowApi {
                 .await
                 .map_err(|e| self.transport_error(&what, &e))?;
             let status = response.status();
+            // Every answer the server gives, success or not, carries its clock. Read it here —
+            // the one place a `Response` exists — so no caller has to make an extra call to ask
+            // what time it is over there.
+            self.learn_skew(response.headers());
             let text = response
                 .text()
                 .await
@@ -305,6 +325,44 @@ impl AirflowApi {
             }
         };
         guard(cancel, call).await
+    }
+
+    /// Record the difference between the server's clock and ours from one response's `Date`.
+    ///
+    /// The header is an RFC 7231 IMF-fixdate, so it has **one-second resolution** and names the
+    /// moment the server built the response — which is before we received it. Both errors push
+    /// the computed server time *earlier* than the truth, so [`AirflowApi::server_now`] runs up to
+    /// about a second slow. For its one caller — is this gate old enough to answer? — slow is the
+    /// safe direction: a gate reads younger than it is and waits longer, never shorter.
+    fn learn_skew(&self, headers: &reqwest::header::HeaderMap) {
+        let Some(stamp) = headers
+            .get(reqwest::header::DATE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|text| DateTime::parse_from_rfc2822(text).ok())
+        else {
+            return;
+        };
+        let delta = stamp
+            .with_timezone(&Utc)
+            .signed_duration_since(Utc::now())
+            .num_milliseconds();
+        self.skew_ms.store(delta, Ordering::Relaxed);
+    }
+
+    /// The server's clock as of now, or `None` if no response has ever carried a `Date`.
+    ///
+    /// This is the *same* clock that stamps a HITL detail's `created_at`: Airflow declares that
+    /// column `default=timezone.utcnow` (`airflow/models/hitl.py`), a Python-side default the API
+    /// server evaluates as it inserts the row — not a database-side `now()`. So the gate's age is
+    /// one machine's clock read twice, which is exactly what a settle window needs and what
+    /// subtracting a server stamp from *our* clock is not.
+    fn observed_server_now(&self) -> Option<Timestamp> {
+        let skew = self.skew_ms.load(Ordering::Relaxed);
+        if skew == NO_SKEW {
+            return None;
+        }
+        let offset = chrono::TimeDelta::try_milliseconds(skew)?;
+        Some(Utc::now().checked_add_signed(offset)?.fixed_offset())
     }
 
     /// Turn a transport failure into this crate's vocabulary, stamping the real timeout budget.
@@ -849,6 +907,10 @@ impl Runs for AirflowApi {
 
     fn run_url(&self, run: &RunRef) -> String {
         self.deep_link(&run.dag_id, &run.run_id)
+    }
+
+    fn server_now(&self) -> Option<Timestamp> {
+        self.observed_server_now()
     }
 }
 

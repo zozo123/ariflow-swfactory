@@ -202,6 +202,21 @@ pub trait Runs: Send + Sync {
     /// The UI deep link for a run. Not an API call, so a just-triggered run can be linked before
     /// it appears in any snapshot.
     fn run_url(&self, run: &RunRef) -> String;
+
+    /// What time it is *on the server*, if this adapter has ever been told.
+    ///
+    /// It exists for exactly one caller: deciding whether a gate has existed long enough to be
+    /// answered. That question compares against `Gate::created_at`, which the server stamped, and
+    /// comparing a server stamp to a local clock is a subtraction of two different clocks. An
+    /// adapter that has seen the server's own clock answers `Some`; one that has not answers
+    /// `None` and the caller falls back — deliberately, and saying so — rather than being handed
+    /// a guess it cannot tell apart from an observation.
+    ///
+    /// Not an I/O method: it reports what previous calls already observed, so it takes no
+    /// cancellation token and costs nothing to ask.
+    fn server_now(&self) -> Option<Timestamp> {
+        None
+    }
 }
 
 /// One pull request as `gh` reports it for a branch — the "does this delivery exist?" answer.
