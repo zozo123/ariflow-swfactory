@@ -71,9 +71,7 @@ class FakeOpener:
         path = request.full_url.removeprefix(AF)
         key = (request.get_method(), path)
         if key not in self.routes:
-            raise urllib.error.HTTPError(
-                request.full_url, 404, "Not Found", {}, io.BytesIO(b'{"detail":"no route"}')
-            )
+            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, io.BytesIO(b'{"detail":"no route"}'))
         payload = self.routes[key]
         if isinstance(payload, Exception):
             raise payload
@@ -242,9 +240,7 @@ class PagedOpener:
     because a client that leans on ``total_entries`` breaks on two of those three.
     """
 
-    def __init__(
-        self, key: str, rows: list[dict], *, clamp: int = 100, total: str = "count"
-    ) -> None:
+    def __init__(self, key: str, rows: list[dict], *, clamp: int = 100, total: str = "count") -> None:
         self.key = key
         self.rows = rows
         self.clamp = clamp
@@ -446,10 +442,7 @@ def test_airflow_trigger_and_stop_and_run_url() -> None:
 # ---------------------------------------------------------------- per-job rows
 
 TI_PATH = f"/api/v2/dags/factory/dagRuns/{RUN_SEG}/taskInstances?limit=100&offset=0"
-XCOM_PATH = (
-    f"/api/v2/dags/factory/dagRuns/{RUN_SEG}/taskInstances/fan_out"
-    "/xcomEntries/return_value?map_index=-1"
-)
+XCOM_PATH = f"/api/v2/dags/factory/dagRuns/{RUN_SEG}/taskInstances/fan_out/xcomEntries/return_value?map_index=-1"
 TWO_JOBS = [  # verbatim shape of fan_out's return value (Blueprint.jobs)
     {"issue": "42", "repo": "o/r", "dir": "", "base_branch": "main", "job_idx": 0},
     {"issue": "demo/issue.md", "repo": "o/r", "dir": "", "base_branch": "main", "job_idx": 1},
@@ -520,9 +513,7 @@ def test_job_rows_before_fan_out_and_with_junk_xcom() -> None:
     assert not rows[0].mapped  # a placeholder row, not "job -1"
     assert af.fan_out_jobs("factory", RUN_ID) == []  # unparseable XCom is no issue list
 
-    already_list = AirflowClient(
-        AF, opener=FakeOpener({("GET", XCOM_PATH): {"value": [*TWO_JOBS, "junk"]}})
-    )
+    already_list = AirflowClient(AF, opener=FakeOpener({("GET", XCOM_PATH): {"value": [*TWO_JOBS, "junk"]}}))
     assert already_list.fan_out_jobs("factory", RUN_ID) == TWO_JOBS  # non-dict entries dropped
 
     empty = AirflowClient(AF, opener=FakeOpener({("GET", TI_PATH): {"task_instances": []}}))
@@ -590,9 +581,7 @@ def test_airflow_username_password_mints_token_once() -> None:
     assert opener.requests[0].get_header("Authorization") is None
     assert opener.requests[1].get_header("Authorization") == "Bearer minted"
 
-    bad = AirflowClient(
-        AF, username="a", password="b", opener=FakeOpener({("POST", "/auth/token"): {}})
-    )
+    bad = AirflowClient(AF, username="a", password="b", opener=FakeOpener({("POST", "/auth/token"): {}}))
     with pytest.raises(ControlError, match="no access_token"):
         bad.list_dags()
 
@@ -642,9 +631,7 @@ def test_github_prs_and_issues_use_gh_json_and_summarize_checks() -> None:
             ],
         }
     ]
-    issues = [
-        {"number": 42, "title": "Add percent_change", "url": "https://x/42", "labels": ["factory"]}
-    ]
+    issues = [{"number": 42, "title": "Add percent_change", "url": "https://x/42", "labels": ["factory"]}]
     runner = FakeRunner({"gh pr": json.dumps(prs), "gh issue": json.dumps(issues)})
     gh = GitHubClient("o/r", runner=runner)
 
@@ -665,10 +652,7 @@ def test_github_prs_and_issues_use_gh_json_and_summarize_checks() -> None:
     assert runner.calls[-1] == ["gh", "pr", "view", "7", "--repo", "o/r", "--web"]
 
     assert summarize_checks(None) == "none" and summarize_checks([]) == "none"
-    assert (
-        summarize_checks([{"status": "COMPLETED", "conclusion": "NEUTRAL"}])
-        == "1 pass / 0 fail / 0 pending"
-    )
+    assert summarize_checks([{"status": "COMPLETED", "conclusion": "NEUTRAL"}]) == "1 pass / 0 fail / 0 pending"
 
 
 def test_github_failures_are_control_errors() -> None:
@@ -766,9 +750,7 @@ class _Airflow:
             Run(dag_id, "r-done", "success", None, None, {"issues": ["43"]}),
         ]
 
-    def job_rows(
-        self, dag_id: str, run_id: str, *, fallback_issues: Sequence[str] = ()
-    ) -> list[JobRow]:
+    def job_rows(self, dag_id: str, run_id: str, *, fallback_issues: Sequence[str] = ()) -> list[JobRow]:
         self._maybe(f"job_rows:{run_id}")
         return [JobRow(dag_id, run_id, 0, next(iter(fallback_issues), "-"), "running")]
 

@@ -65,9 +65,7 @@ def test_islo_provenance_rejects_wrong_provider(monkeypatch, bad_field):
 
     monkeypatch.setattr(verify_module.metadata, "distribution", Distribution)
     with pytest.raises(RuntimeError, match="apache-airflow-providers-common-ai"):
-        verify_module.verify(
-            "--islo", upstream_commit, provider_repo=fork, provider_commit=provider_commit
-        )
+        verify_module.verify("--islo", upstream_commit, provider_repo=fork, provider_commit=provider_commit)
 
 
 def test_islo_provenance_requires_resolved_provider():

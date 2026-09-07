@@ -82,9 +82,7 @@ def negotiate(
     return advertised
 
 
-def capability_document(
-    provider: str, caps: SandboxCapabilities, **metadata: Any
-) -> dict[str, Any]:
+def capability_document(provider: str, caps: SandboxCapabilities, **metadata: Any) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "provider": provider,

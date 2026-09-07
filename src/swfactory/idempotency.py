@@ -48,9 +48,7 @@ class OperationRef:
 
     @classmethod
     def build(cls, cell_id: str, epoch: int, kind: str, *parts: str) -> OperationRef:
-        digest = hashlib.sha256(
-            "\0".join((cell_id, str(epoch), kind, *parts)).encode()
-        ).hexdigest()[:24]
+        digest = hashlib.sha256("\0".join((cell_id, str(epoch), kind, *parts)).encode()).hexdigest()[:24]
         return cls(cell_id, epoch, kind, f"{kind}:{digest}")
 
 
@@ -104,9 +102,7 @@ class OperationJournal:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(
-            path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False
-        )
+        self.db = sqlite3.connect(path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
@@ -143,9 +139,7 @@ class OperationJournal:
             for name, ddl in additions.items():
                 if name not in columns:
                     self.db.execute(f"ALTER TABLE operations ADD COLUMN {name} {ddl}")
-            self.db.execute(
-                "CREATE INDEX IF NOT EXISTS operations_unresolved ON operations(state, updated_at)"
-            )
+            self.db.execute("CREATE INDEX IF NOT EXISTS operations_unresolved ON operations(state, updated_at)")
 
     def begin(self, ref: OperationRef) -> str:
         """Create the durable intent if absent and return the current state."""
@@ -169,9 +163,7 @@ class OperationJournal:
                     "UPDATE operations SET state='exhausted', updated_at=? WHERE operation_key=?",
                     (time.time(), ref.key),
                 )
-                raise RetryBudgetExhausted(
-                    f"{ref.key}: retry budget {budget.max_attempts} exhausted"
-                )
+                raise RetryBudgetExhausted(f"{ref.key}: retry budget {budget.max_attempts} exhausted")
             attempt = attempts + 1
             self.db.execute(
                 """UPDATE operations SET attempts=?, state='intent', last_error=NULL,
@@ -207,9 +199,7 @@ class OperationJournal:
                 (state, payload, time.time(), ref.key),
             )
 
-    def schedule_retry(
-        self, ref: OperationRef, attempt: int, *, budget: RetryBudget | None = None
-    ) -> float:
+    def schedule_retry(self, ref: OperationRef, attempt: int, *, budget: RetryBudget | None = None) -> float:
         budget = budget or budget_for(ref.kind)
         when = time.time() + budget.delay(attempt, ref.key)
         with self.lock, self.db:
@@ -232,16 +222,12 @@ class OperationJournal:
 
     def get(self, key: str) -> dict[str, Any]:
         with self.lock:
-            row = self.db.execute(
-                "SELECT * FROM operations WHERE operation_key=?", (key,)
-            ).fetchone()
+            row = self.db.execute("SELECT * FROM operations WHERE operation_key=?", (key,)).fetchone()
             if row is None:
                 raise KeyError(key)
             out = dict(row)
         out["result"] = json.loads(out.pop("result_json")) if out.get("result_json") else None
-        out["observation"] = (
-            json.loads(out.pop("observation_json")) if out.get("observation_json") else None
-        )
+        out["observation"] = json.loads(out.pop("observation_json")) if out.get("observation_json") else None
         return out
 
     def execute(
@@ -303,8 +289,6 @@ class OperationJournal:
         for raw in rows:
             row = dict(raw)
             row["result"] = json.loads(row.pop("result_json")) if row.get("result_json") else None
-            row["observation"] = (
-                json.loads(row.pop("observation_json")) if row.get("observation_json") else None
-            )
+            row["observation"] = json.loads(row.pop("observation_json")) if row.get("observation_json") else None
             result.append(row)
         return result

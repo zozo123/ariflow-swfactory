@@ -62,9 +62,7 @@ def capability_document(
     features: Iterable[str] = DEFAULT_FEATURES,
     detail: str = "",
 ) -> CapabilityDocument:
-    mutation_ready = bool(
-        read_ready and storage_authoritative and schema_compatible and not draining
-    )
+    mutation_ready = bool(read_ready and storage_authoritative and schema_compatible and not draining)
     return CapabilityDocument(
         schema_version=1,
         contracts=ContractVersions(),
@@ -120,16 +118,12 @@ def build_preview(
         job_idx = int(raw.get("job_idx", index))
         predicted = tuple(sorted(set(str(v) for v in checks.get(target, ()))))
         rows.append(PreviewJob(job_idx, issue, target, required, policy, predicted))
-        normalized_request.append(
-            {"job_idx": job_idx, "issue": issue, "target": target, "checks": predicted}
-        )
+        normalized_request.append({"job_idx": job_idx, "issue": issue, "target": target, "checks": predicted})
     payload = {
         "line": line,
         "jobs": normalized_request,
         "required_capabilities": required,
         "policy_inputs": policy,
     }
-    digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return BlueprintPreview(1, line, digest, tuple(rows), False)

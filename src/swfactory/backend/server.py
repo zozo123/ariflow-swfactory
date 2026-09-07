@@ -94,9 +94,7 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                 if self._public_probe():
                     return
                 credential = self.headers.get("Authorization", "")
-                if not hmac.compare_digest(
-                    credential.encode(), ("Bearer " + factory.token).encode()
-                ):
+                if not hmac.compare_digest(credential.encode(), ("Bearer " + factory.token).encode()):
                     raise Refused(401, "factory backend token required")
                 if self.headers.get("Transfer-Encoding"):
                     raise Refused(400, "chunked requests are not supported")
@@ -111,9 +109,7 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                     raise ValueError("request must be a JSON object")
                 mount = PREFIX + "/airflow/api/v2"
                 if self.path.startswith(mount + "/"):
-                    status, payload = factory.compatibility(
-                        self.command, self.path[len(mount) :], body
-                    )
+                    status, payload = factory.compatibility(self.command, self.path[len(mount) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/scm/"):
                     status, payload = 200, scm_operation(factory, self.path[len(PREFIX) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/"):

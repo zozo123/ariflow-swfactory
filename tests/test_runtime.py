@@ -47,9 +47,7 @@ def test_run_id_for_is_pure_hex8_and_job_sensitive() -> None:
 # ---------------------------------------------------------------- job_config
 
 
-def test_job_config_pins_every_path_to_the_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, job: dict
-) -> None:
+def test_job_config_pins_every_path_to_the_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, job: dict) -> None:
     monkeypatch.chdir(tmp_path)  # a worker's cwd is not the factory checkout
     cfg = job_config(load("factory"), job, run_id="pa7h0001", overrides=LOCAL, root=tmp_path)
     assert cfg.run_id == "pa7h0001" and cfg.blueprint == "factory"
@@ -137,18 +135,14 @@ def test_build_ctx_for_islo_touches_nothing_on_the_host(
 # ---------------------------------------------------------------- CLI parity
 
 
-def test_cli_run_derives_its_config_with_job_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, job: dict
-) -> None:
+def test_cli_run_derives_its_config_with_job_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, job: dict) -> None:
     """``swfactory run`` goes through ``build_ctx``, so the config it runs on is the one
     ``job_config`` derives from (blueprint, job, run id) — the DAG's half is pinned in
     tests/test_dag_parity.py."""
     monkeypatch.chdir(tmp_path)
     bp = load("factory")
     seen: list[tuple] = []
-    monkeypatch.setattr(
-        runtime, "ctx_for", lambda cfg, **kw: (seen.append((cfg, kw)), SimpleNamespace(cfg=cfg))[1]
-    )
+    monkeypatch.setattr(runtime, "ctx_for", lambda cfg, **kw: (seen.append((cfg, kw)), SimpleNamespace(cfg=cfg))[1])
     report = RunReport(
         run_id="c1i00001",
         issue_id="DEMO-1",

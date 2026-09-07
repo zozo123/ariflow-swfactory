@@ -6,6 +6,4 @@ import pytest
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line(
-        "markers", "slow: end-to-end tests that spawn subprocesses (Airflow dag.test, srt)"
-    )
+    config.addinivalue_line("markers", "slow: end-to-end tests that spawn subprocesses (Airflow dag.test, srt)")

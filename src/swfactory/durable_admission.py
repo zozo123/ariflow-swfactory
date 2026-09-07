@@ -65,9 +65,7 @@ class DurableAdmission:
     def __init__(self, path: Path, limits: Limits | None = None):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.limits = limits or Limits()
-        self.db = sqlite3.connect(
-            path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False
-        )
+        self.db = sqlite3.connect(path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
@@ -333,8 +331,7 @@ class DurableAdmission:
     def _record_service(self, priority: Priority) -> None:
         with self.db:
             self.db.execute(
-                "UPDATE admission_fairness SET deficit=MAX(deficit-1,0),served=served+1 "
-                "WHERE priority=?",
+                "UPDATE admission_fairness SET deficit=MAX(deficit-1,0),served=served+1 WHERE priority=?",
                 (int(priority),),
             )
 
@@ -352,8 +349,7 @@ class DurableAdmission:
         seq = self._next_sequence()
         with self.db:
             self.db.execute(
-                "UPDATE admission_work SET sequence=?,updated_at=? "
-                "WHERE work_id=? AND state='queued'",
+                "UPDATE admission_work SET sequence=?,updated_at=? WHERE work_id=? AND state='queued'",
                 (seq, time.time(), work_id),
             )
 
@@ -373,16 +369,10 @@ class DurableAdmission:
     def _next_sequence(self) -> int:
         with self.db:
             self.db.execute("UPDATE admission_meta SET value=value+1 WHERE key='sequence'")
-            return int(
-                self.db.execute("SELECT value FROM admission_meta WHERE key='sequence'").fetchone()[
-                    0
-                ]
-            )
+            return int(self.db.execute("SELECT value FROM admission_meta WHERE key='sequence'").fetchone()[0])
 
     def _row(self, work_id: str) -> sqlite3.Row | None:
-        return self.db.execute(
-            "SELECT * FROM admission_work WHERE work_id=?", (work_id,)
-        ).fetchone()
+        return self.db.execute("SELECT * FROM admission_work WHERE work_id=?", (work_id,)).fetchone()
 
     def _active_rows(self) -> list[sqlite3.Row]:
         return self.db.execute(
@@ -395,11 +385,7 @@ class DurableAdmission:
         ).fetchall()
 
     def _count(self, state: str) -> int:
-        return int(
-            self.db.execute(
-                "SELECT count(*) FROM admission_work WHERE state=?", (state,)
-            ).fetchone()[0]
-        )
+        return int(self.db.execute("SELECT count(*) FROM admission_work WHERE state=?", (state,)).fetchone()[0])
 
     def _any_other_candidate(self, work_id: str) -> bool:
         return bool(
@@ -411,9 +397,7 @@ class DurableAdmission:
 
     def _active_throttle_count(self) -> int:
         return int(
-            self.db.execute(
-                "SELECT count(*) FROM admission_throttles WHERE until_at>?", (time.time(),)
-            ).fetchone()[0]
+            self.db.execute("SELECT count(*) FROM admission_throttles WHERE until_at>?", (time.time(),)).fetchone()[0]
         )
 
     @staticmethod

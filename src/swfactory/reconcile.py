@@ -30,9 +30,7 @@ class ReconcileLeaseStore:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(
-            path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False
-        )
+        self.db = sqlite3.connect(path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
@@ -51,17 +49,13 @@ class ReconcileLeaseStore:
         with self.lock:
             self.db.close()
 
-    def acquire(
-        self, operation_key: str, owner: str, *, ttl_s: float = 30.0
-    ) -> ReconcileLease | None:
+    def acquire(self, operation_key: str, owner: str, *, ttl_s: float = 30.0) -> ReconcileLease | None:
         if not owner.strip():
             raise ValueError("reconciler owner must be nonempty")
         now = time.time()
         expires = now + max(1.0, float(ttl_s))
         with self.lock, self.db:
-            row = self.db.execute(
-                "SELECT * FROM reconcile_leases WHERE operation_key=?", (operation_key,)
-            ).fetchone()
+            row = self.db.execute("SELECT * FROM reconcile_leases WHERE operation_key=?", (operation_key,)).fetchone()
             if row is None:
                 self.db.execute(
                     "INSERT INTO reconcile_leases VALUES(?,?,?,?,?)",

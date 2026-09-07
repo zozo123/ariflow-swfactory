@@ -66,9 +66,7 @@ def job_config(
         "target_dir": normalize_relative_path(
             str(job.get("dir", bp.targets[0].dir)), field="target_dir", allow_empty=True
         ),
-        "base_branch": validate_git_ref(
-            str(job.get("base_branch", bp.targets[0].base_branch)), field="base_branch"
-        ),
+        "base_branch": validate_git_ref(str(job.get("base_branch", bp.targets[0].base_branch)), field="base_branch"),
         "run_id": validate_run_id(run_id),
         "blueprint": bp.name,
     }
@@ -93,9 +91,7 @@ def _cell_binding(job: dict[str, Any]) -> dict[str, Any] | None:
     if type(managed) is not bool:
         raise StageError("policy", "mapped job carries an invalid Factory Cell managed flag")
     policy_digest = job.get("cell_policy_digest")
-    if policy_digest is not None and (
-        not isinstance(policy_digest, str) or not policy_digest.startswith("policy:")
-    ):
+    if policy_digest is not None and (not isinstance(policy_digest, str) or not policy_digest.startswith("policy:")):
         raise StageError("policy", "mapped job carries an invalid Factory Cell policy digest")
     generation = job.get("cell_generation")
     if generation is not None and not isinstance(generation, str):

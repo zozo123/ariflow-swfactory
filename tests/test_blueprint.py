@@ -101,9 +101,7 @@ def test_toolset_line_runs_the_default_order_on_airflows_own_sandbox(
     assert bp.config(job, run_id="r1", agent="claude").sandbox == "toolset"  # a real boundary
 
     seen: list[str] = []
-    monkeypatch.setattr(
-        sandbox_mod, "load_toolset_backend", lambda name, **kw: seen.append(name) or object()
-    )
+    monkeypatch.setattr(sandbox_mod, "load_toolset_backend", lambda name, **kw: seen.append(name) or object())
     sb = sandbox_mod.make_sandbox(cfg, "DEMO-1")
     assert isinstance(sb, sandbox_mod.ToolsetSandbox)
     assert seen == ["sbx"]
@@ -132,9 +130,7 @@ def test_stages_registry_matches_canonical_order() -> None:
 # ---------------------------------------------------------------- loading
 
 
-def test_load_resolves_cwd_then_factory_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_load_resolves_cwd_then_factory_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     local = tmp_path / "blueprints"
     local.mkdir()
     (local / "mine.toml").write_text(DEFAULT_TOML.replace('name = "factory"', 'name = "mine"'))
@@ -207,9 +203,7 @@ def test_validation_errors(changes: dict[str, Any], match: str) -> None:
 
 
 def test_policy_override_via_toml_is_additive_only() -> None:
-    text = DEFAULT_TOML.replace(
-        "extra_allowed_tools = []", 'extra_allowed_tools = ["NotebookEdit"]'
-    )
+    text = DEFAULT_TOML.replace("extra_allowed_tools = []", 'extra_allowed_tools = ["NotebookEdit"]')
     bp = loads(text)
     assert bp.policy["build"].extra_allowed_tools == ["NotebookEdit"]
     with pytest.raises(ValueError, match="disallowed_tools"):

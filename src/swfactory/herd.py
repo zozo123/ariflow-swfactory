@@ -153,9 +153,7 @@ def stage_progress(tasks: Iterable[Any]) -> str:
     for t in tasks:
         stage = str(getattr(t, "task_id", "")).rsplit(".", 1)[-1]
         idx = getattr(t, "map_index", -1)
-        by_job.setdefault(-1 if idx is None else int(idx), {})[stage] = str(
-            getattr(t, "state", "") or "none"
-        )
+        by_job.setdefault(-1 if idx is None else int(idx), {})[stage] = str(getattr(t, "state", "") or "none")
     frontiers: list[str] = []
     for states in by_job.values():
         ordered = [s for s in TASK_ORDER if s in states] + sorted(set(states) - set(TASK_ORDER))
@@ -337,9 +335,7 @@ class Picker(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label(escape(self.question))
-            yield OptionList(
-                *[f"{i + 1}. {escape(c)}" for i, c in enumerate(self.choices)], id="picker-list"
-            )
+            yield OptionList(*[f"{i + 1}. {escape(c)}" for i, c in enumerate(self.choices)], id="picker-list")
             yield Label("[b]1[/b]-[b]9[/b] or [b]enter[/b] · [b]escape[/b] cancel")
 
     def on_mount(self) -> None:
@@ -479,24 +475,15 @@ class HerdApp(App[None]):
         yield RichLog(id="log", markup=True, wrap=True)
         with Horizontal(id="actor"):
             yield Static(
-                f"actions are recorded as [b]{escape(self.info.actor)}[/b] "
-                "(the user the Airflow token belongs to)"
+                f"actions are recorded as [b]{escape(self.info.actor)}[/b] (the user the Airflow token belongs to)"
             )
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#gates-table", DataTable).add_columns(
-            "dag", "run", "gate", "job", "issue", "subject", "age"
-        )
-        self.query_one("#runs-table", DataTable).add_columns(
-            "dag", "run_id", "job", "issue", "stage", "state"
-        )
-        self.query_one("#prs-table", DataTable).add_columns(
-            "#", "title", "labels", "checks", "state"
-        )
-        self.query_one("#sandboxes-table", DataTable).add_columns(
-            "name", "status", "created", "age"
-        )
+        self.query_one("#gates-table", DataTable).add_columns("dag", "run", "gate", "job", "issue", "subject", "age")
+        self.query_one("#runs-table", DataTable).add_columns("dag", "run_id", "job", "issue", "stage", "state")
+        self.query_one("#prs-table", DataTable).add_columns("#", "title", "labels", "checks", "state")
+        self.query_one("#sandboxes-table", DataTable).add_columns("name", "status", "created", "age")
         self._render_status()
         if self.refresh_s > 0:
             self.set_interval(self.refresh_s, self.collect_snapshot, name="auto-refresh")
@@ -608,11 +595,7 @@ class HerdApp(App[None]):
     def job_issue(self, dag_id: str, run_id: str, map_index: int) -> str:
         """The issue of one job, as the Runs tab knows it (``-`` when no row matches yet)."""
         return next(
-            (
-                j.issue
-                for j in self.run_rows()
-                if (j.dag_id, j.run_id, j.map_index) == (dag_id, run_id, map_index)
-            ),
+            (j.issue for j in self.run_rows() if (j.dag_id, j.run_id, j.map_index) == (dag_id, run_id, map_index)),
             "-",
         )
 
@@ -620,10 +603,7 @@ class HerdApp(App[None]):
         self._prs = prs
         self._refill(
             "#prs-table",
-            (
-                (str(p.number), (p.title or "")[:60], _join(p.labels), _join(p.checks), p.state)
-                for p in prs
-            ),
+            ((str(p.number), (p.title or "")[:60], _join(p.labels), _join(p.checks), p.state) for p in prs),
         )
         self.query_one(TabbedContent).get_tab("prs").label = f"PRs ({len(prs)})"
 
@@ -631,10 +611,7 @@ class HerdApp(App[None]):
         self._sandboxes = sandboxes
         self._refill(
             "#sandboxes-table",
-            (
-                (s.name, s.status, when(s.created_at), age(s.created_at, self.clock()))
-                for s in sandboxes
-            ),
+            ((s.name, s.status, when(s.created_at), age(s.created_at, self.clock())) for s in sandboxes),
         )
         self.query_one(TabbedContent).get_tab("sandboxes").label = f"Sandboxes ({len(sandboxes)})"
 
@@ -705,13 +682,9 @@ class HerdApp(App[None]):
             return
         verb = "approve" if approve else "reject"
         name = str(gate.task_id).rsplit(".", 1)[-1]
-        question = (
-            f"{verb} {name} of {gate.dag_id}/{gate.run_id}[{gate.map_index}] as {self.info.actor}?"
-        )
+        question = f"{verb} {name} of {gate.dag_id}/{gate.run_id}[{gate.map_index}] as {self.info.actor}?"
         fn = self.actions.approve if approve else self.actions.reject
-        self._confirm(
-            question, f"{verb} {gate.dag_id}/{gate.run_id}[{gate.map_index}] {name}", fn, gate
-        )
+        self._confirm(question, f"{verb} {gate.dag_id}/{gate.run_id}[{gate.map_index}] {name}", fn, gate)
 
     # -- runs
 
@@ -758,9 +731,7 @@ class HerdApp(App[None]):
                 on_success=lambda run_id: self._triggered(dag_id, issues, run_id),
             )
 
-        self.push_screen(
-            Prompt(f"trigger {dag_id}: issue ids or paths, comma separated", "42, 43"), _go
-        )
+        self.push_screen(Prompt(f"trigger {dag_id}: issue ids or paths, comma separated", "42, 43"), _go)
 
     def _triggered(self, dag_id: str, issues: Sequence[str], run_id: Any) -> None:
         """Show the new run at once (optimistic row) with its Airflow UI link (UI thread)."""
@@ -878,9 +849,7 @@ class HerdApp(App[None]):
         self.notify(f"refused: {exc}", title=label, severity="warning")
 
     def _action_failed(self, label: str, exc: Exception) -> None:
-        self.log_event(
-            f"[red]failed[/red] {escape(label)}: {escape(f'{type(exc).__name__}: {exc}')}"
-        )
+        self.log_event(f"[red]failed[/red] {escape(label)}: {escape(f'{type(exc).__name__}: {exc}')}")
         self.notify(f"{type(exc).__name__}: {exc}", title=label, severity="error")
 
 
@@ -900,9 +869,7 @@ class ControlCollector:
     def collect(self) -> Snapshot:
         from swfactory.control import collect
 
-        return collect(
-            self.airflow, self.github, self.islo, self.metrics, dag_ids=list(self.dag_ids)
-        )
+        return collect(self.airflow, self.github, self.islo, self.metrics, dag_ids=list(self.dag_ids))
 
 
 @dataclass
@@ -1119,23 +1086,15 @@ def snapshot_text(snapshot: Snapshot) -> str:
     ]
     lines += [
         f"run  {r['dag_id']}/{r['run_id']} {r['state']}"
-        + "".join(
-            f"\n  job {job_index(j['map_index'])} {j['issue']} {j['stage']} {j['state']}"
-            for j in r["jobs"]
-        )
+        + "".join(f"\n  job {job_index(j['map_index'])} {j['issue']} {j['stage']} {j['state']}" for j in r["jobs"])
         for r in data["runs"]
     ]
-    lines += [
-        f"gate {g['dag_id']}/{g['run_id']}[{g['map_index']}] {g['gate']} {g['subject']}"
-        for g in data["gates"]
-    ]
+    lines += [f"gate {g['dag_id']}/{g['run_id']}[{g['map_index']}] {g['gate']} {g['subject']}" for g in data["gates"]]
     lines += [f"error {source}: {msg}" for source, msg in data["errors"].items()]
     return "\n".join(lines)
 
 
-def drive_once(
-    collector: Collector, *, as_json: bool = True, out: Callable[[str], Any] = print
-) -> int:
+def drive_once(collector: Collector, *, as_json: bool = True, out: Callable[[str], Any] = print) -> int:
     """Print exactly one snapshot and return the exit code (always 0: this is a read)."""
     snapshot = collector.collect()
     out(json.dumps(snapshot_data(snapshot), indent=2) if as_json else snapshot_text(snapshot))
@@ -1181,11 +1140,7 @@ def approve_all(
             answered += 1
             out(f"{verb} {where} as {actor}")
     outside = f" ({skipped} outside {', '.join(sorted(wanted))})" if skipped else ""
-    out(
-        f"{verb}d {answered}/{len(gates)} pending gates{outside}"
-        if gates
-        else f"no pending gates{outside}"
-    )
+    out(f"{verb}d {answered}/{len(gates)} pending gates{outside}" if gates else f"no pending gates{outside}")
     return 1 if failures else 0
 
 

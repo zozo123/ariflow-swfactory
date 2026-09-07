@@ -35,14 +35,11 @@ GATE_STAGES: tuple[str, ...] = ("intent", "plan")
 NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$"
 # TOML top-level tables the schema knows; anything else is a typo, not an extension point.
 _SECTIONS = frozenset(
-    ("blueprint", "trigger", "targets", "stages", "gates", "limits", "policy", "review")
-    + ("sandbox", "deliver")
+    ("blueprint", "trigger", "targets", "stages", "gates", "limits", "policy", "review") + ("sandbox", "deliver")
 )
 # ``blueprints/<name>.toml`` file names that map to a different ``blueprint.name``.
 _FILE_ALIASES = {DEFAULT_BLUEPRINT: "default"}
-_EXTRA_TOOL_RE = re.compile(
-    r"^(Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit)(?:\([^,\r\n]*\))?$"
-)
+_EXTRA_TOOL_RE = re.compile(r"^(Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit)(?:\([^,\r\n]*\))?$")
 
 
 class Target(BaseModel):
@@ -174,9 +171,7 @@ class Trigger(BaseModel):
             value = item.strip()
             if not value:
                 raise ValueError("trigger.issues entries must not be empty")
-            issues.append(
-                value if value.isdigit() else normalize_relative_path(value, field="trigger.issues")
-            )
+            issues.append(value if value.isdigit() else normalize_relative_path(value, field="trigger.issues"))
         return list(dict.fromkeys(issues))
 
     @model_validator(mode="after")
@@ -214,14 +209,11 @@ class Blueprint(BaseModel):
             raise ValueError("limits.budget_usd_per_stage must not exceed limits.budget_usd")
         if self.sandbox.ttl_s <= self.gate_timeout_h * 3600:
             raise ValueError(
-                f"sandbox.ttl_s ({self.sandbox.ttl_s}) must exceed the longest gate timeout "
-                f"({self.gate_timeout_h} h)"
+                f"sandbox.ttl_s ({self.sandbox.ttl_s}) must exceed the longest gate timeout ({self.gate_timeout_h} h)"
             )
         unknown = sorted(set(self.policy) - set(POLICIES))
         if unknown:
-            raise ValueError(
-                f"policy overrides for unknown stages {unknown}; known: {list(POLICIES)}"
-            )
+            raise ValueError(f"policy overrides for unknown stages {unknown}; known: {list(POLICIES)}")
         for stage, override in self.policy.items():
             unsafe = [
                 tool
@@ -233,10 +225,7 @@ class Blueprint(BaseModel):
                 )
             ]
             if unsafe:
-                raise ValueError(
-                    f"policy.{stage} cannot add shell access or escalate a read-only stage: "
-                    f"{unsafe}"
-                )
+                raise ValueError(f"policy.{stage} cannot add shell access or escalate a read-only stage: {unsafe}")
         return self
 
     def _check_order(self) -> None:
@@ -274,8 +263,7 @@ class Blueprint(BaseModel):
                 raise ValueError(f"gates may only follow {list(GATE_STAGES)}, not {g.after!r}")
             if g.artifact not in stage_artifacts[g.after]:
                 raise ValueError(
-                    f"gate after {g.after!r} must show one of "
-                    f"{sorted(stage_artifacts[g.after])}, not {g.artifact!r}"
+                    f"gate after {g.after!r} must show one of {sorted(stage_artifacts[g.after])}, not {g.artifact!r}"
                 )
 
     # ------------------------------------------------------------ derived
@@ -322,14 +310,10 @@ class Blueprint(BaseModel):
             value = str(item).strip()
             if not value:
                 continue
-            issues.append(
-                value if value.isdigit() else normalize_relative_path(value, field="conf.issues")
-            )
+            issues.append(value if value.isdigit() else normalize_relative_path(value, field="conf.issues"))
         issues = list(dict.fromkeys(issues))
         if not issues:
-            raise ValueError(
-                'run needs conf {"issues": [...]} (or {"issue": N}), or trigger.issues'
-            )
+            raise ValueError('run needs conf {"issues": [...]} (or {"issue": N}), or trigger.issues')
         targets = self.targets
         if conf.get("targets"):
             selected = conf["targets"]
@@ -445,9 +429,7 @@ def resolve(name_or_path: str) -> Path:
             if path.is_file():
                 return path
             tried.append(path)
-    raise FileNotFoundError(
-        f"no blueprint {name_or_path!r}; tried " + ", ".join(str(p) for p in tried)
-    )
+    raise FileNotFoundError(f"no blueprint {name_or_path!r}; tried " + ", ".join(str(p) for p in tried))
 
 
 def load(name_or_path: str = DEFAULT_BLUEPRINT) -> Blueprint:

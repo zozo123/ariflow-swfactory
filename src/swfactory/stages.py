@@ -76,9 +76,7 @@ DEFAULT_LABELS: tuple[str, ...] = ("factory", "agent-authored")  # blueprint.lab
 _GIT_BOT = f"git -c user.name={shlex.quote(BOT_NAME)} -c user.email={shlex.quote(BOT_EMAIL)}"
 PREVIEW_CHARS = 4000  # StageResult.preview: head of the gate artifact shown to the approver
 # crabbox providers that run in place: no file download step exists (or is needed) for junit.
-IN_PLACE_PROVIDERS = frozenset(
-    {"srt", "anthropic-sandbox-runtime", "docker-sandbox", "apple-machine"}
-)
+IN_PLACE_PROVIDERS = frozenset({"srt", "anthropic-sandbox-runtime", "docker-sandbox", "apple-machine"})
 BASE_FILE = ".factory/base"
 STARTED_FILE = ".factory/started"
 STAGES_LOG = ".factory/stages.jsonl"  # sandbox COPY of the stage log (audit trail, never trusted)
@@ -105,8 +103,7 @@ NEVER_COMMITTED = (
     ".ruff_cache/",
 )
 SPECIAL_DOTFILE_SCAN = (
-    "find . -maxdepth 1 -mindepth 1 -name '.*' "
-    "! -type f ! -type d ! -type l -exec basename {} \\; 2>/dev/null"
+    "find . -maxdepth 1 -mindepth 1 -name '.*' ! -type f ! -type d ! -type l -exec basename {} \\; 2>/dev/null"
 )
 
 
@@ -176,9 +173,7 @@ def _contract(ctx: Ctx) -> TargetContract:
     if ctx.contract is None:
         if ctx.state.has_control("target-contract.json"):
             try:
-                ctx.contract = TargetContract.model_validate_json(
-                    ctx.state.read_control("target-contract.json")
-                )
+                ctx.contract = TargetContract.model_validate_json(ctx.state.read_control("target-contract.json"))
             except (OSError, ValueError) as e:
                 raise StageError("policy", f"stored target contract is invalid: {e}") from e
         else:
@@ -186,9 +181,7 @@ def _contract(ctx: Ctx) -> TargetContract:
                 ctx.contract = load_target_contract(ctx.sb)
             except ValueError as e:
                 raise StageError("policy", str(e)) from e
-            ctx.state.write_control(
-                "target-contract.json", ctx.contract.model_dump_json(indent=2) + "\n"
-            )
+            ctx.state.write_control("target-contract.json", ctx.contract.model_dump_json(indent=2) + "\n")
     return ctx.contract
 
 
@@ -196,9 +189,7 @@ def _sh(ctx: Ctx, cmd: str, *, timeout_s: int = 600) -> str:
     """Run a command that must succeed; stdout is returned, failure is a sandbox StageError."""
     res = ctx.sb.run(cmd, timeout_s=timeout_s)
     if not res.ok:
-        raise StageError(
-            "sandbox", f"`{cmd}` failed (rc={res.exit_code}): {res.stderr.strip()[-800:]}"
-        )
+        raise StageError("sandbox", f"`{cmd}` failed (rc={res.exit_code}): {res.stderr.strip()[-800:]}")
     return res.stdout
 
 
@@ -250,9 +241,7 @@ def _persisted(ctx: Ctx) -> list[StageResult]:
     This file is the ONLY evidence a stage may be skipped on: the sandbox is agent-writable.
     """
     try:
-        return [
-            StageResult.model_validate(record) for record in ctx.state.read_jsonl(RUN_STAGES_LOG)
-        ]
+        return [StageResult.model_validate(record) for record in ctx.state.read_jsonl(RUN_STAGES_LOG)]
     except (OSError, ValueError) as e:
         raise StageError("policy", f"run journal is corrupt: {e}") from e
 
@@ -354,9 +343,7 @@ def seed_budget(ctx: Ctx, *, refresh: bool = False) -> float:
     return ctx.spent_usd
 
 
-def _agent(
-    ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseModel] | None
-) -> AgentResult:
+def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseModel] | None) -> AgentResult:
     """Run the agent for one stage call, enforcing the run-level budget and surfacing errors.
     Under srt the kernel ``denyWrite`` set follows the stage (``protected_for``): ``fix`` calls
     lose write access to the tests dir that ``build`` needed, matching the ``Edit(...)`` rules."""
@@ -388,8 +375,7 @@ def _agent(
     if ctx.spent_usd > ctx.cfg.max_budget_usd:
         raise StageError(
             "policy",
-            f"run budget exceeded: {ctx.spent_usd:.2f} > {ctx.cfg.max_budget_usd:.2f} USD "
-            f"after {stage}.{iteration}",
+            f"run budget exceeded: {ctx.spent_usd:.2f} > {ctx.cfg.max_budget_usd:.2f} USD after {stage}.{iteration}",
         )
     envelope = f"{ctx.art}/agent/{stage}.{iteration}.json"
     if ctx.sb.exists(envelope):
@@ -409,9 +395,7 @@ def _policy(ctx: Ctx, stage: str) -> Policy:
     if override is None:
         return policy
     extra = tuple(t for t in override.extra_allowed_tools if t not in policy.allowed_tools)
-    return dataclasses.replace(
-        policy, allowed_tools=policy.allowed_tools + extra, model=override.model or policy.model
-    )
+    return dataclasses.replace(policy, allowed_tools=policy.allowed_tools + extra, model=override.model or policy.model)
 
 
 def _protected(ctx: Ctx, stage: str) -> str:
@@ -504,10 +488,7 @@ def crabbox_command(provider: str, junit: str, test_cmd: str) -> str:
     (``IN_PLACE_PROVIDERS``) already leave it in the working tree, so no download is requested."""
     q = shlex.quote
     download = "" if provider in IN_PLACE_PROVIDERS else f"-download {q(f'{junit}={junit}')} "
-    return (
-        f"crabbox run -provider {q(provider)} -junit {q(junit)} {download}"
-        f"-ttl 45m -idle-timeout 15m -- {test_cmd}"
-    )
+    return f"crabbox run -provider {q(provider)} -junit {q(junit)} {download}-ttl 45m -idle-timeout 15m -- {test_cmd}"
 
 
 def _parse_junit(xml_text: str) -> dict[str, int]:
@@ -584,9 +565,7 @@ def seed_local_workdir(workdir: Path, target_dir: str) -> bool:
     if not src.is_dir():
         raise ValueError(f"target directory does not exist: {target_dir or src}")
     if not target_dir and not (src / "factory.toml").is_file():
-        raise ValueError(
-            "a local root target must run from the target checkout containing factory.toml"
-        )
+        raise ValueError("a local root target must run from the target checkout containing factory.toml")
     shutil.copytree(src, workdir, ignore=COPY_IGNORE, dirs_exist_ok=True)
     return True
 
@@ -610,11 +589,7 @@ def _seed_exclude(ctx: Ctx) -> None:
     special = [
         name
         for name in scanned.stdout.splitlines()
-        if scanned.ok
-        and name.startswith(".")
-        and name not in {".", ".."}
-        and "/" not in name
-        and "\\" not in name
+        if scanned.ok and name.startswith(".") and name not in {".", ".."} and "/" not in name and "\\" not in name
     ]
     if isinstance(ctx.sb, SrtSandbox):
         special.extend(path for path in SRT_RUNTIME_PROTECTED if not ctx.sb.exists(path))
@@ -710,13 +685,9 @@ def setup(ctx: Ctx) -> StageResult:
         _sh(ctx, f"git checkout -q {q}")
     else:
         recorded_head = (
-            ctx.state.read_control("workspace-head").strip()
-            if ctx.state.has_control("workspace-head")
-            else ""
+            ctx.state.read_control("workspace-head").strip() if ctx.state.has_control("workspace-head") else ""
         )
-        progressed = any(
-            record.stage in {"build_and_test", "review", "deliver"} for record in _persisted(ctx)
-        )
+        progressed = any(record.stage in {"build_and_test", "review", "deliver"} for record in _persisted(ctx))
         if (recorded_head and recorded_head != base) or progressed:
             raise StageError(
                 "policy",
@@ -730,9 +701,7 @@ def setup(ctx: Ctx) -> StageResult:
     if sb.exists("pyproject.toml"):
         res = sb.run("uv sync --group dev", timeout_s=1200)
         if not res.ok:
-            raise StageError(
-                "sandbox", f"uv sync failed: {res.stderr.strip()[-800:]}", retryable=True
-            )
+            raise StageError("sandbox", f"uv sync failed: {res.stderr.strip()[-800:]}", retryable=True)
     _contract(ctx)
     _review_policy(ctx)
     return StageResult(stage="setup", duration_s=round(time.monotonic() - t0, 3))
@@ -772,9 +741,7 @@ def spec(ctx: Ctx) -> StageResult:
     path = f"{ctx.art}/spec.md"
     if prior := _done(ctx, "spec"):
         return _skipped(prior)
-    prompt = render_prompt(
-        "spec", issue_id=ctx.issue.id, intent=ctx.read_artifact(f"{ctx.art}/intent.md")
-    )
+    prompt = render_prompt("spec", issue_id=ctx.issue.id, intent=ctx.read_artifact(f"{ctx.art}/intent.md"))
     res = _agent(ctx, "spec", 1, prompt, None)
     if not res.text.strip():
         raise StageError("agent", "spec returned empty text")
@@ -849,8 +816,7 @@ def build_and_test(ctx: Ctx) -> StageResult:
         failures = f"exit code {tr.exit_code}; failed={tr.failed} errors={tr.errors}\n\n{output}"
     raise StageError(
         "policy",
-        f"tests still failing after {ctx.cfg.max_build_iterations} build iterations; "
-        f"last failure:\n{failures[-1500:]}",
+        f"tests still failing after {ctx.cfg.max_build_iterations} build iterations; last failure:\n{failures[-1500:]}",
     )
 
 
@@ -875,17 +841,14 @@ def _plan_fidelity(ctx: Ctx, base: str) -> list[Finding]:
     if not isinstance(plan_data, dict):
         return []
     planned = {str(f).strip() for f in plan_data.get("files") or []} - {""}
-    changed = set(
-        _sh(ctx, f"git diff --name-only --relative {base}..HEAD -- . {_exclude(ctx)}").split()
-    )
+    changed = set(_sh(ctx, f"git diff --name-only --relative {base}..HEAD -- . {_exclude(ctx)}").split())
     tests_dir = _contract(ctx).tests_dir.rstrip("/") + "/"
     findings = [
         Finding(
             severity="major",
             file=f,
             title="Plan fidelity: file not listed in plan.md",
-            detail=f"`{f}` was changed but plan.md does not list it. Add it to the plan or "
-            "revert the change.",
+            detail=f"`{f}` was changed but plan.md does not list it. Add it to the plan or revert the change.",
         )
         for f in sorted(changed - planned)
     ]
@@ -894,8 +857,7 @@ def _plan_fidelity(ctx: Ctx, base: str) -> list[Finding]:
             severity="major" if f.startswith(tests_dir) else "minor",
             file=f,
             title="Plan fidelity: planned file not touched",
-            detail=f"plan.md lists `{f}` but the diff never touches it. Do the planned work or "
-            "drop it from the plan.",
+            detail=f"plan.md lists `{f}` but the diff never touches it. Do the planned work or drop it from the plan.",
         )
         for f in sorted(planned - changed)
     ]
@@ -917,9 +879,7 @@ def _review_policy(ctx: Ctx) -> str:
 
 
 def _format_findings(findings: list[Finding]) -> str:
-    return "\n".join(
-        f"- [{f.severity}] {f.file}:{f.line or '-'} {f.title} — {f.detail}" for f in findings
-    )
+    return "\n".join(f"- [{f.severity}] {f.file}:{f.line or '-'} {f.title} — {f.detail}" for f in findings)
 
 
 def _tests_blocker(ctx: Ctx, tr: TestResult, output: str) -> Finding:
@@ -1037,9 +997,7 @@ def record_approval(ctx: Ctx, approval: Approval) -> None:
     data = _read_json(ctx, path, [])
     if not isinstance(data, list):
         raise StageError("policy", "approvals.json must contain a JSON array")
-    data = [
-        item for item in data if not isinstance(item, dict) or item.get("gate") != approval.gate
-    ]
+    data = [item for item in data if not isinstance(item, dict) or item.get("gate") != approval.gate]
     data.append(approval.model_dump(mode="json"))
     ctx.write_artifact(path, _dumps(data))
 
@@ -1084,9 +1042,7 @@ def pr_body(
         lines.append(f"### {sev.capitalize()} ({len(group)}{note})")
         lines.extend(f"- `{f.file}:{f.line or '-'}` **{f.title}** — {f.detail}" for f in group)
     parts.append("\n".join(lines))
-    approval_rows = [
-        [a.gate, a.decision, a.actor, a.at.isoformat(timespec="seconds")] for a in approvals
-    ]
+    approval_rows = [[a.gate, a.decision, a.actor, a.at.isoformat(timespec="seconds")] for a in approvals]
     parts.append("## Approvals\n" + _md_table(["gate", "decision", "actor", "at"], approval_rows))
     stage_rows = [
         [
@@ -1098,10 +1054,7 @@ def pr_body(
         ]
         for s in stages
     ]
-    parts.append(
-        "## Stages\n"
-        + _md_table(["stage", "status", "duration s", "cost usd", "numbers"], stage_rows)
-    )
+    parts.append("## Stages\n" + _md_table(["stage", "status", "duration s", "cost usd", "numbers"], stage_rows))
     parts.append(
         "## Provenance\n"
         f"- run `{ctx.cfg.run_id}` · agent `{ctx.agent.kind}` · sandbox `{ctx.sb.name}`\n"
@@ -1184,15 +1137,9 @@ def _validated_review(
             if not isinstance(parsed, dict):
                 raise ValueError("review record is not an object")
             data = parsed
-            review = Review.model_validate(
-                {"verdict": parsed.get("verdict"), "findings": parsed.get("findings")}
-            )
+            review = Review.model_validate({"verdict": parsed.get("verdict"), "findings": parsed.get("findings")})
             dropped_nits = parsed.get("dropped_nits", 0)
-            if (
-                not isinstance(dropped_nits, int)
-                or isinstance(dropped_nits, bool)
-                or dropped_nits < 0
-            ):
+            if not isinstance(dropped_nits, int) or isinstance(dropped_nits, bool) or dropped_nits < 0:
                 raise ValueError("dropped_nits must be a non-negative integer")
         except (FileNotFoundError, ValueError, ValidationError) as e:
             raise StageError("policy", f"review evidence is invalid: {e}") from e

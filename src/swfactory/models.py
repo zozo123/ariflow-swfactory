@@ -68,13 +68,7 @@ class TestResult(BoundaryModel):
 
     @property
     def ok(self) -> bool:
-        return (
-            self.report_valid
-            and self.total > 0
-            and self.exit_code == 0
-            and self.failed == 0
-            and self.errors == 0
-        )
+        return self.report_valid and self.total > 0 and self.exit_code == 0 and self.failed == 0 and self.errors == 0
 
 
 class Finding(BoundaryModel):
@@ -164,8 +158,7 @@ class Plan(BoundaryModel):
             undeclared = sorted(set(node.files) - declared_files)
             if undeclared:
                 raise ValueError(
-                    f"work graph node {node.id!r} references files not declared in plan.files: "
-                    f"{undeclared}"
+                    f"work graph node {node.id!r} references files not declared in plan.files: {undeclared}"
                 )
 
         visiting: set[str] = set()
@@ -194,9 +187,7 @@ class Plan(BoundaryModel):
         done: set[str] = set()
         layers: list[list[PlanTask]] = []
         while remaining:
-            layer = [
-                node for node in self.work if node.id in remaining and set(node.depends_on) <= done
-            ]
+            layer = [node for node in self.work if node.id in remaining and set(node.depends_on) <= done]
             if not layer:
                 raise ValueError("work graph is cyclic")
             layers.append(layer)

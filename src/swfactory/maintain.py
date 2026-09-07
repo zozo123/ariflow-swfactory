@@ -129,9 +129,7 @@ def detect(runs: list[dict], bands: dict) -> list[Breach]:
         if not hit:
             continue
         sigma, action = hit[-1]
-        breaches.append(
-            Breach(metric=metric, sigma=sigma, value=value, mean=mean, stdev=stdev, action=action)
-        )
+        breaches.append(Breach(metric=metric, sigma=sigma, value=value, mean=mean, stdev=stdev, action=action))
     return breaches
 
 
@@ -200,9 +198,7 @@ def clone_target(url: str, branch: str, dest: Path) -> Path:
         check=False,
     )
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"git clone {url}@{branch} failed rc={proc.returncode}: {proc.stderr.strip()}"
-        )
+        raise RuntimeError(f"git clone {url}@{branch} failed rc={proc.returncode}: {proc.stderr.strip()}")
     return dest
 
 
@@ -217,9 +213,7 @@ def metrics_root(cfg: Config, scratch: Path, *, env: Mapping[str, str] | None = 
     env = os.environ if env is None else env
     base = env.get(MAINTAIN_ROOT_ENV)
     root = (
-        Path(base)
-        if base
-        else clone_target(f"https://github.com/{cfg.repo}.git", cfg.base_branch, scratch / "target")
+        Path(base) if base else clone_target(f"https://github.com/{cfg.repo}.git", cfg.base_branch, scratch / "target")
     )
     if cfg.target_dir:
         root = root / cfg.target_dir
@@ -238,12 +232,9 @@ def _diagnose(
         print(f"maintain: no agent/sandbox; skipping diagnosis of {breach.metric}")
         return None
     evidence = "\n".join(
-        f"- run {r.get('run_id', '?')}: {breach.metric}={metric_value(r, breach.metric)}"
-        for r in runs
+        f"- run {r.get('run_id', '?')}: {breach.metric}={metric_value(r, breach.metric)}" for r in runs
     )
-    prompt = render_prompt(
-        "diagnose", metric=f"{breach.metric}: {_log_line(breach)}", evidence=evidence
-    )
+    prompt = render_prompt("diagnose", metric=f"{breach.metric}: {_log_line(breach)}", evidence=evidence)
     sb.ensure()
     result = agent.run(
         sb,
@@ -379,9 +370,7 @@ def remove_orphans(names: Sequence[str], runner: Runner) -> list[str]:
     return removed
 
 
-def sweep_sandboxes(
-    ttl_s: int, *, owner: str | None = None, runner: Runner | None = None
-) -> list[str]:
+def sweep_sandboxes(ttl_s: int, *, owner: str | None = None, runner: Runner | None = None) -> list[str]:
     """Remove this owner's orphaned factory sandboxes older than ``ttl_s``.
 
     ``owner`` (or ``$SWF_SANDBOX_OWNER``) is REQUIRED: the sweep refuses to run when it cannot

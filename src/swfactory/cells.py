@@ -150,10 +150,7 @@ class CellStore:
             current = self._decode(row)
             fresh = current["state"] == "created" and current["airflow_run_id"] is None
             if not fresh and current["state"] not in TERMINAL_STATES:
-                raise CellBusy(
-                    f"{cell_id} is already active at epoch {current['epoch']} "
-                    f"in state {current['state']}"
-                )
+                raise CellBusy(f"{cell_id} is already active at epoch {current['epoch']} in state {current['state']}")
             next_epoch = int(current["epoch"]) if fresh else int(current["epoch"]) + 1
             cur = self.db.execute(
                 """UPDATE cells SET
@@ -276,9 +273,7 @@ class CellStore:
             encoded: dict[str, Any] = {}
             for key, value in fields.items():
                 encoded[key + "_json" if key in {"compute", "cleanup"} else key] = (
-                    json.dumps(value, sort_keys=True, separators=(",", ":"))
-                    if key in {"compute", "cleanup"}
-                    else value
+                    json.dumps(value, sort_keys=True, separators=(",", ":")) if key in {"compute", "cleanup"} else value
                 )
             now = time.time()
             with self.db:
@@ -305,8 +300,7 @@ class CellStore:
     def _append(self, mutation: Mutation) -> None:
         try:
             self.db.execute(
-                "INSERT INTO cell_events(cell_id,epoch,operation_key,kind,payload_json,created_at) "
-                "VALUES(?,?,?,?,?,?)",
+                "INSERT INTO cell_events(cell_id,epoch,operation_key,kind,payload_json,created_at) VALUES(?,?,?,?,?,?)",
                 (
                     mutation.cell_id,
                     mutation.epoch,

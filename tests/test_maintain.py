@@ -145,18 +145,14 @@ def _write_metrics(root: Path, issue: str, data: dict) -> Path:
 
 
 def test_load_runs_newest_first_window_and_scripted_filter(tmp_path: Path) -> None:
-    _write_metrics(
-        tmp_path, "A", {"run_id": "a", "agent": "claude", "finished": "2026-01-01T00:00:00Z"}
-    )
+    _write_metrics(tmp_path, "A", {"run_id": "a", "agent": "claude", "finished": "2026-01-01T00:00:00Z"})
     _write_metrics(
         tmp_path,
         "B",
         {"run_id": "b", "agent": "claude", "timestamps": {"finished": "2026-03-01T00:00:00+00:00"}},
     )
     _write_metrics(tmp_path, "C", {"run_id": "c", "agent": "claude", "finished": 1_800_000_000})
-    _write_metrics(
-        tmp_path, "D", {"run_id": "d", "agent": "scripted", "finished": "2027-01-01T00:00:00Z"}
-    )
+    _write_metrics(tmp_path, "D", {"run_id": "d", "agent": "scripted", "finished": "2027-01-01T00:00:00Z"})
     (tmp_path / "docs" / "factory" / "E").mkdir()
     (tmp_path / "docs" / "factory" / "E" / "metrics.json").write_text("not json")
 
@@ -276,9 +272,7 @@ def test_run_log_tier_only_prints(tmp_path: Path, capsys: pytest.CaptureFixture[
 def test_run_diagnose_tier_calls_agent_read_only_and_writes_incident(tmp_path: Path) -> None:
     root = tmp_path / "target"
     _seed(root, 14.5)
-    diagnosis = Diagnosis(
-        metric="build_iterations", hypothesis="flaky fixture", evidence=["run h3"]
-    )
+    diagnosis = Diagnosis(metric="build_iterations", hypothesis="flaky fixture", evidence=["run h3"])
     agent = FakeAgent(AgentResult(agent="scripted", data=diagnosis.model_dump()))
     sb = FakeSandbox()
     scm = FakeScm()
@@ -294,11 +288,7 @@ def test_run_diagnose_tier_calls_agent_read_only_and_writes_incident(tmp_path: P
     )
     assert [b.action for b in breaches] == ["diagnose"]
     (call,) = agent.calls
-    assert (
-        call["stage"] == "diagnose"
-        and call["schema"] is Diagnosis
-        and call["issue_id"] == "maintain"
-    )
+    assert call["stage"] == "diagnose" and call["schema"] is Diagnosis and call["issue_id"] == "maintain"
     assert call["policy"].writes is False and "Edit" not in call["policy"].allowed_tools
     assert "build_iterations" in call["prompt"] and "h3" in call["prompt"]
     assert sb.ensured == 1
@@ -338,9 +328,7 @@ def test_run_propose_without_agent_still_opens_issue(tmp_path: Path) -> None:
     root = tmp_path / "target"
     _seed(root, 40)
     scm = FakeScm()
-    maintain.run(
-        Config(issue="x"), scm=scm, agent=None, sb=None, bands_path=_bands_file(tmp_path), root=root
-    )
+    maintain.run(Config(issue="x"), scm=scm, agent=None, sb=None, bands_path=_bands_file(tmp_path), root=root)
     assert len(scm.issues) == 1 and "no diagnosis" in scm.issues[0]["body"]
 
 
@@ -377,9 +365,7 @@ def test_metrics_root_honours_env_and_requires_docs_factory(tmp_path: Path) -> N
     assert not (tmp_path / "scratch").exists()  # env root -> nothing cloned
 
 
-def test_metrics_root_clones_base_branch_when_env_unset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_metrics_root_clones_base_branch_when_env_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     origin = tmp_path / "origin"
     _write_metrics(origin / "demo" / "target", "A", {"run_id": "a"})
     _git(origin, "init", "-q", "-b", "release")
@@ -397,9 +383,7 @@ def test_metrics_root_clones_base_branch_when_env_unset(
         return real_clone(str(origin), branch, dest)  # same code, local origin
 
     monkeypatch.setattr(maintain, "clone_target", fake_clone)
-    cfg = Config(
-        issue="maintain", repo="acme/widgets", base_branch="release", target_dir="demo/target"
-    )
+    cfg = Config(issue="maintain", repo="acme/widgets", base_branch="release", target_dir="demo/target")
     root = maintain.metrics_root(cfg, tmp_path / "scratch", env={})
     assert seen == {"url": "https://github.com/acme/widgets.git", "branch": "release"}
     assert root == tmp_path / "scratch" / "target" / "demo" / "target"

@@ -121,9 +121,7 @@ class ExecutorPolicy:
 
 
 class WorkExecutor:
-    def __init__(
-        self, runner: NodeRunner, merger: NodeMerger, policy: ExecutorPolicy | None = None
-    ):
+    def __init__(self, runner: NodeRunner, merger: NodeMerger, policy: ExecutorPolicy | None = None):
         self.runner = runner
         self.merger = merger
         self.policy = policy or ExecutorPolicy()
@@ -142,10 +140,7 @@ class WorkExecutor:
         cancellation = cancellation or Cancellation()
         declared_conflicts = conflict_set(ordered)
         parallel = (
-            self.policy.allow_parallel
-            and supports_fork
-            and self.policy.max_parallel > 1
-            and not declared_conflicts
+            self.policy.allow_parallel and supports_fork and self.policy.max_parallel > 1 and not declared_conflicts
         )
         results: dict[str, NodeResult] = {}
         target_head = input_head
@@ -160,9 +155,7 @@ class WorkExecutor:
                     epoch=epoch,
                     node=node,
                     input_head=target_head,
-                    dependency_results=tuple(
-                        results[d].output_head or results[d].input_head for d in node.depends_on
-                    ),
+                    dependency_results=tuple(results[d].output_head or results[d].input_head for d in node.depends_on),
                 )
                 for node in wave.nodes
             ]
@@ -222,14 +215,11 @@ class WorkExecutor:
                 break
         return out
 
-    def _parallel(
-        self, requests: list[NodeRequest], cancellation: Cancellation
-    ) -> list[NodeResult]:
+    def _parallel(self, requests: list[NodeRequest], cancellation: Cancellation) -> list[NodeResult]:
         by_id: dict[str, NodeResult] = {}
         with ThreadPoolExecutor(max_workers=min(self.policy.max_parallel, len(requests))) as pool:
             futures: dict[Future[NodeResult], NodeRequest] = {
-                pool.submit(self._run_with_retry, request, cancellation): request
-                for request in requests
+                pool.submit(self._run_with_retry, request, cancellation): request for request in requests
             }
             for future in as_completed(futures):
                 request = futures[future]

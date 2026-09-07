@@ -104,11 +104,7 @@ def make_snapshot(*, errors: dict[str, str] | None = None, owner: str = "me") ->
             ),
         ],
         gates=[gate],
-        prs=[
-            PullRequest(
-                7, "feat: percent_change", "https://x/pull/7", ["factory"], "open", "pass", "f/42"
-            )
-        ],
+        prs=[PullRequest(7, "feat: percent_change", "https://x/pull/7", ["factory"], "open", "pass", "f/42")],
         sandboxes=[
             Sandbox("swf-42-abcd1234", "running", owner, NOW - timedelta(hours=3)),
             Sandbox("swf-99-deadbeef", "paused", "someone-else", NOW - timedelta(days=1)),
@@ -172,9 +168,7 @@ class FakeActions:
         self.calls.append(("remove_sandbox", sandbox))
 
 
-def build(
-    snapshot: Snapshot | None = None, **kw: Any
-) -> tuple[HerdApp, FakeCollector, FakeActions]:
+def build(snapshot: Snapshot | None = None, **kw: Any) -> tuple[HerdApp, FakeCollector, FakeActions]:
     collector = FakeCollector(snapshot or make_snapshot(), fail=kw.pop("fail", None))
     actions = FakeActions()
     info = HerdInfo(
@@ -184,9 +178,7 @@ def build(
         actor="admin",
         dag_ids=tuple(kw.pop("dag_ids", ("factory",))),
     )
-    app = HerdApp(
-        collector, actions, info=info, refresh_s=kw.pop("refresh_s", 0), clock=lambda: NOW
-    )
+    app = HerdApp(collector, actions, info=info, refresh_s=kw.pop("refresh_s", 0), clock=lambda: NOW)
     return app, collector, actions
 
 
@@ -272,9 +264,7 @@ def test_tables_populate_and_header_renders() -> None:
                 ["hotfix", "manual__2", "0", "9", "intent:failed", "failed"],
             ]
             assert app.query_one("TabbedContent").get_tab("runs").label_text == "Runs (3)"
-            assert rows(app, "#prs-table") == [
-                ["7", "feat: percent_change", "factory", "pass", "open"]
-            ]
+            assert rows(app, "#prs-table") == [["7", "feat: percent_change", "factory", "pass", "open"]]
             sandboxes = rows(app, "#sandboxes-table")
             assert [s[0] for s in sandboxes] == ["swf-42-abcd1234", "swf-99-deadbeef"]
             assert sandboxes[0][1] == "running"
@@ -623,9 +613,7 @@ def test_control_actions_delegate_to_clients() -> None:
 
 
 def test_make_app_and_make_clients_share_one_stack() -> None:
-    clients = herd.make_clients(
-        airflow_url="http://af:8080", repo="o/r", owner="me", token="t", dag_ids=["factory"]
-    )
+    clients = herd.make_clients(airflow_url="http://af:8080", repo="o/r", owner="me", token="t", dag_ids=["factory"])
     assert clients.dag_ids == ("factory",)
     # One AirflowClient behind both seams: a headless answer and a keystroke are the same call.
     assert clients.collector.airflow is clients.actions.airflow

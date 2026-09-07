@@ -34,9 +34,7 @@ def transition(job: dict[str, Any], state: str, *, operation_key: str) -> dict[s
     base = (os.getenv("SWF_BACKEND_URL") or "").rstrip("/")
     token = os.getenv("SWF_BACKEND_TOKEN") or ""
     if not base or len(token) < 32:
-        raise CellCallbackError(
-            "managed Airflow workers require SWF_BACKEND_URL and SWF_BACKEND_TOKEN"
-        )
+        raise CellCallbackError("managed Airflow workers require SWF_BACKEND_URL and SWF_BACKEND_TOKEN")
     payload = json.dumps(
         {
             "cell_id": cell_id,

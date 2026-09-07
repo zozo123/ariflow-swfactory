@@ -39,9 +39,7 @@ class Topology:
                     changed_any = True
         return tuple(module.name for module in self.modules if module.name in impacted)
 
-    def required_checks(
-        self, changed: Iterable[str], *, require_full_suite: bool = False
-    ) -> tuple[str, ...]:
+    def required_checks(self, changed: Iterable[str], *, require_full_suite: bool = False) -> tuple[str, ...]:
         impacted = set(self.impacted(changed))
         checks: list[str] = []
         for module in self.modules:

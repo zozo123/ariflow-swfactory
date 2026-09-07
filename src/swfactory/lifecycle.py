@@ -78,9 +78,7 @@ class ManagedGraph(BoundaryModel):
         done: set[str] = set()
         layers: list[list[ManagedNode]] = []
         while remaining:
-            layer = [
-                node for node in self.nodes if node.id in remaining and set(node.depends_on) <= done
-            ]
+            layer = [node for node in self.nodes if node.id in remaining and set(node.depends_on) <= done]
             if not layer:
                 raise ValueError("managed graph is cyclic")
             layers.append(layer)
@@ -93,9 +91,7 @@ class ManagedGraph(BoundaryModel):
         """Parallel-safe inside-stage nodes in the same wave; runtime support is not implied."""
         groups: list[list[str]] = []
         for layer in self.layers():
-            candidates = [
-                node.id for node in layer if node.execution == "inside_stage" and node.parallel_safe
-            ]
+            candidates = [node.id for node in layer if node.execution == "inside_stage" and node.parallel_safe]
             if len(candidates) > 1:
                 groups.append(candidates)
         return groups
@@ -108,9 +104,7 @@ class ManagedGraph(BoundaryModel):
         for node in self.nodes:
             for parent in node.depends_on:
                 condition = f"|{node.condition}|" if node.condition else ""
-                lines.append(
-                    f"  {parent.replace(':', '_')} -->{condition} {node.id.replace(':', '_')}"
-                )
+                lines.append(f"  {parent.replace(':', '_')} -->{condition} {node.id.replace(':', '_')}")
         return "\n".join(lines) + "\n"
 
 

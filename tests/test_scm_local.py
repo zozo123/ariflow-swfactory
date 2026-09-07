@@ -32,9 +32,7 @@ def _isolated_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def git(*args: str, cwd: Path, input: bytes | None = None) -> str:
-    proc = subprocess.run(
-        ["git", *IDENT, *args], cwd=cwd, input=input, capture_output=True, check=True
-    )
+    proc = subprocess.run(["git", *IDENT, *args], cwd=cwd, input=input, capture_output=True, check=True)
     return proc.stdout.decode()
 
 
@@ -47,9 +45,7 @@ def make_source_repo(root: Path) -> tuple[Path, bytes]:
     git("add", ".", cwd=repo)
     git("commit", "-q", "-m", "baseline", cwd=repo)
     git("checkout", "-q", "-b", "factory/DEMO-1-abc12345", cwd=repo)
-    (repo / "calc.py").write_text(
-        "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
-    )
+    (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n")
     git(
         "-c", "user.name=swfactory-bot", "-c", "user.email=swfactory-bot@users.noreply.github.com",
         "commit", "-q", "-a", "-m", "build: add sub",
@@ -85,9 +81,7 @@ def test_local_publish_pushes_branch_with_trailers(tmp_path: Path, capsys) -> No
     assert msg.startswith("swfactory-bot\n")
     assert "Factory-Run: abc12345" in msg and "Agent: scripted" in msg
     # branch is exactly baseline + one bot commit, on the same base as the source repo
-    assert (
-        git("rev-parse", "main", cwd=remote).strip() == git("rev-parse", "main", cwd=source).strip()
-    )
+    assert git("rev-parse", "main", cwd=remote).strip() == git("rev-parse", "main", cwd=source).strip()
     assert git("rev-list", "--count", "factory/DEMO-1-abc12345", cwd=remote).strip() == "2"
     pr = (run_dir / "pr.md").read_text()
     assert "# DEMO-1: add sub" in pr and "factory, agent-authored" in pr and "adds sub()" in pr
@@ -112,9 +106,7 @@ def test_local_publish_without_base_repo_seeds_orphan_main(tmp_path: Path) -> No
     (repo / "new.txt").write_text("hi\n")
     git("add", "new.txt", cwd=repo)
     git("commit", "-q", "-m", "add new.txt", cwd=repo)
-    patch = subprocess.run(
-        ["git", "format-patch", "--stdout", "-1"], cwd=repo, capture_output=True, check=True
-    ).stdout
+    patch = subprocess.run(["git", "format-patch", "--stdout", "-1"], cwd=repo, capture_output=True, check=True).stdout
     scm.publish(branch="feat", patch=patch, title="t", body="b", labels=["x"])
     remote = run_dir / "remote.git"
     assert git("rev-list", "--count", "main", cwd=remote).strip() == "1"
@@ -213,10 +205,7 @@ def test_github_publish_argv(calls: list[list[str]]) -> None:
     assert any(c[0] == "git" and c[-2:] == ["checkout", "-b", "factory/42-abc"][-2:] for c in calls)
     assert any("am" in c and "--3way" in c for c in calls)
     # bot-owned factory/* refs are force-pushed so a retried deliver can re-publish the branch
-    assert any(
-        c[0] == "git" and c[1:] == ["push", "-u", "--force", "origin", "factory/42-abc"]
-        for c in calls
-    )
+    assert any(c[0] == "git" and c[1:] == ["push", "-u", "--force", "origin", "factory/42-abc"] for c in calls)
     pr_list = next(c for c in calls if c[:3] == ["gh", "pr", "list"])
     assert pr_list[pr_list.index("--head") + 1] == "factory/42-abc"
     assert "--state" in pr_list and pr_list[pr_list.index("--state") + 1] == "open"
@@ -244,9 +233,7 @@ def test_github_publish_requires_token(calls, monkeypatch: pytest.MonkeyPatch) -
 
 def test_github_fetch_issue(calls: list[list[str]]) -> None:
     issue = GitHubScm("o/r", "main").fetch_issue("42")
-    assert issue == Issue(
-        id="42", title="T", body="B", labels=["factory"], url="https://github.com/o/r/issues/42"
-    )
+    assert issue == Issue(id="42", title="T", body="B", labels=["factory"], url="https://github.com/o/r/issues/42")
     view = calls[0]
     assert view[:5] == ["gh", "issue", "view", "42", "--repo"] and view[5] == "o/r"
     assert view[view.index("--json") + 1] == "number,title,body,labels,url"
@@ -320,9 +307,7 @@ def test_local_seed_url_seeds_main_from_clone_url(tmp_path: Path) -> None:
     scm = LocalGitScm(run_dir / "remote.git", run_dir, seed_url=source.as_uri(), seed_ref="main")
     scm.publish(branch="factory/DEMO-1-abc12345", patch=patch, title="t", body="b", labels=[])
     remote = run_dir / "remote.git"
-    assert (
-        git("rev-parse", "main", cwd=remote).strip() == git("rev-parse", "main", cwd=source).strip()
-    )
+    assert git("rev-parse", "main", cwd=remote).strip() == git("rev-parse", "main", cwd=source).strip()
     assert git("rev-list", "--count", "factory/DEMO-1-abc12345", cwd=remote).strip() == "2"
     assert "def sub" in git("show", "factory/DEMO-1-abc12345:calc.py", cwd=remote)
 
@@ -446,9 +431,7 @@ def test_local_publish_policy_runs_first(tmp_path: Path) -> None:
             allowed_prefixes=["docs"],
         )  # fmt: skip
     assert not (run_dir / "remote.git").exists()
-    scm.publish(
-        branch="factory/x", patch=patch, title="t", body="b", labels=[], allowed_prefixes=[""]
-    )
+    scm.publish(branch="factory/x", patch=patch, title="t", body="b", labels=[], allowed_prefixes=[""])
     assert (run_dir / "remote.git" / "HEAD").exists()
 
 
@@ -457,9 +440,7 @@ def test_github_publish_policy_runs_before_token_and_network(
 ) -> None:
     monkeypatch.delenv("GH_TOKEN")
     with pytest.raises(StageError, match="secret-like") as ei:
-        GitHubScm("o/r", "main").publish(
-            branch="factory/x", patch=b"+ghp_" + b"a" * 36, title="t", body="b", labels=[]
-        )
+        GitHubScm("o/r", "main").publish(branch="factory/x", patch=b"+ghp_" + b"a" * 36, title="t", body="b", labels=[])
     assert ei.value.kind == "policy" and calls == []
     with pytest.raises(StageError, match="escapes"):
         GitHubScm("o/r", "main").publish(

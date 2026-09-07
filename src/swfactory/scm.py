@@ -69,9 +69,7 @@ class Scm(Protocol):
 def _run(argv: Sequence[str], cwd: Path | None, input: bytes | None = None) -> str:
     """Run one subprocess and return stdout; non-zero exit -> StageError("scm", retryable=True)."""
     try:
-        proc = subprocess.run(
-            list(argv), cwd=cwd, input=input, capture_output=True, check=False, timeout=600
-        )
+        proc = subprocess.run(list(argv), cwd=cwd, input=input, capture_output=True, check=False, timeout=600)
     except FileNotFoundError as e:
         raise StageError("scm", f"{argv[0]} not found on PATH", retryable=False) from e
     except subprocess.TimeoutExpired as e:
@@ -79,9 +77,7 @@ def _run(argv: Sequence[str], cwd: Path | None, input: bytes | None = None) -> s
     stdout = proc.stdout.decode("utf-8", errors="replace")
     if proc.returncode != 0:
         stderr = proc.stderr.decode("utf-8", errors="replace").strip()
-        raise StageError(
-            "scm", f"{' '.join(argv)} failed (rc={proc.returncode}): {stderr}", retryable=True
-        )
+        raise StageError("scm", f"{' '.join(argv)} failed (rc={proc.returncode}): {stderr}", retryable=True)
     return stdout
 
 
@@ -231,12 +227,8 @@ def validate_patch(patch: bytes, *, allowed_prefixes: Sequence[str] | None = Non
             raise StageError("policy", f"patch path escapes the checkout: {path}")
         if ".git" in parts:
             raise StageError("policy", f"patch touches .git: {path}")
-        if prefixes is not None and not any(
-            p == "" or path == p or path.startswith(p + "/") for p in prefixes
-        ):
-            raise StageError(
-                "policy", f"patch touches {path}, outside allowed {sorted(set(prefixes))}"
-            )
+        if prefixes is not None and not any(p == "" or path == p or path.startswith(p + "/") for p in prefixes):
+            raise StageError("policy", f"patch touches {path}, outside allowed {sorted(set(prefixes))}")
 
 
 def scan_secrets(patch: bytes) -> list[str]:
@@ -325,9 +317,7 @@ class LocalGitScm:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         slug = _slug(title)
         path = self.run_dir / f"issue-{slug}.md"
-        meta = yaml.safe_dump(
-            {"id": slug, "title": title, "labels": list(labels)}, sort_keys=False
-        ).rstrip()
+        meta = yaml.safe_dump({"id": slug, "title": title, "labels": list(labels)}, sort_keys=False).rstrip()
         path.write_text(f"---\n{meta}\n---\n{body.rstrip()}\n", encoding="utf-8")
         return f"file://{path.resolve()}"
 
@@ -372,9 +362,7 @@ class LocalGitScm:
 
     def _has_refs(self) -> bool:
         # `git show-ref` exits 1 on an empty repo; that is not an error here.
-        proc = subprocess.run(
-            ["git", "show-ref", "--heads"], cwd=self.remote_dir, capture_output=True, check=False
-        )
+        proc = subprocess.run(["git", "show-ref", "--heads"], cwd=self.remote_dir, capture_output=True, check=False)
         return proc.returncode == 0
 
 
@@ -533,9 +521,7 @@ def _last_line(out: str) -> str:
 # ---------------------------------------------------------------- factory
 
 
-def make_scm(
-    cfg: Config, run_dir: Path, base_repo: Path | None = None, base_ref: str = "main"
-) -> Scm:
+def make_scm(cfg: Config, run_dir: Path, base_repo: Path | None = None, base_ref: str = "main") -> Scm:
     """Build the Scm named by ``cfg.scm``. ``base_repo``/``base_ref`` only matter for local.
 
     Without a host ``base_repo`` (islo sandbox) the local remote is seeded from the public clone

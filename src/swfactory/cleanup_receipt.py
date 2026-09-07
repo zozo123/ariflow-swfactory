@@ -87,9 +87,7 @@ class RepairLeaseStore:
 
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(
-            path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False
-        )
+        self.db = sqlite3.connect(path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
@@ -131,8 +129,7 @@ class RepairLeaseStore:
                 return None
             epoch = int(row["lease_epoch"]) + 1
             self.db.execute(
-                "UPDATE repair_leases SET owner=?,lease_epoch=?,expires_at=?,metadata_json=? "
-                "WHERE lease_key=?",
+                "UPDATE repair_leases SET owner=?,lease_epoch=?,expires_at=?,metadata_json=? WHERE lease_key=?",
                 (owner, epoch, expires, meta, key),
             )
             return RepairLease(key, owner, epoch, expires)
@@ -142,8 +139,7 @@ class RepairLeaseStore:
         expires = now + ttl_s
         with self.db:
             cur = self.db.execute(
-                "UPDATE repair_leases SET expires_at=? "
-                "WHERE lease_key=? AND owner=? AND lease_epoch=?",
+                "UPDATE repair_leases SET expires_at=? WHERE lease_key=? AND owner=? AND lease_epoch=?",
                 (expires, lease.key, lease.owner, lease.epoch),
             )
         if cur.rowcount != 1:

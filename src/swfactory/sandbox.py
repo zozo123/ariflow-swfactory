@@ -207,9 +207,7 @@ def scrub_env(env: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def _run_subprocess(
-    argv: list[str], *, cwd: Path | None, env: dict[str, str] | None, timeout_s: int
-) -> RunResult:
+def _run_subprocess(argv: list[str], *, cwd: Path | None, env: dict[str, str] | None, timeout_s: int) -> RunResult:
     """Run ``argv`` to completion; a timeout kills the child and yields ``timed_out=True``."""
     started = time.monotonic()
     try:
@@ -378,9 +376,7 @@ class SrtSandbox(LocalSandbox):
     def write_settings(self) -> Path:
         """Write the settings file under ``<workdir>/.factory`` and return its path."""
         self.settings_path.parent.mkdir(parents=True, exist_ok=True)
-        self.settings_path.write_text(
-            json.dumps(self.settings(), indent=2) + "\n", encoding="utf-8"
-        )
+        self.settings_path.write_text(json.dumps(self.settings(), indent=2) + "\n", encoding="utf-8")
         return self.settings_path
 
     def set_protected(self, globs: Sequence[str]) -> None:
@@ -433,18 +429,14 @@ class SrtSandbox(LocalSandbox):
         """Run a credential-free command under srt; its exit code propagates."""
         if not self._settings_current():  # settings() reflects paths that appeared since
             self.write_settings()
-        return _run_subprocess(
-            self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s
-        )
+        return _run_subprocess(self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s)
 
     def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
         """Run only the model process with the explicitly allowlisted credential."""
 
         if not self._settings_current():
             self.write_settings()
-        return _run_subprocess(
-            self.argv(cmd), cwd=self.root, env=self.env(agent=True), timeout_s=timeout_s
-        )
+        return _run_subprocess(self.argv(cmd), cwd=self.root, env=self.env(agent=True), timeout_s=timeout_s)
 
 
 class DockerSandbox(LocalSandbox):
@@ -559,9 +551,7 @@ class DockerSandbox(LocalSandbox):
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
         """Run ``cmd`` in a fresh credential-free container."""
-        return _run_subprocess(
-            self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s
-        )
+        return _run_subprocess(self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s)
 
     def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
         """Run only the model process with the API key or mounted Claude login."""
@@ -721,9 +711,7 @@ class IsloSandbox:
             local.write_text(content, encoding="utf-8")
             res = self._cp(str(local), f"{self.name}:{abs_path}")
         if not res.ok:
-            raise StageError(
-                "sandbox", f"islo cp to {abs_path} failed: {res.stderr.strip()}", retryable=True
-            )
+            raise StageError("sandbox", f"islo cp to {abs_path} failed: {res.stderr.strip()}", retryable=True)
 
     def exists(self, path: str) -> bool:
         """True if ``test -e`` succeeds inside the sandbox."""
@@ -830,15 +818,11 @@ def load_toolset_backend(name: str, **kwargs: object):
             backend_cls = getattr(module, cls_name)
             return backend_cls(**kwargs)
         except (ImportError, AttributeError, TypeError) as e:
-            raise StageError(
-                "sandbox", f"custom toolset backend {name!r} could not load: {e}"
-            ) from e
+            raise StageError("sandbox", f"custom toolset backend {name!r} could not load: {e}") from e
     try:
         module_path, cls_name, pr = TOOLSET_BACKENDS[name]
     except KeyError:
-        raise StageError(
-            "sandbox", f"unknown toolset backend {name!r}; have {sorted(TOOLSET_BACKENDS)}"
-        ) from None
+        raise StageError("sandbox", f"unknown toolset backend {name!r}; have {sorted(TOOLSET_BACKENDS)}") from None
     try:
         module = importlib.import_module(module_path)
     except ImportError as e:
@@ -848,9 +832,7 @@ def load_toolset_backend(name: str, **kwargs: object):
             if pr
             else "install apache-airflow-providers-common-ai"
         )
-        raise StageError(
-            "sandbox", f"toolset backend {name!r} is unavailable ({e}); {where}", retryable=False
-        ) from e
+        raise StageError("sandbox", f"toolset backend {name!r} is unavailable ({e}); {where}", retryable=False) from e
     return getattr(module, cls_name)(**kwargs)
 
 
@@ -970,9 +952,7 @@ class ToolsetSandbox:
                 raise StageError("sandbox", "toolset backend returned an empty sandbox id")
             self.sandbox_id = sandbox_id
             self._persist_id()
-        made = self._run_backend(
-            f"mkdir -p {shlex.quote(self.repo_root)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S
-        )
+        made = self._run_backend(f"mkdir -p {shlex.quote(self.repo_root)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
         if not made.ok:
             raise StageError("sandbox", f"toolset repository root failed: {made.stderr[-800:]}")
         repo_check = self._run_backend(
@@ -989,22 +969,14 @@ class ToolsetSandbox:
             result = self._run_backend(clone, cwd=parent, timeout_s=_CONTROL_TIMEOUT_S * 4)
             if not result.ok:
                 raise StageError("sandbox", f"toolset checkout failed: {result.stderr[-800:]}")
-        command = (
-            f"test -d {shlex.quote(self.workdir)}"
-            if self.source
-            else f"mkdir -p {shlex.quote(self.workdir)}"
-        )
+        command = f"test -d {shlex.quote(self.workdir)}" if self.source else f"mkdir -p {shlex.quote(self.workdir)}"
         result = self._run_backend(command, cwd=self.repo_root, timeout_s=_CONTROL_TIMEOUT_S)
         if not result.ok:
-            raise StageError(
-                "sandbox", f"toolset target directory is unavailable: {result.stderr[-800:]}"
-            )
+            raise StageError("sandbox", f"toolset target directory is unavailable: {result.stderr[-800:]}")
 
     def _check_alive(self) -> None:
         if self._terminated:
-            raise StageError(
-                "sandbox", "sandbox was terminated; start a new factory run to rebuild its work"
-            )
+            raise StageError("sandbox", "sandbox was terminated; start a new factory run to rebuild its work")
 
     def _id(self) -> str:
         self._check_alive()
@@ -1015,9 +987,7 @@ class ToolsetSandbox:
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
         """Run ``cmd`` in the sandbox; the backend has no cwd, so it travels in the command."""
-        return self._run_backend(
-            cmd, cwd=self._cwd(cwd) if cwd else self.workdir, timeout_s=timeout_s
-        )
+        return self._run_backend(cmd, cwd=self._cwd(cwd) if cwd else self.workdir, timeout_s=timeout_s)
 
     def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
         """Run the model process using authentication declared in the backend's sandbox spec."""
@@ -1077,9 +1047,7 @@ class ToolsetSandbox:
         if not self.run(f"test -f {shlex.quote(abs_path)}", timeout_s=_CONTROL_TIMEOUT_S).ok:
             raise FileNotFoundError(abs_path)
         try:
-            return self.backend.read_file(
-                self._id(), abs_path, max_bytes=TOOLSET_MAX_OUTPUT_BYTES
-            ).decode("utf-8")
+            return self.backend.read_file(self._id(), abs_path, max_bytes=TOOLSET_MAX_OUTPUT_BYTES).decode("utf-8")
         except FileNotFoundError as e:
             raise FileNotFoundError(abs_path) from e
         except Exception as e:
@@ -1089,9 +1057,7 @@ class ToolsetSandbox:
         abs_path = self._abs(path)
         parent = abs_path.rsplit("/", 1)[0]
         if parent:
-            result = self._run_backend(
-                f"mkdir -p {shlex.quote(parent)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S
-            )
+            result = self._run_backend(f"mkdir -p {shlex.quote(parent)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
             if not result.ok:
                 raise StageError("sandbox", f"toolset mkdir failed: {result.stderr[-800:]}")
         self.backend.write_file(self._id(), abs_path, content.encode("utf-8"))

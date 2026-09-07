@@ -47,9 +47,7 @@ _RULES = (
     AuthorityRule(ResourceKind.CLEANUP, "python-backend", "cell_epoch", "cleanup receipt"),
     AuthorityRule(ResourceKind.ADMISSION, "python-backend", "work_id", "admission store"),
     AuthorityRule(ResourceKind.EVIDENCE, "python-backend", "cell_epoch", "evidence bundle"),
-    AuthorityRule(
-        ResourceKind.GENERATION, "python-backend", "generation_id", "generation manifest"
-    ),
+    AuthorityRule(ResourceKind.GENERATION, "python-backend", "generation_id", "generation manifest"),
 )
 
 
@@ -68,9 +66,7 @@ class MutationAuthority:
             raise AuthorityViolation(f"stale epoch {self.epoch}; current epoch is {current_epoch}")
         owner = allowed_actor or rule_for(self.resource).owner
         if self.actor != owner:
-            raise AuthorityViolation(
-                f"{self.resource.value} mutations belong to {owner}, not {self.actor}"
-            )
+            raise AuthorityViolation(f"{self.resource.value} mutations belong to {owner}, not {self.actor}")
         if not self.cell_id.startswith("cell_"):
             raise AuthorityViolation("mutation must carry a Factory Cell id")
         if not self.operation_key.strip():

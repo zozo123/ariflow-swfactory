@@ -30,9 +30,7 @@ class TraceContext:
         return cls(trace, span)
 
     def child(self, kind: str, identity: str = "") -> TraceContext:
-        span = hashlib.sha256(
-            f"span\0{self.trace_id}\0{self.span_id}\0{kind}\0{identity}".encode()
-        ).hexdigest()[:16]
+        span = hashlib.sha256(f"span\0{self.trace_id}\0{self.span_id}\0{kind}\0{identity}".encode()).hexdigest()[:16]
         return TraceContext(self.trace_id, span)
 
 
@@ -188,9 +186,7 @@ class EvidenceWriter:
                 continue
             seen.add(key)
             data = path.read_bytes()
-            files.append(
-                {"path": str(path), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-            )
+            files.append({"path": str(path), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
         manifest = {
             "schema_version": 1,
             "cell_id": cell_id,
@@ -243,9 +239,7 @@ class EvidenceWriter:
 
     @staticmethod
     def _append_jsonl(path: Path, value: Mapping[str, Any]) -> None:
-        payload = (
-            json.dumps(dict(value), sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
-        )
+        payload = json.dumps(dict(value), sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
         with path.open("a", encoding="utf-8") as handle:
             handle.write(payload)
             handle.flush()
@@ -259,17 +253,13 @@ class EvidenceWriter:
         os.replace(tmp, path)
 
 
-ALLOWED_METRIC_LABELS = frozenset(
-    {"repo", "blueprint", "generation", "provider", "stage", "state", "kind", "result"}
-)
+ALLOWED_METRIC_LABELS = frozenset({"repo", "blueprint", "generation", "provider", "stage", "state", "kind", "result"})
 
 
 def validate_metric_labels(labels: Mapping[str, str]) -> None:
     forbidden = set(labels) - ALLOWED_METRIC_LABELS
     if forbidden:
-        raise ValueError(
-            f"high-cardinality/unknown metric labels are forbidden: {sorted(forbidden)}"
-        )
+        raise ValueError(f"high-cardinality/unknown metric labels are forbidden: {sorted(forbidden)}")
     for key, value in labels.items():
         lower = value.lower()
         if key in {

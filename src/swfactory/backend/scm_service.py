@@ -37,9 +37,7 @@ def operation(factory: Factory, path: str, body: dict[str, Any]) -> Any:
     raise Refused(404, "unknown backend SCM operation")
 
 
-def _managed_identity(
-    factory: Factory, body: dict[str, Any]
-) -> tuple[dict[str, Any], MutationEnvelope]:
+def _managed_identity(factory: Factory, body: dict[str, Any]) -> tuple[dict[str, Any], MutationEnvelope]:
     cell_id = text(body, "cell_id")
     epoch = body.get("epoch")
     if type(epoch) is not int or epoch < 1:
@@ -76,9 +74,7 @@ def _publish(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str
     if not isinstance(labels, list) or any(not isinstance(v, str) or len(v) > 128 for v in labels):
         raise ValueError("labels must be an array of bounded strings")
     allowed = body.get("allowed_prefixes")
-    if allowed is not None and (
-        not isinstance(allowed, list) or any(not isinstance(v, str) for v in allowed)
-    ):
+    if allowed is not None and (not isinstance(allowed, list) or any(not isinstance(v, str) for v in allowed)):
         raise ValueError("allowed_prefixes must be an array of strings or null")
     encoded = body.get("patch_b64")
     if not isinstance(encoded, str):

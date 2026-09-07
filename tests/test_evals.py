@@ -38,9 +38,7 @@ def _stage(stage: str, status: str = "ok", **numbers: float) -> StageResult:
     return StageResult(stage=stage, status=status, numbers=numbers)
 
 
-def _report(
-    *stages: StageResult, tests_passed: bool = True, pr_url: str | None = None
-) -> RunReport:
+def _report(*stages: StageResult, tests_passed: bool = True, pr_url: str | None = None) -> RunReport:
     return RunReport(
         run_id="e0000001",
         issue_id="EVAL-X",
@@ -87,9 +85,7 @@ def workdir(tmp_path: Path) -> Path:
     )
     pkg = tmp_path / "src" / "calc"
     pkg.mkdir(parents=True)
-    pkg.joinpath("__init__.py").write_text(
-        'from calc.core import average\n\n__all__ = ["average"]\n', encoding="utf-8"
-    )
+    pkg.joinpath("__init__.py").write_text('from calc.core import average\n\n__all__ = ["average"]\n', encoding="utf-8")
     art = tmp_path / "docs" / "factory" / "EVAL-X"
     art.mkdir(parents=True)
     art.joinpath("spec.md").write_text("# Spec\n\n## Open questions\nHow many places?\n", "utf-8")
@@ -196,9 +192,7 @@ def test_check_flags_a_stage_that_recorded_no_counter(workdir: Path) -> None:
 
 
 def test_check_flags_the_wrong_blocker_count(workdir: Path) -> None:
-    blocked = _report(
-        _stage("review", "blocked", blockers=2), _stage("deliver", "blocked", blockers=2)
-    )
+    blocked = _report(_stage("review", "blocked", blockers=2), _stage("deliver", "blocked", blockers=2))
     assert check(_eval(blockers=0), blocked, workdir) == ["blockers: expected 0, got 2"]
     assert check(_eval(blockers=2), blocked, workdir) == []
     assert check(_eval(blockers=1), _report(_stage("intent")), workdir) == [
@@ -208,9 +202,7 @@ def test_check_flags_the_wrong_blocker_count(workdir: Path) -> None:
 
 def test_check_reads_the_expected_label_off_the_published_pr(workdir: Path, tmp_path: Path) -> None:
     pr = tmp_path / "pr.md"
-    pr.write_text(
-        "# [BLOCKED] EVAL-X\n\nlabels: factory, agent-authored, factory:blocked\n", "utf-8"
-    )
+    pr.write_text("# [BLOCKED] EVAL-X\n\nlabels: factory, agent-authored, factory:blocked\n", "utf-8")
     report = _report(
         _stage("review", "blocked", blockers=1),
         _stage("deliver", "blocked", blockers=1),
@@ -234,12 +226,8 @@ def test_check_flags_a_blocked_label_on_a_clean_pr(workdir: Path, tmp_path: Path
 def test_delivered_labels_falls_back_to_the_deliver_counters() -> None:
     """No readable pr.md (a GitHub url needs a token): the deliver counters stand in."""
     assert delivered_labels(_clean_report()) == []
-    assert delivered_labels(_report(_stage("deliver", "blocked", blockers=1))) == [
-        "factory:blocked"
-    ]
-    assert delivered_labels(_report(_stage("deliver", "blocked", rejected=1))) == [
-        "factory:rejected"
-    ]
+    assert delivered_labels(_report(_stage("deliver", "blocked", blockers=1))) == ["factory:blocked"]
+    assert delivered_labels(_report(_stage("deliver", "blocked", rejected=1))) == ["factory:rejected"]
     assert delivered_labels(_report(_stage("intent"))) is None
 
 
@@ -311,9 +299,7 @@ def test_baseline_diff_reports_only_regressions() -> None:
 def test_baseline_diff_flags_an_eval_that_left_the_suite() -> None:
     baseline = score([EvalOutcome(id="A"), EvalOutcome(id="B")])
     current = score([EvalOutcome(id="A")])
-    assert baseline_diff(current, baseline) == [
-        "B: passed in the baseline but is no longer in the suite"
-    ]
+    assert baseline_diff(current, baseline) == ["B: passed in the baseline but is no longer in the suite"]
 
 
 def test_load_baseline_rejects_a_non_score_file(tmp_path: Path) -> None:
@@ -327,9 +313,7 @@ def test_load_baseline_rejects_a_non_score_file(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_two_evals_run_end_to_end_with_the_scripted_agent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_two_evals_run_end_to_end_with_the_scripted_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """One clean eval and the blocked one, through the same pipeline the CLI walks (~10 s).
 
     This is the test that would catch a prompt, guard or stage change the synthetic reports

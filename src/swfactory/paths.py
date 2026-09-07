@@ -30,8 +30,7 @@ def validate_identifier(value: str, *, field: str = "identifier") -> str:
 
     if not _ID_RE.fullmatch(value) or value in {".", ".."}:
         raise ValueError(
-            f"{field} must be 1-128 characters: letters, digits, '.', '_' or '-', "
-            "starting with a letter or digit"
+            f"{field} must be 1-128 characters: letters, digits, '.', '_' or '-', starting with a letter or digit"
         )
     return value
 
@@ -40,9 +39,7 @@ def validate_run_id(value: str) -> str:
     """Return a bounded run id suitable for scratch paths and sandbox names."""
 
     if not _RUN_ID_RE.fullmatch(value):
-        raise ValueError(
-            "run_id must be 1-32 letters, digits, '_' or '-', starting with a letter or digit"
-        )
+        raise ValueError("run_id must be 1-32 letters, digits, '_' or '-', starting with a letter or digit")
     return value
 
 
@@ -133,9 +130,7 @@ def confined_posix_path(root: str, value: str) -> str:
     """POSIX equivalent of :func:`confined_path` for remote sandbox paths."""
 
     boundary = posixpath.normpath(root)
-    candidate = posixpath.normpath(
-        value if value.startswith("/") else posixpath.join(boundary, value)
-    )
+    candidate = posixpath.normpath(value if value.startswith("/") else posixpath.join(boundary, value))
     try:
         inside = posixpath.commonpath((boundary, candidate)) == boundary
     except ValueError:

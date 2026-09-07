@@ -38,9 +38,7 @@ def _tree_digest(root: Path) -> dict[str, str]:
 
 
 def _git(*args: str, cwd: Path) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
-    ).stdout
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
 
 
 @pytest.fixture(scope="module")
@@ -97,10 +95,7 @@ def test_stage_log_lives_on_the_orchestrator_and_is_committed(run) -> None:
     """<run_dir>/state/stages.jsonl is authoritative; deliver copies it (and the hook log, absent
     for a scripted agent) into {art}/agent/ so the audit trail survives the sandbox."""
     report, tmp, _ = run
-    log = [
-        json.loads(line)
-        for line in (tmp / "run" / "state" / "stages.jsonl").read_text().splitlines()
-    ]
+    log = [json.loads(line) for line in (tmp / "run" / "state" / "stages.jsonl").read_text().splitlines()]
     assert [r["stage"] for r in log] == [
         "intent",
         "spec",
@@ -171,10 +166,7 @@ def test_rerun_with_same_run_dir_skips_every_stage_but_deliver(run, tmp_path: Pa
     assert by["plan"].preview.startswith("# Plan — DEMO-1\n")
     assert again.tests_passed is True and again.total_cost_usd == 0.0
     assert again.pr_url == f"file://{(tmp_path / 'run' / 'pr.md').resolve()}"
-    log = [
-        json.loads(line)
-        for line in (tmp_path / "run" / "state" / "stages.jsonl").read_text().splitlines()
-    ]
+    log = [json.loads(line) for line in (tmp_path / "run" / "state" / "stages.jsonl").read_text().splitlines()]
     assert len(log) == 12 and [r["status"] for r in log[6:]] == ["skipped"] * 5 + ["ok"]
 
 
@@ -258,9 +250,7 @@ def test_bare_remote_has_branch_with_trailers(run) -> None:
     for c in commits:
         assert c.startswith("swfactory-bot\n")
         assert f"Factory-Run: {RUN_ID}" in c and "Agent: scripted" in c
-    stages = _git(
-        "log", "--format=%(trailers:key=Factory-Stage,valueonly)", f"main..{branch}", cwd=remote
-    )
+    stages = _git("log", "--format=%(trailers:key=Factory-Stage,valueonly)", f"main..{branch}", cwd=remote)
     assert stages.split() == ["deliver", "fix", "build"]
     files = _git("ls-tree", "-r", "--name-only", branch, cwd=remote)
     assert f"{ART}/metrics.json" in files and "tests/test_percent_change.py" in files
@@ -356,9 +346,7 @@ def _log(tmp_path: Path, *records: dict) -> None:
 
     state = tmp_path / "run" / "state"
     state.mkdir(parents=True, exist_ok=True)
-    (state / "stages.jsonl").write_text(
-        "".join(StageResult(**r).model_dump_json() + "\n" for r in records)
-    )
+    (state / "stages.jsonl").write_text("".join(StageResult(**r).model_dump_json() + "\n" for r in records))
 
 
 def test_forged_sandbox_artifact_does_not_skip_a_stage(tmp_path: Path) -> None:

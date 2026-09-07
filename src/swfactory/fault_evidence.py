@@ -50,9 +50,7 @@ def generate(seed: int, *, steps: int, count: int, targets: Iterable[str]) -> Fa
     return FaultPlan(seed, tuple(sorted(faults, key=lambda f: (f.at_step, f.kind, f.target))))
 
 
-def write_evidence(
-    root: Path, *, plan: FaultPlan, verdicts: dict, metrics: dict, timeline: list[dict]
-) -> Path:
+def write_evidence(root: Path, *, plan: FaultPlan, verdicts: dict, metrics: dict, timeline: list[dict]) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     bundle = {
         "schema_version": 1,

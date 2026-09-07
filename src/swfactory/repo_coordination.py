@@ -44,20 +44,14 @@ def coordinate(
         for peer in concurrent
         if peer.repo == job.repo and peer.target == job.target and peer.base_sha == job.base_sha
     ]
-    overlaps = sorted(
-        {path for peer in peers for path in job.touched_files.intersection(peer.touched_files)}
-    )
+    overlaps = sorted({path for peer in peers for path in job.touched_files.intersection(peer.touched_files)})
     stale = current_target_sha != job.observed_target_sha
 
     if overlaps and policy == StalePolicy.SERIALIZE:
-        return CoordinationDecision(
-            "serialize", stale, tuple(overlaps), False, "overlapping concurrent mutation set"
-        )
+        return CoordinationDecision("serialize", stale, tuple(overlaps), False, "overlapping concurrent mutation set")
     if stale:
         if policy == StalePolicy.BLOCK:
-            return CoordinationDecision(
-                "block", True, tuple(overlaps), False, "target moved since verification"
-            )
+            return CoordinationDecision("block", True, tuple(overlaps), False, "target moved since verification")
         if policy == StalePolicy.REBASE:
             return CoordinationDecision(
                 "rebase",

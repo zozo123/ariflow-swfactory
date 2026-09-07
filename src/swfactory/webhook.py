@@ -166,11 +166,7 @@ def repository_trigger(trigger: Trigger, repository: str) -> Trigger:
     blueprint = load(trigger.dag_id)
     if blueprint.name != trigger.dag_id:
         raise ValueError("blueprint name does not match the requested DAG")
-    targets = list(
-        dict.fromkeys(
-            target.repo for target in blueprint.targets if target.repo.casefold() == repository
-        )
-    )
+    targets = list(dict.fromkeys(target.repo for target in blueprint.targets if target.repo.casefold() == repository))
     if not targets:
         raise ValueError("webhook repository is not a target of this blueprint")
     return Trigger(trigger.dag_id, {**trigger.conf, "targets": targets})
@@ -223,11 +219,7 @@ def _safe_airflow_base(url: str, env: Mapping[str, str] | None = None) -> str:
                 _ = parsed.port
             except ValueError as error:
                 raise ValueError("Airflow URL has an invalid port") from error
-    allowed_http = {
-        item.strip().lower()
-        for item in env.get("SWF_AIRFLOW_HTTP_HOSTS", "").split(",")
-        if item.strip()
-    }
+    allowed_http = {item.strip().lower() for item in env.get("SWF_AIRFLOW_HTTP_HOSTS", "").split(",") if item.strip()}
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("Airflow URL must not contain credentials, query, or fragment")
     if parsed.scheme == "https" and host:
@@ -237,9 +229,7 @@ def _safe_airflow_base(url: str, env: Mapping[str, str] | None = None) -> str:
     raise ValueError("Airflow URL must use HTTPS; HTTP hosts require SWF_AIRFLOW_HTTP_HOSTS")
 
 
-def _post_json(
-    url: str, payload: Mapping[str, Any], *, headers: Mapping[str, str], opener: Opener
-) -> tuple[int, str]:
+def _post_json(url: str, payload: Mapping[str, Any], *, headers: Mapping[str, str], opener: Opener) -> tuple[int, str]:
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -251,9 +241,7 @@ def _post_json(
         return int(getattr(resp, "status", 200)), resp.read().decode("utf-8", errors="replace")
 
 
-def airflow_token(
-    url: str, username: str, password: str, opener: Opener = _NO_REDIRECT_OPENER
-) -> str:
+def airflow_token(url: str, username: str, password: str, opener: Opener = _NO_REDIRECT_OPENER) -> str:
     """``POST {url}/auth/token {"username", "password"}`` -> the JWT ``access_token``.
 
     Airflow 3.3.1 simple auth manager; the generated admin password lives in
@@ -275,9 +263,7 @@ def airflow_token(
     return token
 
 
-def trigger_airflow(
-    trigger: Trigger, *, airflow_url: str, token: str, opener: Opener = _NO_REDIRECT_OPENER
-) -> str:
+def trigger_airflow(trigger: Trigger, *, airflow_url: str, token: str, opener: Opener = _NO_REDIRECT_OPENER) -> str:
     """``POST {airflow_url}/api/v2/dags/{dag_id}/dagRuns`` with ``trigger.body()`` and a Bearer
     token. An identified trigger must return its exact run identity and configuration. After a
     409, GET that run and compare its evidence; a conflict alone is never a successful receipt.
@@ -313,15 +299,9 @@ def trigger_airflow(
             raise RuntimeError("Airflow returned an invalid run receipt") from None
         return text.strip()
     if trigger.dag_run_id is not None:
-        if not isinstance(data, Mapping) or not all(
-            key in data for key in ("dag_id", "dag_run_id", "conf")
-        ):
+        if not isinstance(data, Mapping) or not all(key in data for key in ("dag_id", "dag_run_id", "conf")):
             raise RuntimeError("Airflow returned an incomplete run receipt")
-        if (
-            data["dag_id"] != trigger.dag_id
-            or data["dag_run_id"] != trigger.dag_run_id
-            or data["conf"] != trigger.conf
-        ):
+        if data["dag_id"] != trigger.dag_id or data["dag_run_id"] != trigger.dag_run_id or data["conf"] != trigger.conf:
             raise DeliveryConflict("Airflow run identity or configuration differs from delivery")
         return trigger.dag_run_id
     run_id = data.get("dag_run_id") if isinstance(data, Mapping) else None
@@ -390,8 +370,7 @@ def make_handler(
                     return
                 alive = dispatcher is not None and dispatcher.thread.is_alive()
                 capacity = (
-                    sum(summary["counts"][state] for state in ("pending", "dispatching", "dead"))
-                    < inbox.max_pending
+                    sum(summary["counts"][state] for state in ("pending", "dispatching", "dead")) < inbox.max_pending
                 )
                 ready = alive and capacity
                 self._reply(200 if ready else 503, {"ok": ready, **summary})
@@ -426,9 +405,7 @@ def make_handler(
                 return
             delivery = self.headers.get("X-GitHub-Delivery", "-")
             event = self.headers.get("X-GitHub-Event", "")
-            if secret is not None and not verify_signature(
-                secret, body, self.headers.get(SIGNATURE_HEADER)
-            ):
+            if secret is not None and not verify_signature(secret, body, self.headers.get(SIGNATURE_HEADER)):
                 self._reply(401, {"error": "bad signature"}, delivery, event)
                 return
             try:
@@ -444,9 +421,7 @@ def make_handler(
                 self._enqueue(trigger, payload, body, delivery, event)
                 return
             try:
-                run_id = trigger_airflow(
-                    trigger, airflow_url=airflow_url, token=token_provider(), opener=opener
-                )
+                run_id = trigger_airflow(trigger, airflow_url=airflow_url, token=token_provider(), opener=opener)
             except urllib.error.HTTPError as e:
                 detail = e.read().decode("utf-8", errors="replace")[:500]
                 self._reply(
@@ -457,9 +432,7 @@ def make_handler(
                 )
                 return
             except (urllib.error.URLError, OSError, RuntimeError, ValueError) as e:
-                self._reply(
-                    502, {"error": f"airflow unreachable: {e}", "dag_id": trigger.dag_id}, delivery
-                )
+                self._reply(502, {"error": f"airflow unreachable: {e}", "dag_id": trigger.dag_id}, delivery)
                 return
             self._reply(
                 202,
@@ -500,9 +473,7 @@ def make_handler(
                 self._reply(422, {"error": "blueprint is not installed"}, delivery_id, event)
                 return
             except ValueError:
-                self._reply(
-                    422, {"error": "invalid delivery or repository route"}, delivery_id, event
-                )
+                self._reply(422, {"error": "invalid delivery or repository route"}, delivery_id, event)
                 return
             except (InboxFull, sqlite3.Error, OSError):
                 self._reply(503, {"error": "inbox unavailable or full"}, delivery_id, event)
@@ -523,9 +494,7 @@ def make_handler(
                 event,
             )
 
-        def _reply(
-            self, status: int, doc: Mapping[str, Any], delivery: str = "-", event: str = ""
-        ) -> None:
+        def _reply(self, status: int, doc: Mapping[str, Any], delivery: str = "-", event: str = "") -> None:
             data = json.dumps(doc).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")

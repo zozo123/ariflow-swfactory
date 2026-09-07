@@ -86,9 +86,7 @@ class GitSandbox:
     def close(self) -> None: ...
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
-        p = subprocess.run(
-            ["bash", "-lc", cmd], cwd=cwd or self.workdir, capture_output=True, text=True
-        )
+        p = subprocess.run(["bash", "-lc", cmd], cwd=cwd or self.workdir, capture_output=True, text=True)
         return RunResult(p.returncode, p.stdout, p.stderr, 0.0)
 
     def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
@@ -114,9 +112,7 @@ def _git(repo: Path, *args: str) -> str:
         "GIT_COMMITTER_NAME": "t",
         "GIT_COMMITTER_EMAIL": "t@t",
     }
-    return subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True, env=env
-    ).stdout
+    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True, env=env).stdout
 
 
 def _git_repo(tmp_path: Path) -> Path:
@@ -146,9 +142,7 @@ def test_read_only_stages_have_no_write_or_shell_tools() -> None:
 def test_non_write_policies_never_allow_edit_or_write() -> None:
     for stage, pol in POLICIES.items():
         if not pol.writes:
-            assert not any(
-                t.startswith(("Edit", "Write", "MultiEdit")) for t in pol.allowed_tools
-            ), stage
+            assert not any(t.startswith(("Edit", "Write", "MultiEdit")) for t in pol.allowed_tools), stage
         assert "WebFetch" in pol.disallowed_tools and "WebSearch" in pol.disallowed_tools
 
 
@@ -192,9 +186,7 @@ def test_claude_argv_has_required_flags_and_schema() -> None:
 
 def test_claude_argv_without_schema_and_with_model() -> None:
     pol = Policy(("Read",), model="claude-sonnet-4-5")
-    cmd = ClaudeAgent().argv(
-        prompt_path="p.md", out_path="o.json", policy=pol, schema=None, cfg=_claude_cfg()
-    )
+    cmd = ClaudeAgent().argv(prompt_path="p.md", out_path="o.json", policy=pol, schema=None, cfg=_claude_cfg())
     assert "--json-schema" not in cmd
     assert "--model claude-sonnet-4-5" in cmd
     build_cmd = ClaudeAgent().argv(
@@ -256,10 +248,7 @@ def test_claude_run_write_stage_installs_guard_from_factory_toml() -> None:
     sb = FakeSandbox(
         {
             ".factory/agent.build.1.json": json.dumps(envelope),
-            "factory.toml": (
-                '[commands]\ntest = "uv run pytest"\n[paths]\n'
-                'protected = ["factory.toml", "tests/"]\n'
-            ),
+            "factory.toml": ('[commands]\ntest = "uv run pytest"\n[paths]\nprotected = ["factory.toml", "tests/"]\n'),
             ".factory/agent.fix.2.json": json.dumps(envelope),
         }
     )
@@ -582,9 +571,7 @@ def test_scripted_patch_failure_is_error_and_read_only_stage_is_policy_error(
     )
     assert res.is_error and res.subtype == "error_patch_apply"
     with pytest.raises(StageError) as ei:
-        ScriptedAgent([fx]).run(
-            FakeSandbox(), stage="fix", iteration=1, policy=POLICIES["review"], schema=None, **args
-        )
+        ScriptedAgent([fx]).run(FakeSandbox(), stage="fix", iteration=1, policy=POLICIES["review"], schema=None, **args)
     assert ei.value.kind == "policy"
 
 
@@ -629,9 +616,7 @@ def test_guard_denies_protected_paths_and_allows_source(tmp_path: Path) -> None:
         **env,
     )
     assert denied.returncode == 2 and "protected" in denied.stderr
-    rel = _hook(
-        tmp_path, {"tool_name": "Write", "tool_input": {"file_path": "tests/test_b.py"}}, **env
-    )
+    rel = _hook(tmp_path, {"tool_name": "Write", "tool_input": {"file_path": "tests/test_b.py"}}, **env)
     assert rel.returncode == 2
     allowed = _hook(
         tmp_path,
@@ -668,13 +653,8 @@ def test_guard_bash_denylist(tmp_path: Path) -> None:
         r = _hook(tmp_path, {"tool_name": "Bash", "tool_input": {"command": cmd}})
         assert r.returncode == 2 and "denylist" in r.stderr, cmd
     for cmd in ("uv run pytest", "git diff", "git status"):
-        assert (
-            _hook(tmp_path, {"tool_name": "Bash", "tool_input": {"command": cmd}}).returncode == 0
-        ), cmd
-    assert (
-        _hook(tmp_path, {"tool_name": "Read", "tool_input": {"file_path": "tests/x"}}).returncode
-        == 0
-    )
+        assert _hook(tmp_path, {"tool_name": "Bash", "tool_input": {"command": cmd}}).returncode == 0, cmd
+    assert _hook(tmp_path, {"tool_name": "Read", "tool_input": {"file_path": "tests/x"}}).returncode == 0
 
 
 def test_guard_notebook_edit_uses_notebook_path(tmp_path: Path) -> None:

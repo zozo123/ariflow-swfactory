@@ -246,9 +246,7 @@ class ClaudeAgent:
         sb.write(prompt_path, prompt)
         if policy.writes:
             install_guard(sb, protected)
-        cmd = self.argv(
-            prompt_path=prompt_path, out_path=out_path, policy=policy, schema=schema, cfg=cfg
-        )
+        cmd = self.argv(prompt_path=prompt_path, out_path=out_path, policy=policy, schema=schema, cfg=cfg)
         # This distinct path lets srt/docker scope a real model credential to Claude. Gateway/cell
         # providers (islo/toolset) may provision authentication as a cell capability, but lifecycle
         # and verification never receive orchestrator SCM credentials.
@@ -270,9 +268,7 @@ class ClaudeAgent:
         return result
 
 
-def _parse_envelope(
-    raw: str, schema: type[BaseModel] | None, *, stderr: str
-) -> tuple[AgentResult, dict]:
+def _parse_envelope(raw: str, schema: type[BaseModel] | None, *, stderr: str) -> tuple[AgentResult, dict]:
     """Turn a ``claude --output-format json`` envelope into (AgentResult, envelope-minus-prose)."""
     try:
         env = json.loads(raw)
@@ -360,9 +356,7 @@ def _record(
         diff = sb.run("git add -N . && git diff HEAD")
         if diff.ok and diff.stdout.strip():
             header = f"# recorded by swfactory run {run_id}\n"
-            (record_dir / f"{stage}.{iteration}.patch").write_text(
-                header + diff.stdout, encoding="utf-8"
-            )
+            (record_dir / f"{stage}.{iteration}.patch").write_text(header + diff.stdout, encoding="utf-8")
 
 
 def _dumps(obj: Any) -> str:
@@ -377,9 +371,7 @@ class FixtureMissing(StageError):
 
     def __init__(self, stage: str, iteration: int, dirs: Sequence[Path]) -> None:
         where = ", ".join(str(d) for d in dirs)
-        super().__init__(
-            "agent", f"no fixture for stage={stage} iteration={iteration} in [{where}]"
-        )
+        super().__init__("agent", f"no fixture for stage={stage} iteration={iteration} in [{where}]")
 
 
 class ScriptedAgent:
@@ -477,9 +469,7 @@ def _validate_json(text: str, schema: type[BaseModel] | None) -> AgentResult:
         if schema is not None:
             schema.model_validate(data)
     except (ValueError, ValidationError) as e:
-        return AgentResult(
-            agent="scripted", text=str(e), is_error=True, subtype="error_schema_validation"
-        )
+        return AgentResult(agent="scripted", text=str(e), is_error=True, subtype="error_schema_validation")
     return AgentResult(agent="scripted", text=text, data=data)
 
 

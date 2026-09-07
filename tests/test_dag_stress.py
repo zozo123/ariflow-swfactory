@@ -152,9 +152,7 @@ def _env(home: Path) -> dict[str, str]:
 
 
 def _run(argv: list[str], *, cwd: Path, env: dict[str, str], timeout: int) -> str:
-    proc = subprocess.run(
-        argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout, check=False
-    )
+    proc = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout, check=False)
     tail = f"{proc.stdout[-4000:]}\n{proc.stderr[-4000:]}"
     assert proc.returncode == 0, f"{argv[-3:]} rc={proc.returncode}\n{tail}"
     return proc.stdout + proc.stderr
@@ -281,9 +279,7 @@ def test_each_job_publishes_its_own_pr_on_its_own_remote(stress: dict) -> None:
             text=True,
             check=True,
         ).stdout.split()
-        assert sorted(refs) == sorted(
-            ["refs/heads/main", f"refs/heads/factory/{issue_id}-{run_dir.name}"]
-        )
+        assert sorted(refs) == sorted(["refs/heads/main", f"refs/heads/factory/{issue_id}-{run_dir.name}"])
 
 
 def test_each_job_records_both_gates_and_its_own_metrics(stress: dict) -> None:
@@ -351,8 +347,6 @@ def test_multi_target_blueprint_expands_to_issues_x_targets(stress: dict) -> Non
         assert len(jobs) == len(issues) * targets
         assert [j["job_idx"] for j in jobs] == list(range(len(jobs)))
         # issue-major, target-minor: (i0,t0), (i0,t1), (i1,t0), ...
-        assert [(j["issue"], j["dir"]) for j in jobs] == [
-            (i, t.dir) for i in issues for t in bp.targets
-        ]
+        assert [(j["issue"], j["dir"]) for j in jobs] == [(i, t.dir) for i in issues for t in bp.targets]
     expanded = {mi for tid, mi, _s in stress["tis"] if tid.startswith("job.")}
     assert len(expanded) == len(ISSUES) * targets == len(bp.jobs(CONF))

@@ -133,9 +133,7 @@ def test_a_verified_archive_installs_and_the_binary_runs(tmp_path: Path, base_ur
         assert (tmp_path / "target" / "swf-completions" / f"swf.{shell}").is_file()
 
 
-def test_a_tampered_archive_is_refused_and_nothing_is_installed(
-    tmp_path: Path, base_url: str, release: dict
-) -> None:
+def test_a_tampered_archive_is_refused_and_nothing_is_installed(tmp_path: Path, base_url: str, release: dict) -> None:
     """The whole point of publishing SHA256SUMS. Nothing may land when the digest disagrees."""
     original = release["archive"].read_bytes()
     release["archive"].write_bytes(original + b"tampered")
@@ -148,9 +146,7 @@ def test_a_tampered_archive_is_refused_and_nothing_is_installed(
     assert not (tmp_path / "refused" / "swf").exists(), "a rejected download was installed anyway"
 
 
-def test_a_release_without_checksums_is_refused(
-    tmp_path: Path, base_url: str, release: dict
-) -> None:
+def test_a_release_without_checksums_is_refused(tmp_path: Path, base_url: str, release: dict) -> None:
     """No SHA256SUMS means the download cannot be verified, so it is not installed."""
     sums = release["dir"] / "SHA256SUMS"
     original = sums.read_text(encoding="utf-8")
@@ -164,9 +160,7 @@ def test_a_release_without_checksums_is_refused(
     assert not (tmp_path / "unverifiable" / "swf").exists()
 
 
-def test_a_missing_archive_names_the_release_instead_of_saving_the_404(
-    tmp_path: Path, base_url: str
-) -> None:
+def test_a_missing_archive_names_the_release_instead_of_saving_the_404(tmp_path: Path, base_url: str) -> None:
     """A 404 body written out as a tarball is the confusing failure this guards against."""
     proc = subprocess.run(
         ["sh", str(INSTALLER)],

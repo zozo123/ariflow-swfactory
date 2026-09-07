@@ -397,9 +397,7 @@ def test_srt_settings_written_with_workdir_and_protected(tmp_path, monkeypatch) 
     assert net["deniedDomains"] == []
 
 
-def test_srt_set_protected_rewrites_settings_and_run_resyncs_stale_file(
-    tmp_path, monkeypatch
-) -> None:
+def test_srt_set_protected_rewrites_settings_and_run_resyncs_stale_file(tmp_path, monkeypatch) -> None:
     """The contract is known only after setup seeds the workdir: ``set_protected`` must reach the
     kernel policy, and a fresh object over the same workdir (next DAG task) must not trust a
     settings file written with a different ``protected``."""
@@ -710,9 +708,7 @@ def test_docker_protected_prefixes_mounted_ro_only_when_present(tmp_path, monkey
     assert set(ro) == {f"{r}/.github:{r}/.github:ro", f"{r}/factory.toml:{r}/factory.toml:ro"}
 
 
-def test_docker_credentials_are_scoped_to_agent_process_and_passed_by_name(
-    tmp_path, monkeypatch
-) -> None:
+def test_docker_credentials_are_scoped_to_agent_process_and_passed_by_name(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://x")
     monkeypatch.setenv("GH_TOKEN", "ghp_secret")
@@ -750,9 +746,7 @@ def test_docker_credentials_are_scoped_to_agent_process_and_passed_by_name(
     assert "ANTHROPIC_API_KEY" not in _e_flags(seen["argv"])
 
 
-def test_docker_host_login_is_mounted_only_for_agent_process_when_present(
-    tmp_path, monkeypatch
-) -> None:
+def test_docker_host_login_is_mounted_only_for_agent_process_when_present(tmp_path, monkeypatch) -> None:
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setattr(sandbox_mod.Path, "home", classmethod(lambda cls: home))
@@ -852,9 +846,7 @@ def test_make_sandbox_docker(tmp_path, monkeypatch) -> None:
 
     host = make_sandbox(Config(issue="42", sandbox="docker", docker_credentials="host"), "42")
     assert isinstance(host, DockerSandbox) and host.credentials == "host" and host.pass_env == ()
-    host = make_sandbox(
-        Config(issue="42", sandbox="docker", agent="claude", docker_credentials="host"), "42"
-    )
+    host = make_sandbox(Config(issue="42", sandbox="docker", agent="claude", docker_credentials="host"), "42")
     assert host.pass_env == ()  # host login OR api key, never both
 
     scripted = make_sandbox(Config(issue="42", sandbox="docker"), "42")
@@ -1059,11 +1051,7 @@ def test_toolset_sbx_policy_options_are_backend_specific(monkeypatch, backend):
         toolset_sbx_image="factory-image:test",
     )
     make_sandbox(cfg, "42")
-    assert seen == (
-        {"host_network_policy": "deny-all", "image": "factory-image:test"}
-        if backend == "sbx"
-        else {}
-    )
+    assert seen == ({"host_network_policy": "deny-all", "image": "factory-image:test"} if backend == "sbx" else {})
 
 
 @pytest.mark.parametrize("failure", ["exception", "nonzero"])

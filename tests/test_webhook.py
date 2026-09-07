@@ -83,9 +83,7 @@ class FakeOpener:
             raise self.fail
         if req.full_url.endswith("/auth/token"):
             return FakeResponse(json.dumps({"access_token": "jwt-123"}).encode(), 201)
-        return FakeResponse(
-            json.dumps({"dag_run_id": "manual__2026-01-01", "state": "queued"}).encode(), 200
-        )
+        return FakeResponse(json.dumps({"dag_run_id": "manual__2026-01-01", "state": "queued"}).encode(), 200)
 
 
 def sign(body: bytes, secret: str = SECRET) -> str:
@@ -205,10 +203,7 @@ def test_airflow_rejects_unsafe_credential_transport(url: str) -> None:
 
 
 def test_authenticated_default_opener_refuses_redirects() -> None:
-    assert (
-        webhook._NoRedirect().redirect_request(None, None, 302, "Found", {}, "https://evil.example")
-        is None
-    )
+    assert webhook._NoRedirect().redirect_request(None, None, 302, "Found", {}, "https://evil.example") is None
 
 
 def test_airflow_token_posts_credentials() -> None:
@@ -234,9 +229,7 @@ def test_airflow_token_rejects_bad_response() -> None:
 
 def test_trigger_airflow_url_headers_and_body() -> None:
     opener = FakeOpener()
-    run_id = trigger_airflow(
-        Trigger("hotfix", {"issues": ["42"]}), airflow_url=AIRFLOW + "/", token="T", opener=opener
-    )
+    run_id = trigger_airflow(Trigger("hotfix", {"issues": ["42"]}), airflow_url=AIRFLOW + "/", token="T", opener=opener)
     assert run_id == "manual__2026-01-01"
     (call,) = opener.calls
     assert call["url"] == f"{AIRFLOW}/api/v2/dags/hotfix/dagRuns"
@@ -260,9 +253,7 @@ def test_token_provider_from_env_static_token() -> None:
 
 def test_token_provider_from_env_logs_in_per_call() -> None:
     opener = FakeOpener()
-    provider = webhook.token_provider_from_env(
-        AIRFLOW, {"AIRFLOW_USER": "admin", "AIRFLOW_PASSWORD": "pw"}, opener
-    )
+    provider = webhook.token_provider_from_env(AIRFLOW, {"AIRFLOW_USER": "admin", "AIRFLOW_PASSWORD": "pw"}, opener)
     assert provider() == "jwt-123"
     assert provider() == "jwt-123"
     assert [c["url"] for c in opener.calls] == [f"{AIRFLOW}/auth/token"] * 2
