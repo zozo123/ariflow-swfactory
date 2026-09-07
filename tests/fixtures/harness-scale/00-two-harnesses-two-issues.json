@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "name": "two independent harnesses can drive different cells on one repo",
+  "repo": "owner/repo",
+  "actions": [
+    {"op": "submit", "session": "codex:session-a", "issue": "101", "request_id": "a"},
+    {"op": "submit", "session": "claude:session-b", "issue": "102", "request_id": "b"}
+  ],
+  "expect": {
+    "active_admissions": 2,
+    "queued_admissions": 0,
+    "cells": 2,
+    "active_cells": 2,
+    "busy": 0,
+    "stale": 0,
+    "duplicate_submissions": 0,
+    "duplicate_operations": 0,
+    "max_epoch": 1
+  }
+}
