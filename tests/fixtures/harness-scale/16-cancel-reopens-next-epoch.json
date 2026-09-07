@@ -1,0 +1,11 @@
+{
+  "schema_version":1,
+  "name":"cancelled cell can be reactivated only at the next epoch",
+  "repo":"owner/repo",
+  "actions":[
+    {"op":"submit","session":"codex:a","issue":"306","request_id":"a"},
+    {"op":"cancel","request_id":"a"},
+    {"op":"submit","session":"claude:b","issue":"306","request_id":"b"}
+  ],
+  "expect":{"active_admissions":1,"queued_admissions":0,"cells":1,"active_cells":1,"busy":0,"stale":0,"duplicate_submissions":0,"duplicate_operations":0,"max_epoch":2}
+}
