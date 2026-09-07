@@ -285,7 +285,11 @@ STATE="queued"
 # stale-executor-event failure there — `job.approve_intent[0] = failed`, nine tasks
 # `upstream_failed` — on the same commit where it passes locally. The window is the instrument, and
 # how long the scheduler needs to reconcile depends on how loaded it is, so it is a knob.
-SETTLE_POLLS="${SWF_STRESS_SETTLE_POLLS:-2}"
+# Three polls (9 s), not two. Two was enough on a laptop and still reproduced the stale executor
+# event on a hosted runner, where the whole run finishes in ~40 s and the scheduler is contended.
+# The Rust client's own window is anchored to the server's `created_at` and holds at 5 s; this
+# harness has only its poll count, so it buys the same margin the blunt way.
+SETTLE_POLLS="${SWF_STRESS_SETTLE_POLLS:-3}"
 SEEN="$WORK/seen-gates" # counts consecutive sightings per gate; answered once it reaches SETTLE_POLLS
 : >"$SEEN"
 answered=0
