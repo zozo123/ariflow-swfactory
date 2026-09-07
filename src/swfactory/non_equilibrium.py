@@ -10,9 +10,9 @@ variables, not claims about literal thermodynamic matter.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Mapping, Sequence
 
 
 _EPS = 1e-12
@@ -235,8 +235,11 @@ def classify_phase(state: FactoryState, *, previous: Phase | None = None) -> Pha
         phase = Phase.LIQUID
         reasons.append("mobile adaptive regime without a dominant failure mode")
 
-    # Hysteresis: do not flip a stable liquid/crystal decision on a marginal crossing.
-    if previous in {Phase.LIQUID, Phase.CRYSTAL} and phase in {Phase.LIQUID, Phase.CRYSTAL} and previous is not phase:
+    if (
+        previous in {Phase.LIQUID, Phase.CRYSTAL}
+        and phase in {Phase.LIQUID, Phase.CRYSTAL}
+        and previous is not phase
+    ):
         boundary_distance = abs(order - 0.65)
         if boundary_distance < 0.08:
             phase = previous
@@ -281,7 +284,9 @@ def jarzynski_delta_free_energy(work_samples: Sequence[float], *, beta: float) -
         raise ValueError("at least one work sample is required")
     exponents = [-beta * float(work) for work in work_samples]
     maximum = max(exponents)
-    log_mean_exp = maximum + math.log(sum(math.exp(value - maximum) for value in exponents) / len(exponents))
+    log_mean_exp = maximum + math.log(
+        sum(math.exp(value - maximum) for value in exponents) / len(exponents)
+    )
     return -log_mean_exp / beta
 
 
@@ -326,7 +331,10 @@ def canonical_pitches(state: FactoryState) -> tuple[Pitch, ...]:
         Pitch(
             "recovery",
             (
-                (ControlAction.RECOVER, 2.0 * max(state.failure_fraction, state.blocked_fraction) - 1.0),
+                (
+                    ControlAction.RECOVER,
+                    2.0 * max(state.failure_fraction, state.blocked_fraction) - 1.0,
+                ),
                 (ControlAction.CLEANUP, 2.0 * debt - 1.0),
             ),
         ),
@@ -341,7 +349,10 @@ def canonical_pitches(state: FactoryState) -> tuple[Pitch, ...]:
             "security",
             (
                 (ControlAction.VERIFY, 2.0 * state.security_refusal_fraction - 1.0),
-                (ControlAction.THROTTLE, 2.0 * state.security_refusal_fraction - 1.0),
+                (
+                    ControlAction.THROTTLE,
+                    2.0 * state.security_refusal_fraction - 1.0,
+                ),
             ),
         ),
         Pitch(
@@ -398,22 +409,23 @@ def mix_pitches(
     if len(by_name) != len(pitches):
         raise ValueError("pitch model names must be unique")
 
-    # Reliability becomes an effective cost. Gibbs weighting preserves diversity while preferring
-    # models backed by stronger evidence.
     costs = {pitch.model: 1.0 - pitch.reliability for pitch in pitches}
     beta = 1.0 / effective_temperature
     weights = max_entropy_weights(costs, beta=beta)
 
-    # Regulatory-network couplings change model activity but never create a new authority.
     activity = dict(weights)
     for coupling in couplings:
         if coupling.source not in by_name or coupling.target not in by_name:
             continue
-        activity[coupling.target] *= math.exp(coupling.strength * weights[coupling.source])
+        activity[coupling.target] *= math.exp(
+            coupling.strength * weights[coupling.source]
+        )
 
     floor = minimum_model_weight / len(pitches)
     normalizer = sum(max(floor, value) for value in activity.values())
-    model_weights = {name: max(floor, value) / normalizer for name, value in activity.items()}
+    model_weights = {
+        name: max(floor, value) / normalizer for name, value in activity.items()
+    }
 
     action_utilities = {action: 0.0 for action in ControlAction}
     for pitch in pitches:
@@ -421,7 +433,6 @@ def mix_pitches(
         for action in ControlAction:
             action_utilities[action] += weight * pitch.utility(action)
 
-    # Phase is a context field, not a scheduler. It biases the ensemble without overriding it.
     if phase.phase is Phase.CRYSTAL:
         action_utilities[ControlAction.VERIFY] += 0.15
         action_utilities[ControlAction.PROMOTE] += 0.10
@@ -440,12 +451,16 @@ def mix_pitches(
         for action, utility in action_utilities.items()
     }
     action_normalizer = sum(raw.values())
-    probabilities = {action: value / action_normalizer for action, value in raw.items()}
+    probabilities = {
+        action: value / action_normalizer for action, value in raw.items()
+    }
 
     disagreement = shannon_entropy(list(probabilities.values()), normalize=True)
     return EnsembleDecision(
         phase=phase,
-        action_probabilities=tuple(sorted(probabilities.items(), key=lambda item: item[0].value)),
+        action_probabilities=tuple(
+            sorted(probabilities.items(), key=lambda item: item[0].value)
+        ),
         model_weights=tuple(sorted(model_weights.items())),
         disagreement_entropy=disagreement,
         entropy_production=0.0,
