@@ -22,10 +22,11 @@ class WorkPlan:
 def compile_workgraph(nodes: Iterable[WorkNode], *, max_width: int = 7) -> WorkPlan:
     if max_width < 1 or max_width > 7:
         raise ValueError("inner workgraph width must be between 1 and 7")
-    rows = {node.node_id: node for node in nodes}
+    materialized = tuple(nodes)
+    rows = {node.node_id: node for node in materialized}
     if not rows:
         return WorkPlan((), max_width)
-    if len(rows) != len(list(rows)):
+    if len(rows) != len(materialized):
         raise ValueError("duplicate node id")
     remaining = set(rows)
     emitted: set[str] = set()
