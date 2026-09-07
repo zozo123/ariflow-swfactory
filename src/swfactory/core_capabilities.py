@@ -292,11 +292,7 @@ class CoreCapabilityRuntime:
     def inspect(self, cell_id: str) -> dict[str, Any]:
         """Return the operator-visible core state without adding business logic."""
         cell = self.cells.get(cell_id)
-        unresolved = [
-            row
-            for row in self.journal.unresolved(limit=1000)
-            if row.get("cell_id") == cell_id
-        ]
+        unresolved = [row for row in self.journal.unresolved(limit=1000) if row.get("cell_id") == cell_id]
         verified, evidence_tail = self.evidence.verify(cell_id)
         return {
             "schema_version": 1,
@@ -408,17 +404,10 @@ class CoreCapabilityRuntime:
             record_payload = record.get("payload") or {}
             if record_payload.get("operation_key") != envelope.operation_key:
                 continue
-            if (
-                int(record.get("epoch", -1)) != envelope.epoch
-                or record.get("policy_digest") != envelope.policy_digest
-            ):
-                raise CoreCapabilityError(
-                    "operation key already has evidence for a different Cell epoch or policy"
-                )
+            if int(record.get("epoch", -1)) != envelope.epoch or record.get("policy_digest") != envelope.policy_digest:
+                raise CoreCapabilityError("operation key already has evidence for a different Cell epoch or policy")
             if record.get("kind") != kind:
-                raise CoreCapabilityError(
-                    "operation key already has evidence for a different mutation kind"
-                )
+                raise CoreCapabilityError("operation key already has evidence for a different mutation kind")
             return record
         return self.evidence.mutation(envelope, kind=kind, payload=payload)
 

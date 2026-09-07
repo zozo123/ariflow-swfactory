@@ -95,9 +95,7 @@ def test_activation_replay_converges_on_same_cell_and_policy_evidence(
     assert first["cell_id"] == second["cell_id"]
     assert first["epoch"] == second["epoch"] == 1
     policy_events = [
-        row
-        for row in runtime.evidence.writer.read(first["cell_id"])
-        if row.get("kind") == "policy_activation"
+        row for row in runtime.evidence.writer.read(first["cell_id"]) if row.get("kind") == "policy_activation"
     ]
     assert len(policy_events) == 1
 
@@ -127,9 +125,7 @@ def test_core_external_effect_is_fenced_replayable_and_evidenced(
     assert second.result == first.result
 
     events = [
-        event
-        for event in runtime.cells.history(cell["cell_id"])
-        if event["operation_key"] == first.operation_key
+        event for event in runtime.cells.history(cell["cell_id"]) if event["operation_key"] == first.operation_key
     ]
     assert len(events) == 1
     assert events[0]["kind"] == "external_mutation"
@@ -244,17 +240,9 @@ def test_airflow_binding_is_idempotent_but_conflicts_fail(
     runtime: CoreCapabilityRuntime,
 ) -> None:
     _, cell, airflow, _ = prepared(runtime)
-    before = [
-        row
-        for row in runtime.evidence.writer.read(cell["cell_id"])
-        if row.get("kind") == "airflow_bound"
-    ]
+    before = [row for row in runtime.evidence.writer.read(cell["cell_id"]) if row.get("kind") == "airflow_bound"]
     assert runtime.bind_airflow(airflow)["airflow_run_id"] == airflow.run_id
-    after = [
-        row
-        for row in runtime.evidence.writer.read(cell["cell_id"])
-        if row.get("kind") == "airflow_bound"
-    ]
+    after = [row for row in runtime.evidence.writer.read(cell["cell_id"]) if row.get("kind") == "airflow_bound"]
     assert len(before) == len(after) == 1
 
     with pytest.raises(CoreCapabilityError, match="different Airflow run"):

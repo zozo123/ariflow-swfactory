@@ -14,7 +14,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-
 _EPS = 1e-12
 
 
@@ -205,10 +204,7 @@ def classify_phase(state: FactoryState, *, previous: Phase | None = None) -> Pha
     """
     state.validate()
     disorder = (
-        state.failure_fraction
-        + state.blocked_fraction
-        + state.evidence_gap
-        + state.security_refusal_fraction
+        state.failure_fraction + state.blocked_fraction + state.evidence_gap + state.security_refusal_fraction
     ) / 4.0
     order = max(0.0, min(1.0, 1.0 - 0.55 * disorder - 0.45 * state.configurational_entropy))
     mobility = min(1.0, state.total_flux / max(1.0, len(state.currents)))
@@ -235,11 +231,7 @@ def classify_phase(state: FactoryState, *, previous: Phase | None = None) -> Pha
         phase = Phase.LIQUID
         reasons.append("mobile adaptive regime without a dominant failure mode")
 
-    if (
-        previous in {Phase.LIQUID, Phase.CRYSTAL}
-        and phase in {Phase.LIQUID, Phase.CRYSTAL}
-        and previous is not phase
-    ):
+    if previous in {Phase.LIQUID, Phase.CRYSTAL} and phase in {Phase.LIQUID, Phase.CRYSTAL} and previous is not phase:
         boundary_distance = abs(order - 0.65)
         if boundary_distance < 0.08:
             phase = previous
@@ -284,9 +276,7 @@ def jarzynski_delta_free_energy(work_samples: Sequence[float], *, beta: float) -
         raise ValueError("at least one work sample is required")
     exponents = [-beta * float(work) for work in work_samples]
     maximum = max(exponents)
-    log_mean_exp = maximum + math.log(
-        sum(math.exp(value - maximum) for value in exponents) / len(exponents)
-    )
+    log_mean_exp = maximum + math.log(sum(math.exp(value - maximum) for value in exponents) / len(exponents))
     return -log_mean_exp / beta
 
 
@@ -417,15 +407,11 @@ def mix_pitches(
     for coupling in couplings:
         if coupling.source not in by_name or coupling.target not in by_name:
             continue
-        activity[coupling.target] *= math.exp(
-            coupling.strength * weights[coupling.source]
-        )
+        activity[coupling.target] *= math.exp(coupling.strength * weights[coupling.source])
 
     floor = minimum_model_weight / len(pitches)
     normalizer = sum(max(floor, value) for value in activity.values())
-    model_weights = {
-        name: max(floor, value) / normalizer for name, value in activity.items()
-    }
+    model_weights = {name: max(floor, value) / normalizer for name, value in activity.items()}
 
     action_utilities = {action: 0.0 for action in ControlAction}
     for pitch in pitches:
@@ -447,20 +433,15 @@ def mix_pitches(
 
     maximum = max(action_utilities.values())
     raw = {
-        action: math.exp((utility - maximum) / effective_temperature)
-        for action, utility in action_utilities.items()
+        action: math.exp((utility - maximum) / effective_temperature) for action, utility in action_utilities.items()
     }
     action_normalizer = sum(raw.values())
-    probabilities = {
-        action: value / action_normalizer for action, value in raw.items()
-    }
+    probabilities = {action: value / action_normalizer for action, value in raw.items()}
 
     disagreement = shannon_entropy(list(probabilities.values()), normalize=True)
     return EnsembleDecision(
         phase=phase,
-        action_probabilities=tuple(
-            sorted(probabilities.items(), key=lambda item: item[0].value)
-        ),
+        action_probabilities=tuple(sorted(probabilities.items(), key=lambda item: item[0].value)),
         model_weights=tuple(sorted(model_weights.items())),
         disagreement_entropy=disagreement,
         entropy_production=0.0,
