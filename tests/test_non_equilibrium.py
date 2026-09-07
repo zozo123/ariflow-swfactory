@@ -9,8 +9,8 @@ from swfactory.non_equilibrium import (
     Phase,
     barrier_crossing_probability,
     canonical_pitches,
-    classify_phase,
     classical_nucleation_barrier,
+    classify_phase,
     crooks_log_ratio,
     default_couplings,
     entropy_production,
@@ -109,17 +109,25 @@ def test_hysteresis_prevents_marginal_liquid_crystal_flip() -> None:
 def test_nucleation_barrier_and_kramers_probability_move_in_expected_direction() -> None:
     high_barrier = classical_nucleation_barrier(surface_penalty=2.0, driving_force=1.0)
     low_barrier = classical_nucleation_barrier(surface_penalty=1.0, driving_force=2.0)
-    assert high_barrier > low_barrier
-    assert barrier_crossing_probability(barrier=high_barrier, effective_temperature=1.0) < barrier_crossing_probability(
+    high_probability = barrier_crossing_probability(
+        barrier=high_barrier,
+        effective_temperature=1.0,
+    )
+    low_probability = barrier_crossing_probability(
         barrier=low_barrier,
         effective_temperature=1.0,
     )
+    assert high_barrier > low_barrier
+    assert high_probability < low_probability
 
 
 def test_jarzynski_constant_work_returns_that_work() -> None:
     estimate = jarzynski_delta_free_energy([3.0, 3.0, 3.0], beta=0.7)
     assert math.isclose(estimate, 3.0, rel_tol=1e-12)
-    assert math.isclose(crooks_log_ratio(work=3.0, delta_free_energy=3.0, beta=0.7), 0.0)
+    assert math.isclose(
+        crooks_log_ratio(work=3.0, delta_free_energy=3.0, beta=0.7),
+        0.0,
+    )
 
 
 def test_all_canonical_models_participate_in_the_mixture() -> None:
@@ -135,7 +143,10 @@ def test_all_canonical_models_participate_in_the_mixture() -> None:
     assert {name for name, _ in result.model_weights} == {pitch.model for pitch in pitches}
     assert all(weight > 0.0 for _, weight in result.model_weights)
     assert math.isclose(sum(weight for _, weight in result.model_weights), 1.0)
-    assert math.isclose(sum(probability for _, probability in result.action_probabilities), 1.0)
+    assert math.isclose(
+        sum(probability for _, probability in result.action_probabilities),
+        1.0,
+    )
 
 
 def test_recovery_pressure_changes_ensemble_toward_recovery_or_cleanup() -> None:
