@@ -555,7 +555,10 @@ impl Ops {
             let mut submitted: Submission = backend.call("/work-orders", body, cancel).await?;
             // The backend may see an internal Airflow hostname. Browser links use the context.
             submitted.url = self.runs()?.run_url(&submitted.run());
-            submitted.harness = request.harness.as_ref().map(|v| v.trim().to_ascii_lowercase());
+            submitted.harness = request
+                .harness
+                .as_ref()
+                .map(|v| v.trim().to_ascii_lowercase());
             submitted.factory_id = request
                 .factory_id
                 .as_ref()

@@ -270,7 +270,9 @@ async fn doctor_cmd(ctx: &Ctx) -> Result<Outcome> {
 // ---------------------------------------------------------------------------- submit
 
 fn nonempty_env(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|value| !value.trim().is_empty())
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
 }
 
 async fn submit_cmd(ctx: &Ctx, args: &SubmitArgs) -> Result<Outcome> {

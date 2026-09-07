@@ -87,11 +87,8 @@ impl SubmitRequest {
     /// It is deliberately encoded into the existing backend actor field, so old backends keep
     /// working while the current backend gains distinct admission/idempotency identity per session.
     pub fn origin_actor(&self) -> Result<Option<String>> {
-        let harness = clean_origin_component(
-            self.harness.as_deref(),
-            "harness",
-            MAX_HARNESS_CHARS,
-        )?;
+        let harness =
+            clean_origin_component(self.harness.as_deref(), "harness", MAX_HARNESS_CHARS)?;
         let factory_id = clean_origin_component(
             self.factory_id.as_deref(),
             "factory id",
@@ -102,12 +99,11 @@ impl SubmitRequest {
             (Some(harness), Some(factory_id)) => {
                 Ok(Some(format!("harness:{harness}:{factory_id}")))
             }
-            _ => Err(OpsError::usage(
-                "--harness and --factory-id must be supplied together",
-            )
-            .with_hint(
-                "swf submit --harness claude --factory-id claude-session-1 --issue 42",
-            )),
+            _ => Err(
+                OpsError::usage("--harness and --factory-id must be supplied together").with_hint(
+                    "swf submit --harness claude --factory-id claude-session-1 --issue 42",
+                ),
+            ),
         }
     }
 }
@@ -576,5 +572,4 @@ mod tests {
         request.factory_id = Some("not/a/session".into());
         assert!(request.origin_actor().is_err());
     }
-
 }
