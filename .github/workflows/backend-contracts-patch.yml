@@ -1,0 +1,426 @@
+name: backend-contracts-patch
+
+on:
+  push:
+    branches: [hardening/backend-contracts]
+    paths: [.github/workflows/backend-contracts-patch.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/backend-contracts
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Apply backend contract fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          service_path = Path("src/swfactory/backend/service.py")
+          service = service_path.read_text()
+          needle = '''    def submit(self, body: dict[str, Any]) -> dict[str, Any]:
+                  line = self._line(text(body, "line"))
+          '''
+          replacement = '''    def submit(self, body: dict[str, Any]) -> dict[str, Any]:
+                  if not self.capabilities()["mutation_ready"]:
+                      raise Refused(503, "backend is draining or not mutation-ready")
+                  line = self._line(text(body, "line"))
+          '''
+          if needle not in service:
+              raise SystemExit("submit guard anchor not found")
+          service = service.replace(needle, replacement, 1)
+
+          start = service.index('        if path == "/doctor":\n')
+          end = service.index('        if path == "/compatibility":\n', start)
+          doctor = '''        if path == "/doctor":
+                  caps = self.capabilities()
+                  ready = bool(caps["mutation_ready"])
+                  checks = [
+                      {
+                          "name": "factory backend",
+                          "ok": True,
+                          "status": "ok",
+                          "detail": "Python API v1",
+                          "fix": "",
+                          "required": True,
+                      },
+                      {
+                          "name": "factory cells",
+                          "ok": True,
+                          "status": "ok",
+                          "detail": f"durable CellStore schema v{SCHEMA_VERSION}",
+                          "fix": "",
+                          "required": True,
+                      },
+                      {
+                          "name": "mutation readiness",
+                          "ok": ready,
+                          "status": "ok" if ready else "warn",
+                          "detail": json.dumps(caps, sort_keys=True, separators=(",", ":")),
+                          "fix": "" if ready else "finish the drain or restore backend mutation readiness",
+                          "required": True,
+                      },
+                  ]
+                  try:
+                      health = self._checked_airflow("GET", "/monitor/health")
+                      for name in ("metadatabase", "scheduler"):
+                          healthy = (health.get(name) or {}).get("status") == "healthy"
+                          checks.append(
+                              {
+                                  "name": name,
+                                  "ok": healthy,
+                                  "status": "ok" if healthy else "fail",
+                                  "detail": "Airflow health",
+                                  "required": True,
+                                  "fix": "" if healthy else "restore the Airflow service",
+                              }
+                          )
+                      self._checked_airflow("GET", "/dags?limit=1")
+                      checks.append(
+                          {
+                              "name": "airflow auth",
+                              "ok": True,
+                              "status": "ok",
+                              "detail": "backend credentials accepted by Airflow",
+                              "fix": "",
+                              "required": True,
+                          }
+                      )
+                  except (Refused, ControlError, OSError):
+                      checks.append(
+                          {
+                              "name": "airflow",
+                              "ok": False,
+                              "status": "fail",
+                              "required": True,
+                              "detail": "Airflow is unavailable or authentication failed",
+                              "fix": "check AIRFLOW_URL and credentials on the backend",
+                          }
+                      )
+                  for tool, configured in (("gh", bool(self.repo)), ("islo", bool(self.owner))):
+                      present = bool(shutil.which(tool))
+                      checks.append(
+                          {
+                              "name": tool,
+                              "ok": present,
+                              "status": "ok" if present else "warn",
+                              "required": False,
+                              "detail": (
+                                  f"backend tool installed={present}, configured={configured}; credentials not probed"
+                              ),
+                              "fix": "" if present else f"install {tool} on the backend if needed",
+                          }
+                      )
+                  return checks
+          '''
+          service = service[:start] + doctor + service[end:]
+          service_path.write_text(service)
+
+          server_path = Path("src/swfactory/backend/server.py")
+          server = server_path.read_text()
+          server = server.replace(
+              'MAX_BODY = 16 * 1024 * 1024\n',
+              'DEFAULT_MAX_BODY = 64 * 1024\nSCM_MAX_BODY = 16 * 1024 * 1024\n',
+              1,
+          )
+          health_public = '''            if self.path == PREFIX + "/health":
+                          document = factory.capabilities()
+                          self.reply(
+                              200,
+                              {
+                                  "service": "swfactory",
+                                  "api_version": document["contracts"]["api"],
+                                  "cell_schema_version": document["contracts"]["cell"],
+                                  "mutation_ready": document["mutation_ready"],
+                              },
+                          )
+                          return True
+          '''
+          if health_public not in server:
+              raise SystemExit("public health anchor not found")
+          server = server.replace(health_public, "", 1)
+          auth_anchor = '''                if not hmac.compare_digest(credential.encode(), ("Bearer " + factory.token).encode()):
+                          raise Refused(401, "factory backend token required")
+          '''
+          auth_replacement = auth_anchor + '''                if self.command == "GET" and self.path == PREFIX + "/health":
+                          document = factory.capabilities()
+                          self.reply(
+                              200,
+                              {
+                                  "service": "swfactory",
+                                  "api_version": document["contracts"]["api"],
+                                  "cell_schema_version": document["contracts"]["cell"],
+                                  "mutation_ready": document["mutation_ready"],
+                              },
+                          )
+                          return
+          '''
+          if auth_anchor not in server:
+              raise SystemExit("auth anchor not found")
+          server = server.replace(auth_anchor, auth_replacement, 1)
+          limit_old = '''                length = int(self.headers.get("Content-Length", "0"))
+                          if not 0 <= length <= MAX_BODY:
+                              raise Refused(413, "request exceeds backend limit")
+          '''
+          limit_new = '''                length = int(self.headers.get("Content-Length", "0"))
+                          large_scm = self.path in {PREFIX + "/scm/publish", PREFIX + "/scm/open-issue"}
+                          body_limit = SCM_MAX_BODY if large_scm else DEFAULT_MAX_BODY
+                          if not 0 <= length <= body_limit:
+                              raise Refused(413, "request exceeds backend limit")
+          '''
+          if limit_old not in server:
+              raise SystemExit("body limit anchor not found")
+          server = server.replace(limit_old, limit_new, 1)
+          server_path.write_text(server)
+
+          compose_path = Path("deploy/docker/compose.yml")
+          compose = compose_path.read_text()
+          compose_anchor = '''      SWF_APPROVE: prompt
+                SWF_DOCKER_IMAGE: ${SWF_DOCKER_IMAGE:-swfactory-sandbox:local}
+          '''
+          compose_replacement = '''      SWF_APPROVE: prompt
+                # Managed Cell callbacks and backend-owned SCM need the worker to call the control plane.
+                SWF_BACKEND_URL: ${SWF_BACKEND_URL:-http://backend:8082}
+                SWF_BACKEND_TOKEN: ${SWF_BACKEND_TOKEN:-}
+                SWF_DOCKER_IMAGE: ${SWF_DOCKER_IMAGE:-swfactory-sandbox:local}
+          '''
+          if compose_anchor not in compose:
+              raise SystemExit("compose worker env anchor not found")
+          compose = compose.replace(compose_anchor, compose_replacement, 1)
+          backend_env_anchor = '''      SWF_BACKEND_TOKEN: ${SWF_BACKEND_TOKEN:-}
+                SWF_REPO: ${SWF_REPO:-}
+          '''
+          backend_env_replacement = '''      SWF_BACKEND_TOKEN: ${SWF_BACKEND_TOKEN:-}
+                SWF_BACKEND_URL: ${SWF_BACKEND_URL:-http://backend:8082}
+                SWF_REPO: ${SWF_REPO:-}
+          '''
+          if backend_env_anchor not in compose:
+              raise SystemExit("compose backend env anchor not found")
+          compose = compose.replace(backend_env_anchor, backend_env_replacement, 1)
+          compose_path.write_text(compose)
+
+          docs_path = Path("docs/factory-backend.md")
+          docs = docs_path.read_text()
+          docs = docs.replace('`src/swfactory/backend.py` is the network boundary.', '`src/swfactory/backend/` is the network boundary.', 1)
+          docs = docs.replace(
+              '''HTTPS and run `swfactory backend --host 0.0.0.0` on its private network. The API always requires
+          `Authorization: Bearer <SWF_BACKEND_TOKEN>`, including health. The token must be at least 32
+          non-whitespace characters. It grants factory operator authority, including approvals and cleanup;
+          this is a single trusted-operator deployment, not a multi-tenant authorization system.
+          ''',
+              '''HTTPS and run `swfactory backend --host 0.0.0.0` on its private network. Every factory-state API,
+          including `GET /v1/health`, requires `Authorization: Bearer <SWF_BACKEND_TOKEN>`. Only
+          `GET /v1/liveness` and `GET /v1/readiness` are deliberately public for infrastructure probes;
+          readiness discloses read/mutation readiness and the serving generation. The token must be at least
+          32 non-whitespace characters. It grants factory operator authority, including approvals and cleanup;
+          this is a single trusted-operator deployment, not a multi-tenant authorization system.
+          ''',
+              1,
+          )
+          docker_anchor = '''The `backend` service reads the generated Airflow login from the shared volume when explicit
+          Airflow credentials are absent. It publishes only loopback port 8082. The console profile keeps
+          existing Airflow-only deployments usable; starting the backend requires opting into the profile.
+          '''
+          docker_replacement = '''The `backend` service reads the generated Airflow login from the shared volume when explicit
+          Airflow credentials are absent. It publishes only loopback port 8082. Managed Airflow workers must
+          receive **both** `SWF_BACKEND_URL` and the same `SWF_BACKEND_TOKEN`; the shipped compose file wires
+          them to `http://backend:8082` when the console profile is used. These worker-side values are required
+          for durable Cell callbacks and backend-owned publication; they are not agent sandbox credentials.
+          The console profile keeps existing Airflow-only deployments usable; starting the backend requires
+          opting into the profile.
+          '''
+          if docker_anchor not in docs:
+              raise SystemExit("docker docs anchor not found")
+          docs = docs.replace(docker_anchor, docker_replacement, 1)
+
+          table_start = docs.index('| Route | Request | Response |\n')
+          table_end = docs.index('\nThe compatibility mount', table_start)
+          table = '''| Route | Request | Response / authority |
+          | --- | --- | --- |
+          | `GET /v1/liveness` | none | **public** minimal process liveness |
+          | `GET /v1/readiness` | none | **public** read/mutation readiness and serving generation |
+          | `GET /v1/health` | bearer token | authenticated API/cell contract versions and mutation readiness |
+          | `POST /v1/doctor` | `{}` | backend-host readiness checks in the Rust `Check` schema |
+          | `POST /v1/compatibility` | `{}` | versioned capability/contract document |
+          | `POST /v1/fleet` | `{}` | Cell, queue, cleanup and generation summary |
+          | `POST /v1/lines` | `{}` | installed line names, routes, gates and targets |
+          | `POST /v1/blueprints/preview` | line/issues/targets | validated mapped-work preview; read-only |
+          | `POST /v1/work-orders` | `line`, `issues`, optional `targets` | **mutation:** admission, Cell activation and Airflow dispatch |
+          | `POST /v1/queue` / `queue/inspect` | optional limit / work id | admission state; read-only |
+          | `POST /v1/operations` / `operations/inspect` | optional limit / operation key | mutation-journal inspection; read-only |
+          | `POST /v1/cells` / `cells/inspect` / `cells/history` | limit / Cell id | durable Cell state/evidence; read-only |
+          | `POST /v1/cells/transition` | Cell id, epoch, state, operation key | **mutation:** fenced lifecycle/cleanup transition |
+          | `POST /v1/evidence/verify` / `evidence/checkpoint` | Cell id | verify or checkpoint retained evidence |
+          | `POST /v1/workers` | `{}` | configured owner's active worker references |
+          | `POST /v1/workers/remove` | `name` | **mutation:** provider teardown after fresh ownership checks |
+          | `POST /v1/deliveries/prs` / `issues` | optional `label`, `limit` | normalized repository records |
+          | `POST /v1/deliveries/head` | `branch` | PR publication evidence, or null |
+          | `POST /v1/deliveries/checks` / `url` | `number` | check summary / browser URL |
+          | `POST /v1/metrics/runs` / `summary` | `{}` | committed metrics / aggregate |
+          | `POST /v1/state/runs` | optional `limit` | saved run summaries |
+          | `POST /v1/state/inspect` | `run_id` | ownership, journal health and interruption evidence |
+          | `POST /v1/scm/issue` | issue ref | authenticated issue fetch for managed workers; read-only |
+          | `POST /v1/scm/publish` | Cell epoch/policy + patch | **mutation:** fenced branch push + PR publication |
+          | `POST /v1/scm/open-issue` | Cell epoch/policy + issue | **mutation:** fenced GitHub issue creation |
+          '''
+          docs = docs[:table_start] + table + docs[table_end:]
+          docs = docs.replace(
+              '''Requests are bounded to 64 KiB and upstream responses to 16 MiB, with deadlines and redirects
+          disabled.''',
+              '''Ordinary request bodies are bounded to 64 KiB. Authenticated managed-SCM publication and
+          issue-creation routes may accept bodies up to 16 MiB; upstream responses remain bounded to 16 MiB.
+          Deadlines and redirects are disabled.''',
+              1,
+          )
+          docs_path.write_text(docs)
+
+          claude_path = Path("CLAUDE.md")
+          claude = claude_path.read_text().replace('`backend.py` API', '`backend/` API', 1)
+          claude_path.write_text(claude)
+
+          test_path = Path("tests/test_backend_contract_hardening.py")
+          test_path.write_text(r'''from __future__ import annotations
+
+          import http.client
+          import json
+          import threading
+          from pathlib import Path
+
+          import pytest
+
+          from swfactory.backend.server import make_server
+          from swfactory.backend.service import Factory, Refused
+
+
+          TOKEN = "t" * 32
+
+
+          class _ProbeFactory:
+              token = TOKEN
+              repo = ""
+
+              @staticmethod
+              def capabilities() -> dict[str, object]:
+                  return {
+                      "read_ready": True,
+                      "mutation_ready": True,
+                      "serving_generation": "test",
+                      "contracts": {"api": 1, "cell": 1},
+                  }
+
+
+          def _request(server, method: str, path: str, body: bytes = b"", *, auth: bool = False):
+              host, port = server.server_address
+              conn = http.client.HTTPConnection(host, port, timeout=3)
+              headers = {"Content-Length": str(len(body))}
+              if body:
+                  headers["Content-Type"] = "application/json"
+              if auth:
+                  headers["Authorization"] = f"Bearer {TOKEN}"
+              conn.request(method, path, body=body, headers=headers)
+              response = conn.getresponse()
+              payload = json.loads(response.read())
+              conn.close()
+              return response.status, payload
+
+
+          def test_only_liveness_and_readiness_are_public() -> None:
+              server = make_server(_ProbeFactory(), "127.0.0.1", 0)
+              thread = threading.Thread(target=server.serve_forever, daemon=True)
+              thread.start()
+              try:
+                  assert _request(server, "GET", "/v1/liveness")[0] == 200
+                  assert _request(server, "GET", "/v1/readiness")[0] == 200
+                  assert _request(server, "GET", "/v1/health")[0] == 401
+                  status, payload = _request(server, "GET", "/v1/health", auth=True)
+                  assert status == 200
+                  assert payload["api_version"] == 1
+              finally:
+                  server.shutdown()
+                  server.server_close()
+                  thread.join(timeout=3)
+
+
+          def test_default_body_limit_is_64k_but_managed_scm_gets_large_lane() -> None:
+              server = make_server(_ProbeFactory(), "127.0.0.1", 0)
+              thread = threading.Thread(target=server.serve_forever, daemon=True)
+              thread.start()
+              body = json.dumps({"body": "x" * (70 * 1024)}).encode()
+              try:
+                  assert _request(server, "POST", "/v1/doctor", body, auth=True)[0] == 413
+                  assert _request(server, "POST", "/v1/scm/open-issue", body, auth=True)[0] != 413
+              finally:
+                  server.shutdown()
+                  server.server_close()
+                  thread.join(timeout=3)
+
+
+          def test_drain_guard_precedes_admission_and_cell_activation(tmp_path: Path, monkeypatch) -> None:
+              monkeypatch.setenv("SWF_DRAIN", "1")
+              factory = Factory(
+                  token=TOKEN,
+                  airflow_url="http://127.0.0.1:9",
+                  root=tmp_path,
+                  state_root=tmp_path / "state",
+              )
+              try:
+                  with pytest.raises(Refused, match="draining") as direct:
+                      factory.submit({"line": "factory", "issues": ["42"]})
+                  assert direct.value.status == 503
+                  with pytest.raises(Refused, match="draining") as compat:
+                      factory.compatibility(
+                          "POST",
+                          "/dags/factory/dagRuns",
+                          {"conf": {"issues": ["42"]}},
+                      )
+                  assert compat.value.status == 503
+                  assert factory.cell_store.list() == []
+                  assert factory.control.admission.snapshot(limit=10)["active"] == []
+              finally:
+                  factory.close()
+
+
+          def test_backend_doctor_rows_round_trip_rust_check_shape(tmp_path: Path, monkeypatch) -> None:
+              monkeypatch.setenv("SWF_DRAIN", "1")
+              factory = Factory(
+                  token=TOKEN,
+                  airflow_url="http://127.0.0.1:9",
+                  root=tmp_path,
+                  state_root=tmp_path / "state",
+              )
+              try:
+                  rows = factory.operation("/doctor", {})
+                  assert rows
+                  for row in rows:
+                      assert isinstance(row["name"], str)
+                      assert isinstance(row["ok"], bool)
+                      assert isinstance(row.get("detail", ""), str)
+                      assert isinstance(row.get("fix", ""), str)
+                      assert isinstance(row["required"], bool)
+                  readiness = next(row for row in rows if row["name"] == "mutation readiness")
+                  assert readiness["ok"] is False
+                  assert json.loads(readiness["detail"])["mutation_ready"] is False
+              finally:
+                  factory.close()
+          ''').replace("\n          ", "\n").lstrip()
+          PY
+
+          uv sync
+          uv run ruff format src/swfactory/backend/service.py src/swfactory/backend/server.py tests/test_backend_contract_hardening.py
+          uv run ruff check src/swfactory/backend/service.py src/swfactory/backend/server.py tests/test_backend_contract_hardening.py
+          uv run pytest tests/test_backend_contract_hardening.py
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/swfactory/backend/service.py src/swfactory/backend/server.py deploy/docker/compose.yml docs/factory-backend.md CLAUDE.md tests/test_backend_contract_hardening.py
+          git commit -m 'backend: harden operator trust boundary [backend-patched]'
+          git push origin HEAD:hardening/backend-contracts
