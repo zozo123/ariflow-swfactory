@@ -1,0 +1,36 @@
+name: close-release-issues
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_path:
+        description: Checked-in explicit release issue manifest
+        required: true
+        type: string
+      apply:
+        description: Close the selected issues after validation
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  close-release-issues:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate release issue manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/close_release_issues.py "${{ inputs.manifest_path }}"
+
+      - name: Close only manifest-declared issues
+        if: inputs.apply
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/close_release_issues.py "${{ inputs.manifest_path }}" --apply
