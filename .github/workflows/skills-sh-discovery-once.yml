@@ -22,11 +22,13 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: "22"
 
       - name: Patch README with official skills.sh discovery links
-        shell: python
+        shell: bash
         run: |
+          set -euo pipefail
+          python <<'PY'
           from pathlib import Path
 
           path = Path("README.md")
@@ -74,6 +76,7 @@ Vercel `skills` CLI can find it directly from this repository.
               text = text.replace(marker, section + marker, 1)
 
           path.write_text(text)
+          PY
 
       - name: Validate Vercel skills discovery locally
         shell: bash
