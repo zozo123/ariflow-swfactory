@@ -25,7 +25,7 @@ jobs:
       - run: uv sync
       - name: Apply final hardening patch
         run: uv run python scripts/final_hardening_patch_once.py
-      - name: Normalize generated source and remove patcher
+      - name: Normalize generated source/tests and remove patcher
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -40,6 +40,14 @@ jobs:
           if text.count(old) != 1:
               raise SystemExit(f"expected one callback doctor fix string, found {text.count(old)}")
           path.write_text(text.replace(old, new, 1))
+
+          test_path = Path("tests/test_backend_service_contract.py")
+          test_text = test_path.read_text()
+          test_old = '    monkeypatch.setenv("AIRFLOW_TOKEN", "airflow-test-token")\n'
+          test_new = test_old + '    monkeypatch.setenv("SWF_BACKEND_TOKEN", TOKEN)\n'
+          if test_text.count(test_old) != 1:
+              raise SystemExit(f"expected one backend test env anchor, found {test_text.count(test_old)}")
+          test_path.write_text(test_text.replace(test_old, test_new, 1))
           PY
           rm scripts/final_hardening_patch_once.py
       - name: Canonical formatting
