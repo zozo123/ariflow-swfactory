@@ -25,7 +25,7 @@ jobs:
           set -euo pipefail
           mapfile -t rows < <(
             gh api --paginate "repos/${REPO}/issues?state=open&per_page=100" \
-              --jq ".[] | select(.pull_request == null and .number <= (${MAX_ISSUE} | tonumber)) | \"\(.node_id) \(.number)\""
+              --jq ".[] | select(.pull_request == null and .number <= ${MAX_ISSUE}) | \"\(.node_id) \(.number)\""
           )
 
           closed=0
@@ -36,7 +36,7 @@ jobs:
             if (( upper > ${#rows[@]} )); then upper=${#rows[@]}; fi
             for ((i=offset; i<upper; i++)); do
               read -r node number <<< "${rows[$i]}"
-              query+=" i${number}: closeIssue(input:{issueId:\"${node}\",stateReason:COMPLETED}) { issue { number state } }"
+              query+=" i${number}: closeIssue(input:{issueId:\"${node}\"}) { issue { number state } }"
             done
             query+=' }'
             gh api graphql -f query="$query" >/dev/null
@@ -44,7 +44,7 @@ jobs:
           done
 
           remaining=$(gh api -X GET search/issues \
-            -f q="repo:${REPO} is:issue is:open number:<=${MAX_ISSUE}" \
+            -f q="repo:${REPO} is:issue is:open" \
             --jq '.total_count')
-          echo "Closed ${closed} resolved backlog issues; remaining snapshot issues: ${remaining}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Closed ${closed} resolved backlog issues; remaining open issues: ${remaining}" | tee -a "$GITHUB_STEP_SUMMARY"
           test "$remaining" -eq 0
