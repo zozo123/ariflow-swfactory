@@ -39,12 +39,9 @@ jobs:
   # untested until this existed. It is not hypothetical: a race in `swf gates approve` failed four
   # of five of these runs while all eight CI jobs stayed green (#1199, fixed in #1198).
   #
-  # Both harnesses run, and the pair is the point. When the Rust one failed and the Python one
-  # passed on the same server, that is what proved the fault was in the client rather than in the
-  # factory — a single harness could not have told those apart.
-  #
-  # continue-on-error while its timing is learned on a slower runner than a laptop; promote it to
-  # blocking once it has been green for two weeks, the same way srt-smoke and docker-smoke were.
+  # Both harnesses always run. Their checkouts carry no persisted GitHub credential, and a failure
+  # in one harness cannot suppress the other. The final step reconstructs a red job from either
+  # failed outcome; the job remains non-blocking while timing is learned on hosted runners.
   live-gate-e2e:
     if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
@@ -52,6 +49,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
@@ -59,15 +58,30 @@ jobs:
         with: { workspaces: "rust" }
       - run: uv sync --group airflow
       - name: swf drives a live Airflow end to end (2 issues x 2 targets, 8 gates, 4 deliveries)
+        id: rust_harness
+        continue-on-error: true
         run: bash scripts/swf_e2e.sh
       - name: the Python control room answers the same gates on the same shape of run
+        id: python_harness
+        if: always()
+        continue-on-error: true
         run: bash scripts/stress_airflow.sh
-      - name: Keep the evidence when it fails
-        if: failure()
+      - name: Keep scheduler evidence when either harness fails
+        if: >-
+          always() &&
+          (steps.rust_harness.outcome != 'success' || steps.python_harness.outcome != 'success')
         run: |
-          # The scheduler log says WHY a gate failed; without it a red run is just a red run.
           find "${TMPDIR:-/tmp}" -maxdepth 2 -name 'standalone.log' -newermt '-1 hour' \
             -exec sh -c 'echo "== $1"; tail -200 "$1"' _ {} \; 2>/dev/null || true
+      - name: Propagate harness failures to the job result
+        if: always()
+        env:
+          RUST_HARNESS: ${{ steps.rust_harness.outcome }}
+          PYTHON_HARNESS: ${{ steps.python_harness.outcome }}
+        run: |
+          printf 'rust=%s python=%s\n' "$RUST_HARNESS" "$PYTHON_HARNESS"
+          test "$RUST_HARNESS" = success
+          test "$PYTHON_HARNESS" = success
 
   srt-smoke:
     if: github.event_name == 'push' || github.base_ref == 'main'
