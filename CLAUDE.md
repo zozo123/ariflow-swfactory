@@ -20,7 +20,7 @@ in `stages.py`. Details: README + docs/*.md.
 - `cargo test --manifest-path rust/Cargo.toml --workspace`, `cargo fmt`/`clippy -- -D warnings` —
   the `swf` operator binary in `rust/` (docs/swf.md). It drives the same Airflow/`gh`/`islo`
   interfaces as `control.py` only in explicit `--direct` mode. Normally it connects to the Python
-  `backend.py` API; service credentials and work-order validation live there. It runs no stage. `contract-equivalence` CI asserts both languages
+  `backend/` API package; service credentials and work-order validation live there. It runs no stage. `contract-equivalence` CI asserts both languages
   produce `tests/fixtures/contract/`; `scripts/swf_e2e.sh` is the live acceptance test.
 - `swfactory backend` serves API v1 on loopback:8082; requires `SWF_BACKEND_TOKEN`. See
   docs/factory-backend.md for the Rust/Python boundary, service credentials and migration.

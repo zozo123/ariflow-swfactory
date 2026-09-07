@@ -659,6 +659,30 @@ class Factory:
                     "required": True,
                 },
             ]
+            worker_url = (os.getenv("SWF_BACKEND_URL") or "").strip()
+            worker_token = os.getenv("SWF_BACKEND_TOKEN") or ""
+            worker_token_ok = len(worker_token) >= 32 and not any(c.isspace() for c in worker_token)
+            callback_ready = bool(worker_url) and worker_token_ok
+            checks.append(
+                {
+                    "name": "managed worker callback",
+                    "ok": callback_ready,
+                    "status": "ok" if callback_ready else "fail",
+                    "detail": (
+                        f"SWF_BACKEND_URL={'set' if worker_url else 'missing'}, "
+                        f"SWF_BACKEND_TOKEN={'valid' if worker_token_ok else 'missing/invalid'}"
+                    ),
+                    "required": True,
+                    "fix": (
+                        ""
+                        if callback_ready
+                        else (
+                            "export SWF_BACKEND_URL and the same SWF_BACKEND_TOKEN "
+                            "before starting Airflow scheduler/workers"
+                        )
+                    ),
+                }
+            )
             try:
                 health = self._checked_airflow("GET", "/monitor/health")
                 for name in ("metadatabase", "scheduler"):

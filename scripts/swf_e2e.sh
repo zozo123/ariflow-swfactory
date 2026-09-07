@@ -9,7 +9,10 @@
 # an operator with no Python on their machine can install → connect → submit → inspect → approve →
 # verify, and get the same factory the Python control room gets.
 #
-#   scripts/swf_e2e.sh [issue ...]          # default: demo/issue.md demo/issue2.md
+#   scripts/swf_e2e.sh [--backend] [issue ...]  # default: demo/issue.md demo/issue2.md
+#
+# `--backend` proves the normal Rust -> Python backend -> Airflow path. Without it the script keeps
+# the explicit direct-Airflow compatibility path for local diagnosis.
 #
 # Env: SWF_E2E_KEEP=1        keep the work dir (standalone home, run dirs, logs, config) after exit
 #      SWF_AIRFLOW_NO_SYNC=1 use an installed Airflow main overlay instead of the pinned release
@@ -31,6 +34,11 @@ HEALTH_TIMEOUT_S=240
 PARSE_TIMEOUT_S=240
 RUN_TIMEOUT_S=1800
 CONTEXT="e2e"
+BACKEND_MODE=0
+if [ "${1:-}" = "--backend" ]; then
+  BACKEND_MODE=1
+  shift
+fi
 
 if [ $# -eq 0 ]; then set -- demo/issue.md demo/issue2.md; fi
 if [ $# -lt 2 ]; then
@@ -48,6 +56,8 @@ export AIRFLOW_HOME="$WORK/airflow_home"
 export SWF_CONFIG="$WORK/config/swf/config.toml"
 STANDALONE_LOG="$WORK/standalone.log"
 STANDALONE_PID=""
+BACKEND_LOG="$WORK/backend.log"
+BACKEND_PID=""
 
 say() { printf '\n=== %s\n' "$*"; }
 fail() { echo "FAILED: $*" >&2; exit 1; }
@@ -65,9 +75,17 @@ cleanup() {
     kill -KILL -- "-$STANDALONE_PID" 2>/dev/null || true
     wait "$STANDALONE_PID" 2>/dev/null || true
   fi
+  if [ -n "$BACKEND_PID" ]; then
+    kill -TERM "$BACKEND_PID" 2>/dev/null || true
+    wait "$BACKEND_PID" 2>/dev/null || true
+  fi
   if [ "$rc" -ne 0 ] && [ -f "$STANDALONE_LOG" ]; then
     say "standalone log (tail)"
     tail -40 "$STANDALONE_LOG" || true
+  fi
+  if [ "$rc" -ne 0 ] && [ -f "$BACKEND_LOG" ]; then
+    say "backend log (tail)"
+    tail -80 "$BACKEND_LOG" || true
   fi
   if [ "${SWF_E2E_KEEP:-}" = "1" ]; then echo "work dir kept: $WORK"; else rm -rf "$WORK"; fi
   exit "$rc"
@@ -121,6 +139,14 @@ print(sock.getsockname()[1])
 sock.close()
 ')"
 BASE="http://localhost:$PORT"
+BACKEND_BASE=""
+BACKEND_PORT=""
+if [ "$BACKEND_MODE" -eq 1 ]; then
+  BACKEND_PORT="$("$PY" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+  BACKEND_BASE="http://127.0.0.1:$BACKEND_PORT"
+  export SWF_BACKEND_URL="$BACKEND_BASE"
+  export SWF_BACKEND_TOKEN="${SWF_E2E_BACKEND_TOKEN:-swf-e2e-backend-token-0123456789abcdef}"
+fi
 
 export AIRFLOW__CORE__DAGS_FOLDER="$REPO/dags"
 export AIRFLOW__CORE__LOAD_EXAMPLES=False
@@ -167,6 +193,21 @@ users = json.load(open('$PASSWORDS'))
 print(users.get('admin') or next(iter(users.values())))
 ")"
 
+if [ "$BACKEND_MODE" -eq 1 ]; then
+  say "factory backend on $BACKEND_BASE (log: $BACKEND_LOG)"
+  export AIRFLOW_URL="$BASE" AIRFLOW_USER=admin AIRFLOW_PASSWORD="$PASSWORD"
+  export SWF_STATE_ROOT="$WORK/backend-state" SWF_METRICS_ROOT="$WORK"
+  "$BIN/swfactory" backend --host 127.0.0.1 --port "$BACKEND_PORT" >"$BACKEND_LOG" 2>&1 &
+  BACKEND_PID=$!
+  i=0
+  until curl -fsS "$BACKEND_BASE/v1/liveness" >/dev/null 2>&1; do
+    kill -0 "$BACKEND_PID" 2>/dev/null || fail "backend died during startup"
+    [ $i -lt 60 ] || fail "backend liveness never went green"
+    sleep 1
+    i=$((i + 1))
+  done
+fi
+
 # ---------------------------------------------------------------- 1. connect
 #
 # A password never enters the config file: the context stores the NAME of the variable holding it,
@@ -174,12 +215,20 @@ print(users.get('admin') or next(iter(users.values())))
 export SWF_E2E_PASSWORD="$PASSWORD"
 
 say "swf context add $CONTEXT"
-"$SWF" context add "$CONTEXT" --direct \
-  --airflow-url "$BASE" \
-  --repo "zozo123/ariflow-swfactory" \
-  --user admin --password-env SWF_E2E_PASSWORD \
-  --metrics-root "$WORK" \
-  --use
+if [ "$BACKEND_MODE" -eq 1 ]; then
+  "$SWF" context add "$CONTEXT" \
+    --backend-url "$BACKEND_BASE" \
+    --airflow-url "$BASE" \
+    --repo "zozo123/ariflow-swfactory" \
+    --use
+else
+  "$SWF" context add "$CONTEXT" --direct \
+    --airflow-url "$BASE" \
+    --repo "zozo123/ariflow-swfactory" \
+    --user admin --password-env SWF_E2E_PASSWORD \
+    --metrics-root "$WORK" \
+    --use
+fi
 "$SWF" context show --json >"$WORK/context.json"
 grep -q "$PASSWORD" "$WORK/context.json" &&
   fail "swf context show leaked the password — a context must never carry a secret"
@@ -208,6 +257,20 @@ for c in bad:
 sys.exit(1 if bad else 0)
 PY
 
+if [ "$BACKEND_MODE" -eq 1 ]; then
+  "$PY" - "$WORK/doctor.json" <<'PY' || fail "doctor did not validate managed worker callbacks"
+import json
+import sys
+
+rows = json.load(open(sys.argv[1]))
+row = next((item for item in rows if item.get("name") == "managed worker callback"), None)
+if not row or not row.get("ok"):
+    print(f"managed worker callback doctor row: {row}", file=sys.stderr)
+    raise SystemExit(1)
+print("managed worker callback: ok")
+PY
+fi
+
 say "waiting for the dag-processor to parse $DAG_ID"
 i=0
 until "$SWF" runs list --dag "$DAG_ID" --json >/dev/null 2>&1; do
@@ -226,7 +289,12 @@ say "unpausing $DAG_ID"
 say "swf submit: ${#ISSUES[@]} issues x 2 targets"
 SUBMIT_ARGS=()
 for issue in "${ISSUES[@]}"; do SUBMIT_ARGS+=(--issue "$issue"); done
-"$SWF" submit --blueprint "$DAG_ID" "${SUBMIT_ARGS[@]}" --json >"$WORK/submit.json"
+SUBMIT_ID_ARGS=()
+if [ "$BACKEND_MODE" -eq 1 ]; then
+  # This proves the normal harness identity crosses Rust -> backend -> Cell admission -> Airflow.
+  SUBMIT_ID_ARGS=(--harness codex --factory-id e2e-codex)
+fi
+"$SWF" submit --blueprint "$DAG_ID" "${SUBMIT_ARGS[@]}" "${SUBMIT_ID_ARGS[@]}" --json >"$WORK/submit.json"
 cat "$WORK/submit.json"
 RUN_ID="$("$PY" -c "import json;print(json.load(open('$WORK/submit.json'))['run_id'])")"
 [ -n "$RUN_ID" ] || fail "swf submit returned no run id"

@@ -170,16 +170,14 @@ swf context show                                  # the active one, every creden
 swf --context staging jobs list                   # one command against another environment
 ```
 
-The file is `config.toml` under `$SWF_CONFIG`, else `$XDG_CONFIG_HOME/swf/`, else the platform's own
-config directory (`~/Library/Application Support/swf/` on macOS). It is written atomically at mode
+`$SWF_CONFIG`, when set, is the **path to the config file itself**. Otherwise the file is
+`$XDG_CONFIG_HOME/swf/config.toml`, or the platform config directory (for example
+`~/Library/Application Support/swf/config.toml` on macOS). It is written atomically at mode
 `0600`. Precedence for the active context is `--context NAME` > `$SWF_CONTEXT` > the file's
 `default` key > the only context if there is exactly one > a built-in `local` pointing at
-`http://localhost:8080`. That fallback is never written to disk, and `swf doctor` says so:
-
-```
-warn context       local -> http://localhost:8080 (built-in fallback; nothing is configured)
-                   fix: swf context add local --airflow-url http://localhost:8080
-```
+`http://localhost:8080`. That fallback is never written to disk. `swf context show` identifies it as the built-in
+fallback; `swf doctor` reports the connectivity/authentication checks it can actually perform for
+that context (and, in normal backend mode, the backend's own required checks).
 
 `airflow_url` is a **full base URL, path prefix included** — `/api/v2` and `/auth/token` are
 appended to it — because `[api] base_url` can put Airflow behind a prefix.
@@ -207,7 +205,7 @@ appended to it — because `[api] base_url` can put Airflow behind a prefix.
 Global flags apply everywhere: `--context <name>`, `--json`, `--no-color`, `--timeout <s>`,
 `-v/--verbose` (repeatable), `-y/--yes`.
 
-`--yes` is required for the five mutations that answer or destroy — `gates approve`, `gates reject`,
+`--yes` is required for the six mutations that answer or destroy — `gates approve`, `gates reject`,
 `runs stop`, `sandboxes rm`, `context remove`, `stack down` — whenever stdin is not a terminal or
 `--json` is set. `submit` and `runs unpause` deliberately do **not** confirm: they create and enable
 rather than answer or destroy, and a script that submits work should not need a flag to say it meant
@@ -333,11 +331,17 @@ everything.
 
 | Listing | Narrows by |
 | --- | --- |
-| `swf gates list` | FILTERS_GATES |
-| `swf jobs list` | FILTERS_JOBS |
-| `swf runs list` | FILTERS_RUNS |
+| `swf gates list` | `--dag`, `--blueprint`, `--issue`, `--gate`, `--ready`, `--limit` |
+| `swf jobs list` | `--dag`, `--state`, `--issue`, `--attention`, `--limit` |
+| `swf runs list` | `--dag`, `--state`, `--limit` |
 
-EXAMPLES_BLOCK
+For example:
+
+```sh
+swf gates list --dag factory --issue 42 --ready --limit 50
+swf jobs list --dag factory --state failed --issue 42 --attention --limit 50
+swf runs list --dag factory --state running --limit 50
+```
 
 Prefer a filter to a `jq` select for the set you are about to *answer*: the filters are the same
 selection `gates approve --all` applies, so a listing you narrowed with them is literally the batch
@@ -346,7 +350,15 @@ you are about to run, while a `jq` pipeline is a second implementation that can 
 
 ### Answer a batch, dry run first
 
-DRYRUN_PARA
+`--dry-run` applies to bulk `gates approve --all` and `gates reject --all`. It runs the same
+selection logic as the real batch, reports which ready gates would be answered (and which are
+skipped), and performs no mutation. For example, on a non-interactive shell:
+
+```sh
+swf gates approve --all --dag factory --issue 42 --ready --yes --dry-run
+swf gates approve --all --dag factory --issue 42 --ready --yes
+```
+
 
 The rule to keep is mechanical rather than a matter of judgement: **run the line with `--dry-run`,
 read what it selected, then re-run the identical line with `--dry-run` removed.** Editing a filter
