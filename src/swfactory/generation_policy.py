@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 from swfactory.idempotency import OperationRef
 
@@ -64,9 +64,10 @@ def promotion_decision(
     epoch: int,
     metrics: Mapping[str, float],
     thresholds: Mapping[str, float],
-    limits: GenerationLimits = GenerationLimits(),
+    limits: GenerationLimits | None = None,
 ) -> PromotionDecision:
     """Authorize only the parent after all explicit metric thresholds pass."""
+    limits = limits or GenerationLimits()
     experiment.validate(limits)
     if requester_generation != experiment.parent_generation:
         raise GenerationRefused("only the parent generation may promote a child experiment")
