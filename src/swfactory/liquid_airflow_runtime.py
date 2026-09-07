@@ -4,6 +4,7 @@ Airflow remains the only scheduler. This module only produces deterministic life
 restart-safe decisions for callers that already execute inside the Airflow DAG.
 """
 
+# ruff: noqa: I001
 from __future__ import annotations
 
 from dataclasses import dataclass, field
