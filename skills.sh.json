@@ -3,8 +3,8 @@
   "groupings": [
     {
       "title": "Airflow Software Factory",
-      "description": "Operate, extend, stabilize, and audit the Airflow-governed software delivery factory.",
-      "skills": ["airflow-software-factory"]
+      "description": "Operate, extend, stabilize, audit, and drive the Airflow-governed software delivery factory from supported agent harnesses.",
+      "skills": ["airflow-software-factory", "swfactory"]
     }
   ]
 }
