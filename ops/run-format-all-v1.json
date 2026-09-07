@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "scope": ".",
+  "reason": "Canonical Ruff formatting for exact final fan-in head"
+}
