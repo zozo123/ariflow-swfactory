@@ -1,8 +1,9 @@
-"""Canonical runtime seam for Phase240 and StatMech360 implementation bundles.
+"""Canonical runtime seam for Ocean120, Phase240, and StatMech360 implementation bundles.
 
 Bundles describe bounded domain slices. They do not create schedulers or mutation paths;
 all dynamic recommendations come from ``physics_mixture`` and all protected transitions
-may additionally require the high-assurance ``safety_kernel``.
+may additionally require the high-assurance ``safety_kernel``. Apache Airflow remains the
+sole lifecycle scheduler.
 """
 
 from __future__ import annotations
@@ -10,7 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from swfactory.physics_mixture import ControlAction, MixtureDecision, PhysicsModel, PhysicsSample, evaluate_mixture
+from swfactory.physics_mixture import (
+    ControlAction,
+    MixtureDecision,
+    PhysicsModel,
+    PhysicsSample,
+    evaluate_mixture,
+)
 from swfactory.safety_kernel import SafetyCase, SafetyDecision, evaluate_safety_case
 
 
@@ -53,6 +60,12 @@ _CONCERN_CAPABILITY = {
     Concern.C10: Capability.CONVERGENCE,
 }
 
+_WAVE_PREFIX = {
+    "Ocean120": "D",
+    "Phase240": "P",
+    "StatMech360": "Q",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class WaveDomain:
@@ -66,6 +79,8 @@ class WaveDomain:
             raise ValueError("wave domain identity, slug, and owner are required")
         if not self.models:
             raise ValueError("each wave domain must name at least one physics model")
+        if any(ch.isspace() for ch in self.slug):
+            raise ValueError("wave domain slug cannot contain whitespace")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +90,8 @@ class WaveBundle:
     domains: tuple[WaveDomain, ...]
 
     def validate(self) -> None:
-        if self.wave not in {"Phase240", "StatMech360"}:
+        prefix = _WAVE_PREFIX.get(self.wave)
+        if prefix is None:
             raise ValueError("unsupported physics wave")
         if len(self.domains) != 4:
             raise ValueError("each implementation bundle must contain exactly four domains")
@@ -83,10 +99,21 @@ class WaveBundle:
             raise ValueError("bundle domains must be unique")
         for domain in self.domains:
             domain.validate()
+            if not domain.domain_id.startswith(prefix):
+                raise ValueError(f"domain {domain.domain_id!r} has wrong prefix for {self.wave}")
 
     @property
     def issue_count(self) -> int:
         return len(self.domains) * len(Concern)
+
+    @property
+    def issue_keys(self) -> tuple[str, ...]:
+        """Semantic issue keys remain stable even when GitHub issue numbers interleave."""
+        return tuple(
+            f"{self.wave}/{domain.domain_id}-{concern.value}"
+            for domain in self.domains
+            for concern in Concern
+        )
 
 
 @dataclass(frozen=True, slots=True)
