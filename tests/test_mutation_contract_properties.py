@@ -4,7 +4,6 @@ import random
 
 import pytest
 
-from swfactory.idempotency import MutationOutcome, OperationJournal
 from swfactory.mutation_contract import (
     ExternalMutation,
     StaleMutation,
@@ -12,6 +11,7 @@ from swfactory.mutation_contract import (
     mutation_ref,
     require_current_epoch,
 )
+from swfactory.idempotency import MutationOutcome, OperationJournal
 
 
 SEEDS = (3, 17, 41, 73, 101, 211, 509, 997)
@@ -33,7 +33,7 @@ def test_registry_covers_the_external_side_effect_surface() -> None:
 def test_epoch_and_operation_identity_properties(seed: int) -> None:
     rng = random.Random(seed)
     trace: list[str] = []
-    for index in range(64):
+    for _index in range(64):
         kind = rng.choice(external_mutation_kinds())
         epoch = rng.randint(1, 25)
         cell_id = f"cell_{rng.getrandbits(96):024x}"
