@@ -31,7 +31,7 @@ class Session:
     factory_id: str
 
     @classmethod
-    def parse(cls, value: str) -> "Session":
+    def parse(cls, value: str) -> Session:
         harness, sep, factory_id = value.partition(":")
         if not sep or not _component(harness, 48) or not _component(factory_id, 64):
             raise ValueError("session must be HARNESS:FACTORY_ID using letters, digits, dot, underscore or hyphen")
