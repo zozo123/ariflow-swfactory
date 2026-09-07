@@ -279,7 +279,14 @@ else
   say "polling; answering every gate as admin through the HITL API"
 fi
 STATE="queued"
-SEEN="$WORK/seen-gates" # a gate is answered on the poll AFTER the one that first saw it parked
+# A gate is answered only after it has been seen parked on SETTLE_POLLS consecutive polls, so the
+# wait is `SETTLE_POLLS * 3` seconds of real time rather than one poll interval. One poll (3 s) was
+# enough on a developer's machine and is NOT enough on a hosted runner: this harness reproduced the
+# stale-executor-event failure there — `job.approve_intent[0] = failed`, nine tasks
+# `upstream_failed` — on the same commit where it passes locally. The window is the instrument, and
+# how long the scheduler needs to reconcile depends on how loaded it is, so it is a knob.
+SETTLE_POLLS="${SWF_STRESS_SETTLE_POLLS:-2}"
+SEEN="$WORK/seen-gates" # counts consecutive sightings per gate; answered once it reaches SETTLE_POLLS
 : >"$SEEN"
 answered=0
 i=0
@@ -294,9 +301,10 @@ while [ $i -lt "$RUN_TIMEOUT_S" ]; do
       "$WORK/poll-tis.json" || true)"
     while read -r gate idx; do
       [ -n "${gate:-}" ] || continue
-      if ! grep -qxF "$gate $idx" "$SEEN"; then
-        echo "$gate $idx" >>"$SEEN" # first sighting: let it settle one poll interval
-        continue
+      seen_count="$(grep -cxF "$gate $idx" "$SEEN" || true)"
+      echo "$gate $idx" >>"$SEEN"
+      if [ "$((seen_count + 1))" -lt "$SETTLE_POLLS" ]; then
+        continue # not yet parked for long enough to be safe to answer
       fi
       printf 'answering %s for job %s ... ' "$gate" "$idx"
       if "$BIN/swfactory" approve "$RUN_ID" "$gate" --blueprint "$DAG_ID" \

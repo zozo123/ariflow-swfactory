@@ -284,10 +284,27 @@ wrote = [r for r in rows if r.get("outcome") == "answered"]
 print(f"  dry run: planned {len(planned)} gate(s), answered {len(wrote)}")
 sys.exit(0 if planned and not wrote else 1)
 PYEOF
-      still="$("$SWF" gates list --dag "$DAG_ID" --ready --json | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')"
-      [ "$still" = "$ready" ] ||
-        fail "the dry run changed the world: $ready ready gates before, $still after"
-      echo "  the same $still gates are still waiting — the dry run wrote nothing"
+      # Check the IDENTITIES, not the count. Gates ripen continuously — on a fast runner a
+      # fourth can park while the dry run is still printing the first three — so a changed count
+      # proves nothing and an equal count would have been luck. What must hold is that every gate
+      # the dry run said it WOULD answer is still sitting there unanswered.
+      "$SWF" gates list --dag "$DAG_ID" --ready --json >"$WORK/after-dry-run.json"
+      "$PY" - "$WORK/dry-run.json" "$WORK/after-dry-run.json" <<'PYEOF' || fail "the dry run answered a gate"
+"""Every gate the dry run planned must still be pending afterwards."""
+
+import json
+import sys
+
+report = json.load(open(sys.argv[1]))
+rows = report if isinstance(report, list) else report.get("results", report.get("gates", []))
+planned = {r["id"] for r in rows if r.get("outcome") == "planned"}
+still = {g["id"] for g in json.load(open(sys.argv[2]))}
+answered = planned - still
+print(f"  {len(planned & still)}/{len(planned)} planned gates still waiting after the dry run")
+for gate in sorted(answered):
+    print(f"    a dry run answered {gate}", file=sys.stderr)
+sys.exit(1 if answered else 0)
+PYEOF
 
       # The settle window is measured from the server's own `created_at` on the HITL detail. If
       # that field ever stops arriving — an Airflow rename, a proxy that strips it — `swf` quietly
