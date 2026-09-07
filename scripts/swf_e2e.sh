@@ -280,23 +280,60 @@ PYEOF
     fi
 
     printf 'approving %s ready gate(s) in one call ... ' "$ready"
-    if "$SWF" gates approve --all --dag "$DAG_ID" --yes --json >"$WORK/bulk-$i.json" 2>"$WORK/bulk-$i.err"; then
-      got="$("$PY" -c '
-import json,sys
-rows = json.load(open(sys.argv[1]))
-rows = rows if isinstance(rows, list) else rows.get("gates", rows.get("results", []))
-print(len([r for r in rows if r.get("outcome") == "answered"]))' "$WORK/bulk-$i.json")"
-      answered=$((answered + got))
-      echo "answered $got (total $answered)"
-    else
-      echo "batch reported a failure"
-      sed 's/^/    /' "$WORK/bulk-$i.err" >&2
-    fi
+    # Count from the REPORT, never from the exit code. A batch that answers four gates and fails
+    # on a fifth exits non-zero and has still answered four; throwing that away would make this
+    # script disagree with the factory about work that actually happened.
+    "$SWF" gates approve --all --dag "$DAG_ID" --yes --json >"$WORK/bulk-$i.json" 2>"$WORK/bulk-$i.err" || true
+    got="$("$PY" - "$WORK/bulk-$i.json" <<'PYEOF' || echo 0
+import json
+import sys
+
+try:
+    rows = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    print(0)
+    raise SystemExit
+rows = rows if isinstance(rows, list) else rows.get("results", rows.get("gates", []))
+answered = [r for r in rows if r.get("outcome") == "answered"]
+bad = [r for r in rows if r.get("outcome") not in ("answered", "planned")]
+print(len(answered))
+for r in bad:
+    print(
+        f"    {r.get('outcome')}: {r.get('id', '?')} — {r.get('detail', '')}",
+        file=sys.stderr,
+    )
+PYEOF
+)"
+    answered=$((answered + got))
+    echo "answered $got (total $answered)"
   fi
   sleep 3
   i=$((i + 3))
 done
 echo "run state: $STATE after ${i}s ($answered gates answered through swf)"
+
+# A bare "failed" is not a diagnosis. When the run does not go green, say which task instances are
+# red and what each job's frontier was, because the next person to read this log is trying to tell
+# a factory regression apart from a flake and cannot do it from one word.
+if [ "$STATE" != "success" ]; then
+  say "what actually failed"
+  "$SWF" jobs list || true
+  while read -r job_id; do
+    [ -n "${job_id:-}" ] || continue
+    "$SWF" jobs inspect "$job_id" 2>&1 | sed 's/^/  /' | grep -iE "job|state|fail|error|task" | head -20
+  done < <("$SWF" jobs list --json 2>/dev/null | "$PY" -c '
+import json
+import sys
+
+try:
+    rows = json.load(sys.stdin)
+except ValueError:
+    raise SystemExit
+for r in rows if isinstance(rows, list) else []:
+    if r.get("id") and str(r.get("state", "")).lower() not in ("success", "skipped"):
+        print(r["id"])
+' || true)
+fi
 
 EXPECTED_GATES=$(( ${#ISSUES[@]} * 2 * 2 ))   # issues x targets x (intent, plan)
 [ "$answered" -eq "$EXPECTED_GATES" ] ||

@@ -7,9 +7,17 @@
 //! executor event and **fail the gate** — the failure `scripts/stress_airflow.sh` was written to
 //! reproduce. So a gate is `ready` only when its own task instance is parked in `awaiting_input`
 //! (or `deferred` on older builds), which means joining the HITL details against the task states
-//! rather than trusting the detail list alone. And because the parked state itself can be observed
-//! one poll too early, a gate must be seen ready **twice** before it is answered
-//! (`00-architecture.md` §C.3).
+//! rather than trusting the detail list alone.
+//!
+//! **Settling.** Readiness is necessary and not sufficient, because the window does not close when
+//! the task instance flips to `awaiting_input`; it closes when the scheduler has finished
+//! reconciling the worker process that parked it. A task instance can read `awaiting_input` while
+//! the executor event for that same process is still in the scheduler's queue — answer there and
+//! the response re-queues the task under an event that is about to be judged stale, and the gate
+//! is marked failed. So a gate must be seen parked at **two moments at least
+//! [`CONFIRM_INTERVAL`] apart** (`00-architecture.md` §C.3). Two *reads* are not two moments: a
+//! selection and the re-read that follows it milliseconds later are one observation of the world
+//! made twice, and counting them as two is exactly how a gate gets answered inside the window.
 //!
 //! **Re-validation.** [`answer`] re-reads the gate immediately before the PATCH and refuses if it
 //! has been answered meanwhile, or if the evidence the operator read has moved under them. Another
@@ -28,18 +36,27 @@ use swf_domain::rollup::{job_state, stage_progress};
 use swf_domain::sanitize::{sanitize_block, sanitize_line};
 use swf_domain::states::is_gate_parked;
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::ops::{ErrorKind, OpsError, Result};
 
-/// How long [`answer`] waits before its confirming re-read when it has only seen a gate once.
+/// How long a gate must have been under observation, parked, before it may be answered.
 ///
-/// Three seconds is the interval `scripts/stress_airflow.sh` uses, and the window it is closing is
-/// sub-second. It costs a scripted approval one pause; it costs an interactive one nothing at all,
-/// because the TUI has already sighted the gate on a refresh.
+/// This is a window and not a pause for luck. The scheduler marks a HITL task failed when it
+/// reconciles the executor event of the worker process that parked it *after* the response has
+/// already re-queued the task ("finished with state success, but the task instance's state
+/// attribute is queued"). On a live standalone that lag was measured at up to ~0.9 s; three
+/// seconds is the interval `scripts/stress_airflow.sh` — the reference harness that does not
+/// produce this failure — leaves between the poll that first sees a gate parked and the poll that
+/// answers it. It costs a scripted approval one pause; it costs an interactive one nothing at all,
+/// because the TUI sighted the gate on a refresh long before the operator pressed a key.
 pub const CONFIRM_INTERVAL: Duration = Duration::from_secs(3);
 
 /// How many times a gate must be seen parked before it may be answered.
+///
+/// A count on its own is not the rule — [`CONFIRM_INTERVAL`] is — but two reads remain the minimum
+/// because the write has to be preceded by a read that was not the one that selected the gate.
 pub const REQUIRED_SIGHTINGS: u32 = 2;
 
 /// Approve or reject. There is no third answer, and no free-text option.
@@ -122,39 +139,75 @@ pub struct GateAnswer {
     pub sightings: u32,
 }
 
-/// How many times each gate has been seen parked, for the life of this process.
+/// When a gate was first observed parked, and how many times since.
+#[derive(Debug, Clone, Copy)]
+struct Sighting {
+    /// How many observations, including the first.
+    count: u32,
+    /// The moment of the first one. The clock the settle is measured on.
+    first: Instant,
+}
+
+/// What one observation of a gate establishes.
+///
+/// `settled` is the load-bearing half. A gate observed twice inside a millisecond has a `count` of
+/// two and has established nothing: both reads can be answered by the same instant of the world,
+/// and that instant can be inside the window in which answering fails the gate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Seen {
+    /// How many times this gate has now been observed parked.
+    pub count: u32,
+    /// How long ago it was **first** observed parked. Zero for the first observation.
+    pub settled: Duration,
+}
+
+/// When each gate was first seen parked, and how often since, for the life of this process.
 ///
 /// Kept per-`Ops` rather than globally: a context switch points at a different factory, where the
 /// same `dag/run#index:task` is a different gate, and carrying a sighting across would be exactly
 /// the wrong kind of memory.
 #[derive(Debug, Default)]
 pub struct Sightings {
-    seen: Mutex<HashMap<String, u32>>,
+    seen: Mutex<HashMap<String, Sighting>>,
 }
 
 impl Sightings {
-    /// Note that a gate has been observed parked, and answer the new count.
-    pub fn record(&self, id: &GateId) -> u32 {
+    /// Note that a gate has been observed parked, and answer what that establishes.
+    pub fn record(&self, id: &GateId) -> Seen {
+        let now = Instant::now();
         let mut guard = match self.seen.lock() {
             Ok(guard) => guard,
             // A poisoned lock means another thread panicked while counting sightings. The count is
             // advisory; losing the reason to panic again is the better trade.
             Err(poisoned) => poisoned.into_inner(),
         };
-        let entry = guard.entry(id.to_string()).or_insert(0);
-        *entry = entry.saturating_add(1);
-        *entry
+        let entry = guard.entry(id.to_string()).or_insert(Sighting {
+            count: 0,
+            first: now,
+        });
+        entry.count = entry.count.saturating_add(1);
+        Seen {
+            count: entry.count,
+            settled: now.saturating_duration_since(entry.first),
+        }
     }
 
     /// How many times this gate has been observed parked.
     pub fn count(&self, id: &GateId) -> u32 {
+        self.get(id).map(|seen| seen.count).unwrap_or(0)
+    }
+
+    /// How long this gate has been under observation, or `None` if it has never been seen parked.
+    pub fn settled(&self, id: &GateId) -> Option<Duration> {
+        self.get(id)
+            .map(|seen| Instant::now().saturating_duration_since(seen.first))
+    }
+
+    /// This gate's record, if it has one.
+    fn get(&self, id: &GateId) -> Option<Sighting> {
         match self.seen.lock() {
-            Ok(guard) => guard.get(&id.to_string()).copied().unwrap_or(0),
-            Err(poisoned) => poisoned
-                .into_inner()
-                .get(&id.to_string())
-                .copied()
-                .unwrap_or(0),
+            Ok(guard) => guard.get(&id.to_string()).copied(),
+            Err(poisoned) => poisoned.into_inner().get(&id.to_string()).copied(),
         }
     }
 
@@ -304,7 +357,8 @@ pub struct AnswerOpts {
     pub expect: Option<String>,
     /// Skip the readiness rule. Say so in the output — this is the flag that can fail a gate.
     pub force: bool,
-    /// How long to wait for the confirming second sighting. `None` uses [`CONFIRM_INTERVAL`].
+    /// How long a gate must have been observed parked before the write. `None` uses
+    /// [`CONFIRM_INTERVAL`]; the tests are the only caller with a reason to shorten it.
     pub confirm_delay: Option<Duration>,
 }
 
@@ -342,7 +396,11 @@ pub async fn answer(
         )));
     }
 
-    let mut count = if ready { sightings.record(id) } else { 0 };
+    let seen = if ready {
+        sightings.record(id)
+    } else {
+        Seen::default()
+    };
     if !ready && !opts.force {
         return Err(OpsError::operational(format!(
             "{id} {NOT_READY}: its task instance is {state:?}, not awaiting_input. \
@@ -351,15 +409,20 @@ pub async fn answer(
         .with_hint("wait for the task to park, or pass --force if you accept the risk"));
     }
 
-    if ready && count < REQUIRED_SIGHTINGS && !opts.force {
-        // The second sighting is the whole point: a detail can exist a beat before its task
-        // defers, and one poll cannot tell the two apart.
-        let delay = opts.confirm_delay.unwrap_or(CONFIRM_INTERVAL);
-        if !delay.is_zero() {
+    let settle = opts.confirm_delay.unwrap_or(CONFIRM_INTERVAL);
+    let mut count = seen.count;
+    if ready && !opts.force && (count < REQUIRED_SIGHTINGS || seen.settled < settle) {
+        // What has to elapse is time under observation, not reads. `seen.settled` is measured from
+        // the FIRST sighting — the listing or the review that put this gate in front of somebody —
+        // so an operator who has been watching the gate waits for nothing, and a batch that
+        // selected it a millisecond ago waits out the rest of the window rather than mistaking its
+        // own selection for a second look at the world.
+        let wait = settle.saturating_sub(seen.settled);
+        if !wait.is_zero() {
             tokio::select! {
                 biased;
                 () = cancel.cancelled() => return Err(OpsError::cancelled()),
-                () = tokio::time::sleep(delay) => {}
+                () = tokio::time::sleep(wait) => {}
             }
         }
         let (again, still_ready, state) = read(runs, id, cancel).await?;
@@ -376,7 +439,7 @@ pub async fn answer(
                  being confirmed (now {state:?})"
             )));
         }
-        count = sightings.record(id);
+        count = sightings.record(id).count;
     }
 
     runs.respond(id, decision.approves(), cancel).await?;
@@ -888,18 +951,24 @@ fn not_ready_reason(task_state: &str) -> String {
 
 /// Answer every selected gate, one outcome per gate, with a bounded number in flight.
 ///
-/// Three rules are structural here rather than left to the caller. A gate that is not ready is
+/// Four rules are structural here rather than left to the caller. A gate that is not ready is
 /// never handed to [`answer`] at all — a batch has no equivalent of `--force`, because forcing is
 /// a decision about one gate somebody read and it does not generalise to a set nobody has. One bad
 /// gate cannot abandon the rest, because each answer is its own task and its own line in the
-/// report. And every gate is still re-read immediately before its own PATCH, since [`answer`] is
-/// the only writer: there is no bulk path that skips the re-validation a single answer performs.
+/// report. Every gate is still re-read immediately before its own PATCH, since [`answer`] is the
+/// only writer: there is no bulk path that skips the re-validation a single answer performs. And
+/// every gate still settles for [`CONFIRM_INTERVAL`] counted from the moment it was FIRST seen
+/// parked — the selection that produced this batch is that moment, not a discharge of it, so a
+/// wave of gates selected together settles once, concurrently, and not once per gate.
+///
+/// `settle` overrides that window; `None` is [`CONFIRM_INTERVAL`] and is what the product passes.
 pub async fn answer_all(
     runs: Arc<dyn Runs>,
     sightings: Arc<Sightings>,
     selection: &Selection,
     decision: Decision,
     filter: &GateFilter,
+    settle: Option<Duration>,
     cancel: &CancellationToken,
 ) -> BatchReport {
     let mut slots: Vec<Option<BatchItem>> = vec![None; selection.rows.len()];
@@ -916,11 +985,29 @@ pub async fn answer_all(
     // Which gate each in-flight task is answering. A task that *panics* answers nothing at all, so
     // the only way to give its gate an honest line is to know, from the outside, which gate it was.
     let mut in_flight: Vec<(tokio::task::Id, usize)> = Vec::new();
-    let mut next = 0usize;
+    // One write at a time per DAG run. Concurrency across runs is free, but two answers racing
+    // inside ONE run are not: Airflow answered a second concurrent PATCH to the same run with
+    // HTTP 500 and failed the gate, which then failed its job. The old one-gate-at-a-time loop
+    // never produced two writes to a run at once and so never saw it. Gates of different runs
+    // still overlap, which is where the speed actually comes from — a busy factory is wide, not
+    // deep, and a single run only ever has a handful of gates open at a time anyway.
+    let mut busy: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let run_key = |index: usize| -> (String, String) {
+        let gate = &selection.rows[index].gate;
+        (gate.dag_id.clone(), gate.run_id.clone())
+    };
+    let mut pending: std::collections::VecDeque<usize> = queue.into_iter().collect();
     loop {
-        while running.len() < BATCH_CONCURRENCY && next < queue.len() && !cancel.is_cancelled() {
-            let index = queue[next];
-            next += 1;
+        let mut deferred: Vec<usize> = Vec::new();
+        while running.len() < BATCH_CONCURRENCY && !cancel.is_cancelled() {
+            let Some(index) = pending.pop_front() else {
+                break;
+            };
+            if !busy.insert(run_key(index)) {
+                // Its run already has a write in flight; take it on a later pass.
+                deferred.push(index);
+                continue;
+            }
             let row = &selection.rows[index];
             let id = row.gate.id();
             let gate = row.gate.short_name().to_string();
@@ -929,12 +1016,16 @@ pub async fn answer_all(
             let sightings = Arc::clone(&sightings);
             let cancel = cancel.clone();
             let handle = running.spawn(async move {
+                let opts = AnswerOpts {
+                    confirm_delay: settle,
+                    ..AnswerOpts::default()
+                };
                 let outcome = answer(
                     runs.as_ref(),
                     sightings.as_ref(),
                     &id,
                     decision,
-                    &AnswerOpts::default(),
+                    &opts,
                     &cancel,
                 )
                 .await;
@@ -942,10 +1033,14 @@ pub async fn answer_all(
             });
             in_flight.push((handle.id(), index));
         }
+        for index in deferred.into_iter().rev() {
+            pending.push_front(index);
+        }
         match running.join_next_with_id().await {
             None => break,
             Some(Ok((task, (index, item)))) => {
                 in_flight.retain(|(id, _)| *id != task);
+                busy.remove(&run_key(index));
                 slots[index] = Some(item);
             }
             Some(Err(err)) => {
@@ -955,6 +1050,9 @@ pub async fn answer_all(
                 let task = err.id();
                 if let Some(at) = in_flight.iter().position(|(id, _)| *id == task) {
                     let (_, index) = in_flight.remove(at);
+                    // Release the run even though this gate's fate is unknown: holding the lock
+                    // would strand every other gate of that run behind a task that is already dead.
+                    busy.remove(&run_key(index));
                     let row = &selection.rows[index];
                     slots[index] = Some(BatchItem {
                         outcome: BatchOutcome::Failed,
@@ -1107,11 +1205,29 @@ mod tests {
         let seen = Sightings::default();
         let id = gate().id();
         assert_eq!(seen.count(&id), 0);
-        assert_eq!(seen.record(&id), 1);
-        assert_eq!(seen.record(&id), 2);
+        assert!(seen.settled(&id).is_none(), "a gate nobody has seen");
+        assert_eq!(seen.record(&id).count, 1);
+        assert_eq!(seen.record(&id).count, 2);
         assert_eq!(seen.count(&id), 2);
         seen.forget(&id);
         assert_eq!(seen.count(&id), 0);
+        assert!(seen.settled(&id).is_none(), "and its clock goes with it");
+    }
+
+    #[test]
+    fn a_sighting_measures_from_the_first_look_and_not_from_the_last() {
+        // The count is what two back-to-back reads inflate; the clock is what they cannot. This is
+        // the arithmetic the batch path leans on to tell "seen twice" from "seen for long enough".
+        let seen = Sightings::default();
+        let id = gate().id();
+        assert_eq!(seen.record(&id).settled, Duration::ZERO);
+        let second = seen.record(&id);
+        assert_eq!(second.count, 2);
+        assert!(
+            second.settled < CONFIRM_INTERVAL,
+            "two immediate reads have established no time at all: {:?}",
+            second.settled
+        );
     }
 
     fn item(outcome: BatchOutcome, kind: Option<ErrorKind>) -> BatchItem {
