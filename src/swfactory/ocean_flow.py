@@ -77,25 +77,66 @@ class FlowDecision:
     pressure: float
 
 
-def decide_flow(sample: FlowSample, policy: OceanPolicy = OceanPolicy()) -> FlowDecision:
+def decide_flow(sample: FlowSample, policy: OceanPolicy | None = None) -> FlowDecision:
     """Return a deterministic, side-effect-free control decision for one Cell sample."""
 
+    policy = policy or OceanPolicy()
     sample.validate()
     policy.validate()
     pressure = sample.queue_depth / policy.soft_queue
 
     if sample.scheduler != "airflow":
-        return FlowDecision(FlowRegime.CHOKED, FlowAction.REFUSE, "Airflow is the sole lifecycle scheduler", pressure)
+        return FlowDecision(
+            FlowRegime.CHOKED,
+            FlowAction.REFUSE,
+            "Airflow is the sole lifecycle scheduler",
+            pressure,
+        )
     if sample.stale_writers:
-        return FlowDecision(FlowRegime.TURBULENT, FlowAction.FENCE, "stale writers require epoch fencing", pressure)
+        return FlowDecision(
+            FlowRegime.TURBULENT,
+            FlowAction.FENCE,
+            "stale writers require epoch fencing",
+            pressure,
+        )
     if sample.queue_depth >= policy.hard_queue or sample.saturation >= policy.saturation_choke:
-        return FlowDecision(FlowRegime.CHOKED, FlowAction.SHED, "hard pressure or saturation boundary exceeded", pressure)
+        return FlowDecision(
+            FlowRegime.CHOKED,
+            FlowAction.SHED,
+            "hard pressure or saturation boundary exceeded",
+            pressure,
+        )
     if sample.retry_rate >= policy.retry_cavitation:
-        return FlowDecision(FlowRegime.CAVITATING, FlowAction.HOLD, "retry cavitation detected", pressure)
+        return FlowDecision(
+            FlowRegime.CAVITATING,
+            FlowAction.HOLD,
+            "retry cavitation detected",
+            pressure,
+        )
     if sample.evidence_lag_s > policy.max_evidence_lag_s:
-        return FlowDecision(FlowRegime.PRESSURIZED, FlowAction.HOLD, "evidence is lagging mutation flow", pressure)
+        return FlowDecision(
+            FlowRegime.PRESSURIZED,
+            FlowAction.HOLD,
+            "evidence is lagging mutation flow",
+            pressure,
+        )
     if sample.queue_depth >= policy.soft_queue:
-        return FlowDecision(FlowRegime.PRESSURIZED, FlowAction.THROTTLE, "soft queue pressure exceeded", pressure)
+        return FlowDecision(
+            FlowRegime.PRESSURIZED,
+            FlowAction.THROTTLE,
+            "soft queue pressure exceeded",
+            pressure,
+        )
     if sample.queue_depth and sample.inflight == 0:
-        return FlowDecision(FlowRegime.LAMINAR, FlowAction.ADMIT, "queued work has available execution capacity", pressure)
-    return FlowDecision(FlowRegime.LAMINAR, FlowAction.REBALANCE, "flow is within the laminar operating envelope", pressure)
+        return FlowDecision(
+            FlowRegime.LAMINAR,
+            FlowAction.ADMIT,
+            "queued work has available execution capacity",
+            pressure,
+        )
+    return FlowDecision(
+        FlowRegime.LAMINAR,
+        FlowAction.REBALANCE,
+        "flow is within the laminar operating envelope",
+        pressure,
+    )
