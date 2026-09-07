@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "name": "physics-mixture-v1",
+  "rigor_target": "mission-critical-flight-grade",
+  "affiliation_claim": "none",
+  "authority": {
+    "lifecycle_scheduler": "airflow",
+    "durable_work_identity": "factory-cell",
+    "mutation_identity": "cell_id+epoch+operation_key",
+    "publication_authority": "canonical-swfactory-publication-path",
+    "promotion_authority": "explicit-release-gate",
+    "models_are_advisory_only": true
+  },
+  "phase_order": [
+    "gas",
+    "liquid",
+    "mixed",
+    "supercritical",
+    "crystal_candidate"
+  ],
+  "action_severity": [
+    "admit",
+    "rebalance",
+    "crystallize_candidate",
+    "throttle",
+    "hold",
+    "shed",
+    "fence",
+    "refuse"
+  ],
+  "fan_in": {
+    "sample_semantics": "all models evaluate the same immutable sample",
+    "safety_rule": "strongest safety action wins; risk breaks ties",
+    "crystallization_rule": "candidate votes never override stronger safety actions and require explicit release gate",
+    "evidence_rule": "retain every model signal and dominant-model reason"
+  },
+  "models": [
+    {
+      "id": "fluid",
+      "family": "transport-hydrodynamics",
+      "use_for": ["multi-current flow", "queue pressure", "velocity", "acceleration", "diffusion", "convection", "shock load", "backpressure"],
+      "principles": ["continuity", "pressure gradients", "viscous hysteresis", "boundary layers", "Reynolds-like regime transitions"],
+      "not_for": ["creating lifecycle scheduling authority"]
+    },
+    {
+      "id": "boltzmann_gibbs",
+      "family": "equilibrium-statistical-mechanics",
+      "use_for": ["ensemble weighting", "maximum entropy", "free-energy-like ranking", "order parameters", "exploration entropy"],
+      "principles": ["Boltzmann weights", "Gibbs ensembles", "partition functions", "maximum entropy under constraints"],
+      "not_for": ["automatic promotion", "random production mutation"]
+    },
+    {
+      "id": "nonequilibrium",
+      "family": "non-equilibrium-statistical-mechanics",
+      "use_for": ["driven work", "entropy production", "irreversibility", "response lag", "dissipated work", "rare-event evidence"],
+      "principles": ["Jarzynski equality", "Crooks fluctuation relation", "fluctuation-dissipation", "linear response", "Onsager-like coupling"],
+      "not_for": ["release authority"]
+    },
+    {
+      "id": "phase_field",
+      "family": "phase-transitions-critical-phenomena",
+      "use_for": ["phase coexistence", "metastability", "nucleation", "crystallization readiness", "critical slowing", "domain defects"],
+      "principles": ["order parameters", "Landau-like free energy", "nucleation barriers", "Kramers-like escape", "hysteresis"],
+      "not_for": ["automatic crystallization"]
+    },
+    {
+      "id": "reaction_criticality",
+      "family": "branching-reaction-nuclear-analogy",
+      "use_for": ["retry cascades", "event amplification", "recursive fan-out", "failure propagation"],
+      "principles": ["subcritical decay", "critical persistence", "supercritical growth", "containment", "damping"],
+      "not_for": ["literal nuclear-system design"]
+    },
+    {
+      "id": "discrete_quantum",
+      "family": "discrete-quantum-inspired",
+      "use_for": ["exclusive ownership", "finite occupancy", "rare barrier crossing", "mutually incompatible paths"],
+      "principles": ["exclusion", "discrete state", "rare-transition tunneling proxy", "measurement as evidence acquisition"],
+      "not_for": ["nondeterministic authority", "policy bypass"]
+    },
+    {
+      "id": "protein_network",
+      "family": "many-body-biochemical",
+      "use_for": ["cooperative agents", "stoichiometric balance", "allostery", "reaction-diffusion", "condensates", "repair and degradation", "rugged landscapes"],
+      "principles": ["cooperative binding", "feedback inhibition", "chaperone repair", "degradation", "liquid-liquid phase separation", "homeostasis"],
+      "not_for": ["unbounded emergent authority"]
+    }
+  ],
+  "required_evidence": [
+    "cell_id",
+    "epoch",
+    "model_version",
+    "raw_observables",
+    "normalized_observables",
+    "phase",
+    "risk",
+    "model_action",
+    "dominant_model",
+    "model_disagreement",
+    "entropy_production_when_applicable",
+    "work_free_energy_summary_when_applicable",
+    "crystallization_score",
+    "release_gate_state",
+    "final_authority_action"
+  ],
+  "graduation_requirements": [
+    "explicit units and normalization",
+    "determinism for identical inputs",
+    "bounded runtime and memory",
+    "fail-closed invalid-input handling",
+    "replayable test vectors",
+    "threshold sensitivity analysis",
+    "fault injection",
+    "calibration against operational outcomes",
+    "documented validity region and failure modes",
+    "no hidden scheduler publication policy or promotion authority"
+  ]
+}
