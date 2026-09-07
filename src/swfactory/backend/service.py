@@ -628,23 +628,34 @@ class Factory:
     def operation(self, path: str, body: dict[str, Any]) -> Any:
         if path == "/doctor":
             caps = self.capabilities()
+            # Every row carries `ok` as well as `status`. The console deserializes into
+            # `swf_domain::doctor::Check`, whose `ok: bool` has no default and no alias — so a row
+            # with only `status` fails to parse, the whole response is discarded, and `swf doctor`
+            # prints one fabricated failure blaming the operator's token. `doctor` is the command
+            # someone runs when nothing else works; it must not be the thing that lies to them.
+            # `status` is kept alongside for the Python CLI, which reads it.
             checks = [
                 {
                     "name": "factory backend",
+                    "ok": True,
                     "status": "ok",
                     "detail": "Python API v1",
                     "required": True,
                 },
                 {
                     "name": "factory cells",
+                    "ok": True,
                     "status": "ok",
                     "detail": f"durable CellStore schema v{SCHEMA_VERSION}",
                     "required": True,
                 },
                 {
                     "name": "mutation readiness",
+                    "ok": bool(caps["mutation_ready"]),
                     "status": "ok" if caps["mutation_ready"] else "warn",
-                    "detail": caps,
+                    # A capability document rendered as text: `detail` is a string on both sides,
+                    # and an object here failed to parse even once `ok` was present.
+                    "detail": ", ".join(f"{k}={v}" for k, v in sorted(caps.items())),
                     "required": True,
                 },
             ]
@@ -655,6 +666,7 @@ class Factory:
                     checks.append(
                         {
                             "name": name,
+                            "ok": healthy,
                             "status": "ok" if healthy else "fail",
                             "detail": "Airflow health",
                             "required": True,
@@ -662,11 +674,12 @@ class Factory:
                         }
                     )
                 self._checked_airflow("GET", "/dags?limit=1")
-                checks.append({"name": "airflow auth", "status": "ok", "required": True})
+                checks.append({"name": "airflow auth", "ok": True, "status": "ok", "required": True})
             except (Refused, ControlError, OSError):
                 checks.append(
                     {
                         "name": "airflow",
+                        "ok": False,
                         "status": "fail",
                         "required": True,
                         "detail": "Airflow is unavailable or authentication failed",
@@ -678,6 +691,7 @@ class Factory:
                 checks.append(
                     {
                         "name": tool,
+                        "ok": present,
                         "status": "ok" if present else "warn",
                         "required": False,
                         "detail": (
