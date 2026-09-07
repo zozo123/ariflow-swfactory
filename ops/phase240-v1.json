@@ -1,0 +1,41 @@
+{
+  "wave": "Phase240",
+  "domains": [
+    {"id":"P01","slug":"bernoulli-energy-budget","objective":"Trade pressure, throughput, latency, and cost without violating authority or safety budgets.","owner":"evidence"},
+    {"id":"P02","slug":"pressure-velocity-coupling","objective":"Relate queue pressure to execution velocity with bounded acceleration and explicit overload response.","owner":"airflow"},
+    {"id":"P03","slug":"continuity-work-conservation","objective":"Conserve durable work identity and mutation intent across retries, restarts, and compute replacement.","owner":"recovery"},
+    {"id":"P04","slug":"control-volume-accounting","objective":"Account for work entering, leaving, waiting in, and mutating through each Cell boundary.","owner":"evidence"},
+    {"id":"P05","slug":"multiphase-boundaries","objective":"Represent competing implementations and trust zones explicitly without accidental authority blending.","owner":"security"},
+    {"id":"P06","slug":"phase-fraction-admission","objective":"Control how much exploratory, liquid, mixed, and supercritical work may coexist under finite capacity.","owner":"authority"},
+    {"id":"P07","slug":"nucleation-branch-seeding","objective":"Seed diverse branches from stable contracts while keeping lineage and ownership deterministic.","owner":"workgraph"},
+    {"id":"P08","slug":"boiling-retry-transition","objective":"Detect retry heat that turns laminar work into mixed or turbulent execution before storms form.","owner":"recovery"},
+    {"id":"P09","slug":"condensation-fanin","objective":"Condense compatible branches into shared interfaces while preserving evidence and deleting no alternatives yet.","owner":"authority"},
+    {"id":"P10","slug":"supercritical-concurrency","objective":"Drive concurrency to deliberate stress limits while bounding damage, cost, and scheduler load.","owner":"airflow"},
+    {"id":"P11","slug":"shock-load-shedding","objective":"Shed or hold work predictably when sudden load exceeds safe control-plane or provider capacity.","owner":"security"},
+    {"id":"P12","slug":"mach-event-bursts","objective":"Coalesce high-rate events and wakeups so propagation speed cannot create duplicate lifecycle scheduling.","owner":"authority"},
+    {"id":"P13","slug":"capillary-small-change-flow","objective":"Move tiny low-risk changes quickly without bypassing Cell identity, evidence, or required gates.","owner":"operator"},
+    {"id":"P14","slug":"surface-tension-contracts","objective":"Keep interfaces cohesive under branch pressure and refuse changes that tear authority boundaries.","owner":"workgraph"},
+    {"id":"P15","slug":"marangoni-priority-gradients","objective":"Translate priority gradients into fair movement without starvation, hidden preemption, or policy drift.","owner":"airflow"},
+    {"id":"P16","slug":"porous-provider-media","objective":"Route through heterogeneous providers and capacity holes without losing lineage or deterministic refusal.","owner":"security"},
+    {"id":"P17","slug":"diffusive-evidence-propagation","objective":"Propagate evidence summaries across operator surfaces while retaining one canonical ledger.","owner":"evidence"},
+    {"id":"P18","slug":"convective-work-dispatch","objective":"Move ready work toward available capacity using Airflow-owned dispatch and explicit admission signals.","owner":"airflow"},
+    {"id":"P19","slug":"heat-flux-budgeting","objective":"Treat retry, model, compute, and operator effort as bounded thermal load with measurable dissipation.","owner":"evidence"},
+    {"id":"P20","slug":"latent-heat-migrations","objective":"Absorb schema and contract migration cost explicitly during phase change rather than hiding it in runtime drift.","owner":"recovery"},
+    {"id":"P21","slug":"turbulent-mixing-merges","objective":"Expose and compare conflicting implementations under stress without prematurely selecting a winner.","owner":"workgraph"},
+    {"id":"P22","slug":"laminar-fast-path","objective":"Preserve a low-overhead path for stable low-pressure work while keeping full invariants intact.","owner":"operator"},
+    {"id":"P23","slug":"crystallization-readiness","objective":"Measure whether entropy, authority overlap, generated backlog, and CI debt are low enough for final solidification.","owner":"evidence"},
+    {"id":"P24","slug":"solidification-release-gate","objective":"Define the final one-way release gate without invoking it during gas, liquid, mixed, or supercritical development.","owner":"authority"}
+  ],
+  "concerns": [
+    {"id":"C01","name":"canonical law","slice":"Define identities, units, ownership, and the invariant that survives every phase."},
+    {"id":"C02","name":"durable state","slice":"Persist phase/control state crash-safely with explicit migration and rollback semantics."},
+    {"id":"C03","name":"versioned contract","slice":"Expose the signal and decision through a deterministic versioned backend contract."},
+    {"id":"C04","name":"Airflow integration","slice":"Integrate the control law into Airflow-owned lifecycle orchestration only."},
+    {"id":"C05","name":"operator mechanics","slice":"Expose inspection, explanation, override boundaries, and repair in CLI/TUI surfaces."},
+    {"id":"C06","name":"security and isolation","slice":"Apply least privilege, trust-zone checks, tenant isolation, and fail-closed behavior."},
+    {"id":"C07","name":"failure dynamics","slice":"Specify retry, timeout, cancellation, stale writer, ambiguous result, and restart behavior."},
+    {"id":"C08","name":"stress envelope","slice":"Bound concurrency, pressure, hysteresis, fairness, overload, and provider saturation."},
+    {"id":"C09","name":"evidence and metrics","slice":"Record phase, signal, decision, latency, cost, refusal, and repair outcomes."},
+    {"id":"C10","name":"pre-crystal convergence","slice":"Prepare deterministic entropy collapse while explicitly refusing premature crystallization."}
+  ]
+}
