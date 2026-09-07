@@ -28,11 +28,8 @@ from swfactory.cells import (
     operation_key,
 )
 from swfactory.idempotency import MutationOutcome, OperationJournal, OperationRef, RetryBudget
-from swfactory.liquid_security_runtime import (
-    Capability,
-    SecurityContext,
-    authorize as authorize_capability,
-)
+from swfactory.liquid_security_runtime import Capability, SecurityContext
+from swfactory.liquid_security_runtime import authorize as authorize_capability
 from swfactory.liquid_workgraph_runtime import WorkNode, WorkPlan, compile_workgraph
 from swfactory.security_contract import CanonicalPolicy, MutationEnvelope, redact
 from swfactory.trust_evidence import TrustedEvidence, validate_mutation_policy
