@@ -4,9 +4,13 @@ on:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6
@@ -17,11 +21,10 @@ jobs:
       - name: e2e demo (scripted agent, local runner, local git remote)
         run: uv run swfactory demo
 
+  # Expensive integration gates run only for main fan-in PRs and main pushes. Internal liquid
+  # fan-out PRs get the fast Python gate above, which keeps 10-50 issue bundles cheap to iterate.
   airflow-parity:
-    # One DAG per blueprints/*.toml mirrors the blueprint (parity), the default line runs end to
-    # end through `dag.test()` with the gates marked success (smoke; HITL never resolves itself),
-    # and the stress line runs 2 issues x 2 targets to prove the mapped jobs never collide.
-    # Named explicitly because the `test` job has no airflow group, so these three skip there.
+    if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -34,8 +37,7 @@ jobs:
           tests/test_dag_parity.py tests/test_dag_smoke.py tests/test_dag_stress.py
 
   srt-smoke:
-    # Anthropic Sandbox Runtime (bubblewrap on Linux) confining the scripted demo: no model, no
-    # ANTHROPIC key. srt is a beta research preview, so this job may not block merges yet.
+    if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-24.04
     continue-on-error: true
     timeout-minutes: 20
@@ -53,11 +55,11 @@ jobs:
       - name: demo under srt (scripted agent, kernel-enforced write confinement)
         run: uv run swfactory demo --sandbox srt
 
-  # Fully local sandbox: build the sandbox image and run the scripted demo with one container per
-  # command (ubuntu runners have a Docker daemon). Optional until it has been green for two weeks.
   docker-smoke:
+    if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
     continue-on-error: true
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6
@@ -66,9 +68,8 @@ jobs:
       - run: docker build -t swfactory-sandbox:local -f deploy/docker/sandbox.Dockerfile .
       - run: SWF_DOCKER_IMAGE=swfactory-sandbox:local uv run swfactory demo --sandbox docker
 
-  # A single upstream snapshot, including the sandbox provider. Source provenance is checked
-  # before tests, and no uv sync may replace it with release wheels afterwards.
   airflow-main:
+    if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -86,8 +87,8 @@ jobs:
           SWF_AIRFLOW_NO_SYNC: "1"
         run: scripts/stress_airflow.sh
 
-  # A fork remains experimental and explicitly selected; it never replaces the default provider.
   airflow-main-sandbox-toolset:
+    if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 20
@@ -101,12 +102,8 @@ jobs:
       - run: scripts/airflow_main.sh --islo
       - run: uv run --no-sync pytest tests/test_sandbox_argv.py tests/test_dag_parity.py
 
-  # `swf` is a second client of the same Airflow and GitHub APIs the Python control room drives, so
-  # it earns the same three gates the Python side has: format, lint-as-error, and the hermetic
-  # suite. The release build runs here too — a workspace that tests green but fails to link is
-  # still a broken release, and finding that out at tag time is finding it out too late. The
-  # manifest lives under rust/ because the repository root is the Python package.
   rust:
+    if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -123,13 +120,8 @@ jobs:
       - name: Release build (the binary release.yml ships; --locked keeps Cargo.lock authoritative)
         run: cargo build --manifest-path rust/Cargo.toml --release --locked
 
-  # The two implementations must not merely both work, they must agree. tests/fixtures/contract/
-  # holds one recorded answer per ported pure function: the pytest half asserts Python still
-  # produces it, the cargo half asserts Rust does. Both halves run here, in one job over one
-  # checkout, because the fixtures are the contract — a commit that regenerates them to match a
-  # drifting implementation has to turn the other language red in the same run, or the safety net
-  # is decorative.
   contract-equivalence:
+    if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
