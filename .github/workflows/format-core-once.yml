@@ -1,0 +1,43 @@
+name: format-core-once
+
+on:
+  push:
+    branches: [core/capability-path]
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: core/capability-path
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - run: uv sync
+      - name: Canonical Ruff rewrite
+        run: |
+          uv run ruff check --fix \
+            src/swfactory/core_capabilities.py \
+            src/swfactory/non_equilibrium.py \
+            tests/test_core_capabilities.py \
+            tests/test_non_equilibrium.py
+          uv run ruff format \
+            src/swfactory/core_capabilities.py \
+            src/swfactory/non_equilibrium.py \
+            tests/test_core_capabilities.py \
+            tests/test_non_equilibrium.py
+      - name: Commit canonical format
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/swfactory/core_capabilities.py src/swfactory/non_equilibrium.py tests/test_core_capabilities.py tests/test_non_equilibrium.py
+          git commit -m 'style: canonical Ruff formatting for core control'
+          git push origin HEAD:core/capability-path
