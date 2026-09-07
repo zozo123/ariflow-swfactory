@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "release_id": "example-release",
+  "expected_count": 3,
+  "issues": [101, 103, 108]
+}
