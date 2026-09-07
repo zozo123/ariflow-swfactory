@@ -1,0 +1,26 @@
+name: skills-sh-seed
+
+on:
+  push:
+    branches: [ops/skills-sh-seed]
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install published Airflow Software Factory skill through the public CLI
+        env:
+          DISABLE_TELEMETRY: ""
+          DO_NOT_TRACK: ""
+        run: |
+          set -euo pipefail
+          npx --yes skills add https://github.com/zozo123/ariflow-swfactory \
+            --skill airflow-software-factory \
+            --agent codex \
+            --global \
+            --yes
+          npx --yes skills list --global --agent codex
