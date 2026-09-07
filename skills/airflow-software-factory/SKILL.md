@@ -1,8 +1,6 @@
 ---
 name: airflow-software-factory
-description: Design, configure, operate, or audit an Apache Airflow software factory that turns GitHub work orders into reviewed pull requests. Use for production routes, approval gates, coding-agent work cells, evidence chains, and factory deployment.
-metadata:
-  short-description: Run software factories on Airflow
+description: Design, configure, operate, extend, stabilize, or audit an Apache Airflow software factory that turns GitHub work orders into reviewed pull requests. Use for production routes, approval gates, coding-agent work cells, bounded work graphs, recovery, evidence chains, operator surfaces, sandbox boundaries, CI/CD, and factory deployment while preserving Airflow as the sole lifecycle scheduler.
 ---
 
 # Airflow software factory
@@ -20,6 +18,12 @@ WORK ORDER -> ROUTE -> INTENT GATE -> SPEC -> PLAN GATE -> WORK CELL
                                                                |
                                                                v
                                                      CONTINUOUS IMPROVEMENT
+```
+
+Install this skill from the public repository with:
+
+```bash
+npx skills add https://github.com/zozo123/ariflow-swfactory --skill airflow-software-factory
 ```
 
 ## Choose the job
