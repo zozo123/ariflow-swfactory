@@ -178,8 +178,4 @@ def execute_wave(
 def wave_issue_slots(wave: PhysicsWave) -> tuple[tuple[int, Concern], ...]:
     """Return the deterministic 10-concern slot set for every domain in a wave."""
 
-    return tuple(
-        (domain_ordinal, concern)
-        for domain_ordinal in range(1, DOMAIN_COUNTS[wave] + 1)
-        for concern in Concern
-    )
+    return tuple((domain_ordinal, concern) for domain_ordinal in range(1, DOMAIN_COUNTS[wave] + 1) for concern in Concern)
