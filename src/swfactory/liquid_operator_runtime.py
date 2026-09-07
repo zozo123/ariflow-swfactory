@@ -52,7 +52,9 @@ class OperatorRequest:
         return data
 
 
-def render_operator_state(*, cells: list[dict[str, Any]], debt: list[dict[str, Any]], generations: list[dict[str, Any]]) -> dict[str, Any]:
+def render_operator_state(
+    *, cells: list[dict[str, Any]], debt: list[dict[str, Any]], generations: list[dict[str, Any]]
+) -> dict[str, Any]:
     """One stable view for CLI/TUI/API renderers; contains no business logic."""
     return {
         "schema_version": 1,
