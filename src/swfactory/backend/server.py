@@ -24,7 +24,9 @@ from .scm_service import operation as scm_operation
 from .service import Factory, Refused
 
 PREFIX = "/v1"
-MAX_BODY = 16 * 1024 * 1024
+MAX_BODY = 64 * 1024
+MAX_SCM_BODY = 16 * 1024 * 1024
+LARGE_SCM_ROUTES = {PREFIX + "/scm/publish", PREFIX + "/scm/open-issue"}
 
 
 def _json_default(value: Any) -> Any:
@@ -75,19 +77,11 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                     },
                 )
                 return True
-            if self.path == PREFIX + "/health":
-                document = factory.capabilities()
-                self.reply(
-                    200,
-                    {
-                        "service": "swfactory",
-                        "api_version": document["contracts"]["api"],
-                        "cell_schema_version": document["contracts"]["cell"],
-                        "mutation_ready": document["mutation_ready"],
-                    },
-                )
-                return True
             return False
+
+        def _require_mutation_ready(self) -> None:
+            if not factory.capabilities().get("mutation_ready"):
+                raise Refused(503, "backend is draining or not mutation-ready")
 
         def handle_api(self) -> None:
             try:
@@ -99,7 +93,8 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                 if self.headers.get("Transfer-Encoding"):
                     raise Refused(400, "chunked requests are not supported")
                 length = int(self.headers.get("Content-Length", "0"))
-                if not 0 <= length <= MAX_BODY:
+                body_limit = MAX_SCM_BODY if self.path in LARGE_SCM_ROUTES else MAX_BODY
+                if not 0 <= length <= body_limit:
                     raise Refused(413, "request exceeds backend limit")
                 raw = self.rfile.read(length)
                 if len(raw) != length:
@@ -108,9 +103,26 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                 if not isinstance(body, dict):
                     raise ValueError("request must be a JSON object")
                 mount = PREFIX + "/airflow/api/v2"
-                if self.path.startswith(mount + "/"):
+                if self.command == "GET" and self.path == PREFIX + "/health":
+                    document = factory.capabilities()
+                    status, payload = (
+                        200,
+                        {
+                            "service": "swfactory",
+                            "api_version": document["contracts"]["api"],
+                            "cell_schema_version": document["contracts"]["cell"],
+                            "mutation_ready": document["mutation_ready"],
+                        },
+                    )
+                elif self.path.startswith(mount + "/"):
+                    # Every non-GET operation accepted by the compatibility mount is a mutation
+                    # (submit, unpause, fail or HITL answer).  Drain applies before any of them can
+                    # create a Cell, consume admission capacity or touch Airflow.
+                    if self.command != "GET":
+                        self._require_mutation_ready()
                     status, payload = factory.compatibility(self.command, self.path[len(mount) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/scm/"):
+                    self._require_mutation_ready()
                     status, payload = 200, scm_operation(factory, self.path[len(PREFIX) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/"):
                     status, payload = 200, factory.operation(self.path[len(PREFIX) :], body)

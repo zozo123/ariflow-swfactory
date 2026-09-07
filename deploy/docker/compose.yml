@@ -37,6 +37,11 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       AIRFLOW__API__PORT: "8080"
       AIRFLOW__API__HOST: 0.0.0.0
+      # Backend-submitted Cells call back to the authoritative backend at every managed stage
+      # boundary.  These stay in the Airflow control-plane container and are scrubbed from work
+      # sandboxes; they are required only when the `console` profile submits managed work.
+      SWF_BACKEND_URL: ${SWF_BACKEND_URL:-http://backend:8082}
+      SWF_BACKEND_TOKEN: ${SWF_BACKEND_TOKEN:-}
       # Operational factory knobs. Mapped job identity still wins over ambient SWF_* values.
       SWF_SANDBOX: docker
       SWF_AGENT: ${SWF_AGENT:-scripted}
