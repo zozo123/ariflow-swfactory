@@ -9,7 +9,6 @@ from typing import Any
 
 from swfactory.backend.server import LARGE_SCM_ROUTES, MAX_BODY, MAX_SCM_BODY, make_server
 
-
 TOKEN = "t" * 32
 
 
@@ -93,7 +92,7 @@ def test_drain_refuses_compatibility_submit_before_it_reaches_factory() -> None:
 def test_default_request_bound_is_64k_and_only_scm_patch_routes_get_16m() -> None:
     assert MAX_BODY == 64 * 1024
     assert MAX_SCM_BODY == 16 * 1024 * 1024
-    assert LARGE_SCM_ROUTES == {"/v1/scm/publish", "/v1/scm/open-issue"}
+    assert {"/v1/scm/publish", "/v1/scm/open-issue"} == LARGE_SCM_ROUTES
 
 
 def test_compose_wires_backend_callback_contract_into_airflow_workers() -> None:

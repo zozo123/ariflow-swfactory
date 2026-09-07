@@ -105,12 +105,15 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                 mount = PREFIX + "/airflow/api/v2"
                 if self.command == "GET" and self.path == PREFIX + "/health":
                     document = factory.capabilities()
-                    status, payload = 200, {
-                        "service": "swfactory",
-                        "api_version": document["contracts"]["api"],
-                        "cell_schema_version": document["contracts"]["cell"],
-                        "mutation_ready": document["mutation_ready"],
-                    }
+                    status, payload = (
+                        200,
+                        {
+                            "service": "swfactory",
+                            "api_version": document["contracts"]["api"],
+                            "cell_schema_version": document["contracts"]["cell"],
+                            "mutation_ready": document["mutation_ready"],
+                        },
+                    )
                 elif self.path.startswith(mount + "/"):
                     # Every non-GET operation accepted by the compatibility mount is a mutation
                     # (submit, unpause, fail or HITL answer).  Drain applies before any of them can
