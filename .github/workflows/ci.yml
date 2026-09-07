@@ -14,6 +14,8 @@ jobs:
         with: { python-version: "3.12" }
       - run: uv sync
       - run: uv run ruff check . && uv run ruff format --check .
+      - name: Reject unresolved documentation template tokens
+        run: '! grep -R -n -E "FILTERS_[A-Z]+|EXAMPLES_BLOCK|DRYRUN_PARA" docs'
       - run: uv run pytest
       - run: uv run python -m swfactory.liquid_release
       - name: e2e demo (scripted agent, local runner, local git remote)
@@ -42,11 +44,10 @@ jobs:
   #
   # Both harnesses always run. Their checkouts carry no persisted GitHub credential, and a failure
   # in one harness cannot suppress the other. The final step reconstructs a red job from either
-  # failed outcome; the job remains non-blocking while timing is learned on hosted runners.
+  # failed outcome; this job is a blocking main-fan-in gate.
   live-gate-e2e:
     if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 45
     # `swf` reads pull requests through `gh`, which refuses to run in Actions without a token and
     # would otherwise degrade the delivery half of the run into "source github is unavailable".
@@ -70,10 +71,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: "rust" }
       - run: uv sync --group airflow
-      - name: swf drives a live Airflow end to end (2 issues x 2 targets, 8 gates, 4 deliveries)
+      - name: swf drives backend + live Airflow end to end (2 issues x 2 targets, 8 gates, 4 deliveries)
         id: rust_harness
         continue-on-error: true
-        run: bash scripts/swf_e2e.sh
+        run: bash scripts/swf_e2e.sh --backend
       - name: the Python control room answers the same gates on the same shape of run
         id: python_harness
         if: always()
