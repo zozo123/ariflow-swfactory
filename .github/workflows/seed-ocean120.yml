@@ -49,28 +49,21 @@ jobs:
                 continue
               fi
 
-              body=$(cat <<EOF
-**Ocean domain:** ${slug}
-
-**Objective:** ${objective}
-
-**Owner lane:** \`${owner}\`
-
-**Engineering slice:** ${slice}
-
-### Acceptance
-- Apache Airflow remains the only lifecycle scheduling authority.
-- Work remains bound to one durable Factory Cell identity and positive epoch.
-- External mutation paths are epoch-fenced, idempotent, or explicitly read-only.
-- Pressure, retry, cancellation, stale-writer, and restart behavior are deterministic.
-- Operator/API views expose the same regime and refusal reason where visible.
-- Evidence records the measured signal, decision, latency, and cost impact.
-- Backpressure is bounded; no fluid metaphor may introduce a second scheduler.
-- Stabilization deletes superseded flow-control abstractions instead of stacking them.
-
-Parent wave: Ocean120 / Navier-Stokes control plane.
-EOF
-)
+              body=$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n%s\n' \
+                "**Ocean domain:** ${slug}" \
+                "**Objective:** ${objective}" \
+                "**Owner lane:** ${owner}" \
+                "**Engineering slice:** ${slice}" \
+                "### Acceptance" \
+                "- Apache Airflow remains the only lifecycle scheduling authority." \
+                "- Work remains bound to one durable Factory Cell identity and positive epoch." \
+                "- External mutation paths are epoch-fenced, idempotent, or explicitly read-only." \
+                "- Pressure, retry, cancellation, stale-writer, and restart behavior are deterministic." \
+                "- Operator/API views expose the same regime and refusal reason where visible." \
+                "- Evidence records the measured signal, decision, latency, and cost impact." \
+                "- Backpressure is bounded; no fluid metaphor may introduce a second scheduler." \
+                "- Stabilization deletes superseded flow-control abstractions instead of stacking them." \
+                "Parent wave: Ocean120 / Navier-Stokes control plane.")
               gh issue create --repo "$REPO" --title "$title" --body "$body" >/dev/null
               created=$((created + 1))
             done
