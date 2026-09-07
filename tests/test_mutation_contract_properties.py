@@ -4,6 +4,7 @@ import random
 
 import pytest
 
+from swfactory.idempotency import MutationOutcome, OperationJournal
 from swfactory.mutation_contract import (
     ExternalMutation,
     StaleMutation,
@@ -11,8 +12,6 @@ from swfactory.mutation_contract import (
     mutation_ref,
     require_current_epoch,
 )
-from swfactory.idempotency import MutationOutcome, OperationJournal
-
 
 SEEDS = (3, 17, 41, 73, 101, 211, 509, 997)
 
@@ -80,8 +79,9 @@ def test_ambiguous_previous_write_is_observed_before_replay(tmp_path) -> None:
             ref,
             lambda: writes.append("write") or {"pr": 42},
             replay_safe=True,
-            reconcile=lambda: observations.append("observe")
-            or MutationOutcome("definitely_absent", evidence={"pr": 42}),
+            reconcile=lambda: (
+                observations.append("observe") or MutationOutcome("definitely_absent", evidence={"pr": 42})
+            ),
         )
         assert result == {"pr": 42}
         assert observations == ["observe"]
