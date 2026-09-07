@@ -1,5 +1,6 @@
 {
   "wave": "Ocean120",
+  "trigger": 2,
   "domains": [
     {"id":"D01","slug":"pressure-routing","objective":"Turn queue pressure into deterministic admission and routing signals without creating a second scheduler.","owner":"authority"},
     {"id":"D02","slug":"viscosity-backpressure","objective":"Damp oscillation under burst load with bounded backpressure, hysteresis, and fair recovery.","owner":"airflow"},
