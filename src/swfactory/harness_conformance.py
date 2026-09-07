@@ -207,13 +207,8 @@ def assert_scenario(document: dict[str, Any], result: ScenarioResult) -> None:
         if key not in observed:
             raise AssertionError(f"{document['name']}: unknown expectation {key}")
         if observed[key] != expected:
-            raise AssertionError(
-                f"{document['name']}: expected {key}={expected!r}, observed {observed[key]!r}"
-            )
+            raise AssertionError(f"{document['name']}: expected {key}={expected!r}, observed {observed[key]!r}")
 
 
 def _component(value: str, limit: int) -> bool:
-    return (
-        1 <= len(value) <= limit
-        and all(char.isascii() and (char.isalnum() or char in "._-") for char in value)
-    )
+    return 1 <= len(value) <= limit and all(char.isascii() and (char.isalnum() or char in "._-") for char in value)
