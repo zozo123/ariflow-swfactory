@@ -140,11 +140,11 @@ print(run_id_for('$job_airflow_run', int('$idx')))
 )
 
 one(
-    '''  branch="$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/factory/*' | head -1)"
+    '''  branch="$(git -C "$remote" for-each-ref 'refs/heads/factory/*' --format='%(refname:short)' | head -1)"
   [ -n "$branch" ] || fail "job $idx has no factory/* branch in $remote"
   printf 'verifying job %s: %s\n' "$idx" "$branch"
 ''',
-    '''  branch="$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/factory/*' | head -1)"
+    '''  branch="$(git -C "$remote" for-each-ref 'refs/heads/factory/*' --format='%(refname:short)' | head -1)"
   [ -n "$branch" ] || fail "job $idx has no factory/* branch in $remote"
   printf '%s|%s\n' "$remote" "$branch" >>"$WORK/delivery-keys.txt"
   printf 'verifying job %s: %s\n' "$idx" "$branch"
