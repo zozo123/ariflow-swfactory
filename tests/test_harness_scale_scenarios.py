@@ -6,7 +6,6 @@ import pytest
 
 from swfactory.harness_conformance import assert_scenario, execute_scenario, load_scenario
 
-
 FIXTURES = Path(__file__).parent / "fixtures" / "harness-scale"
 SCENARIOS = sorted(FIXTURES.glob("*.json"))
 
