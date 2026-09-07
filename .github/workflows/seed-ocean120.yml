@@ -1,0 +1,78 @@
+name: seed-ocean120
+
+on:
+  push:
+    branches: [ocean/navier-stokes]
+    paths:
+      - ops/ocean120-v1.json
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Create Ocean120 issue matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=ops/ocean120-v1.json
+          domains=$(jq '.domains | length' "$manifest")
+          concerns=$(jq '.concerns | length' "$manifest")
+          test "$domains" -eq 12
+          test "$concerns" -eq 10
+
+          created=0
+          skipped=0
+          for ((di=0; di<domains; di++)); do
+            did=$(jq -r ".domains[$di].id" "$manifest")
+            slug=$(jq -r ".domains[$di].slug" "$manifest")
+            objective=$(jq -r ".domains[$di].objective" "$manifest")
+            owner=$(jq -r ".domains[$di].owner" "$manifest")
+            for ((ci=0; ci<concerns; ci++)); do
+              cid=$(jq -r ".concerns[$ci].id" "$manifest")
+              concern=$(jq -r ".concerns[$ci].name" "$manifest")
+              slice=$(jq -r ".concerns[$ci].slice" "$manifest")
+              key="[Ocean120/${did}-${cid}]"
+              title="${key} ${slug}: ${concern}"
+
+              if gh issue list --repo "$REPO" --state all --search "${key} in:title" --limit 20 --json title \
+                --jq ".[] | select(.title == \"${title}\") | .title" | grep -q .; then
+                skipped=$((skipped + 1))
+                continue
+              fi
+
+              body=$(cat <<EOF
+**Ocean domain:** ${slug}
+
+**Objective:** ${objective}
+
+**Owner lane:** \`${owner}\`
+
+**Engineering slice:** ${slice}
+
+### Acceptance
+- Apache Airflow remains the only lifecycle scheduling authority.
+- Work remains bound to one durable Factory Cell identity and positive epoch.
+- External mutation paths are epoch-fenced, idempotent, or explicitly read-only.
+- Pressure, retry, cancellation, stale-writer, and restart behavior are deterministic.
+- Operator/API views expose the same regime and refusal reason where visible.
+- Evidence records the measured signal, decision, latency, and cost impact.
+- Backpressure is bounded; no fluid metaphor may introduce a second scheduler.
+- Stabilization deletes superseded flow-control abstractions instead of stacking them.
+
+Parent wave: Ocean120 / Navier-Stokes control plane.
+EOF
+)
+              gh issue create --repo "$REPO" --title "$title" --body "$body" >/dev/null
+              created=$((created + 1))
+            done
+          done
+          echo "Ocean120 created=${created} skipped=${skipped}" >> "$GITHUB_STEP_SUMMARY"
