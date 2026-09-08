@@ -188,3 +188,29 @@ def test_backend_mesh_operation_exposes_shared_rendezvous(tmp_path) -> None:
         },
     )
     assert signal.kind == "observation"
+
+
+def test_backend_missing_claim_release_is_conflict_not_internal_error(tmp_path) -> None:
+    factory = SimpleNamespace(state_root=tmp_path)
+    lease = operation(
+        factory,
+        "/mesh/join",
+        {
+            "station_id": "station_release",
+            "repo": "acme/widgets",
+            "incarnation_id": "inc_release",
+            "operator": "alice",
+        },
+    )
+    with pytest.raises(MeshError, match="claim no longer exists"):
+        operation(
+            factory,
+            "/mesh/release",
+            {
+                "repo": "acme/widgets",
+                "station_id": lease.station_id,
+                "station_lease_epoch": lease.lease_epoch,
+                "cell_id": "cell_missing",
+                "claim_epoch": 1,
+            },
+        )
