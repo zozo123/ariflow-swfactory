@@ -71,13 +71,9 @@ def _actor(responded_by_user: Any) -> str:
 
 
 def _stage_fn(stage: str):
-    if stage == "build_and_test":
-        from swfactory.work_stage import build_and_test
+    from swfactory.stage_registry import resolve
 
-        return build_and_test
-    from swfactory.stages import STAGES
-
-    return STAGES[stage]
+    return resolve(stage)
 
 
 def _cell_transition(job: dict[str, Any], state: str, context: dict[str, Any], suffix: str) -> None:
