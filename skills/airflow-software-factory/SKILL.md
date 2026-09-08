@@ -102,7 +102,9 @@ one shared operations layer that owns validation, readiness, and the write itsel
 decides for itself is a second policy, and only one of two policies ever gets fixed. Read
 [references/operator-interface.md](references/operator-interface.md) before building or auditing
 one: it covers gate readiness, the three levels of delivery evidence, exit codes a script can trust,
-and paging a control plane that clamps `limit` without saying so.
+paging a control plane that clamps `limit` without saying so, what a bulk action owes an operator
+before it is allowed a blast radius, and shipping the client so a stranger can install and verify
+it.
 
 Prefer the repository's own commands and documentation over copied instructions:
 
