@@ -1,0 +1,34 @@
+name: format-convergence
+
+on:
+  push:
+    branches: [roadmap/2022-convergence]
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: roadmap/2022-convergence
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - run: uv sync
+      - name: Apply Ruff fixes and formatting
+        run: |
+          uv run ruff check . --fix --unsafe-fixes || true
+          uv run ruff format .
+          uv run ruff check .
+      - name: Commit formatter output
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Fix convergence lint and formatting'
+          git push origin HEAD:roadmap/2022-convergence
