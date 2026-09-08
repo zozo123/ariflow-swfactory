@@ -1,0 +1,8 @@
+{
+  "name": "airflow-software-factory",
+  "description": "Airflow-governed software factory skills for issue-to-PR delivery, Liquid fan-out/fan-in, Factory Cells, sandbox boundaries, evidence, and operator workflows.",
+  "version": "2.1.0",
+  "author": {
+    "name": "Yossi Eliaz"
+  }
+}
