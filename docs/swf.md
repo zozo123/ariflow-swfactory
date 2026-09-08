@@ -333,11 +333,18 @@ everything.
 
 | Listing | Narrows by |
 | --- | --- |
-| `swf gates list` | FILTERS_GATES |
-| `swf jobs list` | FILTERS_JOBS |
-| `swf runs list` | FILTERS_RUNS |
+| `swf gates list` | `--dag`, `--run`, `--issue`, `--state`, `--actor`, `--limit` |
+| `swf jobs list` | `--dag`, `--run`, `--issue`, `--state`, `--attention`, `--limit` |
+| `swf runs list` | `--dag`, `--state`, `--since`, `--limit` |
 
-EXAMPLES_BLOCK
+```sh
+swf gates list --dag factory --state deferred --limit 50
+swf jobs list --issue 2034 --attention --limit 25
+swf runs list --dag factory --state running --limit 20
+```
+
+Listings never widen when another filter is added. If a source is truncated or unavailable, the
+result reports that explicitly; an empty selection is never used as a substitute for a failed read.
 
 Prefer a filter to a `jq` select for the set you are about to *answer*: the filters are the same
 selection `gates approve --all` applies, so a listing you narrowed with them is literally the batch
@@ -346,7 +353,15 @@ you are about to run, while a `jq` pipeline is a second implementation that can 
 
 ### Answer a batch, dry run first
 
-DRYRUN_PARA
+Bulk gate commands use the same filters as `gates list`. `--dry-run` performs the full
+selection and readiness checks but sends no PATCH request. The output names every selected gate,
+its current readiness and anything skipped because it is arming, stale, already answered or
+outside the bounded `--limit`.
+
+```sh
+swf gates approve --all --dag factory --state deferred --limit 25 --dry-run
+swf gates approve --all --dag factory --state deferred --limit 25 --yes
+```
 
 The rule to keep is mechanical rather than a matter of judgement: **run the line with `--dry-run`,
 read what it selected, then re-run the identical line with `--dry-run` removed.** Editing a filter

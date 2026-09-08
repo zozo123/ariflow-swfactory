@@ -1,5 +1,6 @@
 //! Read-only fleet/control-plane operations shared by CLI and TUI.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use swf_adapters::factory::FactoryApi;
@@ -8,27 +9,22 @@ use swf_domain::operator::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::backend_context::BackendContext;
 use crate::context::Context;
 use crate::ops::{OpsError, Result};
 
 pub struct OperatorOps {
-    api: FactoryApi,
+    api: Arc<FactoryApi>,
 }
 
 impl OperatorOps {
     pub fn connect(context: &Context, timeout: Duration) -> Result<Self> {
-        let backend_url =
-            std::env::var("SWF_BACKEND_URL").unwrap_or_else(|_| context.backend_url.clone());
-        if backend_url.is_empty() {
-            return Err(OpsError::operational(
-                "fleet operations require the Python backend; this context is in direct mode",
-            )
-            .with_hint("configure --backend-url and SWF_BACKEND_TOKEN"));
-        }
-        let token = std::env::var("SWF_BACKEND_TOKEN").unwrap_or_default();
-        Ok(Self {
-            api: FactoryApi::new(&backend_url, token, timeout)?,
-        })
+        let backend = BackendContext::connect(context, timeout, "fleet operations")?;
+        Ok(Self::from_backend(&backend))
+    }
+
+    pub fn from_backend(backend: &BackendContext) -> Self {
+        Self { api: backend.api() }
     }
 
     pub async fn queue(&self, limit: usize, cancel: &CancellationToken) -> Result<QueueSnapshot> {
