@@ -19,12 +19,13 @@ jobs:
         with:
           python-version: '3.13'
       - run: python tools/finalize_operator_docs_once.py
-      - name: Commit generated docs
+      - run: python tools/finalize_stage_registry_once.py
+      - name: Commit generated convergence edits
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          if ! git diff --quiet -- docs/swf.md; then
-            git add docs/swf.md
-            git commit -m "docs: replace operator guide placeholders with executable examples"
+          if ! git diff --quiet -- docs/swf.md dags/blueprints.py; then
+            git add docs/swf.md dags/blueprints.py
+            git commit -m "refactor: finalize operator docs and shared stage registry"
             git push
           fi
