@@ -13,12 +13,17 @@ import hmac
 import json
 import os
 import subprocess
+import sys
+import traceback
+import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from swfactory.cells import CellError
 from swfactory.control import ControlError
+from swfactory.idempotency import OperationError
 
 from .core_service import operation as core_operation
 from .scm_service import operation as scm_operation
@@ -129,8 +134,23 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                 status, payload = 400, {"detail": str(error)[:500]}
             except (ControlError, OSError, subprocess.SubprocessError):
                 status, payload = 502, {"detail": "backend service unavailable; mutation outcome may be unknown"}
+            except (OperationError, CellError) as error:
+                # The durable control plane refusing a request is an answer, not a crash. Both
+                # families subclass RuntimeError, so without this they fell into the sink below and
+                # an operator was told "internal backend error" for a stale epoch, a busy Cell, a
+                # duplicate operation key or an in-doubt outcome -- conditions with a specific
+                # remedy that the message must name.
+                status, payload = 409, {"detail": str(error)[:500]}
             except Exception:
-                status, payload = 500, {"detail": "internal backend error"}
+                # Last resort. Anything reaching here is a defect, so it must leave a trace: this
+                # handler used to discard the traceback while `log_message` suppressed the access
+                # log, which produced a zero-byte backend log next to an intermittent failure and
+                # made it undiagnosable. The id ties the operator's response to the traceback.
+                error_id = uuid.uuid4().hex[:12]
+                print(f"[backend] unhandled error {error_id} on {self.command} {self.path}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
+                sys.stderr.flush()
+                status, payload = 500, {"detail": "internal backend error", "error_id": error_id}
             self.reply(status, payload)
 
         do_GET = handle_api

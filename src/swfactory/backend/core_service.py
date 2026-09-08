@@ -52,7 +52,14 @@ def intent_digest(payload: dict[str, Any]) -> str:
 
 def operator_projection(factory: Factory, cell_id: str) -> dict[str, Any]:
     core = ensure_core(factory)
-    truth = core.inspect(cell_id)
+    try:
+        truth = core.inspect(cell_id)
+    except KeyError as error:
+        # `CoreCapabilityRuntime.inspect` reads the Cell store directly rather than going through
+        # `Factory._cell`, so an unknown id escaped as a bare KeyError, reached the transport's
+        # catch-all and told an operator who mistyped a cell id that the backend was broken. Every
+        # sibling cell route answers 404 naming the id; this one now matches them.
+        raise Refused(404, f"no such Factory Cell {cell_id}") from error
     cell = truth["cell"]
     current_epoch = int(cell["epoch"])
     recovery = []
