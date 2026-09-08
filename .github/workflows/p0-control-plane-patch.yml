@@ -26,6 +26,7 @@ jobs:
         run: uv sync
       - name: Format and lint
         run: |
+          uv run ruff check --fix src/swfactory/backend/service.py tests/test_backend_control_plane.py
           uv run ruff format src/swfactory/backend/service.py tests/test_backend_control_plane.py
           uv run ruff check src/swfactory/backend/service.py tests/test_backend_control_plane.py
       - name: Prove drain and cancellation contracts
