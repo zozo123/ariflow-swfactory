@@ -1,0 +1,83 @@
+# Contract between this repository and the software factory that builds it.
+#
+# This is the file that makes self-hosting possible. Every other blueprint target points at
+# `demo/target` (a toy calculator committed inside this repo); a target with `dir = ""` resolves
+# here instead, so a work cell can work on swfactory itself. Without this file the factory refuses
+# outright: `stages.seed_local_workdir` raises "a local root target must run from the target
+# checkout containing factory.toml", and `config.load_target_contract` raises "target has no
+# factory.toml; the factory refuses to guess commands".
+#
+# `swfactory.config.TargetContract` recognises exactly [commands].test (required),
+# [commands].lint, and [paths].{junit, source, tests, protected}. `parse()` hand-picks those keys,
+# so anything else is silently dropped rather than rejected: do not add keys expecting effect.
+
+[commands]
+# The hermetic suite: 653 tests, ~98 s wall, no network (fake subprocess, tmp git repos). Five
+# tests are collection-skipped because the DAG parity tests need `uv sync --group airflow`, which
+# a work cell does not have; CI's `airflow-parity` job covers those instead.
+#
+# This command runs INSIDE the work cell (`stages.run_tests` -> `ctx.sb.run(cmd)`), not on the
+# orchestrator, and `stages.setup` has already run `uv sync --group dev` there, so it resolves
+# from the warm venv. It is deliberately Python-only: `cargo test` would fail in an islo cell
+# because the deny-by-default `swfactory` gateway profile allows pypi.org and
+# files.pythonhosted.org but no crates.io host, and CLAUDE.md rules out Rust inside a work cell in
+# any case. Rust stays the operator's client, verified by CI's `rust` job.
+#
+# --junitxml is not decoration. `run_tests` deletes that file, runs this command, then parses the
+# report; a missing or malformed report is `report_valid=False` and the stage fails even on a zero
+# exit code.
+test = "uv run --group dev pytest --junitxml=.factory/junit.xml"
+# The same gate CI's `test` job applies. Validated by the contract, but no stage executes it
+# today: it is declared for humans, `doctor`, and any future lint stage.
+lint = "uv run --group dev ruff check . && uv run --group dev ruff format --check ."
+
+[paths]
+# Must live below `.factory/` (validator), which is git-ignored and is orchestrator scratch.
+junit = ".factory/junit.xml"
+# The Python package root; hatch builds `src/swfactory`. `rust/` is the operator's client, never
+# cell work, so it is not the declared source and is protected below.
+source = "src"
+# Writable during `build` (a cell must be able to add tests) and read-only during `fix`
+# ("fix the code, not the gate"). `config.protected_for` derives that from this key plus the list
+# below: for `fix` it appends the tests dir, for every other stage it removes it.
+tests = "tests"
+
+# Read-only inside the work cell. This list reaches the agent two ways: `guard_deny_rules` turns
+# every entry into a Claude Code `permissions.deny` rule (all five backends), and srt/docker
+# additionally enforce it in the kernel (`denyWrite` / a `:ro` bind mount). islo and toolset have
+# no `set_protected`, so on the production backend these are agent-enforced only -- which is why
+# `.github/workflows/control-plane-gate.yml` re-checks the same list against the base revision.
+#
+# NEVER list a `src/**` glob here. `sandbox._literal_prefix` reduces each entry to its longest
+# wildcard-free prefix, so `src/**/*.py` becomes `src`: the whole package would be mounted `:ro`
+# and no build stage could edit any code. Exact file paths are safe -- they have no wildcard, so
+# they survive intact.
+#
+# `REVIEW.md`, `bands.yaml`, `.git/**`, `.claude/**`, `.github/**`, `docs/factory/**` and
+# `.factory/**` are already in `agent.GUARD_PATH_DENY` for every target. `factory.toml` and
+# `.github/` are repeated below anyway: the hard-coded rules are in-agent, and repeating them here
+# buys kernel enforcement on srt and docker.
+protected = [
+  # --- this contract and the checks that police it -------------------------------------------
+  "factory.toml",                       # a cell must not rewrite its own contract
+  ".github/",                           # nor the required checks that gate its own PR
+  "config/capability-inventory.json",   # support claims are a human governance decision
+  # --- what governs every FUTURE run ----------------------------------------------------------
+  "blueprints/",                        # gates, limits, budgets and sandbox of every line
+  "dags/",                              # Airflow is the only lifecycle scheduler
+  "scripts/",                           # release, e2e and stress entry points
+  "pyproject.toml",                     # the verification environment itself
+  "uv.lock",
+  "CLAUDE.md",                          # the knowledge page every later cell is briefed from
+  # --- the confinement itself: editing these is how a run would widen its own cage ------------
+  "src/swfactory/agent.py",             # tool policy, GUARD_PATH_DENY, guard installation
+  "src/swfactory/sandbox.py",           # every sandbox backend and its argv
+  "src/swfactory/sandbox_contract.py",
+  "src/swfactory/stages.py",            # stage semantics, incl. applying this very list
+  "src/swfactory/security_boundary.py",
+  "src/swfactory/security_contract.py",
+  "src/swfactory/worker_security.py",
+  # --- fix the code, not the gate --------------------------------------------------------------
+  "tests/",                             # removed for build, re-added for fix by protected_for
+  "rust/",                              # the operator's client is out of scope for a cell
+]
