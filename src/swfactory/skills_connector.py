@@ -1,6 +1,6 @@
 """Orchestrator-side connector to the open skills.sh ecosystem.
 
-This module deliberately does not participate in lifecycle scheduling.  It is an operator utility
+This module deliberately does not participate in lifecycle scheduling. It is an operator utility
 around Vercel's ``skills`` CLI: discover packages, install an explicitly selected skill, and expose
 canonical package identities for the factory and Vercel's ``find-skills`` skill.
 
@@ -10,10 +10,12 @@ Factory Cell fencing, sandbox policy, evidence gates, or publication authority.
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 from swfactory.models import StageError
 
@@ -99,7 +101,7 @@ def list_argv(repository: str = SWFACTORY_SKILL.repository) -> tuple[str, ...]:
 def run(argv: Sequence[str], *, timeout_s: int = 120) -> str:
     """Run the skills CLI on the trusted orchestrator/operator host and return stdout.
 
-    No shell is used.  A missing ``npx``, timeout, or non-zero result is surfaced as a non-retryable
+    No shell is used. A missing ``npx``, timeout, or non-zero result is surfaced as a non-retryable
     operator error rather than silently falling back to another package source.
     """
 
@@ -131,3 +133,55 @@ def catalog() -> dict[str, str]:
         "vercel_repository": VERCEL_SKILLS_REPO,
         "skills_sh": SKILLS_SH_URL,
     }
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Small operator CLI: ``python -m swfactory.skills_connector ...``."""
+
+    parser = argparse.ArgumentParser(description="skills.sh/Vercel Skills operator connector")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("catalog", help="print canonical skill package identities")
+    commands.add_parser("list", help="list skills exported by this repository")
+
+    find = commands.add_parser("find", help="search skills through Vercel's skills CLI")
+    find.add_argument("query")
+    find.add_argument("--owner", default="vercel-labs")
+
+    bootstrap = commands.add_parser("bootstrap", help="install Vercel's find-skills package")
+    bootstrap.add_argument("--global", dest="global_scope", action="store_true")
+    bootstrap.add_argument("--agent")
+    bootstrap.add_argument("--copy", action="store_true")
+
+    install_self = commands.add_parser("install-self", help="install the factory skill")
+    install_self.add_argument("--global", dest="global_scope", action="store_true")
+    install_self.add_argument("--agent")
+    install_self.add_argument("--copy", action="store_true")
+
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.command == "catalog":
+        print(json.dumps(catalog(), indent=2, sort_keys=True))
+        return 0
+    if args.command == "list":
+        print(run(list_argv()), end="")
+        return 0
+    if args.command == "find":
+        print(run(find_argv(args.query, owner=args.owner)), end="")
+        return 0
+
+    package = VERCEL_FIND_SKILLS if args.command == "bootstrap" else SWFACTORY_SKILL
+    print(
+        run(
+            install_argv(
+                package,
+                global_scope=args.global_scope,
+                agent=args.agent,
+                copy=args.copy,
+            )
+        ),
+        end="",
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
