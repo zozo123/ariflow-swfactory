@@ -195,6 +195,14 @@ class OperationJournal:
         budget = budget or budget_for(ref.kind)
         owner = uuid.uuid4().hex
         now = time.time()
+        # `with self.db` rolls the transaction back on any exception, so a branch that records a
+        # durable fact and then raises loses the very fact it just recorded. Both refusals below
+        # do exactly that, so both defer their raise until the write has committed: an operation
+        # whose budget is spent, or whose lease expired, must still look spent or in doubt to the
+        # next process that opens this database. Losing it makes a dead operation read as
+        # retryable forever, which is how a blind replay reaches a provider a second time.
+        deferred: Exception | None = None
+        attempt = 0
         with self.lock, self.db:
             row = self.get(ref.key)
             self._assert_identity(ref, row)
@@ -210,24 +218,29 @@ class OperationJournal:
                            WHERE operation_key=? AND attempt_owner=?""",
                         ("attempt lease expired; reconcile before another effect", now, ref.key, incumbent),
                     )
-                raise OperationInDoubt(ref.key, state)
-            attempts = int(row.get("attempts") or 0)
-            if attempts >= budget.max_attempts:
-                self.db.execute(
-                    "UPDATE operations SET state='exhausted', updated_at=? WHERE operation_key=?",
-                    (now, ref.key),
-                )
-                raise RetryBudgetExhausted(f"{ref.key}: retry budget {budget.max_attempts} exhausted")
-            attempt = attempts + 1
-            cur = self.db.execute(
-                """UPDATE operations SET attempts=?,state='intent',last_error=NULL,next_attempt_at=NULL,
-                   attempt_owner=?,attempt_lease_until=?,updated_at=?
-                   WHERE operation_key=? AND state!='committed' AND attempt_owner IS NULL""",
-                (attempt, owner, now + max(1.0, lease_s), now, ref.key),
-            )
-            if cur.rowcount != 1:
-                raise OperationInDoubt(ref.key, "attempt_in_progress")
-            return attempt, owner
+                deferred = OperationInDoubt(ref.key, state)
+            else:
+                attempts = int(row.get("attempts") or 0)
+                if attempts >= budget.max_attempts:
+                    self.db.execute(
+                        "UPDATE operations SET state='exhausted', updated_at=? WHERE operation_key=?",
+                        (now, ref.key),
+                    )
+                    deferred = RetryBudgetExhausted(f"{ref.key}: retry budget {budget.max_attempts} exhausted")
+                else:
+                    attempt = attempts + 1
+                    cur = self.db.execute(
+                        """UPDATE operations SET attempts=?,state='intent',last_error=NULL,next_attempt_at=NULL,
+                           attempt_owner=?,attempt_lease_until=?,updated_at=?
+                           WHERE operation_key=? AND state!='committed' AND attempt_owner IS NULL""",
+                        (attempt, owner, now + max(1.0, lease_s), now, ref.key),
+                    )
+                    if cur.rowcount != 1:
+                        # Nothing was written, so this one may raise inside the transaction.
+                        raise OperationInDoubt(ref.key, "attempt_in_progress")
+        if deferred is not None:
+            raise deferred
+        return attempt, owner
 
     def mark_in_doubt(self, ref: OperationRef, error: BaseException | str, *, owner: str | None = None) -> None:
         detail = str(error)[:2000]

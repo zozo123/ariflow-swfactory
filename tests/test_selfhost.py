@@ -153,9 +153,13 @@ def test_both_sandbox_backends_are_declared_in_the_capability_inventory() -> Non
         assert claim_id in by_id, f"{claim_id} missing from the capability inventory"
         assert by_id[claim_id]["state"] == "experimental"
         assert by_id[claim_id]["follow_up"], "an experimental claim owes a follow_up"
-    assert by_id["selfhost.factory"]["evidence"] == [
-        "advisory check: control-plane-gate (base-revision protected list vs the PR diff; not required on main)"
-    ], "no self-hosted run has been archived yet; do not claim end-to-end evidence"
+    (evidence,) = by_id["selfhost.factory"]["evidence"]
+    assert evidence.startswith("advisory check ci:control-plane-gate"), (
+        "no self-hosted run has been archived yet; the only evidence is the advisory gate, "
+        "written as a ci: reference so the inventory check can prove that job still exists"
+    )
+    assert "not required on main" in evidence
+    assert "No end-to-end evidence exists yet" in by_id["selfhost.factory"]["follow_up"]
 
 
 def test_the_control_plane_gate_reads_the_base_revision() -> None:

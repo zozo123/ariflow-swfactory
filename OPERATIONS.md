@@ -318,7 +318,9 @@ receiver, creates a signed incoming webhook, and installs the repository hook. S
 
 ### Other sandbox providers
 
-The built-in choices are `local`, `srt`, `docker`, `islo`, and Airflow `toolset`. The toolset path
+The choices are `local`, `srt`, `docker`, `islo`, and Airflow `toolset`. The `local` sandbox is
+test only. The `srt`, `docker` and `islo` sandboxes are experimental. See
+`config/capability-inventory.json` for what each one carries. The toolset path
 can load an Airflow-compatible backend for Docker Sandboxes (`sbx`) or a custom Daytona, E2B,
 Tensorlake, or Box by ASCII adapter:
 

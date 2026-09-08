@@ -6,6 +6,35 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The capability inventory is the single public truth for every claimed feature. `test` and
+  `evidence` references must now *resolve*: a cited file has to exist and a cited CI job, written
+  as `ci:<name>`, has to exist in `.github/workflows`. The README claim table is generated from
+  `config/capability-inventory.json` (`python -m swfactory.capability_inventory --write`), the
+  sandbox tables in README and `site/` carry each profile's claim id and `support` value, and a
+  test refuses any sentence in either document that describes a capability more strongly than its
+  claim, or describes an available capability that has no claim at all.
+- `tests/test_recovery_acceptance.py`, `tests/test_workgraph_stage_execution.py`,
+  `tests/test_work_executor.py` and `tests/test_generation_contract.py`. Four claims cited test
+  files nobody had written; each now cites a test that executes the entrypoint it claims.
+
+### Fixed
+
+- `operation_recovery.plan_recovery` planned a plain `retry` for an operation the journal had
+  marked `in_doubt`, and for one it had already marked `exhausted` — exactly the blind replay of a
+  possibly-committed external effect that the recovery invariant exists to prevent.
+- `OperationJournal.start_attempt` raised `RetryBudgetExhausted` inside its transaction, which
+  rolled back the `exhausted` row it had just written; after a restart a dead operation looked
+  retryable forever.
+
+### Changed
+
+- `workgraph.serial` names the entrypoint that actually executes `Plan.work`
+  (`swfactory.work_stage.build_and_test`, the Airflow build task) rather than
+  `swfactory.stages.build_and_test`, which runs the legacy loop.
+- The site's sandbox table reports each profile's inventory support level instead of "built in".
+
 ## [2.2.0] - 2026-09-08
 
 ### Removed

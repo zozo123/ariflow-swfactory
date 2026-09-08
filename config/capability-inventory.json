@@ -9,10 +9,15 @@
       "owner": "airflow",
       "runtime_entry": "swfactory.backend.service.Factory.submit -> Airflow DAG run",
       "environment": "GitHub-hosted Ubuntu with upstream Airflow plus authenticated live-gate harness",
-      "test": "airflow-parity required check plus scripts/stress_airflow.sh",
+      "test": "ci:airflow-parity required check plus scripts/stress_airflow.sh",
       "evidence": [
         "candidate-readiness-airflow artifact",
-        "GitHub required check: airflow-parity"
+        "GitHub required check ci:airflow-parity"
+      ],
+      "public_surface": [
+        "Airflow",
+        "airflow",
+        "lifecycle scheduler"
       ]
     },
     {
@@ -23,10 +28,15 @@
       "owner": "authority+security",
       "runtime_entry": "swfactory.core_capabilities.CoreCapabilityRuntime.execute_external via ControlKernel",
       "environment": "backend-owned GitHub credentials; coding sandboxes receive no publication secret",
-      "test": "tests/test_canonical_mutation_path.py",
+      "test": "tests/test_core_capabilities.py (fenced, replayed and evidenced execute_external)",
       "evidence": [
         "candidate-readiness-core artifact",
         "operation journal + TrustedEvidence receipt"
+      ],
+      "public_surface": [
+        "GitHub publication",
+        "publish",
+        "pull request"
       ]
     },
     {
@@ -40,7 +50,12 @@
       "test": "tests/test_recovery_acceptance.py",
       "evidence": [
         "candidate-readiness-core artifact",
-        "operator recovery-plan endpoint"
+        "operation journal + TrustedEvidence receipt"
+      ],
+      "public_surface": [
+        "recovery",
+        "in-doubt",
+        "reconcile"
       ]
     },
     {
@@ -49,12 +64,15 @@
       "support": "supported",
       "invariant": "Plan.work executes only inside the Airflow-owned build stage, honors dependencies and conflicts, and fans in deterministically.",
       "owner": "workgraph",
-      "runtime_entry": "swfactory.stages.build_and_test -> bounded Plan.work execution",
+      "runtime_entry": "swfactory.work_stage.build_and_test (the Airflow build task dags/blueprints.py selects) -> bounded Plan.work execution",
       "environment": "supported serial fallback on the governed build workspace",
-      "test": "tests/test_workgraph_stage_execution.py and tests/test_work_executor.py",
+      "test": "tests/test_workgraph_stage_execution.py",
       "evidence": [
         "candidate-readiness-core artifact",
         "workgraph execution report"
+      ],
+      "public_surface": [
+        "`Plan.work`"
       ]
     },
     {
@@ -65,11 +83,15 @@
       "owner": "workgraph",
       "runtime_entry": "swfactory.work_executor.WorkExecutor and swfactory.execution_binding",
       "environment": "provider-specific; not part of the supported promotion contract",
-      "test": "WorkExecutor unit scenarios for parallel fan-out, conflict, crash and cancellation",
+      "test": "tests/test_work_executor.py (parallel fan-out, conflict, crash and cancellation scenarios)",
       "evidence": [
         "unit-level executor receipts only"
       ],
-      "follow_up": "Qualify one real provider with isolated candidate workspaces and retained lineage before changing support to validated."
+      "follow_up": "Qualify one real provider with isolated candidate workspaces and retained lineage before changing support to validated.",
+      "public_surface": [
+        "provider-native fork",
+        "`parallel_safe`"
+      ]
     },
     {
       "id": "sandbox.local-scripted",
@@ -79,9 +101,14 @@
       "owner": "security+evidence",
       "runtime_entry": "swfactory demo",
       "environment": "local sandbox with scripted fixtures",
-      "test": "required test job e2e demo",
+      "test": "ci:test required job (its e2e demo step) plus tests/test_stages_scripted.py",
       "evidence": [
         "candidate-readiness-core artifact"
+      ],
+      "public_surface": [
+        "`local` sandbox",
+        "<code>local</code> sandbox",
+        "sandbox.local-scripted"
       ]
     },
     {
@@ -92,11 +119,16 @@
       "owner": "security",
       "runtime_entry": "swfactory.sandbox.SrtSandbox",
       "environment": "Ubuntu 24.04 with Anthropic Sandbox Runtime",
-      "test": "srt-smoke CI job",
+      "test": "ci:srt-smoke plus the SrtSandbox argv contracts in tests/test_sandbox_argv.py",
       "evidence": [
-        "CI check: srt-smoke"
+        "CI check ci:srt-smoke"
       ],
-      "follow_up": "Promote only after the hosted smoke is stable enough to join a required protected-branch context."
+      "follow_up": "Promote only after the hosted smoke is stable enough to join a required protected-branch context.",
+      "public_surface": [
+        "<code>srt</code>",
+        "`srt`",
+        "srt"
+      ]
     },
     {
       "id": "sandbox.docker",
@@ -106,11 +138,18 @@
       "owner": "security",
       "runtime_entry": "swfactory.sandbox Docker path",
       "environment": "GitHub-hosted Docker",
-      "test": "docker-smoke CI job",
+      "test": "ci:docker-smoke",
       "evidence": [
-        "CI check: docker-smoke"
+        "CI check ci:docker-smoke"
       ],
-      "follow_up": "Keep advisory until failure rate and cleanup semantics satisfy the supported sandbox SLO."
+      "follow_up": "Keep advisory until failure rate and cleanup semantics satisfy the supported sandbox SLO.",
+      "public_surface": [
+        "<code>docker</code>",
+        "`docker`",
+        "docker sandbox",
+        "docker sandboxing",
+        "docker work container"
+      ]
     },
     {
       "id": "factory.generations",
@@ -120,11 +159,15 @@
       "owner": "authority+evidence",
       "runtime_entry": "generation manifests and parent-owned promotion path",
       "environment": "simulation/contract path only",
-      "test": "generation contract tests",
+      "test": "tests/test_generation_contract.py",
       "evidence": [
         "contract evidence only"
       ],
-      "follow_up": "Require a parent-approved adoption/refusal/rollback experiment with no parent production credentials before operational support."
+      "follow_up": "Require a parent-approved adoption/refusal/rollback experiment with no parent production credentials before operational support.",
+      "public_surface": [
+        "recursive factories",
+        "factory generations"
+      ]
     },
     {
       "id": "sandbox.islo",
@@ -134,12 +177,17 @@
       "owner": "security",
       "runtime_entry": "swfactory.sandbox.IsloSandbox (islo use / cp / rm control plane)",
       "environment": "islo MicroVMs: one trusted orchestrator VM plus one untrusted agent VM per job; requires ISLO_API_KEY and the swfactory gateway profile described in docs/islo.md",
-      "test": "evals-islo job in .github/workflows/evals.yml (a real claude run inside a MicroVM) plus the hermetic argv contracts in tests/test_sandbox_argv.py",
+      "test": "ci:evals-islo in .github/workflows/evals.yml (a real claude run inside a MicroVM) plus the hermetic argv contracts in tests/test_sandbox_argv.py",
       "evidence": [
-        "CI job: evals-islo (workflow evals.yml; self-skips when the ISLO_API_KEY secret is unset, so a green result does not prove a MicroVM ran)",
+        "CI job ci:evals-islo (workflow evals.yml; self-skips when the ISLO_API_KEY secret is unset, so a green result does not prove a MicroVM ran)",
         "artifact: factory-artifacts-islo"
       ],
-      "follow_up": "Promote only once evals-islo runs unconditionally on main-bound candidates, joins the candidate-readiness required set, and lands its receipt in the SHA-bound readiness manifest. The credential-separation invariant additionally needs a negative test proving an agent VM cannot obtain GH_TOKEN, and kernel-level protected-path enforcement needs an IsloSandbox.set_protected."
+      "follow_up": "Promote only once evals-islo runs unconditionally on main-bound candidates, joins the candidate-readiness required set, and lands its receipt in the SHA-bound readiness manifest. The credential-separation invariant additionally needs a negative test proving an agent VM cannot obtain GH_TOKEN, and kernel-level protected-path enforcement needs an IsloSandbox.set_protected.",
+      "public_surface": [
+        "<code>islo</code>",
+        "`islo`",
+        "islo"
+      ]
     },
     {
       "id": "selfhost.factory",
@@ -151,9 +199,13 @@
       "environment": "islo MicroVM agent cells in production and local Docker sandboxes on a developer box; in both the orchestrator holds the only GitHub credential",
       "test": "tests/test_selfhost.py (contract parses, every protected entry survives literal-prefix reduction, confinement modules are refused for build and fix, both gates are non-auto, one line serves both backends)",
       "evidence": [
-        "advisory check: control-plane-gate (base-revision protected list vs the PR diff; not required on main)"
+        "advisory check ci:control-plane-gate (base-revision protected list vs the PR diff; not required on main)"
       ],
-      "follow_up": "No end-to-end evidence exists yet: no self-hosted run has produced a merged pull request on either backend. Before any change of state, archive one full self-hosted run per backend (islo and docker) whose PR a human merged, and settle whether `islo use --init minimal` executes the repo-root islo.yaml setup script that installs uv."
+      "follow_up": "No end-to-end evidence exists yet: no self-hosted run has produced a merged pull request on either backend. Before any change of state, archive one full self-hosted run per backend (islo and docker) whose PR a human merged, and settle whether `islo use --init minimal` executes the repo-root islo.yaml setup script that installs uv.",
+      "public_surface": [
+        "`selfhost`",
+        "self-hosted run"
+      ]
     }
   ]
 }

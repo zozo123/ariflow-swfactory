@@ -85,7 +85,9 @@ def plan_recovery(
     state = str(operation.get("state") or operation.get("status") or "pending").casefold()
     if state in {"committed", "success", "done"}:
         return RecoveryDecision(key, RecoveryAction.COMMITTED, "already_committed")
-    if state in {"refused", "divergent", "dead"}:
+    # ``exhausted`` is written by OperationJournal.start_attempt once the retry budget is spent.
+    # Planning another attempt for it would hand the reconciler an action the journal will refuse.
+    if state in {"refused", "divergent", "dead", "exhausted"}:
         return RecoveryDecision(key, RecoveryAction.DEAD, state)
 
     next_attempt = operation.get("next_attempt_at")
@@ -105,8 +107,15 @@ def plan_recovery(
     if attempts >= max_attempts:
         return RecoveryDecision(key, RecoveryAction.DEAD, "retry_budget_exhausted", target)
 
+    # ``in_doubt`` is the state OperationJournal.mark_in_doubt writes when an attempt died after
+    # its request left the process: the external effect may already exist. Retrying that row would
+    # replay a live mutation, so recovery must observe first — the invariant this module exists for.
+    # The journal records its observation under ``observation.status``; ``outcome`` stays supported
+    # for callers that project the row themselves.
+    observation = operation.get("observation")
+    observed = str(observation.get("status") or "").casefold() if isinstance(observation, dict) else ""
     outcome = str(operation.get("outcome") or "").casefold()
-    if state in {"ambiguous", "observing"} or outcome == "ambiguous":
+    if state in {"ambiguous", "observing", "in_doubt"} or "ambiguous" in {outcome, observed}:
         return RecoveryDecision(key, RecoveryAction.OBSERVE, "must_observe_before_retry", target)
     return RecoveryDecision(key, RecoveryAction.RETRY, "retryable_pending_operation", target)
 
