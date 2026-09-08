@@ -24,8 +24,10 @@ from typing import Any
 from swfactory.cells import CellError
 from swfactory.control import ControlError
 from swfactory.idempotency import OperationError
+from swfactory.station_mesh import MeshError
 
 from .core_service import operation as core_operation
+from .mesh_service import operation as mesh_operation
 from .scm_service import operation as scm_operation
 from .service import Factory, Refused
 
@@ -120,6 +122,8 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                     status, payload = 200, scm_operation(factory, self.path[len(PREFIX) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/core/"):
                     status, payload = 200, core_operation(factory, self.path[len(PREFIX) :], body)
+                elif self.command == "POST" and self.path.startswith(PREFIX + "/mesh/"):
+                    status, payload = 200, mesh_operation(factory, self.path[len(PREFIX) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/"):
                     status, payload = 200, factory.operation(self.path[len(PREFIX) :], body)
                 else:
@@ -134,12 +138,10 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                 status, payload = 400, {"detail": str(error)[:500]}
             except (ControlError, OSError, subprocess.SubprocessError):
                 status, payload = 502, {"detail": "backend service unavailable; mutation outcome may be unknown"}
-            except (OperationError, CellError) as error:
-                # The durable control plane refusing a request is an answer, not a crash. Both
-                # families subclass RuntimeError, so without this they fell into the sink below and
-                # an operator was told "internal backend error" for a stale epoch, a busy Cell, a
-                # duplicate operation key or an in-doubt outcome -- conditions with a specific
-                # remedy that the message must name.
+            except (OperationError, CellError, MeshError) as error:
+                # Durable control-plane and mesh refusals are specific answers, not crashes.  A
+                # stale station lease or a competing coordination claim deserves the same honest
+                # conflict surface as a stale Cell epoch or in-doubt external mutation.
                 status, payload = 409, {"detail": str(error)[:500]}
             except Exception:
                 # Last resort. Anything reaching here is a defect, so it must leave a trace: this
