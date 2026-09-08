@@ -1,0 +1,38 @@
+name: operation-single-writer-patch
+
+on:
+  push:
+    branches: [fix/operation-single-writer]
+    paths:
+      - .github/workflows/operation-single-writer-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - name: Apply single-writer patch
+        run: python tools/patch_operation_single_writer.py
+      - name: Install
+        run: uv sync
+      - name: Format and lint
+        run: |
+          uv run ruff format src/swfactory/idempotency.py tests/test_operation_single_writer.py
+          uv run ruff check src/swfactory/idempotency.py tests/test_operation_single_writer.py
+      - name: Prove single-writer and regression contracts
+        run: uv run pytest tests/test_operation_single_writer.py tests/test_liquid_convergence.py tests/test_core_capabilities.py
+      - name: Commit proven implementation only
+        run: |
+          rm tools/patch_operation_single_writer.py .github/workflows/operation-single-writer-patch.yml
+          git config user.name "Yossi Eliaz"
+          git config user.email "zozo123@users.noreply.github.com"
+          git add -A
+          git commit -m "Serialize concurrent attempts for one durable external operation (#2042)"
+          git push origin HEAD:fix/operation-single-writer
