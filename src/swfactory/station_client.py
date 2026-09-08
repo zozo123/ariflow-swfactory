@@ -1,6 +1,6 @@
 """Small operator client for the shared Factory Mesh rendezvous.
 
-Run with ``uv run python -m swfactory.station_client``.  The client keeps only non-secret lease
+Run with ``uv run python -m swfactory.station_client``. The client keeps only non-secret lease
 identity in ``.factory/station.json``; bearer tokens stay in environment variables.
 """
 
@@ -163,10 +163,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    base = _url(args.url)
-    token = _token(args.token)
     state_path: Path = args.state
     try:
+        base = _url(args.url)
+        token = _token(args.token)
         if args.command == "join":
             sid = args.station_id or stable_station_id(args.repo, args.operator, socket.gethostname())
             incarnation = new_incarnation_id()
@@ -225,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
                     "incarnation_id": state["incarnation_id"],
                 },
             )
+            state_path.unlink(missing_ok=True)
         elif args.command == "peers":
             value = _call(
                 base,
