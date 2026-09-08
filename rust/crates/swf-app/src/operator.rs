@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::backend_context::BackendContext;
 use crate::context::Context;
+use crate::control_attention::ControlAttention;
 use crate::ops::{OpsError, Result};
 
 pub struct OperatorOps {
@@ -61,6 +62,18 @@ impl OperatorOps {
 
     pub async fn fleet(&self, cancel: &CancellationToken) -> Result<FleetSummary> {
         Ok(self.api.fleet(cancel).await?)
+    }
+
+    /// One actionable view over queued work, unresolved mutation debt and fleet cleanup debt.
+    ///
+    /// The backend remains the persistence authority; this method performs only bounded reads and
+    /// then feeds one pure projection shared by CLI/TUI callers.
+    pub async fn attention(&self, limit: usize, cancel: &CancellationToken) -> Result<ControlAttention> {
+        validate_limit(limit)?;
+        let queue = self.queue(limit, cancel).await?;
+        let operations = self.operations(limit, cancel).await?;
+        let fleet = self.fleet(cancel).await?;
+        Ok(ControlAttention::from_parts(&queue, &operations, &fleet))
     }
 
     pub async fn capabilities(&self, cancel: &CancellationToken) -> Result<BackendCapabilities> {
