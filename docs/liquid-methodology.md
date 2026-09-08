@@ -1,575 +1,489 @@
-# Liquid Software Factory Methodology
+# Liquid Software Factory methodology
 
-This document is the development and execution constitution for the Airflow Software Factory.
-It explains the methodology used to turn a large, high-entropy backlog into one coherent runtime
-without creating a second scheduler, duplicate control planes, or unverifiable claims.
+**Durable intent. Disposable execution. Singular authority. Deterministic convergence.**
 
-The short version is:
+Liquid development deliberately expands implementation alternatives while a problem is being
+explored, then removes that freedom at integration. Workers, branches, sandboxes, and candidate
+implementations may change shape. Work identity, authority, approved contracts, retained evidence,
+and the accepted repository state must remain coherent.
 
-> **Fan out ideas aggressively. Fan in contracts deterministically. Keep authority singular. Keep
-> compute disposable. Keep identity durable. Fence mutations. Require evidence. Delete superseded
-> abstractions.**
+> **Create entropy where exploration benefits from it; destroy entropy before promotion.**
 
-The methodology applies at two levels:
+This document is the canonical methodology for two related activities:
 
-1. **Product execution** - how one GitHub issue moves through the software factory.
-2. **Factory development** - how many implementation issues and parallel workers can change the
-   factory itself without turning the repository into competing architectures.
+- **Product execution:** deliver one work order through an Airflow-managed Factory Cell.
+- **Factory development:** turn many issue slices and implementation lanes into one maintained runtime.
 
-The second level is what we call **Liquid Development**.
+The rules below define the intended contract. The [implementation map](#implementation-and-evidence-map)
+identifies existing behavior and remaining integration work. A rule, an issue closure, or an emitted
+intent is not by itself evidence that an end-to-end guarantee has been achieved.
 
----
+[Identity and authority](#identity-and-authority) · [Mutation and recovery](#mutation-and-recovery) ·
+[Liquid development](#liquid-development) · [CI and promotion](#ci-and-promotion) ·
+[Definition of done](#definition-of-done) · [Implementation priorities](#implementation-priorities)
 
-## 1. The constitution
+## The core idea
 
-These rules are deliberately stronger than ordinary implementation preferences. New work should
-fit them or explicitly change the architecture first.
+Permit independent lanes to expose assumptions and alternatives. Give each lane a bounded scope,
+then compare its result against shared contracts and retained evidence. Integrate one canonical
+implementation, migrate its callers, and delete superseded paths before promotion to `main`.
 
-### Rule 1: Apache Airflow is the only lifecycle scheduler
+**Parallelism is cheap. Authority is singular.** Many workers may explore; they must not compete to
+own scheduling, Cell epochs, external publication, or release decisions. Twenty workers are not
+twenty control planes. More issue slices do not require more permanent services or abstractions.
 
-Airflow owns lifecycle scheduling: task ordering, retries, mapped jobs, waits, approval pauses,
-timeouts, and the durable progression of a factory run.
+Here, *entropy* means temporary implementation diversity and integration uncertainty. It is a useful
+engineering metaphor, not a measured thermodynamic quantity. The
+[non-equilibrium control doctrine](non-equilibrium-factory.md) separately requires measurable inputs,
+falsifiable behavior, and bounded authority for any physics-inspired control model.
 
-Inner issue work may contain a bounded work graph (`Plan.work`), but that graph is data executed
-inside an Airflow-owned stage. It is **not another scheduler**.
+## Identity and authority
 
-Why: two schedulers create ambiguous ownership for retries, cancellation, backpressure, and
-recovery.
+### Durable intent, disposable execution
 
-### Rule 2: the Factory Cell is the durable unit of ownership
+| Disposable or revisable | Durable control-plane record |
+| --- | --- |
+| Worker processes and agent sessions | Work order and stable Factory Cell identity |
+| Sandboxes, VMs, containers, leases | Current epoch, owner, policy, and execution lineage |
+| Implementation branches and speculative code | Approved contract and plan revisions |
+| Experiments, temporary adapters, intermediate work graphs | Mutation history, checkpoints, recovery decisions, and evidence |
+| An individual execution attempt | Airflow lifecycle binding and publication/promotion state |
 
-A **Factory Cell** is the durable boundary for one issue x target identity, state, policy, and
-evidence. A sandbox, process, container, or MicroVM is only an incarnation of that Cell.
+A worker may disappear without becoming the source of truth. An intermediate plan may change;
+the accepted revision and the approvals attached to it must remain identifiable.
 
-Compute may disappear. Cell identity must not.
+### The Factory Cell is the durable unit
 
-A worker that restarts must recover from durable Cell intent rather than treating a surviving
-process as the source of truth.
+A Cell represents **one issue × repository target**. Conceptually it contains or references:
 
-### Rule 3: every mutable authority is epoch-fenced
+| Field | Meaning |
+| --- | --- |
+| `cell_id` | Stable identity derived from repository, target, and issue |
+| `epoch` | Positive generation of mutation authority |
+| Work order and target | Intent, repository, directory/base branch, and relevant commit identities |
+| Lifecycle binding | Airflow DAG, run, mapped-job identity, and durable state |
+| Policy and plan | Approved contract digests, execution graph, budgets, and limits |
+| Mutation history | Operation identities, attempts, observations, and receipts |
+| Evidence | Approvals, verification results, provenance, costs, and refusal reasons |
+| Publication and cleanup | Delivered artifact, promotion decision, resources, and reconciliation debt |
 
-A Cell has a positive epoch. Takeover, reactivation, or authority transfer advances the epoch.
-External mutations are identified by the tuple:
+These are logical responsibilities, not a requirement that every field live in one database row.
+The current [Cell store](../src/swfactory/cells.py) uses SQLite; the
+[runtime binding](../src/swfactory/cell_runtime.py) identifies a target as `directory@base_branch`.
+
+For example, the following attempts can belong to the same Cell and epoch:
+
+| Cell | Epoch | Compute instance | Outcome |
+| --- | --- | --- | --- |
+| Cell A | 3 | Sandbox 17 | Crashed |
+| Cell A | 3 | Sandbox 18 | Timed out |
+| Cell A | 3 | Sandbox 19 | Succeeded |
+
+This is an illustrative recovery sequence, not a recorded benchmark. Replacing compute does not
+in itself transfer authority. Explicit takeover or reactivation advances the epoch; recovery must
+also determine whether the lost execution state can be reconstructed safely. A recorded sandbox
+handle or warm image is not proof that an interrupted workspace can be resumed.
+
+### One authority for each decision
+
+| Decision | Authority | Boundary |
+| --- | --- | --- |
+| Lifecycle scheduling | Apache Airflow | Ordering, task retries, mapped jobs, waits, and approval pauses |
+| Cell ownership | Durable Cell control plane | Current epoch, activation, transfer, and terminal state |
+| External mutation | Trusted mutation boundary and journal | Validate owner, policy, operation identity, and observed outcome |
+| GitHub publication | Trusted factory SCM boundary | Publish or update the PR and retain its receipt |
+| Merge, release, or generation promotion | Explicit human or parent promotion authority | Accept the verified candidate; a worker cannot grant itself authority |
+
+Airflow is the **only managed lifecycle scheduler**. Admission decides whether work may enter;
+a provider allocates compute; GitHub Actions validates a candidate. None of these independently
+advances the factory's lifecycle. The direct `swfactory run` path is a rehearsal using shared stage
+code, not a second durable scheduler to operate beside managed Airflow.
+
+The conceptual lifecycle covers intake, admission, planning, provisioning, execution, verification,
+publication, promotion, and cleanup. Those names describe responsibilities; they are not a promise
+of one literal DAG task per name. The actual
+[blueprint](../blueprints/default.toml) and [DAG](../dags/blueprints.py) define stage order, gates,
+metrics, and teardown. Promotion is a separate decision after publication.
+
+### Plan.work stays inside a workstation
+
+`Plan.work` may describe dependencies, parallelizable units, declared outputs, and validations
+inside an Airflow-owned stage. It may not persist an independent retry queue, claim lifecycle
+ownership, publish directly, or continue authoritative mutations after cancellation.
+
+**Airflow owns the factory. `Plan.work` organizes work at one workstation.**
+
+The current [plan model](../src/swfactory/models.py) bounds the graph to 64 nodes and rejects cycles,
+unknown dependencies, duplicate IDs, and undeclared files. Its nodes currently use the `code_writer`
+role. `parallel_safe` is a hint; the [default executor](lifecycle.md#forkable-sandboxes-capability-not-fiction)
+still runs a governed build/review cell. Do not describe graph validation or a warm-start snapshot
+as deployed native-fork execution.
+
+A future parallel executor must inherit the stage's Cell epoch, budget, deadline, policy, and
+cancellation, retain fork lineage, and verify the final combined result. Its acceptance question is:
+can inner work still mutate authoritatively after the owning lifecycle revokes permission?
+
+## Mutation and recovery
+
+### Epoch fencing and idempotency solve different problems
+
+Identify an external operation conceptually by:
 
 ```text
 (cell_id, epoch, operation_key)
 ```
 
-A stale worker from an older epoch must not be able to mutate current state.
+For example, `(cell_842, 4, "publish-pr")` describes a current publication attempt. A returning
+worker presenting epoch 3 must be rejected before its side effect. Real keys also need enough scope
+to distinguish the logical target and request content; an example label is not a universal key format.
 
-An external operation must therefore be one of:
+- **Fencing** rejects an owner whose authority has expired.
+- **Idempotency** makes repeated attempts at the same authorized operation converge.
+- **Observation** resolves whether an external effect occurred when its response was lost.
 
-- idempotent under its operation key,
-- fenced by the current Cell epoch,
-- or explicitly read-only.
+A read-only operation needs no mutation authority. A write needs current authorization and a safe
+retry contract. Idempotency does not make a stale writer authorized. An epoch in a request or log is
+not fencing unless the mutation boundary checks it, including the race with authority transfer.
 
-### Rule 4: compute is disposable; intent and evidence are durable
+Where a remote API cannot enforce epochs, keep mutation authority behind a controlled publisher,
+use the provider's idempotency or conditional-write mechanism where available, and reconcile
+ambiguous outcomes from external state. Do not promise exactly-once effects across arbitrary APIs.
+If the outcome cannot be established safely, retain `in_doubt` evidence and require deterministic
+repair rather than blind replay.
 
-Sandboxes are hands, not brains. They may be created, replaced, reclaimed, or lost.
+### Recover by observation
 
-Durable state belongs to the control plane: Cell identity, epoch, plan, approvals, operation
-journal, evidence, publication state, and recovery decisions.
+For an interrupted mutation:
 
-### Rule 5: authority must be singular
+1. Read durable Cell state, current epoch, policy, and cancellation.
+2. Read the operation identity, prior attempts, and any retained receipt.
+3. Reject stale authority. If already committed, verify and reuse the recorded outcome.
+4. If ambiguous, observe the external resource and compare its identity and content to the request.
+5. Classify it as committed, definitely absent, divergent, or still in doubt.
+6. Retry only when authorized and safe, within a bounded budget; record the decision and evidence.
+7. Let Airflow resume lifecycle progression. Reconcile residual resources separately.
 
-There should be exactly one authority for each of these decisions:
+A retry within an epoch preserves its logical operation identity. After an epoch change, reconcile
+prior-epoch effects against the same external work before creating a new operation: changing the
+key must not create a second PR for an already completed publication.
 
-| Decision | Authority |
+### Failures are part of the specification
+
+Each domain must state its behavior for the following cases:
+
+| Failure | Required behavior and evidence |
 | --- | --- |
-| Lifecycle scheduling | Apache Airflow |
-| Cell ownership and current epoch | Cell control plane |
-| External mutation identity | `(cell_id, epoch, operation_key)` journal |
-| GitHub publication | trusted publication boundary |
-| Release/promotion | explicit promotion authority |
+| Crash before an effect | Recover intent and classify the operation before retry |
+| Crash after an effect, before receipt | Observe the external result; do not infer absence from a missing local success record |
+| Timeout or lost response | Retain ambiguity, deadline, and observation history |
+| Duplicate request | Converge on the same authorized work or explain the refusal |
+| Retry or process restart | Recover durable identity and bounded attempt history |
+| Stale worker or resurrected sandbox | Refuse old-epoch mutations; record the refusal |
+| Cancellation during execution | Revoke permission to progress; cancellation wins over repair |
+| Concurrent claim or takeover | One current owner; explicit, recorded authority transfer |
+| Provider outage | Bounded retry/backpressure and visible reason; no independent lifecycle queue |
+| Partial cleanup | Retain cleanup debt until resource observation proves reclamation |
 
-Duplicating an authority is architecture debt, even if both implementations currently agree.
+A terminal task is not proof that its processes, leases, sandboxes, worktrees, or reservations have
+been reclaimed. The current operator stop action changes Airflow state; it is not a universal kill
+switch. See [run recovery](run-recovery.md) for current behavior.
 
-### Rule 6: evidence is required for claims
+## Liquid development
 
-Success, security, performance, recovery, compatibility, and cost claims must be backed by retained
-evidence. If the evidence required for a claim is missing, the system should refuse to assert it.
+### Seven canonical ownership roles
 
-This is why evidence is a runtime concern rather than documentation added at the end.
+These roles divide engineering responsibility. They do not imply seven services, seven schedulers,
+or the seven product-stage agent names listed in [lifecycle.md](lifecycle.md#the-managed-roles).
 
-### Rule 7: fail closed at trust boundaries
+| Role | Owns | Required integration output |
+| --- | --- | --- |
+| `authority` | Cell identity, epoch, ownership, invariants, transfer | One durable authority contract |
+| `airflow` | Lifecycle DAGs, mapping, scheduling, approvals, lifecycle recovery | One scheduling path |
+| `workgraph` | Decomposition, dependencies, bounded parallel work | Validated work data and deterministic combination |
+| `recovery` | Cancel, restart, retry, ambiguous effects, reconciliation | Explicit failure states and repair semantics |
+| `security` | Trust boundaries, secret scope, authorization, tenant isolation | Enforced policy and observable refusal |
+| `evidence` | Provenance, measurements, logs, traces, benchmarks, claims | Retained proof tied to acceptance criteria |
+| `operator` | CLI, TUI, backend API, inspection, repair | Consistent views and explainable actions |
 
-Policy uncertainty, stale authority, missing evidence, invalid epoch, or ambiguous publication
-identity should stop or refuse the operation rather than silently continue.
+An independent outer harness also has a stable `(harness, factory_id)` session identity. That names
+who submits; the Cell names the durable work. Concurrent harnesses coordinate through the factory,
+not a shared mutable checkout or private scheduler. See [harness methodology](harness-concurrency-methodology.md).
 
-### Rule 8: backpressure is not scheduling
+### Use the domain × concern matrix for coverage
 
-Admission control, quotas, fairness, throttling, and resource pressure may delay or reject work,
-but they must not become a hidden second scheduler. Airflow still owns lifecycle progression.
+Instead of “implement sandbox lifecycle,” examine that domain through ten concerns. Repeat for
+Cell authority, Airflow, workgraphs, evidence, security, operators, and other selected domains.
 
-### Rule 9: factories may create candidate factories, never self-promote implicitly
+| Code | Concern | Question every domain must answer |
+| --- | --- | --- |
+| C01 | Canonical invariant | What must always hold, and who owns it? |
+| C02 | Persistence and migration | What survives restart, and how is it migrated or rolled back? |
+| C03 | Versioned API | Which stable contract exposes the behavior? |
+| C04 | Runtime integration | Where does the Airflow-owned execution path invoke it? |
+| C05 | Operator surface | How does someone inspect, explain, or repair it? |
+| C06 | Security and policy | What is the trust boundary, secret scope, and refusal behavior? |
+| C07 | Recovery and cancellation | What happens on crash, timeout, retry, stale work, and cleanup failure? |
+| C08 | Scale and pressure | What are the bounds, fairness rules, and overload behavior? |
+| C09 | Evidence and SLOs | What demonstrates correctness, provenance, latency, and cost? |
+| C10 | Stabilization and entropy collapse | Which overlapping paths disappear, and what verifies the survivor? |
 
-A factory-of-factories is allowed only when it is bounded and generational:
+The axes are explicit in the [bundle engine](../src/swfactory/liquid_bundle_engine.py). A matrix
+cell is a completeness question. Several cells may resolve to the same primitive; some may be
+inapplicable with a documented reason. It is not a requirement for ten implementations per domain.
 
-- parent and child generations have distinct identity,
-- child experiments are isolated,
-- evaluation is explicit,
-- promotion is explicit,
-- a child cannot make itself authoritative merely because it produced a better result.
+### Bound fan-out by integration capacity
 
-### Rule 10: stabilization deletes entropy
+Issue count expresses coverage. PR count expresses integration boundaries. They need not match.
 
-Parallel development is allowed to create temporary duplication. Final fan-in is not complete until
-superseded abstractions, branches, adapters, and alternate authorities are removed or intentionally
-retained with a documented reason.
+Before parallel work starts, each lane needs a contract, owner, file/surface boundary, expected
+artifact, validation plan, resource budget, and stopping condition. Split by coherent behavior and
+rollback boundary. The historical wave often used five domains × ten concerns per bundle; **10–50
+related slices is a planning heuristic**, not a quality target or permission for an unreviewable diff.
 
----
+A campaign can allocate roughly 20 worker seats: 18 implementation lanes, one CI/CD lane, and one
+final integration/closure lane. That describes the staffing pattern, not measured runtime capacity.
+Use fewer lanes when shared files, unproven contracts, review capacity, or cost limits demand it.
+A difficult problem may explore 12 candidates; a routine edit may need one.
 
-## 2. Product execution flow
+Maximize useful exploration within the available budget, not raw branch or issue count. Stop
+opening lanes when unresolved conflicts, duplicate ownership, or stabilization debt exceed the
+capacity to converge. Every speculative branch has an owner and a disposition.
 
-One issue does not become one long-lived worker. It becomes durable Cell intent scheduled by
-Airflow and executed through replaceable compute.
+### Fan in through contracts; delete superseded paths
+
+1. Compare alternative implementations against the same invariant and acceptance evidence.
+2. Identify the common primitive and select or refactor its canonical implementation.
+3. Route all relevant issue families and callers through that primitive.
+4. Resolve schema/API compatibility and migrate durable state where required.
+5. Delete alternate implementations, dead adapters, temporary helpers, and competing authorities.
+6. Re-verify the integrated result, including recovery and operator behavior.
+
+C10 is the explicit deletion and integration obligation. Keeping A, B, and C and adding coordinator
+D is not convergence. If an old path must remain temporarily, name its owner, compatibility reason,
+removal condition, and migration plan.
+
+Legacy vocabulary is absorbed through a documented mapping to canonical Cell, Airflow, workgraph,
+persistence, security, evidence, GitHub, deployment, generation, and operator concepts. The
+[legacy adapter](../src/swfactory/legacy_issue_runtime.py) records that mapping. Old issue wording
+does not require an obsolete implementation family to live forever.
+
+### Stabilize before main
+
+Worker changes converge through bundle PRs into an integration branch such as
+`stabilize/liquid-all`. Aggregate validation and deletion happen there. One final PR presents the
+candidate for promotion to `main`.
 
 ```mermaid
 flowchart TD
-    I[GitHub issue / work order] --> C[Create or recover Factory Cell]
-    C --> E[Bind positive epoch]
-    E --> A[Airflow lifecycle run]
-    A --> G1{Intent approved?}
-    G1 -->|no| R0[Retain refusal evidence]
-    G1 -->|yes| P[Specification + bounded Plan.work]
-    P --> G2{Plan approved?}
-    G2 -->|no| R0
-    G2 -->|yes| W[Acquire disposable compute]
-    W --> X[Execute issue-specific work]
-    X --> T[Verify / test / review]
-    T -->|repair budget remains| X
-    T -->|blocked| RB[Retain blocked evidence]
-    T -->|accepted| V[Seal evidence]
-    V --> PUB[Trusted publication boundary]
-    PUB --> PR[Publish pull request]
-    PR --> H[Human / promotion authority]
-    H --> CL[Cleanup + reconciliation]
-    CL --> DONE[Durable terminal Cell state]
+    W["Work order, Cell, epoch, contracts"] --> A["Airflow lifecycle authority"]
+    A --> L1["Disposable lane A"]
+    A --> L2["Disposable lane B"]
+    A --> L3["Disposable lane C"]
+    L1 --> F["Contract and evidence fan-in"]
+    L2 --> F
+    L3 --> F
+    F --> K["Retain canonical implementation"]
+    F --> D["Migrate and delete superseded paths"]
+    K --> S["Stabilization candidate"]
+    D --> S
+    S --> G{"Required evidence valid for candidate SHA?"}
+    G -->|No| F
+    G -->|Yes| P["Explicit promotion authority"]
+    P --> M["Main and retained release evidence"]
+    M --> C["Close only proven issue scope"]
 ```
 
-The important distinction is between **lifecycle state** and **compute state**. Losing a sandbox is
-a recoverable runtime event. Losing Cell identity or mutation history is a control-plane failure.
+This diagram describes the governing topology. It does not assert that the default product
+executor currently launches multiple candidate sandboxes for one issue.
 
----
+## Historical fan-in and what it proves
 
-## 3. `Plan.work`: bounded inner graphs, not nested orchestration
+[PR #1196](https://github.com/zozo123/ariflow-swfactory/pull/1196) records the original
+`stabilize/liquid-all` fan-in. The current [Liquid manifest](../src/swfactory/liquid_release.py)
+checks these declared bundles and legacy ranks:
 
-Issue-specific work often has dependencies: edit A before B, run two analyses in parallel, then
-combine them. The plan may describe that as a DAG-like graph.
-
-That graph must remain:
-
-- bounded by the current Airflow stage,
-- issue-specific,
-- validated before execution,
-- subordinate to Cell policy, epoch, timeout, budget, and cancellation,
-- unable to create an independent lifecycle authority.
-
-A useful test is:
-
-> If Airflow cancels the owning stage, can the inner work continue to make authoritative external
-> mutations?
-
-If the answer is yes, the design has accidentally created a second scheduler.
-
----
-
-## 4. Liquid Development
-
-Liquid Development is the repository-development method for safely using many workers against a
-large backlog.
-
-It intentionally separates **entropy creation** from **entropy collapse**.
-
-### Phase A: expand the problem space
-
-Create a broad issue matrix so missing dimensions are visible. The repository used two recurring
-axes:
-
-1. **Domain** - the architectural area being changed.
-2. **Concern** - the type of completeness required for that domain.
-
-The canonical concern set is implemented by `Concern` in
-[`src/swfactory/liquid_bundle_engine.py`](../src/swfactory/liquid_bundle_engine.py):
-
-| Code | Concern | Required question |
+| Wave | Coverage model | Integration units |
 | --- | --- | --- |
-| C01 | Invariant | What identity/ownership rule must always hold? |
-| C02 | Persistence | How is it durable, migrated, and rolled back? |
-| C03 | API | What stable/versioned contract exposes it? |
-| C04 | Runtime | How does Airflow-owned execution invoke it? |
-| C05 | Operator | How can an operator inspect or repair it? |
-| C06 | Security | What policy/trust boundary applies? |
-| C07 | Recovery | What happens on cancel, crash, retry, stale writer, restart? |
-| C08 | Scale | What happens under load, fairness, quotas, and backpressure? |
-| C09 | Evidence | What proves success, refusal, latency, provenance, and cost? |
-| C10 | Stabilize | What duplicate or superseded abstraction gets deleted? |
+| Liquid500 | 50 domains × 10 concerns = 500 slices | 10 bundles of 50 |
+| Liquid400 | 40 domains × 10 concerns = 400 slices | 8 bundles of 50 |
+| Generated total | 90 domains, 900 slices | 18 bundles |
+| Legacy backlog | 181 snapshot ranks | Four tranches: 50, 50, 50, 31 |
+| Combined original scope | 900 generated slices + 181 legacy ranks | 22 grouped units feeding the final fan-in |
 
-This matrix is not a promise to build ten separate systems. It is a checklist forcing every domain
-to be viewed from ten completeness angles.
+Reproduce the structural check from the repository root:
 
-### Phase B: fan out implementation lanes
+```sh
+uv run python -m swfactory.liquid_release
+```
 
-Parallel workers take disjoint slices. The preferred worker roles are:
+The manifest checks bundle shape, declared source counts, contiguous/non-overlapping spans, and
+configured authority names. The bundle engine validates inputs and emits `ExecutionIntent` values.
+It does not itself implement every domain effect or prove every acceptance criterion. Legacy ranks
+are positions in a snapshot, not a range of GitHub issue numbers.
 
-| Role | Primary responsibility |
+PR #1196 records head `0603693a99aa675eb5d10592c7a30ebfb8161fda` and merge commit
+`22c92ac7951dfe3d1c8f42103192b18b966e1daf`. These identify the historical candidate and merge;
+they are not a substitute for retained check results or a claim that current `main` passed them.
+
+Later [PR #2016](https://github.com/zozo123/ariflow-swfactory/pull/2016) records Ocean120,
+Phase240, and StatMech360: a further 720 declared slots. Their
+[aggregate coverage test](../tests/test_physics_bundle_coverage.py) has the same limitation:
+coverage and routing are distinct from integrated, measured runtime capability. The original 900
+is a historical wave size, not a claim about the entire current backlog or product feature count.
+
+## Security follows authority
+
+The intended capability flow is Cell intent, policy decision, scoped capability, then disposable
+execution. Capabilities should be operation-specific, short-lived, auditable, and revocable where
+the provider supports it. A sandbox does not become a permanent credential holder.
+
+Required boundaries:
+
+- Authenticate the actor and authorize the current Cell epoch, target, tenant, and policy revision.
+- Grant only the tools and credentials needed by the stage; never inherit backend or publishing
+  credentials into coding compute.
+- Keep GitHub publication at the trusted SCM boundary and bind it to work identity and evidence.
+- Retain policy digests and refusal reasons; stale authority, policy drift, or missing mandatory
+  evidence must fail closed.
+- Revoke or expire authority on cancellation/transfer and account for cleanup separately.
+
+Current agent/provider integrations may supply model credentials explicitly. “Disposable compute”
+does not imply that every capability is already brokered as a short-lived token. Similarly, a
+trusted backend token is not a complete multi-tenant authorization system. See
+[design](design.md), [backend setup](factory-backend.md), and [security reporting](../SECURITY.md).
+
+## Evidence is part of the product
+
+A delivery claim must identify the subject, conditions, observation, and result. Retain evidence
+when the action occurs; do not reconstruct proof from a worker's success message afterward.
+
+| Claim | Minimum evidence to retain |
 | --- | --- |
-| `authority` | Cell identity, ownership, epoch, transfer, generations |
-| `airflow` | lifecycle binding, mapped execution, waits, scheduler parity |
-| `workgraph` | bounded inner work, sandbox execution, deterministic dependencies |
-| `recovery` | mutation observation, journal, reconciliation, cleanup, restart |
-| `security` | policy, trust zones, secrets, tenant boundaries, fail-closed behavior |
-| `evidence` | evidence ledger, provenance, metrics, SLO/cost records |
-| `operator` | backend/CLI/TUI inspection, repair, release/operator UX |
+| “This change passed” | Candidate/base identities, exact verification command, fresh result, environment, review, and artifact digests |
+| “This retry is safe” | Cell/epoch, operation key, interrupted attempt, external observation, stale-attempt refusal, retry receipt, timestamps, and final state |
+| “This operation was authorized” | Actor, scope, target/tenant, policy revision, decision, and mutation identity |
+| “This run was cleaned up” | Resource/lease identities, termination observations, unresolved debt, and final reconciliation |
+| “This is faster or cheaper” | Workload, baseline, provider/model versions, repetitions, failures, latency distribution, and attributed cost |
+| “This candidate may be promoted” | Required checks and their conclusions bound to the exact candidate, evidence digests, and authorized decision |
 
-Roles are ownership lanes, not separate architectures. Every lane routes back to the same canonical
-authorities.
+Sibling forks reusing the same evidence are not independent confirmation. Record lineage and
+provenance. A successful DAG run, a published PR, verified code, and a promotable candidate are
+separate claims. Missing evidence must remain visible as missing.
 
-### Phase C: implement coarse bundles, not one PR per issue
+The current artifact chain and host journals are described in the
+[README](../README.md#what-arrives-with-a-change). The table above is the evidence contract for
+stronger claims; it does not imply every listed record is already emitted by every execution path.
 
-A generated backlog can easily produce hundreds of tiny PRs whose merge order becomes the actual
-architecture. Liquid Development avoids that by grouping related issues into bounded bundles.
+## CI and promotion
 
-For generated matrix work, a standard bundle is:
+### Fast exploration, strict convergence
 
-```text
-5 domains x 10 concerns = 50 issues
-```
+Internal fan-out receives fast feedback; final integration must evaluate the candidate as a whole.
+The actual [CI workflow](../.github/workflows/ci.yml) and
+[eval workflow](../.github/workflows/evals.yml) currently have these semantics:
 
-For irregular legacy work, a tranche may contain **10 to 50 issues**.
-
-The bundle boundary is large enough to implement a coherent surface and small enough to review,
-retry, or replace independently.
-
-The executable bundle contract lives in
-[`src/swfactory/liquid_bundle_engine.py`](../src/swfactory/liquid_bundle_engine.py).
-
-### Phase D: fan in through contracts
-
-Workers do not merge by choosing a winner ad hoc. Fan-in means mapping each implementation back to
-canonical contracts:
-
-- one scheduler,
-- one Cell identity model,
-- one epoch/fencing model,
-- one mutation journal model,
-- one publication authority,
-- one evidence vocabulary,
-- one promotion path.
-
-Legacy issue vocabulary is mapped through
-[`src/swfactory/legacy_issue_runtime.py`](../src/swfactory/legacy_issue_runtime.py) rather than
-preserving old one-off runtimes.
-
-### Phase E: stabilize and delete
-
-The fan-in branch is where temporary entropy is removed:
-
-1. run formatting/lint,
-2. run unit and integration tests,
-3. run Airflow parity and live scheduler checks,
-4. run sandbox smoke paths,
-5. run Rust fmt/clippy/tests/release build,
-6. run contract equivalence,
-7. run evals,
-8. remove temporary formatter/worker helpers,
-9. delete or fold duplicate abstractions,
-10. merge to `main` only from an exact known head SHA.
-
-This is deterministic fan-in: the exact candidate that passed the gate is the exact candidate that
-is merged.
-
----
-
-## 5. Why the bundle engine emits intents
-
-The Liquid bundle engine does not execute its own scheduler. It validates domain/Cell invariants and
-emits an `ExecutionIntent` routed to an existing authority.
-
-Representative mapping:
-
-```text
-C01 invariant   -> assert invariant
-C02 persistence -> persist
-C03 API         -> expose versioned API
-C04 runtime     -> dispatch from Airflow
-C05 operator    -> inspect or repair
-C06 security    -> authorize or refuse
-C07 recovery    -> recover or cancel
-C08 scale       -> measure / throttle under pressure
-C09 evidence    -> measure and seal or refuse
-C10 stabilize   -> stabilize and delete superseded
-```
-
-This is an anti-duplication device. A new issue may add a domain, but it should not invent another
-scheduler, another Cell ownership model, or another publication authority.
-
----
-
-## 6. Recovery semantics
-
-Recovery starts from durable truth and observation, not wishful replay.
-
-For an interrupted external mutation:
-
-1. load the current Cell and epoch,
-2. reject stale epochs,
-3. load the operation key and prior journal state,
-4. observe the external system when the previous outcome is ambiguous,
-5. classify the operation as already applied, safely retryable, failed, or requiring repair,
-6. record the resolution,
-7. continue only through the Airflow-owned lifecycle.
-
-Cancellation has priority over repair. If durable Cell state says the work is cancelled, recovery
-must not resurrect it because a worker happens to still be alive.
-
-Cleanup is also a durable concern. A terminal Airflow task does not prove that all sandboxes,
-leases, worktrees, or external reservations were reclaimed. Reconciliation must be able to find and
-repair cleanup debt later.
-
----
-
-## 7. Security model
-
-The methodology separates capability from authority.
-
-A coding sandbox may have the capability to edit files or run tests, but it should not receive the
-credential that grants publication authority. The control plane decides which tools and credentials
-are present for each stage.
-
-Security rules:
-
-- least privilege by stage,
-- no implicit secret inheritance into disposable compute,
-- policy version visible at decision time,
-- tenant/repository boundaries explicit,
-- stale epochs fail closed,
-- missing evidence fails closed for evidence-backed claims,
-- backend/operator credentials are not silently replaced with local fallbacks.
-
----
-
-## 8. Evidence as a control-plane primitive
-
-Evidence should answer both **what happened** and **why the system was allowed to say it happened**.
-
-Useful evidence classes include:
-
-- intent/specification digests,
-- approval actor, time, and artifact digest,
-- plan/work graph revision,
-- Cell id and epoch,
-- operation journal records,
-- sandbox/provider identity and capabilities,
-- verification commands and fresh results,
-- review findings and repair rounds,
-- provenance/SBOM data where relevant,
-- stage latency and cost,
-- refusal and cancellation reasons,
-- publication identity and target.
-
-A benchmark without retained inputs/environment/result evidence is not a benchmark claim. A security
-claim without the policy/version/decision evidence is not a security claim. A successful workflow
-run without delivery verification is not proof that delivered code is correct.
-
----
-
-## 9. Publication and promotion
-
-Publication and promotion are intentionally separate.
-
-**Publication** creates an external artifact such as a pull request using trusted SCM authority.
-
-**Promotion** decides that the artifact becomes authoritative: merge, release, deployment, or parent
-factory promotion.
-
-A coding worker may propose. It does not self-promote.
-
-This distinction also applies to generated factories: a child factory can emit evidence that it is
-better, but only the parent/promotion authority can adopt it.
-
----
-
-## 10. Exact-head fan-in
-
-Parallel branches move quickly, so "CI was green recently" is not enough. Final fan-in uses an
-exact-head discipline:
-
-```text
-candidate SHA -> run complete gate -> verify PR head is unchanged -> merge with expected_head_sha
-```
-
-If the head changes after the gate, the prior result is stale and the new head must be evaluated.
-
-This prevents accidental merging of an untested formatter patch, late worker commit, or conflict
-resolution.
-
----
-
-## 11. CI topology for high fan-out
-
-Running the full expensive matrix on every internal fan-out PR wastes capacity and encourages people
-to bypass CI. The repository therefore separates fast internal feedback from final-main evidence.
-
-Conceptually:
-
-```text
-internal fan-out PR
-    -> fast Python gate
-
-fan-in PR to main
-    -> full Python tests
-    -> Airflow parity
-    -> sandbox smoke paths
-    -> upstream/live Airflow checks
-    -> Rust fmt/clippy/tests/release
-    -> cross-language contract equivalence
-    -> evals
-
-push to main
-    -> repeat the production-relevant gate
-```
-
-The final-main gate is the release-quality proof. Internal fan-out remains cheap enough to stay
-parallel.
-
----
-
-## 12. Legacy collapse
-
-Old backlogs often encode the same architecture under different names. Treating every historical
-term as permanent creates layers forever.
-
-Legacy work is normalized into ten broad areas:
-
-- Cell control plane,
-- Airflow lifecycle,
-- operator surfaces,
-- workgraph/sandbox,
-- persistence/reconciliation,
-- security/policy,
-- evidence/observability,
-- GitHub intake/publication,
-- deployment/supply chain,
-- factory generations.
-
-Those areas are adapters into canonical anchors, not new authorities. The adapter is implemented in
-[`src/swfactory/legacy_issue_runtime.py`](../src/swfactory/legacy_issue_runtime.py).
-
-The goal of legacy closure is therefore **semantic collapse**, not merely marking issue numbers
-closed.
-
----
-
-## 13. Anti-patterns
-
-Reject these designs unless the architecture is deliberately being changed:
-
-### Hidden scheduler
-
-A worker queue or inner DAG independently retries, cancels, or advances lifecycle state after the
-owning Airflow task is gone.
-
-### Process identity as ownership
-
-A PID, container ID, sandbox ID, or VM ID is treated as the durable identity of the work.
-
-### Retry without observation
-
-An ambiguous external mutation is blindly replayed without checking whether it already happened.
-
-### Stale writer wins
-
-An old worker can still publish or mutate because the external API did not receive the Cell epoch.
-
-### Evidence after the fact
-
-The system claims success/security/performance first and tries to reconstruct evidence later.
-
-### Parallel PRs as permanent architecture
-
-Two workers create overlapping schedulers/stores/policy engines and both are retained because each
-PR was locally reasonable.
-
-### Self-promotion
-
-A child factory, worker, or model decides that its own output is authoritative without an explicit
-promotion authority.
-
-### Stabilization by accumulation
-
-A new abstraction wraps the old abstraction, which wrapped an older abstraction, without deleting
-or migrating anything.
-
----
-
-## 14. Review checklist
-
-Before accepting a new architectural slice, ask:
-
-- [ ] Is Airflow still the only lifecycle scheduler?
-- [ ] What is the durable Factory Cell identity?
-- [ ] What is the current positive epoch?
-- [ ] Which external mutations exist, and what are their operation keys?
-- [ ] Are mutations idempotent, epoch-fenced, or read-only?
-- [ ] Can cancellation win over a surviving worker?
-- [ ] Can a lost sandbox be replaced from durable intent?
-- [ ] Is backpressure only admission/throttling rather than hidden scheduling?
-- [ ] Where is policy evaluated, and does uncertainty fail closed?
-- [ ] What evidence is retained for the claims made by this slice?
-- [ ] Are CLI/TUI/backend views derived from the same contract?
-- [ ] Is publication authority separated from coding capability?
-- [ ] Is promotion explicit?
-- [ ] What old abstraction is deleted or migrated during stabilization?
-- [ ] Will final CI run on the exact SHA that is merged?
-
----
-
-## 15. Code map
-
-The methodology is reflected in code rather than existing only as prose.
-
-| Methodology area | Canonical implementation surface |
+| Check | Current trigger and enforcement |
 | --- | --- |
-| Concern matrix and intent routing | `src/swfactory/liquid_bundle_engine.py` |
-| Generated bundle registrations | `src/swfactory/liquid_bundle_*.py` |
-| Legacy normalization | `src/swfactory/legacy_issue_runtime.py`, `src/swfactory/legacy_tranche_*.py` |
-| Cell authority | `src/swfactory/liquid_authority_runtime.py` and core Cell/runtime modules |
-| Airflow ownership | `src/swfactory/liquid_airflow_runtime.py`, `dags/`, scheduler integration |
-| Work graph | `src/swfactory/liquid_workgraph_runtime.py`, plan/runtime modules |
-| Recovery/reconciliation | `src/swfactory/liquid_recovery_runtime.py`, journals/recovery modules |
-| Security | `src/swfactory/liquid_security_runtime.py`, policy/tool boundaries |
-| Evidence | `src/swfactory/liquid_evidence_runtime.py`, factory evidence artifacts |
-| Operator surface | `src/swfactory/liquid_operator_runtime.py`, backend and Rust CLI/TUI |
-| CI fan-in | `.github/workflows/ci.yml`, `.github/workflows/evals.yml` |
+| Python lint, format, tests, Liquid manifest, scripted demo | Every PR and pushes to `main`; ordinary failing checks |
+| Pinned Airflow parity, smoke, stress | Main-targeted PRs and pushes to `main`; ordinary failing check |
+| Upstream Airflow, demo, live scheduler/mapping/approvals | Main-targeted PRs and pushes to `main`; ordinary failing check |
+| Rust format, clippy, tests, release build | Main-targeted PRs and pushes to `main`; ordinary failing check |
+| Python/Rust fixture contract equivalence | Main-targeted PRs and pushes to `main`; ordinary failing check |
+| Pinned live-gate E2E, SRT smoke, Docker smoke, upstream sandbox-toolset | Main-targeted PRs and pushes to `main`; job-level `continue-on-error: true` |
+| Scripted eval suite | Selected changed paths, weekly schedule, or manual dispatch; not every final PR |
+| Real-agent SRT/islo evaluations | Same eval workflow; actual execution depends on configured secrets |
 
-The `liquid_*` modules are consolidation surfaces: they encode the common contract used to collapse a
-large backlog. Product behavior still lives in the normal runtime, Airflow, backend, sandbox, SCM,
-and operator modules referenced throughout the design documentation.
+An ordinary failing check is not automatically a required GitHub branch-protection check. Workflow
+configuration alone does not establish repository ruleset enforcement. Advisory failures, skipped
+checks, absent secrets, and missing artifacts must not be summarized as full release evidence.
 
----
+The target promotion standard is to define the mandatory check set for the supported deployment,
+make it enforceable, retain its artifacts, and refuse promotion if any mandatory result is failed,
+missing, skipped, cancelled, stale, or from the wrong candidate. Exploratory-provider checks may
+remain advisory if they are explicitly outside that supported claim.
 
-## 16. Relationship to the rest of the documentation
+### Validate and promote the same candidate
 
-Read this document as the **methodology/constitution**. Then use the specialized documents for
-implementation detail:
+1. Freeze the PR head SHA and record the base SHA and tested integration tree where applicable.
+2. Run the complete required check set for that candidate and collect retained evidence.
+3. Inspect individual conclusions, including advisory and secret-gated jobs; do not infer success
+   from a green aggregate badge.
+4. Re-read the candidate. If the head changes, invalidate the evidence and rerun. Re-evaluate
+   integration when the base changes; a head-only comparison cannot prove compatibility with a new base.
+5. Obtain the authorized promotion decision and use a merge operation conditional on the expected
+   head SHA, with repository rules enforcing the required integration checks.
+6. Record the resulting merge/release identity, evidence, and rollback path. Close only issue scope
+   whose acceptance criteria the retained record actually demonstrates.
 
-- [`design.md`](design.md) - architecture and trust-boundary design.
-- [`lifecycle.md`](lifecycle.md) - managed lifecycle and fork semantics.
-- [`run-recovery.md`](run-recovery.md) - interrupted-run recovery.
-- [`factory-backend.md`](factory-backend.md) - backend/operator boundary.
-- [`swf.md`](swf.md) - Rust CLI/TUI operator surface.
-- [`evals.md`](evals.md) - evaluation strategy.
-- [`../OPERATIONS.md`](../OPERATIONS.md) - deployment and real-repository operation.
+This is a promotion procedure, not an instruction for a coding worker to merge its own work.
+No candidate self-promotes, and documentation of this procedure does not establish automated enforcement.
 
-When these documents appear to conflict, first preserve the singular-authority rules in this
-methodology and then reconcile the implementation/design docs explicitly. Do not solve a conflict by
-silently introducing a second authority.
+## Factory-of-factories
 
----
+The method can extend to candidate factories: generate bounded child generations, evaluate them
+against the parent baseline, compare evidence, then explicitly promote one candidate.
 
-## 17. The methodology in one sentence
+Each child needs its own identity, immutable lineage, budget, deadline, isolation, and evaluation
+record. Cap generation depth, candidate count, cost, and elapsed time. Children cannot inherit parent
+production credentials or install themselves because a score improved. The parent or designated
+promotion authority owns adoption and rollback.
 
-**Create parallel entropy only inside bounded lanes; collapse it through one Airflow lifecycle, one
-durable Cell/epoch authority, fenced external mutations, retained evidence, explicit promotion, and
-the deletion of superseded implementations before `main`.**
+[Generation primitives](../src/swfactory/generations.py) define candidate identity, evaluation,
+budgets, and promotion predicates. These are foundations for governed experiments, not a claim of
+an autonomous production self-improvement loop.
+
+## Definition of done
+
+A slice is complete only when its acceptance criteria are demonstrably true in the surviving
+implementation:
+
+- [ ] Canonical invariant and durable owner are explicit.
+- [ ] Cell identity, current epoch, authority transfer, and policy boundaries are unambiguous.
+- [ ] Runtime entry points reach the intended implementation; a declaration alone is insufficient.
+- [ ] External mutations have authorization, operation identity, and safe recovery semantics.
+- [ ] Crash, timeout, cancellation, retry, restart, stale worker, duplicate request, provider outage,
+      and partial cleanup behavior are specified and validated where applicable.
+- [ ] Operator/API views explain state, refusal, and repair from the same contract.
+- [ ] Acceptance evidence is retained with provenance, digests, and candidate identity.
+- [ ] Meaningful tests or machine validation exercise the claimed behavior.
+- [ ] Callers and state are migrated; duplicate implementations are deleted or have an explicit
+      temporary compatibility obligation and removal condition.
+- [ ] The exact integrated candidate passes the required final checks and receives explicit promotion.
+- [ ] The canonical implementation reaches `main`, with the evidence and issue scope linked.
+
+Before promotion, the work may be implemented and reviewable, but it is not closed as delivered.
+Neither generated issue coverage nor bulk closure supplies missing behavioral evidence.
+
+## Implementation and evidence map
+
+These links are starting points for review, not blanket capability certification.
+
+| Area | Current surface | What still needs integration or proof |
+| --- | --- | --- |
+| Identity and epoch | [Cell store](../src/swfactory/cells.py), [job binding](../src/swfactory/cell_runtime.py) | Demonstrate transfer/cancel races across real process and mutation boundaries |
+| Managed lifecycle | [DAG](../dags/blueprints.py), [runtime](../src/swfactory/runtime.py), [backend service](../src/swfactory/backend/service.py) | Enforce supported live approval/recovery checks as release evidence |
+| Managed publication | [Backend SCM service](../src/swfactory/backend/scm_service.py), [journal](../src/swfactory/idempotency.py) | Converge mutation call sites and test ambiguous remote outcomes end to end |
+| Shared capability contract | [Core runtime](../src/swfactory/core_capabilities.py), [focused tests](../tests/test_core_capabilities.py) | The backend currently uses `ControlKernel`; adopt one canonical path without retaining parallel authority |
+| Inner work | [Plan model](../src/swfactory/models.py), [workgraph](../src/swfactory/workgraph.py), [lifecycle contract](lifecycle.md) | Wire bounded native fork/merge execution before advertising it |
+| Evidence and claims | [Trusted evidence](../src/swfactory/trust_evidence.py), [public capabilities](../src/swfactory/public_capabilities.py) | Link acceptance criteria and claims to retained runtime evidence |
+| Matrix and legacy scope | [Bundle engine](../src/swfactory/liquid_bundle_engine.py), [manifest](../src/swfactory/liquid_release.py), [legacy mapping](../src/swfactory/legacy_issue_runtime.py) | Track declared coverage separately from integrated, validated behavior |
+| Providers and generations | [Provider conformance](../src/swfactory/provider_conformance.py), [generations](../src/swfactory/generations.py) | Publish measured support boundaries and govern candidate promotion |
+| Operators and recovery | [Rust console](../rust/README.md), [recovery guide](run-recovery.md), [backend](factory-backend.md) | Prove cross-surface agreement and repair from durable state after interruption |
+
+## Implementation priorities
+
+The next convergence cycle should focus on a small set of measurable outcomes:
+
+1. Establish a capability-to-evidence inventory and an enforceable promotion gate.
+2. Consolidate the live mutation path around one Cell/journal/policy/evidence contract.
+3. Prove cancellation, takeover, ambiguous publication, and cleanup through integrated failure scenarios.
+4. Complete one bounded `Plan.work` execution path with deterministic combination and provider evidence.
+5. Measure useful throughput, recovery, cost, and operator effort; promote control experiments only
+   after they improve a retained baseline.
+
+The companion repository improvement issue supplies the ordered implementation bundles, dependencies,
+acceptance criteria, and deletion obligations. Use this methodology as its contract, and update the
+status/evidence map as each capability becomes demonstrable.
+
+When implementation and documentation disagree, record and repair the discrepancy. Preserve singular
+authority while resolving it; do not add another scheduler or control plane to make both descriptions true.
