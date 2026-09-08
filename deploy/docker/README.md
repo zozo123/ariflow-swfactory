@@ -16,6 +16,10 @@ docker compose -f deploy/docker/compose.yml exec airflow \
 docker compose -f deploy/docker/compose.yml down
 # Add --volumes to also drop the DB, venv and generated password.
 
-# one-shot, no Airflow: the CLI on the host, one sandbox container per command
-uv run swfactory demo --sandbox docker
+# one-shot, no Airflow: the CLI on the host, one sandbox container per command.
+# SWF_DOCKER_IMAGE is required: the built-in default is an unpublished ghcr.io image, so without
+# it the run fails with `registry: denied` rather than using the image you just built.
+SWF_DOCKER_IMAGE=swfactory-sandbox:local uv run swfactory demo --sandbox docker
 ```
+
+To run the factory against **itself** on this stack, see [../../docs/selfhost.md](../../docs/selfhost.md).

@@ -1,0 +1,91 @@
+# Self-host line: the only blueprint whose target IS the factory.
+#
+# Every other line points at `demo/target`, a toy calculator committed inside this repo. This one
+# sets `dir = ""`, so the work cell checks out `zozo123/ariflow-swfactory` at `main` and the agent
+# edits `src/swfactory/` and the docs that describe it. Two consequences drive every number below.
+#
+#   1. THE BLAST RADIUS IS THE FACTORY. A bad edit to the factory's own source breaks every other
+#      line, including the line that would fix it. So both gates are `auto = false`: an unattended
+#      self-edit is the one failure mode this repo cannot recover from on its own. The plan gate is
+#      the only checkpoint BEFORE the agent writes to the factory's own source, and it is not
+#      optional here. The human merge remains the release gate, as `docs/liquid-methodology.md`
+#      requires -- children never promote themselves.
+#   2. THE TARGET IS A REAL REPOSITORY, not a 200-line package: ~460 files, and `stages.py` alone
+#      is 54 KB. Turn, cost and timeout ceilings calibrated for the calculator would abort a real
+#      change mid-stage, so each is raised with its reason inline.
+#
+# ONE FILE, BOTH BACKENDS. `[sandbox] kind = "islo"` is the production work cell (docs/islo.md).
+# `sandbox` is not part of job identity (`config.IDENTITY_SETTINGS`) and env settings outrank
+# blueprint values (`config.settings_customise_sources`), so the same line runs on a dev box:
+#
+#   uv run swfactory run --blueprint selfhost --issue 2026 --agent claude --sandbox docker
+#   SWF_SANDBOX=docker uv run swfactory run --blueprint selfhost --issue 2026 --agent claude
+#
+# `dir = ""` becomes the islo cell's repo root and, on docker, a copy of the checkout under
+# `.factory/<run_id>/work`. Because the local backends seed from the host cwd, a docker run must be
+# started from a factory checkout -- use a dedicated clone, not the tree you are editing.
+#
+# PRECONDITION (hard): the root `factory.toml`, and on islo it must already be merged to
+# `base_branch` -- the cell clones from GitHub and reads the contract out of that clone.
+
+[blueprint]
+name = "selfhost"           # DAG id, CLI name and file stem; ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$
+version = 1
+description = "Self-host line: the factory develops itself (repo root target, both human gates)"
+
+[trigger]
+kind = "manual"             # never cron: a line that rewrites its own source does not self-fire
+
+[[targets]]
+repo = "zozo123/ariflow-swfactory"
+dir = ""                    # repo ROOT: the factory itself, not demo/target
+base_branch = "main"
+
+[stages]
+order = ["intent", "spec", "plan", "build_and_test", "review", "deliver"]
+# The full canonical order. `spec` is kept (unlike hotfix.toml) because an issue against a
+# 460-file codebase is a request, not a specification, and `plan.md` is what the human gate reads.
+
+[[gates]]
+after = "intent"
+artifact = "intent.md"
+timeout_h = 24
+assigned = []               # empty = anyone with HITL access may answer
+auto = false                # restating the default: no gate on this line self-approves
+
+[[gates]]
+after = "plan"
+artifact = "plan.md"
+timeout_h = 48              # two business days: the plan names the factory files it will edit
+assigned = []
+auto = false                # MANDATORY here; see (1) in the header
+
+[limits]
+max_build_iterations = 4    # the first failure is usually ruff (line length 100), not logic
+max_review_fixes = 2        # a self-edit spans code plus docs; one repair round is thin
+max_turns = 120             # per invocation; reading stages.py (54 KB) costs turns before an Edit
+budget_usd_per_stage = 8.0  # <= budget_usd; 4x the demo line, for a 4x-larger context per stage
+budget_usd = 40.0           # per JOB (issue x target); binds before 6 x per-stage, deliberately
+stage_timeout_h = 6         # build_and_test reruns the ~98 s suite up to 4 times in ONE task
+max_parallel_jobs = 2       # concurrent MicroVMs, or docker containers each holding a repo copy
+
+[policy.build]              # ADDITIVE ONLY, per POLICIES key (spec|plan|build|fix|review|diagnose)
+extra_allowed_tools = []    # nothing to add: build already writes, and shell access is rejected
+                            # outright, so "let it run the suite itself" is not grantable here
+
+[review]
+policy = "REVIEW.md"        # target == factory, so the repo's own REVIEW.md reviews the change
+nit_cap = 3
+
+[sandbox]
+kind = "islo"               # production work cell; --sandbox docker / SWF_SANDBOX overrides
+gateway_profile = "swfactory"
+environment = "swfactory"
+ttl_s = 302400              # 84 h: 24 h + 48 h of gates plus stage work. The validator floor is
+                            # max(gates[].timeout_h) * 3600 = 172800, exclusive.
+idle_s = 900                # --pause-after-idle; a paused cell keeps its warm .venv
+# snapshot: deliberately unset. The golden snapshot bakes a clone of this very repo, so pinning it
+# would hand the agent a stale copy of the tree it is patching.
+
+[deliver]
+labels = ["factory", "agent-authored", "selfhost"]   # deliver appends factory:blocked if blocked

@@ -1,0 +1,52 @@
+# scripted fixture for SELFHOST-1 — the factory adding a test to its own suite.
+diff --git a/tests/test_blueprint_files.py b/tests/test_blueprint_files.py
+new file mode 100644
+index 0000000..ae07fb8
+--- /dev/null
++++ b/tests/test_blueprint_files.py
+@@ -0,0 +1,45 @@
++"""Every installed blueprint must load.
++
++`dags/blueprints.py` builds one DAG per file in `blueprints/`, and the blueprint name IS the
++dag_id. One malformed TOML or one duplicated name therefore breaks DAG parsing for every line at
++once, including the line that would ship the fix. These checks are cheap and run in the hermetic
++suite, so a bad blueprint fails in review rather than in the scheduler.
++"""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from swfactory.blueprint import load
++
++ROOT = Path(__file__).resolve().parents[1]
++BLUEPRINTS = sorted((ROOT / "blueprints").glob("*.toml"))
++
++
++def test_there_is_at_least_one_blueprint() -> None:
++    assert BLUEPRINTS, "blueprints/ contains no .toml files"
++
++
++def test_blueprint_names_are_unique() -> None:
++    """The name is the dag_id, so a collision silently drops a line from the DagBag."""
++    names = [load(path).name for path in BLUEPRINTS]
++    assert len(names) == len(set(names)), f"duplicate dag ids across blueprints: {names}"
++
++
++@pytest.mark.parametrize("path", BLUEPRINTS, ids=lambda p: p.name)
++def test_every_blueprint_loads(path: Path) -> None:
++    bp = load(path)
++    assert bp.name, f"{path.name} declares no [blueprint].name"
++    assert bp.targets, f"{path.name} declares no [[targets]]"
++    assert bp.order[0] == "intent", f"{path.name} must start at intent"
++    assert bp.order[-1] == "deliver", f"{path.name} must end at deliver"
++
++
++@pytest.mark.parametrize("path", BLUEPRINTS, ids=lambda p: p.name)
++def test_every_blueprint_sandbox_outlives_its_gates(path: Path) -> None:
++    """A cell that expires while a human gate is still open loses the run's workspace."""
++    bp = load(path)
++    if bp.gates:
++        assert bp.sandbox.ttl_s > max(gate.timeout_h for gate in bp.gates) * 3600

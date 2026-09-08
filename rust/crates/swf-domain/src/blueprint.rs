@@ -1311,7 +1311,10 @@ order = ["intent", "deliver"]
         }
         seen.sort_by(|a, b| a.0.cmp(&b.0));
         let names: Vec<&str> = seen.iter().map(|(stem, _)| stem.as_str()).collect();
-        assert_eq!(names, vec!["default", "hotfix", "stress", "toolset"]);
+        assert_eq!(
+            names,
+            vec!["default", "hotfix", "selfhost", "stress", "toolset"]
+        );
 
         let by_stem = |stem: &str| {
             seen.iter()
@@ -1360,5 +1363,21 @@ order = ["intent", "deliver"]
         assert_eq!(toolset.sandbox.workdir, "/workspace/repo");
         assert_eq!(toolset.limits.max_build_iterations, 2);
         assert_eq!(toolset.sandbox.ttl_s, 10_800);
+
+        let Some(selfhost) = by_stem("selfhost") else {
+            panic!("selfhost.toml missing");
+        };
+        // The self-host line is the only one whose target is the factory itself, so the operator
+        // pins the two properties that make that survivable: an empty target dir really does mean
+        // the repository root, and neither gate may self-approve.
+        assert_eq!(selfhost.name, "selfhost");
+        assert_eq!(selfhost.targets.len(), 1);
+        assert_eq!(selfhost.targets[0].dir, "");
+        assert_eq!(selfhost.targets[0].repo, "zozo123/ariflow-swfactory");
+        assert_eq!(selfhost.order, CANONICAL_ORDER.to_vec());
+        assert!(selfhost.gates.iter().all(|g| !g.auto));
+        assert_eq!(selfhost.gate_timeout_h(), 48);
+        assert_eq!(selfhost.sandbox.kind, SandboxKind::Islo);
+        assert!(selfhost.sandbox.ttl_s > u64::from(selfhost.gate_timeout_h()) * 3600);
     }
 }

@@ -1,0 +1,26 @@
+{
+  "files": [
+    "tests/test_blueprint_files.py"
+  ],
+  "steps": [
+    "Add tests/test_blueprint_files.py that discovers blueprints/*.toml relative to the repo root",
+    "Assert the directory is non-empty, so the parametrized cases cannot silently collect nothing",
+    "Assert every file loads through swfactory.blueprint.load and declares a name and targets",
+    "Assert blueprint names are unique, since the name is the dag_id",
+    "Assert each stage order starts at intent and ends at deliver",
+    "Assert each sandbox ttl_s outlives the longest gate timeout",
+    "Run the target test command (factory.toml [commands].test) until the whole suite passes"
+  ],
+  "tests": [
+    "R1: test_there_is_at_least_one_blueprint - the glob is non-empty",
+    "R2: test_every_blueprint_loads - load() raises for no installed blueprint",
+    "R3: test_blueprint_names_are_unique - duplicate dag ids fail",
+    "R4: test_every_blueprint_loads - targets present, order runs intent..deliver",
+    "R5: test_every_blueprint_sandbox_outlives_its_gates - ttl_s > max gate timeout"
+  ],
+  "risks": [
+    "A parametrized test over an empty glob passes vacuously; R1 exists to prevent exactly that",
+    "Resolving blueprints/ relative to the working directory instead of the module would break in a work cell; the module uses Path(__file__).parents[1]",
+    "Scope creep into changing a blueprint to satisfy a new assertion; the plan touches one new test file and nothing else"
+  ]
+}

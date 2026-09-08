@@ -1,0 +1,33 @@
+{
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "tests/test_blueprint_files.py",
+      "line": 37,
+      "title": "Stage order is checked only at the ends",
+      "detail": "Spec R4 is satisfied by asserting order[0] and order[-1], but CANONICAL_ORDER requires the whole sequence to be a subsequence. A blueprint with a legal first and last stage and a scrambled middle would pass. blueprint.load already rejects that, so this is coverage overlap rather than a hole."
+    },
+    {
+      "severity": "nit",
+      "file": "tests/test_blueprint_files.py",
+      "line": 20,
+      "title": "BLUEPRINTS is computed at import time",
+      "detail": "Collection happens once per session, so a blueprint added during a run is not seen. That is the intended behaviour for parametrize; noting it so the next reader does not treat it as a bug."
+    },
+    {
+      "severity": "nit",
+      "file": "tests/test_blueprint_files.py",
+      "line": 44,
+      "title": "The ttl assertion skips gate-less lines",
+      "detail": "`if bp.gates:` means a line with no gates asserts nothing. Correct today, since ttl_s has its own floor, but an explicit assert on the floor would read better."
+    },
+    {
+      "severity": "nit",
+      "file": "tests/test_blueprint_files.py",
+      "line": 30,
+      "title": "Duplicate-name message could name the offenders",
+      "detail": "Printing only the full list makes a 5-line diff harder to read than printing the duplicates themselves."
+    }
+  ]
+}
