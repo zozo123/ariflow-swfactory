@@ -45,7 +45,8 @@ Four pieces, one job each. The split is the design, not an accident of history.
 | **Isolation** | islo MicroVM, `srt`, or Docker | the work cell, where the coding agent runs holding no GitHub credential |
 
 **The connection is Rust console → Python backend → Airflow → Python stages → isolated worker.**
-Run `uv run swfactory backend`, then connect `swf` using `SWF_BACKEND_TOKEN`.
+Run `uv run swfactory backend`, then connect `swf` using `SWF_BACKEND_TOKEN`. The Airflow workers
+need their own copy of that token and of `SWF_BACKEND_URL`; the backend host's copy is not theirs.
 [Backend setup, API contract and factory vocabulary](docs/factory-backend.md) explain exactly
 what runs where, including Docker startup and migration from direct connections.
 
@@ -272,10 +273,25 @@ network destinations required for its job.
 
 ```bash
 docker build -f deploy/docker/sandbox.Dockerfile -t swfactory-sandbox:local .
+export SWF_BACKEND_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 SWF_AGENT=claude SWF_SCM=github \
 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" GH_TOKEN="$GH_TOKEN" \
 docker compose -f deploy/docker/compose.yml up -d
 ```
+
+That starts Airflow (`:8080`), the webhook receiver (`:8081`) and the factory backend (`:8082`) the
+console connects to. Export `SWF_BACKEND_TOKEN` **before** `up`: Compose gives it to the backend
+*and* to the Airflow workers, which is a separate requirement from setting it on the backend host.
+
+**Backend-host variables are not worker variables.** `swfactory backend` needs
+`SWF_BACKEND_TOKEN`; the operator machine needs the same secret plus a context `backend_url`; and
+the Airflow workers need their own `SWF_BACKEND_URL` and `SWF_BACKEND_TOKEN`, because a
+backend-managed work cell reports its lifecycle and publishes from inside the worker process. A
+worker missing either one fails closed in the job's first stage, and the console cannot see it —
+the work order is admitted, no gate appears, and the evidence is a task log. Run `swfactory doctor`
+and read its `managed workers` row before submitting; direct/unmanaged runs need neither variable.
+[The backend guide](docs/factory-backend.md#backend-host-variables-are-not-worker-variables) has
+the full table.
 
 The stack binds to localhost. Production exposure needs TLS, webhook HMAC verification, durable
 Airflow storage, authentication, backups, and a restricted network. Docker socket access gives the

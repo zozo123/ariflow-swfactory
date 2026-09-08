@@ -24,10 +24,11 @@ Argv shapes (verified against ``islo 0.48.1`` and ``gh 2.83``)::
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -54,6 +55,12 @@ _CLAUDE_INTEGRATIONS = frozenset({"claude", "anthropic"})
 _INTEGRATION_KEYS = ("tool", "name", "provider", "type", "slug", "id")
 _DISCONNECTED = frozenset({"disconnected", "expired", "error", "revoked", "pending"})
 _COMMAND_TIMEOUT_S = 120
+# What a backend-managed Airflow worker needs in its own environment to reach the backend
+# (``cell_callback.transition`` and ``backend_scm.BackendScm`` both read exactly these).
+MANAGED_WORKER_VARS = ("SWF_BACKEND_URL", "SWF_BACKEND_TOKEN")
+# The backend rejects anything shorter (``backend/service.py``), so a shorter value is not a
+# weak configuration: it is one that cannot authenticate at all.
+MIN_BACKEND_TOKEN_CHARS = 32
 
 
 class DoctorCommandError(RuntimeError):
@@ -388,6 +395,63 @@ def _check_toolset_backend(name: str, loader: ToolsetLoader) -> Check:
     return Check("toolset backend", True, f"{name!r} loads")
 
 
+def managed_worker_fix() -> str:
+    """The one command that fixes both variables, phrased for the machine that runs the workers."""
+    return (
+        "export SWF_BACKEND_URL=http://backend:8082 and SWF_BACKEND_TOKEN=<32+ non-whitespace chars> "
+        "in the environment that STARTS the Airflow workers (deploy/docker/compose.yml passes both "
+        "into the airflow service), not only on the backend host"
+    )
+
+
+def _check_managed_workers(env: Mapping[str, str]) -> Check:
+    """Can a backend-managed work cell reach the backend from inside the worker?
+
+    ``cell_callback.transition`` and ``BackendScm`` fail closed on the FIRST stage of every managed
+    job when these are missing, and that failure is invisible from the console: the work order is
+    admitted, no gate ever appears, and the only evidence is a task log. Reporting it here turns a
+    stage crash on the first submitted job into a readiness line.
+
+    The backend host's own copies never reach the workers — Compose passes the pair into the
+    ``airflow`` service separately — so this reads the environment rather than inferring it from a
+    reachable backend.
+
+    Unset *pair* is a warning, not a failure: an Airflow-only/direct deployment runs no managed
+    cells and needs neither variable. Anything half-configured is required, because it can only
+    mean a managed deployment that will fail closed.
+    """
+    url = (env.get("SWF_BACKEND_URL") or "").strip()
+    token = env.get("SWF_BACKEND_TOKEN") or ""
+    if not url and not token:
+        return Check(
+            "managed workers",
+            False,
+            "managed workers cannot reach the backend: "
+            f"{' and '.join(MANAGED_WORKER_VARS)} are unset "
+            "(managed jobs would fail in their first stage; direct/Airflow-only runs are unaffected)",
+            managed_worker_fix(),
+            required=False,
+        )
+    problems = []
+    if not url:
+        problems.append("SWF_BACKEND_URL is unset")
+    elif not url.startswith(("http://", "https://")):
+        problems.append("SWF_BACKEND_URL must be an http(s) URL")
+    if not token:
+        problems.append("SWF_BACKEND_TOKEN is unset")
+    elif len(token) < MIN_BACKEND_TOKEN_CHARS or any(c.isspace() for c in token):
+        problems.append(f"SWF_BACKEND_TOKEN must be {MIN_BACKEND_TOKEN_CHARS}+ non-whitespace characters")
+    if problems:
+        # Never the token itself: a doctor report is pasted into issues.
+        return Check(
+            "managed workers",
+            False,
+            "managed workers cannot reach the backend: " + "; ".join(problems),
+            managed_worker_fix(),
+        )
+    return Check("managed workers", True, f"{url} with a token the backend can accept")
+
+
 def _check_blueprint(name: str) -> Check:
     try:
         bp = blueprint_mod.load(name)
@@ -455,16 +519,18 @@ def run_doctor(
     which: Which = shutil.which,
     root: Path | None = None,
     toolset_loader: ToolsetLoader | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> list[Check]:
     """Run only the checks required by ``cfg`` and return them in display order. Never raises.
 
     ``runner`` defaults to :func:`subprocess_runner` (resolved at call time so tests can patch
-    the module attribute); ``which``/``root`` are the other injection points. When the islo CLI
-    is missing, the islo-dependent checks are reported as failed-skipped instead of each
+    the module attribute); ``which``/``root``/``env`` are the other injection points. When the islo
+    CLI is missing, the islo-dependent checks are reported as failed-skipped instead of each
     repeating the error.
     """
     runner = runner if runner is not None else subprocess_runner
     root = Path(root) if root is not None else Path.cwd()
+    env = os.environ if env is None else env
     if toolset_loader is None:
         from swfactory.sandbox import load_toolset_backend
 
@@ -513,6 +579,7 @@ def run_doctor(
         checks.append(_check_claude(runner, required=True))
     checks.append(_check_blueprint(cfg.blueprint))
     checks.append(_check_factory_toml(cfg, runner, root))
+    checks.append(_check_managed_workers(env))
     return checks
 
 

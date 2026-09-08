@@ -1,6 +1,8 @@
-# Fully local factory: Airflow 3 + webhook receiver in containers, agent/test commands in sibling
-# `docker run` containers (SWF_SANDBOX=docker). TESTING deployment — see docs/docker.md for limits.
+# Fully local factory: Airflow 3 + webhook receiver + factory backend in containers, agent/test
+# commands in sibling `docker run` containers (SWF_SANDBOX=docker). TESTING deployment — see
+# docs/docker.md for limits.
 #
+#   export SWF_BACKEND_TOKEN=<32+ non-whitespace characters>   # console AND managed workers
 #   docker build -t swfactory-sandbox:local -f deploy/docker/sandbox.Dockerfile .
 #   docker compose -f deploy/docker/compose.yml up
 #
@@ -46,6 +48,17 @@ services:
       SWF_DOCKER_CREDENTIALS: ${SWF_DOCKER_CREDENTIALS:-env}
       SWF_DOCKER_NETWORK: ${SWF_DOCKER_NETWORK:-bridge}
       SWF_DOCKER_USER: ${SWF_DOCKER_USER:-}
+      # WORKER copies of the backend coordinates. A backend-managed work cell reports every
+      # lifecycle transition (src/swfactory/cell_callback.py) and publishes (backend_scm.py) from
+      # THIS container, and both fail closed in the job's first stage when either value is missing
+      # — a failure that is invisible from the console, because the submission itself succeeds and
+      # no gate ever appears. The backend service's own copies below do not reach this process, so
+      # the pair is repeated here on purpose. Direct/unmanaged runs ignore both.
+      # The URL is fixed rather than taken from the host shell: an operator running `swf` on this
+      # machine exports the CONSOLE's address (http://localhost:8082), which addresses nothing
+      # from inside this network — the worker's route to the backend is the compose service name.
+      SWF_BACKEND_URL: http://backend:8082
+      SWF_BACKEND_TOKEN: ${SWF_BACKEND_TOKEN:-}
       # credentials: the agent key crosses into sandbox containers ONLY as the -e allowlist of
       # DockerSandbox (agent=claude, credentials=env); GH_TOKEN stays here (deliver: gh pr create).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -89,9 +102,11 @@ services:
       - "127.0.0.1:8081:8081"
     restart: unless-stopped
 
+  # The console's control plane. It starts with the default stack (no profile): the built-in
+  # `swf` context and every managed work cell address it, so a stack that omits it accepts work
+  # orders and then fails each of them in its first stage.
   backend:
     <<: *common
-    profiles: ["console"]
     command: ["bash", "deploy/docker/backend.sh"]
     depends_on:
       airflow:

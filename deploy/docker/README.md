@@ -10,7 +10,10 @@ same absolute path on the host, in the Airflow container and in every sandbox co
 ```bash
 docker build -t swfactory-sandbox:local -f deploy/docker/sandbox.Dockerfile .
 #   Linux: --build-arg UID=$(id -u) --build-arg GID=$(id -g) so the agent's files are yours
-docker compose -f deploy/docker/compose.yml up          # airflow :8080 + webhook receiver :8081
+# 32+ non-whitespace characters: the console authenticates with it AND managed work cells send it
+# from inside the Airflow worker (a stack without it fails every managed job in its first stage).
+export SWF_BACKEND_TOKEN=...
+docker compose -f deploy/docker/compose.yml up   # airflow :8080, webhook :8081, backend :8082
 docker compose -f deploy/docker/compose.yml exec airflow \
   cat /opt/airflow_home/simple_auth_manager_passwords.json.generated    # the admin password
 docker compose -f deploy/docker/compose.yml down
