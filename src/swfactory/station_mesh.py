@@ -1,11 +1,11 @@
 """Durable coordination between independent software-factory stations.
 
-The mesh is deliberately *not* a scheduler.  Airflow still owns lifecycle scheduling and Factory
-Cell epochs still own mutation authority.  A mesh signal is only a durable knock telling another
+The mesh is deliberately *not* a scheduler. Airflow still owns lifecycle scheduling and Factory
+Cell epochs still own mutation authority. A mesh signal is only a durable knock telling another
 station what to re-read from an authoritative source.
 
 A shared backend can expose one :class:`StationMesh` to many independently operated Airflow
-stations working the same repository.  Station leases fence stale processes; coordination claims
+stations working the same repository. Station leases fence stale processes; coordination claims
 prevent duplicate station-level ownership attempts; signals carry human/agent context and artifact
 references without becoming executable commands.
 """
@@ -117,7 +117,7 @@ def station_id(repo: str, operator: str, host: str) -> str:
 
 
 def new_incarnation_id() -> str:
-    """Return a process-incarnation token.  It is an identity fence, not a credential."""
+    """Return a process-incarnation token. It is an identity fence, not a credential."""
     return "inc_" + uuid.uuid4().hex
 
 
@@ -164,9 +164,10 @@ def _strings(value: Any, field: str, *, limit: int = 64) -> tuple[str, ...]:
 class StationMesh:
     """SQLite rendezvous for independent stations sharing one repository.
 
-    The database may sit behind one shared backend HTTP endpoint.  Callers never acquire a Python
-    lock as authority: SQLite transactions and explicit lease/claim epochs are the concurrency
-    boundary, so a second process using the same store sees the same fences.
+    The intended topology is one shared backend process for this state database and many remote
+    stations talking to it over HTTP. The process lock serializes compound read/compare/write
+    operations while SQLite makes them durable. Do not run multiple mesh backend processes over
+    the same SQLite file as a multi-primary cluster; use a transactional shared database first.
     """
 
     def __init__(self, path: Path):
@@ -266,6 +267,8 @@ class StationMesh:
         expires = now + ttl
         with self.lock, self.db:
             row = self.db.execute("SELECT * FROM stations WHERE station_id=?", (station_id,)).fetchone()
+            if row is not None and str(row["repo"]) != repo:
+                raise MeshError(f"{station_id}: station id is already bound to repository {row['repo']}")
             lease_epoch = 1 if row is None else int(row["lease_epoch"])
             created = now if row is None else float(row["created_at"])
             if row is not None and row["incarnation_id"] != incarnation_id:
@@ -481,7 +484,8 @@ class StationMesh:
                     and current.station_lease_epoch == station_lease_epoch
                     and current.cell_epoch == cell_epoch
                 )
-                if current.expires_at > now and not same_owner:
+                owner_live = self._claim_owner_live(current, now)
+                if current.expires_at > now and owner_live and not same_owner:
                     raise ClaimConflict(self._claim_dict(current))
                 claim_epoch = current.claim_epoch if same_owner else current.claim_epoch + 1
                 created = current.created_at if same_owner else now
@@ -528,7 +532,11 @@ class StationMesh:
                 (repo, cell_id, station_id, station_lease_epoch, claim_epoch),
             )
             if cur.rowcount != 1:
-                raise ClaimConflict(self._claim_dict(self._claim(repo, cell_id)))
+                try:
+                    current = self._claim(repo, cell_id)
+                except KeyError:
+                    raise MeshError("coordination claim no longer exists; re-read mesh claims") from None
+                raise ClaimConflict(self._claim_dict(current))
 
     def claims(self, repo: str, *, include_expired: bool = False, limit: int = 100) -> list[MeshClaim]:
         repo = _required(repo, "repo")
@@ -546,16 +554,16 @@ class StationMesh:
     def conflicts(self, repo: str) -> list[dict[str, Any]]:
         """Return coordination anomalies that need a human/station response.
 
-        Claims are single-row CAS leases, so two live claims cannot exist.  The useful anomalies are
-        an unexpired claim owned by a station whose lease died, and competing live ``intent``
+        Claims are single-row leases, so two current claim rows cannot exist. The useful anomalies
+        are an unexpired claim owned by a dead/replaced station lease and competing live ``intent``
         signals emitted before a claim converged.
         """
         repo = _required(repo, "repo")
         now = time.time()
-        live = {peer.station_id for peer in self.peers(repo, limit=1000)}
+        live = {(peer.station_id, peer.lease_epoch) for peer in self.peers(repo, limit=1000)}
         out: list[dict[str, Any]] = []
         for claim in self.claims(repo, limit=1000):
-            if claim.station_id not in live:
+            if (claim.station_id, claim.station_lease_epoch) not in live:
                 out.append(
                     {
                         "kind": "orphaned_claim",
@@ -569,12 +577,13 @@ class StationMesh:
         intents: dict[tuple[str, int], set[str]] = {}
         with self.lock:
             rows = self.db.execute(
-                """SELECT cell_id,cell_epoch,station_id FROM signals
+                """SELECT cell_id,cell_epoch,station_id,station_lease_epoch FROM signals
                    WHERE repo=? AND kind=? AND cell_id IS NOT NULL AND expires_at>?""",
                 (repo, SignalKind.INTENT.value, now),
             ).fetchall()
         for row in rows:
-            if row["station_id"] in live:
+            station_key = (str(row["station_id"]), int(row["station_lease_epoch"]))
+            if station_key in live:
                 intents.setdefault((str(row["cell_id"]), int(row["cell_epoch"])), set()).add(str(row["station_id"]))
         for (cell_id, cell_epoch), stations in sorted(intents.items()):
             if len(stations) > 1:
@@ -587,6 +596,14 @@ class StationMesh:
                     }
                 )
         return out
+
+    def _claim_owner_live(self, claim: MeshClaim, now: float) -> bool:
+        row = self.db.execute(
+            """SELECT 1 FROM stations
+               WHERE station_id=? AND lease_epoch=? AND repo=? AND expires_at>?""",
+            (claim.station_id, claim.station_lease_epoch, claim.repo, now),
+        ).fetchone()
+        return row is not None
 
     def _assert_live_station(self, station_id: str, lease_epoch: int, repo: str, now: float) -> sqlite3.Row:
         if type(lease_epoch) is not int or lease_epoch < 1:
