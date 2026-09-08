@@ -42,14 +42,14 @@ def _nodes(plan: Plan) -> tuple[WorkNode, ...]:
     )
 
 
-def _load_progress(ctx: stages.Ctx, plan: Plan, input_head: str) -> dict[str, Any]:
+def _load_progress(ctx: stages.Ctx, plan: Plan, current_head: str) -> dict[str, Any]:
     expected = _digest_plan(plan)
     if not ctx.state.has_control(_PROGRESS):
         return {
             "schema_version": 1,
             "plan_digest": expected,
-            "input_head": input_head,
-            "head": input_head,
+            "input_head": current_head,
+            "head": current_head,
             "nodes": [],
         }
     try:
@@ -58,10 +58,19 @@ def _load_progress(ctx: stages.Ctx, plan: Plan, input_head: str) -> dict[str, An
         raise StageError("policy", f"workgraph progress is corrupt: {error}") from error
     if not isinstance(progress, dict) or progress.get("schema_version") != 1:
         raise StageError("policy", "workgraph progress has an unsupported schema")
-    if progress.get("plan_digest") != expected or progress.get("input_head") != input_head:
-        raise StageError("policy", "workgraph progress belongs to a different plan or candidate")
-    if not isinstance(progress.get("nodes"), list) or not isinstance(progress.get("head"), str):
+    if progress.get("plan_digest") != expected:
+        raise StageError("policy", "workgraph progress belongs to a different plan")
+    if not isinstance(progress.get("nodes"), list):
+        raise StageError("policy", "workgraph progress node receipts are invalid")
+    input_head = progress.get("input_head")
+    checkpoint_head = progress.get("head")
+    if not isinstance(input_head, str) or not input_head or not isinstance(checkpoint_head, str) or not checkpoint_head:
         raise StageError("policy", "workgraph progress is incomplete")
+    if checkpoint_head != current_head:
+        raise StageError(
+            "policy",
+            f"workgraph checkpoint expects HEAD {checkpoint_head} but workspace is {current_head}",
+        )
     return progress
 
 
@@ -105,19 +114,15 @@ def _execute_nodes(
         {"left": left, "right": right, "files": list(files)}
         for left, right, files in conflict_set(_nodes(plan))
     ]
-    first_head = stages._assert_workspace_head(ctx, "workgraph start")
-    progress = _load_progress(ctx, plan, first_head)
-    if progress["head"] != first_head:
-        # The task may be a retry. The checkout must already reflect the last durable checkpoint.
-        raise StageError(
-            "policy",
-            f"workgraph checkpoint expects HEAD {progress['head']} but workspace is {first_head}",
-        )
+    current_head = stages._assert_workspace_head(ctx, "workgraph start")
+    progress = _load_progress(ctx, plan, current_head)
     completed = {
         str(row["node_id"]): row
         for row in progress["nodes"]
         if isinstance(row, dict) and row.get("state") == "ok" and row.get("node_id")
     }
+    # Every completed node consumes exactly one deterministic agent call number. Retrying a task
+    # resumes at the next number, so host-owned agent envelopes are neither overwritten nor skipped.
     agent_call = len(completed)
 
     for layer_index, layer in enumerate(plan.work_layers()):
