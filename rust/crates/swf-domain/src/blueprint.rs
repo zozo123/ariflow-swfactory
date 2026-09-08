@@ -1313,7 +1313,7 @@ order = ["intent", "deliver"]
         let names: Vec<&str> = seen.iter().map(|(stem, _)| stem.as_str()).collect();
         assert_eq!(
             names,
-            vec!["default", "hotfix", "selfhost", "stress", "toolset"]
+            vec!["default", "hotfix", "liquid", "selfhost", "stress", "toolset"]
         );
 
         let by_stem = |stem: &str| {
@@ -1363,6 +1363,24 @@ order = ["intent", "deliver"]
         assert_eq!(toolset.sandbox.workdir, "/workspace/repo");
         assert_eq!(toolset.limits.max_build_iterations, 2);
         assert_eq!(toolset.sandbox.ttl_s, 10_800);
+
+        let Some(liquid) = by_stem("liquid") else {
+            panic!("liquid.toml missing");
+        };
+        // The one scheduled line whose target is the factory. The operator pins the properties
+        // that keep a cron line inside the doctrine: it fires on a schedule, it targets the repo
+        // root, neither gate may self-approve, and it runs one job at a time against its own tree.
+        assert_eq!(liquid.name, "liquid");
+        assert_eq!(liquid.trigger.kind, TriggerKind::Cron);
+        assert_eq!(liquid.trigger.cron.as_deref(), Some("17 6 * * *"));
+        assert_eq!(liquid.targets.len(), 1);
+        assert_eq!(liquid.targets[0].dir, "");
+        assert!(liquid.gates.iter().all(|g| !g.auto));
+        assert_eq!(liquid.limits.max_parallel_jobs, 1);
+        // Gates must expire inside the schedule period or scheduled runs stack: the DAG sets
+        // catchup=false but no max_active_runs.
+        assert!(u64::from(liquid.gate_timeout_h()) * 3600 < 24 * 3600);
+        assert!(liquid.sandbox.ttl_s > u64::from(liquid.gate_timeout_h()) * 3600);
 
         let Some(selfhost) = by_stem("selfhost") else {
             panic!("selfhost.toml missing");

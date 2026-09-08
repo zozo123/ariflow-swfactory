@@ -295,3 +295,37 @@ def test_the_root_contract_is_the_only_new_target_and_demo_still_works() -> None
     assert default["targets"][0]["dir"] == "demo/target", (
         "the default line must keep pointing at the calculator; selfhost.toml is the root target"
     )
+
+
+# --------------------------------------------------------------------------------------------
+# The liquid line: the same root target on a schedule. Continuous intake, human promotion.
+# --------------------------------------------------------------------------------------------
+
+
+def test_the_liquid_line_is_scheduled_but_cannot_self_approve() -> None:
+    """A cron line that rewrites the factory's own source is only inside the doctrine while the
+    human release gate holds. `docs/liquid-methodology.md` forbids self-PROMOTION, not self-work,
+    so the schedule may decide when work starts and never who decides it ships."""
+    bp = load(ROOT / "blueprints" / "liquid.toml")
+    assert bp.trigger.kind == "cron"
+    assert bp.trigger.cron == "17 6 * * *"
+    assert [(t.repo, t.dir) for t in bp.targets] == [("zozo123/ariflow-swfactory", "")]
+    assert not any(gate.auto for gate in bp.gates), "a scheduled line must never self-approve"
+    assert bp.limits.max_parallel_jobs == 1, "two cells editing our own tree manufacture conflicts"
+
+
+def test_the_liquid_gates_expire_inside_the_schedule_period() -> None:
+    """`dags/blueprints.py` sets catchup=False but no max_active_runs, so gates that outlive the
+    period stack runs faster than a human answers them. Shorter gates fail visibly instead."""
+    bp = load(ROOT / "blueprints" / "liquid.toml")
+    longest_gate_s = max(gate.timeout_h for gate in bp.gates) * 3600
+    assert longest_gate_s < 24 * 3600, "a daily line needs sub-daily gates"
+    assert bp.sandbox.ttl_s > longest_gate_s, "the cell must outlive its longest gate"
+
+
+def test_a_scheduled_liquid_run_draws_its_work_from_the_trigger() -> None:
+    """A scheduled run has no conf, so the line falls back to its declared backlog."""
+    bp = load(ROOT / "blueprints" / "liquid.toml")
+    jobs = bp.jobs(None)
+    assert [job["issue"] for job in jobs] == bp.trigger.issues
+    assert all(job["dir"] == "" for job in jobs), "every job targets the repo root"

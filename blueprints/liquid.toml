@@ -1,0 +1,89 @@
+# The liquid line: the factory working on its own convergence backlog, on a schedule.
+#
+# `selfhost.toml` is the manual root-target line -- you trigger it, it does one issue. This is the
+# same target on a timetable, so the convergence backlog drains without anyone starting a run.
+#
+# WHERE THE DOCTRINE LINE IS. `docs/liquid-methodology.md` forbids a child that "installs itself
+# because a score improved", and it is right. What it forbids is self-PROMOTION, not self-work. So
+# this line is continuous INTAKE with the human release gate fully intact:
+#
+#   cron fires -> Cell claims the issue -> agent works in a disposable cell -> gates wait for a
+#   human -> deliver opens a PR on a bot-owned branch the agent had no credential to push -> a
+#   PERSON merges.
+#
+# Nothing here can promote itself. Both gates are `auto = false`, `deliver` force-updates only the
+# `factory/*` branch, and the agent holds no GitHub credential. The schedule changes when work
+# STARTS, never who decides it ships.
+#
+# WHY THE GATES ARE SHORTER THAN THE PERIOD. `dags/blueprints.py` sets `catchup=False` but no
+# `max_active_runs`, so a daily line whose gates wait 24 h would stack runs faster than a human
+# answers them. 8 h gates inside a 24 h period mean an unanswered run FAILS VISIBLY instead of
+# piling up -- backpressure by construction rather than an unbounded queue. If you want a run to
+# survive a weekend, trigger `selfhost` by hand; that is what it is for.
+#
+# PRECONDITION: the target's test command must pass inside the cell. On `local`/`srt` that needs
+# the `SWF_*` settings scrub (#2036) -- without it the factory's own tests read the orchestrator's
+# environment and fail. `docker` and `islo` build the cell environment explicitly and were never
+# affected.
+
+[blueprint]
+name = "liquid"
+version = 1
+description = "Continuous liquid convergence: the factory drains its own backlog, a human still merges"
+
+[trigger]
+kind = "cron"
+cron = "17 6 * * *"          # daily at 06:17 -- off the hour, like the gcc-full schedulers
+# The backlog this line drains. Issue numbers, resolved through the SCM at run time, so closing an
+# issue removes it from the line without a blueprint edit.
+issues = ["2034", "2035"]
+
+[[targets]]
+repo = "zozo123/ariflow-swfactory"
+dir = ""                     # the repo root: the factory itself
+base_branch = "main"
+
+[stages]
+order = ["intent", "spec", "plan", "build_and_test", "review", "deliver"]
+
+[[gates]]
+after = "intent"
+artifact = "intent.md"
+timeout_h = 8                # < the 24 h period on purpose; see the header
+assigned = []
+auto = false                 # a scheduled line must never self-approve
+
+[[gates]]
+after = "plan"
+artifact = "plan.md"
+timeout_h = 8
+assigned = []
+auto = false                 # the checkpoint before an agent writes to the factory's own source
+
+[limits]
+max_build_iterations = 4
+max_review_fixes = 2
+max_turns = 120
+budget_usd_per_stage = 8.0
+budget_usd = 40.0
+stage_timeout_h = 6
+max_parallel_jobs = 1        # one job at a time against our own tree: two cells editing the same
+                             # source concurrently is how a convergence line manufactures conflicts
+
+[policy.build]
+extra_allowed_tools = []
+
+[review]
+policy = "REVIEW.md"
+nit_cap = 3
+
+[sandbox]
+kind = "islo"                # SWF_SANDBOX=docker for a dev box
+gateway_profile = "swfactory"
+environment = "swfactory"
+ttl_s = 86400                # 24 h > max gate timeout (8 h); the validator floor is exclusive
+idle_s = 900
+# snapshot deliberately unset: a golden snapshot pins a stale copy of the tree this line edits.
+
+[deliver]
+labels = ["factory", "agent-authored", "liquid"]
