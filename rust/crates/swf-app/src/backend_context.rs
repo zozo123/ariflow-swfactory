@@ -21,7 +21,8 @@ pub struct BackendContext {
 
 impl BackendContext {
     pub fn connect(context: &Context, timeout: Duration, feature: &str) -> Result<Self> {
-        let backend_url = env::var("SWF_BACKEND_URL").unwrap_or_else(|_| context.backend_url.clone());
+        let backend_url =
+            env::var("SWF_BACKEND_URL").unwrap_or_else(|_| context.backend_url.clone());
         if backend_url.is_empty() {
             return Err(OpsError::operational(format!(
                 "{feature} require the Python backend; this context is in direct mode"
