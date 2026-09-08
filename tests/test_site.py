@@ -90,11 +90,45 @@ def test_homepage_accessibility_and_discovery_contract() -> None:
     assert_local_references_exist(page)
 
 
-def test_sandbox_table_lists_the_toolset_profile_with_its_honest_limit() -> None:
-    """Native profiles and provider seams must state their actual integration boundary."""
+def test_homepage_is_small_static_and_content_first() -> None:
+    source, _ = parse_page("index.html")
+    css = (SITE / "styles.css").read_text()
+    javascript = (SITE / "app.js").read_text()
+
+    assert len(source.encode()) < 15_000
+    assert len(css.encode()) < 12_000
+    assert len(javascript.encode()) < 300
+    assert 'src="app.js"' not in source
+    assert "factory-line.webp" not in source
+    assert "IntersectionObserver" not in javascript
+    assert 'addEventListener("scroll"' not in javascript
+    for decorative_surface in (
+        "ambient",
+        "hero-glow",
+        "reveal",
+        "pipeline-board",
+        "factory-visual",
+        "mobile-menu",
+    ):
+        assert decorative_surface not in source
+
+
+def test_homepage_explains_the_actual_algorithm_and_authorities() -> None:
+    source, _ = parse_page("index.html")
+
+    assert "Issue in. Verified PR out." in source
+    assert "issue -&gt;" not in source
+    assert "issue -> cell -> airflow -> sandbox -> evidence -> pull request" in source
+    assert "Airflow is the only lifecycle scheduler" in source
+    assert "one durable Factory Cell" in source
+    assert "(cell_id, epoch, operation_key)" in source
+    assert "Humans keep final merge authority" in source
+
+
+def test_sandbox_table_is_complete_and_honest() -> None:
     source, page = parse_page("index.html")
 
-    rows = re.findall(r'<span role="cell" class="mono">([^<]+)</span>', source)
+    rows = re.findall(r'data-sandbox="([^"]+)"', source)
     assert rows == [
         "local",
         "srt",
@@ -106,30 +140,22 @@ def test_sandbox_table_lists_the_toolset_profile_with_its_honest_limit() -> None
         "tensorlake",
         "box / ascii",
     ]
-    assert "policy support is backend-specific" in source
+    assert "policy support is backend-specific" in source.lower()
     assert source.count("custom backend required") == 4
     assert "--sandbox toolset" in source
-    assert "toolset_backend" in source
-    assert "StageError" in source
+    assert "The factory owns the issue-to-PR route" in source
     assert set(page.fragment_links) <= set(page.ids)
 
 
-def test_toolset_block_states_the_boundary_without_fake_provider_claims() -> None:
+def test_toolset_boundary_does_not_fake_provider_capabilities() -> None:
     source, _ = parse_page("index.html")
 
-    assert "common-ai" in source and "SandboxBackend" in source
-    assert "package.module:Class" in source
-    assert "The run stops when a required isolation policy is" in source
-    assert "The factory owns the issue-to-PR route" in source
-
-
-def test_homepage_copy_avoids_decorative_factory_jargon() -> None:
-    source, _ = parse_page("index.html")
-
-    assert "Work enters." in source and "Proof ships." in source
-    assert "signal-strip" not in source
-    assert "Not a concept diagram" not in source
-    assert "—" not in source and "–" not in source
+    assert "common-ai" in source
+    assert "SandboxBackend" in source
+    assert 'toolset_backend = "package.module:Class"' in source
+    assert "required isolation policy is unsupported" in source
+    assert "StageError" in source
+    assert "does not fake provider capabilities" in source
 
 
 def test_astronomer_blueprint_bridge_is_visible_and_linked() -> None:
@@ -151,22 +177,17 @@ def test_custom_not_found_page_is_self_contained() -> None:
     assert_local_references_exist(page)
 
 
-def test_site_assets_and_interactions_are_resilient() -> None:
+def test_static_assets_remain_valid_without_driving_the_layout() -> None:
     css = (SITE / "styles.css").read_text()
-    javascript = (SITE / "app.js").read_text()
     manifest = (SITE / "site.webmanifest").read_text()
 
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert "min-height: 100dvh" in css
-    assert "IntersectionObserver" in javascript
-    assert "prefers-reduced-motion" in javascript
-    assert 'addEventListener("scroll"' not in javascript
     assert '"start_url": "./"' in manifest
     assert (SITE / ".nojekyll").exists()
     assert re.search(r"<svg\b", (SITE / "favicon.svg").read_text())
     assert re.search(r"<svg\b", (SITE / "social-card.svg").read_text())
     assert (SITE / "social-card.png").stat().st_size > 10_000
-    assert (SITE / "factory-line.webp").stat().st_size > 100_000
 
 
 def test_pages_workflow_deploys_only_the_site_artifact() -> None:
