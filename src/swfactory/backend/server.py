@@ -4,6 +4,9 @@ The server intentionally exposes only minimal unauthenticated liveness/readiness
 control/read API containing factory state still requires the backend bearer token. Managed SCM
 publication accepts larger authenticated bodies because format-patch streams are intentionally sent
 to the backend that owns GitHub credentials.
+
+Factory Mesh may additionally use ``SWF_MESH_TOKEN``. That credential is deliberately scoped to
+``/v1/mesh/*`` and cannot call the privileged Cell, Airflow, SCM, worker or publication routes.
 """
 
 from __future__ import annotations
@@ -44,6 +47,15 @@ def _json_default(value: Any) -> Any:
 
 
 def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> ThreadingHTTPServer:
+    mesh_token = os.getenv("SWF_MESH_TOKEN", "")
+    if mesh_token:
+        if len(mesh_token) < 32 or any(c.isspace() for c in mesh_token):
+            raise ValueError("SWF_MESH_TOKEN must contain at least 32 non-whitespace characters")
+        if hmac.compare_digest(mesh_token.encode(), factory.token.encode()):
+            raise ValueError("SWF_MESH_TOKEN must differ from SWF_BACKEND_TOKEN")
+    backend_authorization = ("Bearer " + factory.token).encode()
+    mesh_authorization = ("Bearer " + mesh_token).encode() if mesh_token else b""
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "swfactory-backend/2"
 
@@ -101,8 +113,11 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
             try:
                 if self._public_probe():
                     return
-                credential = self.headers.get("Authorization", "")
-                if not hmac.compare_digest(credential.encode(), ("Bearer " + factory.token).encode()):
+                credential = self.headers.get("Authorization", "").encode()
+                mesh_route = self.command == "POST" and self.path.startswith(PREFIX + "/mesh/")
+                backend_ok = hmac.compare_digest(credential, backend_authorization)
+                mesh_ok = bool(mesh_authorization) and mesh_route and hmac.compare_digest(credential, mesh_authorization)
+                if not (backend_ok or mesh_ok):
                     raise Refused(401, "factory backend token required")
                 if self.headers.get("Transfer-Encoding"):
                     raise Refused(400, "chunked requests are not supported")
@@ -122,7 +137,7 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                     status, payload = 200, scm_operation(factory, self.path[len(PREFIX) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/core/"):
                     status, payload = 200, core_operation(factory, self.path[len(PREFIX) :], body)
-                elif self.command == "POST" and self.path.startswith(PREFIX + "/mesh/"):
+                elif mesh_route:
                     status, payload = 200, mesh_operation(factory, self.path[len(PREFIX) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/"):
                     status, payload = 200, factory.operation(self.path[len(PREFIX) :], body)
