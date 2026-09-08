@@ -5,9 +5,9 @@ that task, a validated issue-local DAG is expanded into stable topological waves
 one governed workspace. Shared-workspace execution is serial by design; provider fork/clone fan-out
 remains experimental until a provider can prove isolated lineage, cancellation and teardown.
 
-Progress is checkpointed in host-owned RunState after every node. An Airflow task retry therefore
-resumes from durable node receipts rather than replaying completed work, while workspace-head
-fencing refuses an unexpected checkout.
+Progress is checkpointed in host-owned RunState after every node and before every agent attempt. An
+Airflow task retry therefore resumes from durable node receipts without replaying completed work or
+reusing a failed agent-envelope identity, while workspace-head fencing refuses an unexpected checkout.
 """
 
 from __future__ import annotations
@@ -50,6 +50,7 @@ def _load_progress(ctx: stages.Ctx, plan: Plan, current_head: str) -> dict[str, 
             "plan_digest": expected,
             "input_head": current_head,
             "head": current_head,
+            "agent_calls": 0,
             "nodes": [],
         }
     try:
@@ -71,6 +72,9 @@ def _load_progress(ctx: stages.Ctx, plan: Plan, current_head: str) -> dict[str, 
             "policy",
             f"workgraph checkpoint expects HEAD {checkpoint_head} but workspace is {current_head}",
         )
+    agent_calls = progress.setdefault("agent_calls", len(progress["nodes"]))
+    if type(agent_calls) is not int or agent_calls < len(progress["nodes"]):
+        raise StageError("policy", "workgraph attempt counter is invalid")
     return progress
 
 
@@ -121,9 +125,6 @@ def _execute_nodes(
         for row in progress["nodes"]
         if isinstance(row, dict) and row.get("state") == "ok" and row.get("node_id")
     }
-    # Every completed node consumes exactly one deterministic agent call number. Retrying a task
-    # resumes at the next number, so host-owned agent envelopes are neither overwritten nor skipped.
-    agent_call = len(completed)
 
     for layer_index, layer in enumerate(plan.work_layers()):
         for node in sorted(layer, key=lambda item: item.id):
@@ -133,7 +134,9 @@ def _execute_nodes(
             if missing:
                 raise StageError("policy", f"Plan.work node {node.id!r} has incomplete dependencies: {missing}")
             before = stages._assert_workspace_head(ctx, f"workgraph node {node.id}")
-            agent_call += 1
+            agent_call = int(progress["agent_calls"]) + 1
+            progress["agent_calls"] = agent_call
+            _store_progress(ctx, progress)
             started = time.monotonic()
             try:
                 result = stages._agent(
@@ -167,6 +170,7 @@ def _execute_nodes(
                 "node_id": node.id,
                 "state": "ok",
                 "layer": layer_index,
+                "agent_call": agent_call,
                 "input_head": before,
                 "output_head": after,
                 "depends_on": list(node.depends_on),
@@ -190,6 +194,7 @@ def _execute_nodes(
         "input_head": progress["input_head"],
         "final_head": progress["head"],
         "plan_digest": progress["plan_digest"],
+        "agent_calls": progress["agent_calls"],
         "declared_conflicts": declared_conflicts,
         "nodes": ordered_receipts,
     }
@@ -197,7 +202,7 @@ def _execute_nodes(
         f"{ctx.art}/workgraph-execution.json",
         json.dumps(report, indent=2, sort_keys=True) + "\n",
     )
-    return agent_call, report
+    return int(progress["agent_calls"]), report
 
 
 def _legacy_build(ctx: stages.Ctx, spec_text: str, plan_text: str) -> StageResult:
