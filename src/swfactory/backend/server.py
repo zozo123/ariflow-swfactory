@@ -120,9 +120,13 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
         def _compatibility(self, body: dict[str, Any]) -> tuple[int, Any]:
             mount = PREFIX + "/airflow/api/v2"
             path = self.path[len(mount) :]
-            if self.command == "POST" and path.startswith("/dags/") and path.endswith("/dagRuns"):
-                if not factory.capabilities().get("mutation_ready"):
-                    raise Refused(503, "backend is draining or not mutation-ready")
+            if (
+                self.command == "POST"
+                and path.startswith("/dags/")
+                and path.endswith("/dagRuns")
+                and not factory.capabilities().get("mutation_ready")
+            ):
+                raise Refused(503, "backend is draining or not mutation-ready")
             return factory.compatibility(self.command, path, body)
 
         def handle_api(self) -> None:
