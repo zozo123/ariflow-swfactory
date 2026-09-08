@@ -12,7 +12,7 @@ verified Factory Cell id/epoch/policy bindings. Direct legacy Airflow submission
 cell id but remain explicitly unmanaged. Airflow is the only lifecycle scheduler; managed tasks
 report state back to the backend solely for epoch-fenced authority, admission and evidence.
 
-Loops live inside stage functions (``swfactory.stages``), never in the DAG.
+Loops and bounded ``Plan.work`` execution live inside stage functions, never in the DAG.
 """
 
 from __future__ import annotations
@@ -71,6 +71,10 @@ def _actor(responded_by_user: Any) -> str:
 
 
 def _stage_fn(stage: str):
+    if stage == "build_and_test":
+        from swfactory.work_stage import build_and_test
+
+        return build_and_test
     from swfactory.stages import STAGES
 
     return STAGES[stage]
@@ -101,8 +105,6 @@ def _failure_callback(context: dict[str, Any]) -> None:
             return
         _cell_transition(jobs[index], "failed", context, "failed")
     except Exception:
-        # Failure callbacks must never hide or replace the original Airflow task failure. The
-        # backend reconciler can classify an unreported terminal state as repair debt.
         return
 
 
