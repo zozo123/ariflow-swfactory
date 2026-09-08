@@ -22,6 +22,16 @@ jobs:
       - name: Apply Ruff fixes and formatting
         run: |
           uv run ruff check . --fix --unsafe-fixes || true
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/swfactory/core_capabilities.py')
+          text = path.read_text()
+          old = '''        if self.external_operation_key is not None:\n            if not self.external_operation_key.strip() or len(self.external_operation_key) > 256:\n                raise ValueError("external operation key must be nonempty and bounded")\n'''
+          new = '''        if self.external_operation_key is not None and (\n            not self.external_operation_key.strip() or len(self.external_operation_key) > 256\n        ):\n            raise ValueError("external operation key must be nonempty and bounded")\n'''
+          if old not in text:
+              raise SystemExit('expected SIM102 block not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
           uv run ruff format .
           uv run ruff check .
       - name: Commit formatter output
