@@ -5,7 +5,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Candidate identity, not PR identity, owns a CI run. A stale advisory E2E process may ignore
+  # cancellation while unwinding; it must never serialize a newer exact head behind the same PR.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 jobs:
   test:
