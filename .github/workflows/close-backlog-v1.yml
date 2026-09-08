@@ -1,72 +1,46 @@
 name: close-backlog-v1
 
+# Historical compatibility entrypoint. Blanket backlog mutation is intentionally disabled: a
+# release may close only the exact issue identities named by a checked-in manifest. This keeps a
+# later issue from being swept into an older release merely because it happened to be open.
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/close-backlog-v1.yml
-      - ops/close-backlog-v2.json
   workflow_dispatch:
+    inputs:
+      manifest_path:
+        description: Checked-in explicit release issue manifest
+        required: true
+        type: string
+      apply:
+        description: Close only the manifest-declared issues after validation
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
   issues: write
 
 jobs:
-  close-shard:
-    name: close-shard-${{ matrix.shard }}
+  manifest-scoped-closure:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 20
-      matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-    env:
-      GH_TOKEN: ${{ github.token }}
-      REPO: ${{ github.repository }}
-      SHARD: ${{ matrix.shard }}
     steps:
-      - name: Close this shard of open issues
-        shell: bash
+      - uses: actions/checkout@v6
+
+      - name: Explain closure authority
         run: |
-          set -euo pipefail
-          mapfile -t issues < <(
-            gh api --paginate "repos/${REPO}/issues?state=open&per_page=100" \
-              --jq ".[] | select(.pull_request == null and ((.number % 20) == ${SHARD})) | .number"
-          )
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          Blanket issue closure is disabled.
+          This compatibility workflow delegates to the checked-in explicit release manifest.
+          EOF
 
-          closed=0
-          for number in "${issues[@]}"; do
-            if gh api --method PATCH "repos/${REPO}/issues/${number}" \
-              -f state=closed -f state_reason=completed >/dev/null; then
-              closed=$((closed + 1))
-              continue
-            fi
+      - name: Validate explicit release issue manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/close_release_issues.py "${{ inputs.manifest_path }}"
 
-            state=$(gh api "repos/${REPO}/issues/${number}" --jq '.state')
-            if [[ "$state" != "closed" ]]; then
-              echo "Failed to close issue #${number}" >&2
-              exit 1
-            fi
-          done
-
-          echo "Shard ${SHARD}: closed ${closed} issues" >> "$GITHUB_STEP_SUMMARY"
-
-  verify-zero-open:
-    needs: close-shard
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      GH_TOKEN: ${{ github.token }}
-      REPO: ${{ github.repository }}
-    steps:
-      - name: Verify zero open issues
-        shell: bash
-        run: |
-          set -euo pipefail
-          remaining=$(gh api -X GET search/issues \
-            -f q="repo:${REPO} is:issue is:open" \
-            --jq '.total_count')
-          echo "Remaining open issues: ${remaining}" | tee -a "$GITHUB_STEP_SUMMARY"
-          test "$remaining" -eq 0
+      - name: Close only manifest-declared issues
+        if: inputs.apply
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/close_release_issues.py "${{ inputs.manifest_path }}" --apply
