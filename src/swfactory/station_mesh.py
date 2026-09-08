@@ -271,7 +271,7 @@ class StationMesh:
                 raise MeshError(f"{station_id}: station id is already bound to repository {row['repo']}")
             lease_epoch = 1 if row is None else int(row["lease_epoch"])
             created = now if row is None else float(row["created_at"])
-            if row is not None and row["incarnation_id"] != incarnation_id:
+            if row is not None and (row["incarnation_id"] != incarnation_id or float(row["expires_at"]) <= now):
                 lease_epoch += 1
             self.db.execute(
                 """INSERT INTO stations(
@@ -316,8 +316,8 @@ class StationMesh:
         with self.lock, self.db:
             cur = self.db.execute(
                 """UPDATE stations SET heartbeat_at=?,expires_at=?,updated_at=?
-                   WHERE station_id=? AND lease_epoch=? AND incarnation_id=?""",
-                (now, now + ttl, now, station_id, lease_epoch, incarnation_id),
+                   WHERE station_id=? AND lease_epoch=? AND incarnation_id=? AND expires_at>?""",
+                (now, now + ttl, now, station_id, lease_epoch, incarnation_id, now),
             )
             if cur.rowcount != 1:
                 raise StaleStationLease(f"{station_id}: station lease is stale")
@@ -328,8 +328,8 @@ class StationMesh:
         with self.lock, self.db:
             cur = self.db.execute(
                 """UPDATE stations SET heartbeat_at=?,expires_at=?,updated_at=?
-                   WHERE station_id=? AND lease_epoch=? AND incarnation_id=?""",
-                (now, now, now, station_id, lease_epoch, incarnation_id),
+                   WHERE station_id=? AND lease_epoch=? AND incarnation_id=? AND expires_at>?""",
+                (now, now, now, station_id, lease_epoch, incarnation_id, now),
             )
             if cur.rowcount != 1:
                 raise StaleStationLease(f"{station_id}: station lease is stale")
@@ -479,16 +479,18 @@ class StationMesh:
                 created = now
             else:
                 current = self._decode_claim(row)
-                same_owner = (
-                    current.station_id == station_id
+                owner_live = self._claim_owner_live(current, now)
+                same_current_owner = (
+                    current.expires_at > now
+                    and owner_live
+                    and current.station_id == station_id
                     and current.station_lease_epoch == station_lease_epoch
                     and current.cell_epoch == cell_epoch
                 )
-                owner_live = self._claim_owner_live(current, now)
-                if current.expires_at > now and owner_live and not same_owner:
+                if current.expires_at > now and owner_live and not same_current_owner:
                     raise ClaimConflict(self._claim_dict(current))
-                claim_epoch = current.claim_epoch if same_owner else current.claim_epoch + 1
-                created = current.created_at if same_owner else now
+                claim_epoch = current.claim_epoch if same_current_owner else current.claim_epoch + 1
+                created = current.created_at if same_current_owner else now
             self.db.execute(
                 """INSERT INTO claims(
                     repo,cell_id,cell_epoch,claim_epoch,station_id,station_lease_epoch,purpose,
