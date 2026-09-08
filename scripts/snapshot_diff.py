@@ -12,7 +12,11 @@ So this compares a NORMALISED projection. Dropped, with the reason:
 * ``collected_at`` and every other timestamp — the two reads are not simultaneous;
 * task-level ``state`` of a job still in flight — genuinely volatile between two reads;
 * ``metrics`` — a filesystem scan, not an Airflow read, and each client may root it differently;
-* ``errors`` — one client may see a transient failure the other does not.
+* ``errors`` — one client may see a transient failure the other does not, AND, for the same
+  reason, the data a failed source would have produced. Dropping the error while still comparing
+  its rows is incoherent: a one-sided ``gh`` failure then reads as the two clients disagreeing
+  about the factory, when what actually happened is that one of them could not look. Observed in
+  CI as ``snapshot.prs: python has 0 entries, rust has 6``.
 
 What survives is identity and shape, which is exactly the claim under test: an operator who
 switches from the Python control room to the Rust one sees the same factory.
@@ -31,6 +35,21 @@ from typing import Any
 # A job's roll-up is stable only once the job has finished; while it is moving, the two clients
 # legitimately disagree by one task. These are the states we hold the clients to.
 SETTLED = {"success", "failed", "skipped"}
+
+
+# Which top-level key each source fills, so a source that failed on one side can have its rows
+# excluded from the comparison on BOTH sides rather than counted as a disagreement.
+SOURCE_KEYS = {"github": "prs", "islo": "sandboxes"}
+
+
+def failed_sources(snapshot: dict[str, Any]) -> set[str]:
+    """The sources this snapshot reports as broken, by the key they would have filled."""
+    errors = snapshot.get("errors") or {}
+    return {
+        key
+        for source, key in SOURCE_KEYS.items()
+        if any(str(name) == source or str(name).startswith(f"{source}:") for name in errors)
+    }
 
 
 def norm(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -109,15 +128,24 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     with open(argv[1], encoding="utf-8") as fh:
-        python = norm(json.load(fh))
+        python_raw = json.load(fh)
     with open(argv[2], encoding="utf-8") as fh:
-        rust = norm(json.load(fh))
+        rust_raw = json.load(fh)
+    # A source either client could not read is not evidence about the factory. Drop its rows from
+    # both sides and say so, rather than reporting the outage as a disagreement.
+    broken = failed_sources(python_raw) | failed_sources(rust_raw)
+    python, rust = norm(python_raw), norm(rust_raw)
+    for key in broken:
+        python.pop(key, None)
+        rust.pop(key, None)
+    if broken:
+        print(f"not compared (a source was unavailable to one side): {', '.join(sorted(broken))}")
     problems: list[str] = []
     walk("snapshot", python, rust, problems)
     counts = (
-        f"{len(python['runs'])} runs, "
-        f"{sum(len(r['jobs']) for r in python['runs'])} jobs, "
-        f"{len(python['gates'])} gates, {len(python['prs'])} prs"
+        f"{len(python.get('runs', []))} runs, "
+        f"{sum(len(r['jobs']) for r in python.get('runs', []))} jobs, "
+        f"{len(python.get('gates', []))} gates, {len(python.get('prs', []))} prs"
     )
     if problems:
         print(f"the two control rooms disagree ({counts}):", file=sys.stderr)
