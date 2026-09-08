@@ -1,0 +1,38 @@
+name: p0-control-plane-patch
+
+on:
+  push:
+    branches: [fix/p0-control-plane-e2e]
+    paths:
+      - .github/workflows/p0-control-plane-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - name: Apply control-plane patch
+        run: python tools/patch_control_plane.py
+      - name: Install
+        run: uv sync
+      - name: Format and lint
+        run: |
+          uv run ruff format src/swfactory/backend/service.py tests/test_backend_control_plane.py
+          uv run ruff check src/swfactory/backend/service.py tests/test_backend_control_plane.py
+      - name: Prove drain and cancellation contracts
+        run: uv run pytest tests/test_backend_control_plane.py tests/test_cells.py tests/test_control.py
+      - name: Commit proven implementation only
+        run: |
+          rm tools/patch_control_plane.py .github/workflows/p0-control-plane-patch.yml
+          git config user.name "Yossi Eliaz"
+          git config user.email "zozo123@users.noreply.github.com"
+          git add -A
+          git commit -m "Enforce shared drain and managed cancellation semantics (#1219 #2041)"
+          git push origin HEAD:fix/p0-control-plane-e2e
