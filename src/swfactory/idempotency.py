@@ -19,6 +19,7 @@ import json
 import sqlite3
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -148,6 +149,8 @@ class OperationJournal:
                 "observation_json": "TEXT",
                 "next_attempt_at": "REAL",
                 "intent_digest": "TEXT",
+                "attempt_owner": "TEXT",
+                "attempt_lease_until": "REAL",
             }
             for name, ddl in additions.items():
                 if name not in columns:
@@ -175,35 +178,74 @@ class OperationJournal:
                 )
         return str(self.get(ref.key)["state"])
 
-    def start_attempt(self, ref: OperationRef, *, budget: RetryBudget | None = None) -> int:
+    def start_attempt(
+        self,
+        ref: OperationRef,
+        *,
+        budget: RetryBudget | None = None,
+        lease_s: float = 300.0,
+    ) -> tuple[int, str]:
+        """Atomically claim the one live provider attempt for an operation.
+
+        The claim lives in SQLite rather than a process lock, so independent backend processes and
+        journal connections see the same owner. An unexpired owner is never displaced. An expired
+        owner is treated as an ambiguous external outcome and must be reconciled before another
+        provider callback is allowed to start.
+        """
         budget = budget or budget_for(ref.kind)
+        owner = uuid.uuid4().hex
+        now = time.time()
         with self.lock, self.db:
             row = self.get(ref.key)
             self._assert_identity(ref, row)
+            if row["state"] == "committed":
+                raise OperationInDoubt(ref.key, "already_committed")
+            incumbent = row.get("attempt_owner")
+            lease_until = float(row.get("attempt_lease_until") or 0.0)
+            if incumbent:
+                state = "attempt_in_progress" if lease_until > now else "expired_attempt_in_doubt"
+                if lease_until <= now:
+                    self.db.execute(
+                        """UPDATE operations SET state='in_doubt',last_error=?,updated_at=?
+                           WHERE operation_key=? AND attempt_owner=?""",
+                        ("attempt lease expired; reconcile before another effect", now, ref.key, incumbent),
+                    )
+                raise OperationInDoubt(ref.key, state)
             attempts = int(row.get("attempts") or 0)
             if attempts >= budget.max_attempts:
                 self.db.execute(
                     "UPDATE operations SET state='exhausted', updated_at=? WHERE operation_key=?",
-                    (time.time(), ref.key),
+                    (now, ref.key),
                 )
                 raise RetryBudgetExhausted(f"{ref.key}: retry budget {budget.max_attempts} exhausted")
             attempt = attempts + 1
-            self.db.execute(
-                """UPDATE operations SET attempts=?, state='intent', last_error=NULL,
-                   next_attempt_at=NULL, updated_at=? WHERE operation_key=?""",
-                (attempt, time.time(), ref.key),
+            cur = self.db.execute(
+                """UPDATE operations SET attempts=?,state='intent',last_error=NULL,next_attempt_at=NULL,
+                   attempt_owner=?,attempt_lease_until=?,updated_at=?
+                   WHERE operation_key=? AND state!='committed' AND attempt_owner IS NULL""",
+                (attempt, owner, now + max(1.0, lease_s), now, ref.key),
             )
-            return attempt
+            if cur.rowcount != 1:
+                raise OperationInDoubt(ref.key, "attempt_in_progress")
+            return attempt, owner
 
-    def mark_in_doubt(self, ref: OperationRef, error: BaseException | str) -> None:
+    def mark_in_doubt(self, ref: OperationRef, error: BaseException | str, *, owner: str | None = None) -> None:
         detail = str(error)[:2000]
         with self.lock, self.db:
             self._assert_identity(ref, self.get(ref.key))
-            self.db.execute(
-                """UPDATE operations SET state='in_doubt', last_error=?, updated_at=?
-                   WHERE operation_key=? AND state!='committed'""",
-                (detail, time.time(), ref.key),
-            )
+            if owner is None:
+                self.db.execute(
+                    """UPDATE operations SET state='in_doubt',last_error=?,updated_at=?
+                       WHERE operation_key=? AND state!='committed'""",
+                    (detail, time.time(), ref.key),
+                )
+            else:
+                self.db.execute(
+                    """UPDATE operations SET state='in_doubt',last_error=?,attempt_owner=NULL,
+                       attempt_lease_until=NULL,updated_at=?
+                       WHERE operation_key=? AND state!='committed' AND attempt_owner=?""",
+                    (detail, time.time(), ref.key, owner),
+                )
 
     def mark_observation(self, ref: OperationRef, outcome: MutationOutcome) -> None:
         payload = json.dumps(
@@ -231,17 +273,33 @@ class OperationJournal:
             )
         return when
 
-    def commit(self, ref: OperationRef, result: Any) -> None:
+    def commit(self, ref: OperationRef, result: Any, *, owner: str | None = None) -> None:
         payload = json.dumps(result, sort_keys=True, separators=(",", ":"))
         with self.lock, self.db:
-            self._assert_identity(ref, self.get(ref.key))
+            row = self.get(ref.key)
+            self._assert_identity(ref, row)
+            if row["state"] == "committed":
+                existing = json.dumps(row["result"], sort_keys=True, separators=(",", ":"))
+                if existing != payload:
+                    raise OperationIdentityConflict(f"committed operation {ref.key!r} cannot be overwritten")
+                return
+            if owner is not None and row.get("attempt_owner") != owner:
+                raise OperationInDoubt(ref.key, "attempt_owner_changed")
+            where = "operation_key=? AND state!='committed'"
+            args: list[Any] = [payload, time.time(), ref.key]
+            if owner is not None:
+                where += " AND attempt_owner=?"
+                args.append(owner)
             cur = self.db.execute(
-                """UPDATE operations SET state='committed', result_json=?, last_error=NULL,
-                   next_attempt_at=NULL, updated_at=? WHERE operation_key=?""",
-                (payload, time.time(), ref.key),
+                f"""UPDATE operations SET state='committed',result_json=?,last_error=NULL,next_attempt_at=NULL,
+                    attempt_owner=NULL,attempt_lease_until=NULL,updated_at=? WHERE {where}""",
+                args,
             )
             if cur.rowcount != 1:
-                raise KeyError(ref.key)
+                latest = self.get(ref.key)
+                if latest["state"] == "committed" and latest["result"] == result:
+                    return
+                raise OperationInDoubt(ref.key, "commit_lost_attempt_owner")
 
     def get(self, key: str) -> dict[str, Any]:
         with self.lock:
@@ -264,12 +322,12 @@ class OperationJournal:
         intent_digest: str | None = None,
         observe_before_first_attempt: bool = False,
     ) -> Any:
-        """Execute once, replay committed output, otherwise observe/reconcile before safe replay.
+        """Execute one provider effect with a durable cross-process attempt claim.
 
-        ``replay_safe=True`` alone is intentionally insufficient: a previous attempt can be replayed
-        only after ``reconcile()`` proves it is definitely absent. With
-        ``observe_before_first_attempt=True`` a newly-created local intent is observed remotely
-        before its first effect, which lets a new epoch adopt an existing deterministic resource.
+        A follower never interprets an in-flight owner's temporary absence from the provider as
+        permission to start another effect. It either replays an immutable committed receipt or
+        reports the operation in doubt. Reconciliation is required before a retry of any prior
+        attempt, including an expired claim.
         """
         existed = True
         try:
@@ -283,6 +341,16 @@ class OperationJournal:
         if row["state"] == "committed":
             return row["result"]
 
+        now = time.time()
+        incumbent = row.get("attempt_owner")
+        if incumbent:
+            lease_until = float(row.get("attempt_lease_until") or 0.0)
+            if lease_until > now:
+                raise OperationInDoubt(ref.key, "attempt_in_progress")
+            self.mark_in_doubt(ref, "attempt lease expired; external outcome is unknown", owner=incumbent)
+            row = self.get(ref.key)
+            existed = True
+
         should_observe = existed or observe_before_first_attempt
         if should_observe:
             if reconcile is None:
@@ -295,14 +363,14 @@ class OperationJournal:
             if outcome.status != "definitely_absent" or not replay_safe:
                 raise OperationInDoubt(ref.key, outcome.status)
 
-        attempt = self.start_attempt(ref, budget=budget)
+        attempt, owner = self.start_attempt(ref, budget=budget)
         try:
             result = fn()
         except BaseException as exc:
-            self.mark_in_doubt(ref, exc)
+            self.mark_in_doubt(ref, exc, owner=owner)
             self.schedule_retry(ref, attempt, budget=budget)
             raise
-        self.commit(ref, result)
+        self.commit(ref, result, owner=owner)
         return result
 
     def observe(self, ref: OperationRef, observer: Callable[[], MutationOutcome]) -> MutationOutcome:
