@@ -473,3 +473,32 @@ def test_github_publish_reuses_open_pr(monkeypatch: pytest.MonkeyPatch) -> None:
     assert edit[edit.index("--add-label") + 1] == "factory"
     assert not any(c[:3] == ["gh", "pr", "create"] for c in recorded)
     assert any(c[:1] == ["git"] and "--force" in c and "push" in c for c in recorded)
+
+
+def test_git_runs_with_background_maintenance_disabled(tmp_path: Path) -> None:
+    """Every git the factory spawns must have auto-gc and auto-maintenance off.
+
+    Git forks ``git maintenance run --auto --detach`` after am/commit/fetch/push. In CI that
+    detached child was still writing into a disposable clone while ``TemporaryDirectory`` cleanup
+    walked it, and ``deliver`` died with ``OSError: [Errno 39] Directory not empty: 'clone'``. The
+    race is not reproducible on demand, so pin the mechanism instead: read the effective config back
+    through the same helper that publish uses.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    assert scm_mod._run(["git", "config", "--get", "gc.auto"], repo).strip() == "0"
+    assert scm_mod._run(["git", "config", "--get", "maintenance.auto"], repo).strip() == "false"
+
+
+def test_non_git_argv_is_passed_through_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The hardening keys off argv[0]; `gh` must not be handed git's -c flags."""
+    seen: list[list[str]] = []
+
+    def fake_subprocess_run(argv, **kw):
+        seen.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(scm_mod.subprocess, "run", fake_subprocess_run)
+    scm_mod._run(["gh", "pr", "list"], None)
+    assert seen == [["gh", "pr", "list"]]

@@ -27,6 +27,13 @@ BOT_EMAIL = "swfactory-bot@users.noreply.github.com"
 FACTORY_BRANCH_PREFIX = "factory/"  # bot-owned refs: re-publishing a run force-updates them
 # Committer identity for `git am` so a bare CI/orchestrator host needs no git config.
 _GIT_IDENT = ["-c", f"user.name={BOT_NAME}", "-c", f"user.email={BOT_EMAIL}"]
+
+# Git forks `git maintenance run --auto --detach` after am/commit/fetch/push. That background
+# process keeps writing into .git after the foreground command has already returned, so a clone in
+# a TemporaryDirectory can still be growing while cleanup walks it -> ENOTEMPTY. Every clone here is
+# disposable and pushed immediately; repacking it is pure waste, and a detached child that outlives
+# the directory it writes to is also a process we cannot account for on the way out of a sandbox.
+_GIT_NO_AUTO_GC = ["-c", "gc.auto=0", "-c", "maintenance.auto=false"]
 _FRONT_MATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?(.*)\Z", re.DOTALL)
 
 
@@ -67,9 +74,16 @@ class Scm(Protocol):
 
 
 def _run(argv: Sequence[str], cwd: Path | None, input: bytes | None = None) -> str:
-    """Run one subprocess and return stdout; non-zero exit -> StageError("scm", retryable=True)."""
+    """Run one subprocess and return stdout; non-zero exit -> StageError("scm", retryable=True).
+
+    Git invocations are hardened here rather than at each call site so a future ``git`` command
+    cannot reintroduce a detached background writer by forgetting the flags.
+    """
+    argv = list(argv)
+    if argv and argv[0] == "git":
+        argv = [argv[0], *_GIT_NO_AUTO_GC, *argv[1:]]
     try:
-        proc = subprocess.run(list(argv), cwd=cwd, input=input, capture_output=True, check=False, timeout=600)
+        proc = subprocess.run(argv, cwd=cwd, input=input, capture_output=True, check=False, timeout=600)
     except FileNotFoundError as e:
         raise StageError("scm", f"{argv[0]} not found on PATH", retryable=False) from e
     except subprocess.TimeoutExpired as e:
