@@ -147,7 +147,14 @@ nothing else in the module would change. crabbox already knows a `docker-sandbox
 
 ## Rust console backend
 
-Set `SWF_BACKEND_TOKEN` to an operator secret of at least 32 characters and start Compose with
-`--profile console` to expose the Python factory API at `http://localhost:8082`.
+Set `SWF_BACKEND_TOKEN` to an operator secret of at least 32 non-whitespace characters **before**
+`docker compose up`: the `backend` service is part of the default stack and exposes the Python
+factory API at `http://localhost:8082`. Compose hands the same secret to the `airflow` service
+along with `SWF_BACKEND_URL=http://backend:8082`, because a backend-managed work cell reports its
+lifecycle and publishes from inside the worker process and fails closed in its first stage without
+them — a failure the console cannot see, since the submission itself succeeds. `swfactory doctor`
+reports that pair as its `managed workers` row.
+
 The backend reads Airflow credentials from the shared volume and keeps GitHub credentials on
-the control plane. See [the complete setup](factory-backend.md).
+the control plane. For an Airflow-only stack, name the services: `docker compose -f
+deploy/docker/compose.yml up -d airflow webhook`. See [the complete setup](factory-backend.md).

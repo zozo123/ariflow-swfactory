@@ -38,8 +38,14 @@ pub const SANDBOX_DOCKERFILE: &str = "deploy/docker/sandbox.Dockerfile";
 /// The tag the sandbox image is built under.
 pub const SANDBOX_IMAGE: &str = "swfactory-sandbox:local";
 
-/// The services `compose.yml` runs. `sandbox-image` is a build target and never runs.
-pub const SERVICES: &[&str] = &["airflow", "webhook"];
+/// The services `compose.yml` runs by default. `sandbox-image` is a build target (profile
+/// `build`) and never runs. `backend` is here because it is no longer profile-gated: it is the
+/// console's control plane and every managed work cell calls it, so a stack whose backend died
+/// still accepts work orders and then fails each of them in its first stage. Omitting it from
+/// this list is what lets `swf stack up` report a healthy stack over exactly that failure.
+/// `tests/test_doctor.py::test_stack_status_covers_every_service_the_default_stack_starts`
+/// keeps this list and `compose.yml` from drifting apart.
+pub const SERVICES: &[&str] = &["airflow", "backend", "webhook"];
 
 /// How long a cold `up` may take before it is a hang: the first run does `uv sync` into a volume.
 pub const UP_TIMEOUT: Duration = Duration::from_secs(900);

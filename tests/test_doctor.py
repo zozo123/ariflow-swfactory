@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from swfactory import doctor
@@ -41,6 +43,8 @@ STATUS_TEXT_NONE = (
 STATUS_TEXT_BOTH = (
     "Connected Integrations\n  github: connected as zozo123\n  claude: connected\n\nProject Configuration\n"
 )
+# What the ``airflow`` Compose service receives: the worker's own copy of the backend coordinates.
+MANAGED_ENV = {"SWF_BACKEND_URL": "http://backend:8082", "SWF_BACKEND_TOKEN": "t" * 32}
 
 
 class FakeRunner:
@@ -102,7 +106,7 @@ def by_name(checks: list[Check]) -> dict[str, Check]:
 
 def test_all_green_exit_zero() -> None:
     runner = green()
-    checks = run_doctor(cfg(islo_snapshot="swf-golden-20260902"), runner, which=which_all, root=ROOT)
+    checks = run_doctor(cfg(islo_snapshot="swf-golden-20260902"), runner, which=which_all, root=ROOT, env=MANAGED_ENV)
     assert all(c.ok for c in checks), [c for c in checks if not c.ok]
     assert exit_code(checks) == 0
     names = [c.name for c in checks]
@@ -118,6 +122,7 @@ def test_all_green_exit_zero() -> None:
         "gh repo",
         "blueprint",
         "factory.toml",
+        "managed workers",
     ]
     # Exact argv the doctor issues (flags verified against islo 0.48.1 / gh 2.83).
     assert ["islo", "status", "--output", "json"] in runner.calls
@@ -139,10 +144,10 @@ def test_no_snapshot_check_when_unconfigured() -> None:
 
 
 def test_table_and_json_shapes() -> None:
-    checks = run_doctor(cfg(), green(), which=which_all, root=ROOT)
+    checks = run_doctor(cfg(), green(), which=which_all, root=ROOT, env=MANAGED_ENV)
     text = table(checks)
     assert text.startswith("ok   islo cli")
-    assert text.rstrip().endswith("10 checks, 0 failed")
+    assert text.rstrip().endswith("11 checks, 0 failed")
     data = json.loads(doctor.to_json(checks))
     assert data[0] == {
         "name": "islo cli",
@@ -397,6 +402,79 @@ def test_subprocess_runner_contract() -> None:
         doctor.subprocess_runner(["swf-no-such-binary-xyz"])
 
 
+# ------------------------------------------- managed workers reaching the backend
+
+
+def managed(**over: str) -> Check:
+    """The ``managed workers`` row for one worker environment."""
+    return by_name(run_doctor(cfg(), green(), root=ROOT, env={**MANAGED_ENV, **over}))["managed workers"]
+
+
+def test_managed_workers_ok_when_the_worker_carries_both_variables() -> None:
+    row = managed()
+    assert row.ok and row.status == "ok"
+    assert "http://backend:8082" in row.detail
+    assert MANAGED_ENV["SWF_BACKEND_TOKEN"] not in row.detail  # a report gets pasted into issues
+
+
+@pytest.mark.parametrize(
+    ("over", "expected"),
+    [
+        ({"SWF_BACKEND_TOKEN": "short"}, "SWF_BACKEND_TOKEN must be 32+ non-whitespace characters"),
+        ({"SWF_BACKEND_TOKEN": "t" * 31 + " "}, "SWF_BACKEND_TOKEN must be 32+ non-whitespace characters"),
+        ({"SWF_BACKEND_TOKEN": ""}, "SWF_BACKEND_TOKEN is unset"),
+        ({"SWF_BACKEND_URL": ""}, "SWF_BACKEND_URL is unset"),
+        ({"SWF_BACKEND_URL": "backend:8082"}, "SWF_BACKEND_URL must be an http(s) URL"),
+    ],
+)
+def test_half_configured_managed_workers_fail_the_report(over: dict[str, str], expected: str) -> None:
+    row = managed(**over)
+    assert not row.ok and row.required and row.status == "FAIL"
+    assert row.detail.startswith("managed workers cannot reach the backend: ")
+    assert expected in row.detail
+    assert "STARTS the Airflow workers" in row.fix
+
+
+def test_unset_pair_warns_because_direct_deployments_run_no_managed_cells() -> None:
+    checks = run_doctor(cfg(), green(), which=which_all, root=ROOT, env={})
+    row = by_name(checks)["managed workers"]
+    assert not row.ok and not row.required and row.status == "warn"
+    assert row.detail.startswith("managed workers cannot reach the backend: ")
+    assert exit_code(checks) == 0  # an Airflow-only stack is a state, not a fault
+    assert "1 warnings" in table(checks)
+
+
+def test_the_local_stack_gives_its_workers_what_the_check_asks_for() -> None:
+    """The row above is only useful if the documented stack actually satisfies it."""
+    compose = yaml.safe_load((ROOT / "deploy" / "docker" / "compose.yml").read_text(encoding="utf-8"))
+    airflow = compose["services"]["airflow"]["environment"]
+    for var in doctor.MANAGED_WORKER_VARS:
+        assert var in airflow, f"the airflow service must carry {var}: managed jobs read it in-process"
+    # The console's backend is not opt-in: the built-in context and every managed cell address it.
+    assert "profiles" not in compose["services"]["backend"]
+
+
+def test_stack_status_covers_every_service_the_default_stack_starts() -> None:
+    """`swf stack up/status` reports one row per name in `stack.rs`'s SERVICES. A service that
+    compose starts by default but that list omits is worse than an unmonitored container: `up`
+    starts it, so the operator gets a green stack over a dead one. That is precisely how the
+    backend would fail here — a stack whose control plane is down still accepts work orders and
+    then fails every one of them in its first stage, with nothing on the status table to say so.
+    """
+    compose = yaml.safe_load((ROOT / "deploy" / "docker" / "compose.yml").read_text(encoding="utf-8"))
+    default_stack = {name for name, svc in compose["services"].items() if not svc.get("profiles")}
+
+    source = (ROOT / "rust" / "crates" / "swf-app" / "src" / "stack.rs").read_text(encoding="utf-8")
+    declared = re.search(r"pub const SERVICES: &\[&str\] = &\[(.*?)\];", source, re.S)
+    assert declared, "stack.rs no longer declares SERVICES the way this guard reads it"
+    reported = set(re.findall(r'"([^"]+)"', declared.group(1)))
+
+    assert reported == default_stack, (
+        f"stack.rs SERVICES {sorted(reported)} does not match the profile-free services in "
+        f"compose.yml {sorted(default_stack)}: `swf stack status` would hide a running service"
+    )
+
+
 # ---------------------------------------------------------------- CLI
 
 
@@ -404,9 +482,13 @@ def test_cli_doctor_exit_codes(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(doctor, "subprocess_runner", green())
     monkeypatch.chdir(ROOT)
+    # The managed-worker row reads the process environment: pin it so this asserts the CLI, not
+    # whatever the developer happens to export.
+    for name, value in MANAGED_ENV.items():
+        monkeypatch.setenv(name, value)
     res = runner.invoke(app, ["doctor"])
     assert res.exit_code == 0, res.output
-    assert "10 checks, 0 failed" in res.output
+    assert "11 checks, 0 failed" in res.output
     assert "sandbox=islo" in res.output
 
     res = runner.invoke(app, ["doctor", "--json"])

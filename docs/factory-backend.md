@@ -62,15 +62,42 @@ this is a single trusted-operator deployment, not a multi-tenant authorization s
 Optional integrations use the backend's `gh` and `islo` installations and credentials. Missing
 integrations remain visible in `swf doctor`; an empty configured fleet is a valid result.
 
-For Docker, set the token in your shell, then:
+## Backend-host variables are not worker variables
+
+`SWF_BACKEND_URL` and `SWF_BACKEND_TOKEN` are read by three different processes. Setting them once,
+on the backend host, configures **only** that host:
+
+| Variable | Backend host (`swfactory backend`) | Airflow worker (managed stages) | Operator machine (`swf`) |
+| --- | --- | --- | --- |
+| `SWF_BACKEND_URL` | not read — `--host`/`--port` bind the listener | **required**: where a managed work cell reports | optional; overrides the context's `backend_url` |
+| `SWF_BACKEND_TOKEN` | **required**: the token the API accepts | **required**: the same secret, sent as `Authorization: Bearer` | **required**: the same secret |
+
+A backend-managed work cell reports every lifecycle transition
+(`src/swfactory/cell_callback.py`) and publishes (`backend_scm.py`) from inside the Airflow worker
+process, using the worker's own copy of the pair. Both fail closed when a value is missing or the
+token is under 32 non-whitespace characters, so a stack whose workers do not carry them accepts
+work orders and then fails every one of them in its first stage: the submission succeeds, no gate
+ever appears, and the only evidence is in a task log. `swfactory doctor` reports that wiring as its
+`managed workers` row — read it before admitting a work order. Direct/unmanaged Airflow runs never
+call the backend and need neither variable.
+
+For Docker, export the token in the shell that starts Compose, then:
 
 ```sh
-docker compose -f deploy/docker/compose.yml --profile console up -d
+export SWF_BACKEND_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+docker compose -f deploy/docker/compose.yml up -d
 ```
 
-The `backend` service reads the generated Airflow login from the shared volume when explicit
-Airflow credentials are absent. It publishes only loopback port 8082. The console profile keeps
-existing Airflow-only deployments usable; starting the backend requires opting into the profile.
+Compose gives that one secret to both the `backend` and the `airflow` service, and gives the
+workers `SWF_BACKEND_URL=http://backend:8082`. That URL is fixed in the file, not read from your
+shell: `http://localhost:8082` is the *console's* address and reaches nothing from inside the
+compose network. Workers that must reach a backend published elsewhere need a compose override.
+
+The `backend` service starts with the default stack, because the built-in console context and every
+managed work cell address it; a stack without it is the failure above. It reads the generated
+Airflow login from the shared volume when explicit Airflow credentials are absent, and publishes
+only loopback port 8082. An Airflow-only deployment that wants no backend names its services
+explicitly: `docker compose -f deploy/docker/compose.yml up -d airflow webhook`.
 Worker discovery/removal currently uses islo; Docker work cells still clean up through their
 Python stage lifecycle. The Docker image does not install islo, so that optional integration must
 be provisioned separately if needed.
