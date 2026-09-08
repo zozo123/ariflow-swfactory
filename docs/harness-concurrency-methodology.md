@@ -133,6 +133,39 @@ scheduling: what lifecycle step runs next?
 
 Only Airflow answers the second question.
 
+Admission is also responsible for *finishing* what it admitted. Work that is admitted while the
+backend is restarting, or that drains only when another Cell releases capacity, still owes Airflow
+one command. That command must be durable and re-deliverable, or the queue reports progress that
+never happens. Redelivery is still not scheduling: it hands over the same deterministic run one more
+time, under an idempotency journal that observes an ambiguous remote outcome before repeating
+anything, and Airflow alone decides what runs next.
+
+A useful set of states, rather than one overloaded "active":
+
+```text
+queued       -> waiting for capacity
+admitted     -> capacity reserved, command not yet delivered
+dispatching  -> one leased delivery attempt owns the command
+bound        -> the run exists and every Cell is bound to it
+terminal     -> capacity released
+```
+
+The capacity unit should be the thing that actually consumes the factory — one Cell activation —
+counted for every affected repository. A submission that fans out to several Cells holds every unit
+until its last member is terminal; releasing on the first one strands the siblings still running.
+
+Redelivery attempts are bounded, so the interesting question is what happens when the budget runs
+out. Answering "keep the reservation and stop trying" rebuilds the original bug one layer up: a
+reservation nothing can claim any more holds its unit forever, blocks the queue behind it, and
+reports nothing, because an exhausted retry loop is silent by construction. Spending the budget has
+to *end* the reservation on evidence — proven-absent remote, so undo the activations and fail it and
+let the queue move; unproven remote, so keep the unit but count it as stuck rather than as healthy
+work awaiting dispatch. The same rule applies to any unit whose Cell has already finished without
+the backend hearing about it: a release that depends on a report which will never arrive is a leak,
+so the request paths must be able to reconcile held units against Cell truth. And a delivery attempt
+that has been superseded — its lease taken over after expiry — has no authority left: it may record
+what it observed, but it must not cancel Cells or retire an intent a newer attempt now owns.
+
 ## 6. Deterministic submission dedupe
 
 Retries are normal. A network timeout after submit must not create a second authoritative Cell.

@@ -3,6 +3,12 @@
 The callback is intentionally tiny and bounded. Airflow still schedules the work; it merely reports
 managed cell lifecycle transitions to the backend that owns epoch fencing, admission release and
 durable evidence. Direct/unmanaged Airflow runs remain backward-compatible and do not call it.
+
+A transition can free capacity, and the backend answers with the work that released
+(``released_work``) and the admitted commands it re-delivered as a result (``resumed_dispatch``).
+The worker reports both and acts on neither: redelivery happens inside the backend request that
+released the capacity, because a worker that triggered runs of its own would be a second lifecycle
+scheduler standing next to Airflow.
 """
 
 from __future__ import annotations
@@ -78,4 +84,15 @@ def transition(job: dict[str, Any], state: str, *, operation_key: str) -> dict[s
         raise CellCallbackError("Factory Cell callback returned invalid JSON") from error
     if not isinstance(result, dict):
         raise CellCallbackError("Factory Cell callback returned invalid document")
-    return result
+    cell = result.get("cell")
+    if not isinstance(cell, dict) or cell.get("cell_id") != cell_id or cell.get("epoch") != epoch:
+        # A reply about some other cell or epoch must not be read as an acknowledgement of this
+        # transition: the job would carry on believing the control plane had moved with it.
+        raise CellCallbackError("Factory Cell callback acknowledged a different cell epoch")
+    released = result.get("released_work")
+    resumed = result.get("resumed_dispatch")
+    return {
+        "cell": cell,
+        "released_work": list(released) if isinstance(released, list) else [],
+        "resumed_dispatch": list(resumed) if isinstance(resumed, list) else [],
+    }
