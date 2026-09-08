@@ -4,6 +4,9 @@ on:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -16,8 +19,34 @@ jobs:
       - run: uv run ruff check . && uv run ruff format --check .
       - run: uv run pytest
       - run: uv run python -m swfactory.liquid_release
+      - run: uv run python -m swfactory.capability_inventory
       - name: e2e demo (scripted agent, local runner, local git remote)
         run: uv run swfactory demo
+
+  # The scripted eval suite is part of final fan-in, not a best-effort side workflow. It is
+  # hermetic and keyless, so there is no reason to omit it from candidate acceptance.
+  eval-suite:
+    if: github.event_name == 'push' || github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ANTHROPIC_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - run: uv sync
+      - run: uv run python -m swfactory.evals --suite demo/evals
+      - name: Upload eval evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-eval-runs
+          path: |
+            .factory/evals/*/*/run/report.json
+            .factory/evals/*/*/run/pr.md
+            .factory/evals/*/*/run/stages.jsonl
+          if-no-files-found: ignore
 
   # Expensive integration gates run only for main fan-in PRs and main pushes. Internal liquid
   # fan-out PRs get the fast Python gate above, which keeps 10-50 issue bundles cheap to iterate.
@@ -34,35 +63,17 @@ jobs:
           uv run --group airflow pytest
           tests/test_dag_parity.py tests/test_dag_smoke.py tests/test_dag_stress.py
 
-  # The only job that answers a REAL approval gate against a REAL scheduler. Every other job
-  # proves a piece works; `dag.test()` cannot resolve HITL tasks at all (tests/test_dag_smoke.py
-  # marks them success with `--mark-success-pattern`), so the product's central behaviour was
-  # untested until this existed. It is not hypothetical: a race in `swf gates approve` failed four
-  # of five of these runs while all eight CI jobs stayed green (#1199, fixed in #1198).
-  #
-  # Both harnesses always run. Their checkouts carry no persisted GitHub credential, and a failure
-  # in one harness cannot suppress the other. The final step reconstructs a red job from either
-  # failed outcome; the job remains non-blocking while timing is learned on hosted runners.
+  # This exercises a real approval gate against a real scheduler. It remains advisory because its
+  # hosted-runner timing path is not yet a supported release claim; the supported Airflow path is
+  # blocked below by airflow-main and airflow-parity.
   live-gate-e2e:
     if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 45
-    # `swf` reads pull requests through `gh`, which refuses to run in Actions without a token and
-    # would otherwise degrade the delivery half of the run into "source github is unavailable".
     env:
       GH_TOKEN: ${{ github.token }}
-      # The gate settle window, widened for this runner without rebuilding the binary. `swf`
-      # defaults to 5 s, measured against a laptop's scheduler; a two-core runner reconciles a
-      # parked worker more slowly AND ripens gates faster (36 s here against ~110 s on a laptop),
-      # and answering inside that reconciliation fails the gate. The knob exists because the
-      # previous fix was a compiled-in 3 s that went nine local runs green and failed here on the
-      # first try, with no way to raise it short of shipping a new binary. Lower it back toward
-      # the default if this job stays green for a month; raise it if it does not.
       SWF_GATE_SETTLE_SECS: "8"
-      # stress_airflow counts sightings at 3-second polling intervals. Four sightings are the
-      # first point at which >=8 seconds have actually elapsed (0, 3, 6, 9); two sightings are
-      # only ~3 seconds apart and reproduced a stale executor event on this runner.
       SWF_STRESS_SETTLE_POLLS: "4"
     steps:
       - uses: actions/checkout@v6
@@ -100,6 +111,8 @@ jobs:
           test "$RUST_HARNESS" = success
           test "$PYTHON_HARNESS" = success
 
+  # Provider-specific sandbox jobs stay advisory until the capability inventory moves them from
+  # experimental to validated. A green advisory check must not silently upgrade a support claim.
   srt-smoke:
     if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-24.04
@@ -199,3 +212,65 @@ jobs:
       - run: uv sync
       - run: uv run pytest tests/test_contract_fixtures.py
       - run: cargo test --manifest-path rust/Cargo.toml -p swf-domain --test contract
+
+  # One blocking fan-in check for the supported release surface. It records the PR head, base and
+  # tested checkout (GitHub's PR merge candidate) together with a digest of every required job's
+  # result. If HEAD changes, concurrency cancels this run and a new manifest must be produced.
+  candidate-readiness:
+    if: always() && (github.event_name == 'push' || github.base_ref == 'main')
+    needs: [test, eval-suite, airflow-parity, airflow-main, rust, contract-equivalence]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+      TESTED_SHA: ${{ github.sha }}
+      TEST_RESULT: ${{ needs.test.result }}
+      EVAL_RESULT: ${{ needs.eval-suite.result }}
+      AIRFLOW_PARITY_RESULT: ${{ needs.airflow-parity.result }}
+      AIRFLOW_MAIN_RESULT: ${{ needs.airflow-main.result }}
+      RUST_RESULT: ${{ needs.rust.result }}
+      CONTRACT_RESULT: ${{ needs.contract-equivalence.result }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - run: uv sync
+      - name: Materialize exact-candidate check evidence
+        run: |
+          set -euo pipefail
+          mkdir -p .factory/candidate-evidence
+          record() {
+            name="$1"; result="$2"
+            printf 'check=%s\nresult=%s\nhead=%s\nbase=%s\ntested=%s\n' \
+              "$name" "$result" "$HEAD_SHA" "$BASE_SHA" "$TESTED_SHA" \
+              > ".factory/candidate-evidence/${name}.txt"
+            test "$result" = success
+          }
+          record test "$TEST_RESULT"
+          record eval-suite "$EVAL_RESULT"
+          record airflow-parity "$AIRFLOW_PARITY_RESULT"
+          record airflow-main "$AIRFLOW_MAIN_RESULT"
+          record rust "$RUST_RESULT"
+          record contract-equivalence "$CONTRACT_RESULT"
+      - name: Seal candidate evidence to exact head/base/tested identity
+        run: >-
+          uv run python -m swfactory.candidate_readiness
+          --head-sha "$HEAD_SHA"
+          --base-sha "$BASE_SHA"
+          --tested-sha "$TESTED_SHA"
+          --required test=.factory/candidate-evidence/test.txt
+          --required eval-suite=.factory/candidate-evidence/eval-suite.txt
+          --required airflow-parity=.factory/candidate-evidence/airflow-parity.txt
+          --required airflow-main=.factory/candidate-evidence/airflow-main.txt
+          --required rust=.factory/candidate-evidence/rust.txt
+          --required contract-equivalence=.factory/candidate-evidence/contract-equivalence.txt
+          --out .factory/candidate-readiness.json
+      - name: Upload exact-candidate readiness manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-readiness-${{ github.event.pull_request.number || github.run_number }}
+          path: |
+            .factory/candidate-readiness.json
+            .factory/candidate-evidence/*.txt
+          if-no-files-found: error
