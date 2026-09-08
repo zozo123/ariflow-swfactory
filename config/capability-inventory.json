@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "claims": [
+    {
+      "id": "airflow.lifecycle",
+      "state": "validated",
+      "support": "supported",
+      "invariant": "Apache Airflow is the only managed lifecycle scheduler and every managed run is bound to a durable Factory Cell epoch.",
+      "owner": "airflow",
+      "runtime_entry": "swfactory.backend.service.Factory.submit -> Airflow DAG run",
+      "environment": "GitHub-hosted Ubuntu with upstream Airflow plus authenticated live-gate harness",
+      "test": "airflow-parity required check plus scripts/stress_airflow.sh",
+      "evidence": ["candidate-readiness-airflow artifact", "GitHub required check: airflow-parity"]
+    },
+    {
+      "id": "mutation.github",
+      "state": "validated",
+      "support": "supported",
+      "invariant": "Every managed GitHub write carries the current Cell epoch, policy, operation identity and durable observation/replay contract.",
+      "owner": "authority+security",
+      "runtime_entry": "swfactory.core_capabilities.CoreCapabilityRuntime.execute_external via ControlKernel",
+      "environment": "backend-owned GitHub credentials; coding sandboxes receive no publication secret",
+      "test": "tests/test_canonical_mutation_path.py",
+      "evidence": ["candidate-readiness-core artifact", "operation journal + TrustedEvidence receipt"]
+    },
+    {
+      "id": "recovery.external-effects",
+      "state": "validated",
+      "support": "supported",
+      "invariant": "Ambiguous effects remain in_doubt until observation proves committed or definitely absent; stale epochs cannot repair or replay them.",
+      "owner": "recovery",
+      "runtime_entry": "swfactory.idempotency.OperationJournal and swfactory.operation_recovery",
+      "environment": "durable SQLite journal with restart/reconciliation tests",
+      "test": "tests/test_recovery_acceptance.py",
+      "evidence": ["candidate-readiness-core artifact", "operator recovery-plan endpoint"]
+    },
+    {
+      "id": "workgraph.serial",
+      "state": "validated",
+      "support": "supported",
+      "invariant": "Plan.work executes only inside the Airflow-owned build stage, honors dependencies and conflicts, and fans in deterministically.",
+      "owner": "workgraph",
+      "runtime_entry": "swfactory.stages.build_and_test -> bounded Plan.work execution",
+      "environment": "supported serial fallback on the governed build workspace",
+      "test": "tests/test_workgraph_stage_execution.py and tests/test_work_executor.py",
+      "evidence": ["candidate-readiness-core artifact", "workgraph execution report"]
+    },
+    {
+      "id": "workgraph.provider-fork",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Parallel candidates need immutable parent identity, isolated workspaces, bounded leases and deterministic conflict-aware fan-in.",
+      "owner": "workgraph",
+      "runtime_entry": "swfactory.work_executor.WorkExecutor and swfactory.execution_binding",
+      "environment": "provider-specific; not part of the supported promotion contract",
+      "test": "WorkExecutor unit scenarios for parallel fan-out, conflict, crash and cancellation",
+      "evidence": ["unit-level executor receipts only"],
+      "follow_up": "Qualify one real provider with isolated candidate workspaces and retained lineage before changing support to validated."
+    },
+    {
+      "id": "sandbox.local-scripted",
+      "state": "validated",
+      "support": "test_only",
+      "invariant": "The keyless scripted path contains no model or publishing credential and produces a verified local delivery.",
+      "owner": "security+evidence",
+      "runtime_entry": "swfactory demo",
+      "environment": "local sandbox with scripted fixtures",
+      "test": "required test job e2e demo",
+      "evidence": ["candidate-readiness-core artifact"]
+    },
+    {
+      "id": "sandbox.srt",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "OS confinement and protected-write policy are verified independently of publication authority.",
+      "owner": "security",
+      "runtime_entry": "swfactory.sandbox.SrtSandbox",
+      "environment": "Ubuntu 24.04 with Anthropic Sandbox Runtime",
+      "test": "srt-smoke CI job",
+      "evidence": ["CI check: srt-smoke"],
+      "follow_up": "Promote only after the hosted smoke is stable enough to join a required protected-branch context."
+    },
+    {
+      "id": "sandbox.docker",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Container execution is isolated from publication authority and passes the scripted delivery contract.",
+      "owner": "security",
+      "runtime_entry": "swfactory.sandbox Docker path",
+      "environment": "GitHub-hosted Docker",
+      "test": "docker-smoke CI job",
+      "evidence": ["CI check: docker-smoke"],
+      "follow_up": "Keep advisory until failure rate and cleanup semantics satisfy the supported sandbox SLO."
+    },
+    {
+      "id": "factory.generations",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Child factories are isolated, budgeted and cannot self-promote into the parent production authority.",
+      "owner": "authority+evidence",
+      "runtime_entry": "generation manifests and parent-owned promotion path",
+      "environment": "simulation/contract path only",
+      "test": "generation contract tests",
+      "evidence": ["contract evidence only"],
+      "follow_up": "Require a parent-approved adoption/refusal/rollback experiment with no parent production credentials before operational support."
+    }
+  ]
+}
