@@ -195,14 +195,29 @@ def owns_sandbox(list_json: str, name: str, *, owner: str | None = None) -> bool
     return False
 
 
+#: The factory's own operational namespace. `Config` reads it with `env_prefix="SWF_"`, so any of
+#: it that reaches a cell overrides what the blueprint declared — for the TARGET's code, not just
+#: for ours. That is invisible until the target IS the factory: a calculator's tests do not read
+#: `SWF_*`, but this repository's do, and a self-hosted run on an env-inheriting backend saw
+#: `SWF_SANDBOX=local` where the blueprint said `toolset` and failed ~47 of its own tests.
+#: A credential scrub and a settings scrub are different jobs; this is the second one.
+SETTINGS_PREFIX = "SWF_"
+
+#: The only `SWF_*` a cell legitimately reads. `maintain` running on a worker resolves its metrics
+#: root from it (`maintain.MAINTAIN_ROOT_ENV`). An allow-list rather than a blanket prefix drop,
+#: so a future cell-side setting has to be added deliberately instead of surviving by accident.
+SETTINGS_KEEP = frozenset({"SWF_MAINTAIN_ROOT"})
+
+
 def scrub_env(env: Mapping[str, str]) -> dict[str, str]:
-    """Drop common credential families before a host process crosses into agent execution."""
+    """Drop credential families AND the factory's own settings before crossing into a cell."""
 
     return {
         key: value
         for key, value in env.items()
         if key not in SCRUB_EXACT
         and not key.startswith(SCRUB_PREFIXES)
+        and not (key.startswith(SETTINGS_PREFIX) and key not in SETTINGS_KEEP)
         # `_TOKEN` is the suffix this project's own credentials use — SWF_BACKEND_TOKEN and
         # AIRFLOW_TOKEN both ended in it and both survived the scrub, which handed the operator's
         # authority to the process running model-written code. The allow-list was written against

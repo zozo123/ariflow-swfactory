@@ -17,6 +17,7 @@ from swfactory.sandbox import (
     DOCKER_HOME,
     HOST_SANDBOXES,
     SCRUB_PREFIXES,
+    SETTINGS_KEEP,
     SRT_CLAUDE_DOMAINS,
     DockerSandbox,
     IsloSandbox,
@@ -567,6 +568,40 @@ def test_scrub_env_drops_credentials_keeps_basics() -> None:
     out = scrub_env(env)
     assert out == {"PATH": "/usr/bin", "HOME": "/home/u", "CI": "1"}
     assert "ANTHROPIC_" in SCRUB_PREFIXES
+
+
+def test_scrub_env_drops_the_factorys_own_settings() -> None:
+    """A cell must not inherit the orchestrator's operational namespace.
+
+    `Config` reads `SWF_*`, so a leaked `SWF_SANDBOX` overrides what the blueprint declared -- for
+    the TARGET's code as much as ours. Harmless for a calculator, and the reason a self-hosted run
+    on an env-inheriting backend failed ~47 of this repository's own tests with
+    `assert 'local' == 'toolset'`.
+    """
+    env = {
+        "PATH": "/usr/bin",
+        "SWF_AGENT": "scripted",
+        "SWF_SANDBOX": "local",
+        "SWF_SCM": "local",
+        "SWF_FIXTURES_DIR": "demo/selfhost-scripted",
+        "SWF_APPROVE": "auto",
+        "SWF_MAINTAIN_ROOT": "/checkout",
+    }
+    out = scrub_env(env)
+    assert out == {"PATH": "/usr/bin", "SWF_MAINTAIN_ROOT": "/checkout"}, out
+    # The keep-list is deliberate: `maintain` on a worker resolves its root from this one.
+    assert {"SWF_MAINTAIN_ROOT"} == SETTINGS_KEEP
+
+
+def test_a_cell_resolves_the_blueprints_sandbox_not_the_orchestrators(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The invariant the leak broke: the blueprint declares the line, and the orchestrator's own
+    environment must not reach into the target's verification."""
+    monkeypatch.setenv("SWF_SANDBOX", "local")
+    monkeypatch.setenv("SWF_AGENT", "scripted")
+    assert "SWF_SANDBOX" not in scrub_env(os.environ)
+    assert "SWF_AGENT" not in scrub_env(os.environ)
 
 
 def test_both_implementations_satisfy_protocol(tmp_path) -> None:
