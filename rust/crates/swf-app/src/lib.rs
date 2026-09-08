@@ -6,6 +6,7 @@
 //! drifting apart while the factory underneath keeps moving.
 
 pub mod attention;
+pub mod backend_context;
 pub mod cells;
 pub mod context;
 pub mod control_plane;
@@ -19,6 +20,7 @@ pub mod snapshot;
 pub mod stack;
 pub mod submit;
 
+pub use backend_context::BackendContext;
 pub use context::{Auth, Context, ContextStore};
 pub use operator::OperatorOps;
 pub use ops::{Ops, OpsError};
