@@ -1,0 +1,68 @@
+name: skills-catalog
+
+on:
+  pull_request:
+    paths:
+      - "skills/**"
+      - "skills.sh.json"
+      - ".claude-plugin/**"
+      - "src/swfactory/skills_connector.py"
+      - "tests/test_skills_connector.py"
+      - ".github/workflows/skills-catalog.yml"
+  push:
+    branches: [main]
+    paths:
+      - "skills/**"
+      - "skills.sh.json"
+      - ".claude-plugin/**"
+      - "src/swfactory/skills_connector.py"
+      - "tests/test_skills_connector.py"
+      - ".github/workflows/skills-catalog.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Validate repository metadata
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(Path("skills.sh.json").read_text())
+          plugin = json.loads(Path(".claude-plugin/plugin.json").read_text())
+          slugs = {
+              path.parent.name
+              for path in Path("skills").glob("*/SKILL.md")
+          }
+          grouped = {
+              slug
+              for grouping in config.get("groupings", [])
+              for slug in grouping.get("skills", [])
+          }
+          assert grouped == slugs, (grouped, slugs)
+          assert plugin["name"] == "airflow-software-factory"
+          PY
+
+      - name: Vercel skills CLI discovers repository skills
+        run: npx -y skills@latest add . --list
+
+      - name: Connector unit tests
+        run: |
+          uv sync
+          uv run pytest tests/test_skills_connector.py
+
+      - name: Connector catalog is executable
+        run: uv run python -m swfactory.skills_connector catalog
