@@ -1,0 +1,183 @@
+"""The self-host line: the factory's own target contract and the line that builds it.
+
+Self-hosting removes the separation every other line relies on. Normally the factory's control
+surfaces are unreachable from a work cell because the target is a different repository; with
+``dir = ""`` the guard hook, the blueprints, the sandbox implementation and the stage semantics
+are all inside the agent's workspace. These tests pin the two things that keep that survivable:
+the root ``factory.toml`` refuses the paths that govern future runs, and every entry in it
+actually reaches the sandbox instead of being silently reduced to something wider or narrower.
+"""
+
+from __future__ import annotations
+
+import json
+import tomllib
+from pathlib import Path
+
+import pytest
+
+from swfactory.agent import GUARD_PATH_DENY, guard_deny_rules
+from swfactory.blueprint import load
+from swfactory.config import TargetContract, protected_for
+from swfactory.sandbox import _literal_prefix
+
+ROOT = Path(__file__).resolve().parents[1]
+
+# Editing any of these from inside a work cell is how a self-hosted run would widen its own cage:
+# they define the tool policy, the sandbox confinement, and the stage that applies the protected
+# list. They must be refused for both writing stages, not just for ``fix``.
+CONFINEMENT = (
+    "src/swfactory/agent.py",
+    "src/swfactory/sandbox.py",
+    "src/swfactory/sandbox_contract.py",
+    "src/swfactory/stages.py",
+    "src/swfactory/security_boundary.py",
+    "src/swfactory/security_contract.py",
+    "src/swfactory/worker_security.py",
+)
+
+# What governs every later run rather than this one: a cell that edits these changes the rules the
+# next cell is judged by.
+FUTURE_RUNS = (
+    "blueprints",
+    "dags",
+    "scripts",
+    "pyproject.toml",
+    "uv.lock",
+    "CLAUDE.md",
+    "config/capability-inventory.json",
+)
+
+
+@pytest.fixture(scope="module")
+def contract() -> TargetContract:
+    return TargetContract.parse((ROOT / "factory.toml").read_text(encoding="utf-8"))
+
+
+def test_the_repo_root_is_a_valid_factory_target(contract: TargetContract) -> None:
+    """Without this file the factory refuses a root target outright, so it is the keystone."""
+    assert contract.test.startswith("uv run")
+    assert ".factory/" in contract.junit, "run_tests deletes and re-parses this path"
+    assert contract.source == "src"
+    assert contract.tests_dir == "tests"
+
+
+def test_the_test_command_stays_python_only(contract: TargetContract) -> None:
+    """``cargo`` cannot run in an islo cell: the gateway allow-list has no crates.io host, and
+    CLAUDE.md keeps Rust out of a work cell entirely. Rust is the operator's client, covered by
+    CI's own ``rust`` job rather than by the target contract."""
+    assert "cargo" not in contract.test
+    assert "--junitxml" in contract.test, "a missing report fails the stage even on exit 0"
+
+
+@pytest.mark.parametrize("entry", CONFINEMENT)
+def test_confinement_modules_are_refused_for_both_writing_stages(contract: TargetContract, entry: str) -> None:
+    for stage in ("build", "fix"):
+        assert entry in protected_for(contract, stage), f"{entry} writable during {stage}"
+
+
+@pytest.mark.parametrize("entry", FUTURE_RUNS)
+def test_paths_governing_future_runs_are_refused(contract: TargetContract, entry: str) -> None:
+    assert entry in protected_for(contract, "build")
+
+
+def test_no_protected_entry_is_widened_by_literal_prefix_reduction(
+    contract: TargetContract,
+) -> None:
+    """srt and docker reduce each entry to its longest wildcard-free prefix, so a glob like
+    ``src/**/*.py`` silently becomes ``src`` -- the whole package would go read-only and no build
+    stage could edit any code. Every entry here must survive that reduction unchanged."""
+    for entry in contract.protected:
+        assert _literal_prefix(entry) == entry, (
+            f"{entry!r} reduces to {_literal_prefix(entry)!r}: use an exact path, not a glob"
+        )
+
+
+def test_the_trap_this_repo_must_never_fall_into() -> None:
+    """Pins the reduction itself, so the guard above cannot rot into a tautology."""
+    assert _literal_prefix("src/**/*.py") == "src"
+    assert _literal_prefix("src/swfactory/sandbox.py") == "src/swfactory/sandbox.py"
+
+
+def test_tests_are_writable_for_build_and_refused_for_fix(contract: TargetContract) -> None:
+    """ "Fix the code, not the gate" -- but a build stage must still be able to add tests."""
+    assert "tests" not in protected_for(contract, "build")
+    assert "tests" in protected_for(contract, "fix")
+
+
+def test_the_protected_list_reaches_the_agent_on_every_backend(contract: TargetContract) -> None:
+    """islo and toolset have no ``set_protected``, so kernel enforcement is srt/docker only. The
+    list still reaches every backend as Claude Code deny rules, which is what makes it meaningful
+    on the production sandbox."""
+    rules = guard_deny_rules(protected_for(contract, "build"))
+    for entry in CONFINEMENT:
+        assert any(entry in rule for rule in rules), f"{entry} absent from deny rules"
+    # The hard-coded rules are independent of this contract and must stay that way.
+    assert "Edit(factory.toml)" in GUARD_PATH_DENY
+    assert "Edit(.github/**)" in GUARD_PATH_DENY
+
+
+def test_the_selfhost_line_targets_the_repo_root_with_both_gates_human() -> None:
+    bp = load(ROOT / "blueprints" / "selfhost.toml")
+    assert bp.name == "selfhost"
+    assert [(t.repo, t.dir) for t in bp.targets] == [("zozo123/ariflow-swfactory", "")]
+    assert [g.after for g in bp.gates] == ["intent", "plan"]
+    assert not any(g.auto for g in bp.gates), (
+        "an unattended self-edit is the one failure this repo cannot recover from on its own"
+    )
+    assert bp.sandbox.ttl_s > max(g.timeout_h for g in bp.gates) * 3600
+
+
+def test_one_line_serves_islo_and_docker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole "islo and local docker" requirement rests on ``sandbox`` being an operational
+    knob rather than job identity, so the same blueprint runs on both without a second file."""
+    bp = load(ROOT / "blueprints" / "selfhost.toml")
+    job = bp.jobs({"issues": ["demo/issue.md"]})[0]
+    monkeypatch.delenv("SWF_SANDBOX", raising=False)
+    assert bp.config(job, run_id="selfhost__manual__t").sandbox == "islo"
+    monkeypatch.setenv("SWF_SANDBOX", "docker")
+    flipped = bp.config(job, run_id="selfhost__manual__t")
+    assert flipped.sandbox == "docker"
+    assert flipped.target_dir == "", "the backend must not change which tree is the target"
+
+
+def test_both_sandbox_backends_are_declared_in_the_capability_inventory() -> None:
+    """A self-host line makes an unclaimed production backend visible, so the inventory has to
+    name islo even while it stays experimental."""
+    claims = json.loads((ROOT / "config" / "capability-inventory.json").read_text(encoding="utf-8"))["claims"]
+    by_id = {c["id"]: c for c in claims}
+    for claim_id in ("sandbox.islo", "sandbox.docker", "selfhost.factory"):
+        assert claim_id in by_id, f"{claim_id} missing from the capability inventory"
+        assert by_id[claim_id]["state"] == "experimental"
+        assert by_id[claim_id]["follow_up"], "an experimental claim owes a follow_up"
+    assert by_id["selfhost.factory"]["evidence"] == [
+        "required check: control-plane-gate (re-checks the base-revision protected list against the PR diff)"
+    ], "no self-hosted run has been archived yet; do not claim end-to-end evidence"
+
+
+def test_the_control_plane_gate_reads_the_base_revision() -> None:
+    """The gate exists to catch diffs the in-sandbox guard did not produce, and those diffs can
+    edit ``factory.toml`` freely. Reading the pull request's own copy would let one commit shrink
+    the protected list and edit the newly-unprotected file, passing green."""
+    workflow = (ROOT / ".github" / "workflows" / "control-plane-gate.yml").read_text(encoding="utf-8")
+    assert 'git show "${BASE_SHA}:factory.toml"' in workflow
+    assert 'git cat-file -e "${BASE_SHA}:factory.toml"' in workflow, (
+        "a deleted factory.toml must fail the gate, not disarm it"
+    )
+
+
+def test_every_protected_entry_exists(contract: TargetContract) -> None:
+    """A stale entry is worse than no entry: docker only mounts paths that exist, so a renamed
+    module would drop out of kernel enforcement silently."""
+    for entry in contract.protected:
+        assert (ROOT / entry).exists(), f"{entry} is protected but not present in the tree"
+
+
+def test_the_root_contract_is_the_only_new_target_and_demo_still_works() -> None:
+    """Self-hosting must not disturb the demo line every other test and the eval suite use."""
+    demo = TargetContract.parse((ROOT / "demo" / "target" / "factory.toml").read_text(encoding="utf-8"))
+    assert demo.source == "src"
+    default = tomllib.loads((ROOT / "blueprints" / "default.toml").read_text(encoding="utf-8"))
+    assert default["targets"][0]["dir"] == "demo/target", (
+        "the default line must keep pointing at the calculator; selfhost.toml is the root target"
+    )

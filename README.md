@@ -344,6 +344,7 @@ acceptance standard and explain the remaining enforcement work.
 | --- | --- |
 | Understand and apply Liquid development | [Methodology](docs/liquid-methodology.md) |
 | Deploy or run against GitHub | [Operations](OPERATIONS.md), [Docker](docs/docker.md), [islo](docs/islo.md) |
+| Run the factory against itself | [Self-hosting](docs/selfhost.md) |
 | Operate Cells, jobs, approvals, and deliveries | [CLI/TUI](docs/swf.md), [backend API](docs/factory-backend.md) |
 | Design lifecycle and parallel work | [Lifecycle](docs/lifecycle.md), [architecture](docs/design.md) |
 | Receive work and recover interruptions | [Webhooks](docs/webhooks.md), [run recovery](docs/run-recovery.md) |

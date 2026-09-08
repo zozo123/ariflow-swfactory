@@ -1,0 +1,118 @@
+name: control-plane-gate
+# The residual control for self-hosting.
+#
+# A self-hosted run edits the factory's own tree, so the paths that govern the factory are inside
+# the agent's workspace. Two enforcement layers already exist in the work cell: Claude Code
+# `permissions.deny` rules derived from `factory.toml` `[paths] protected` (every backend), and a
+# kernel-level `denyWrite` / `:ro` bind mount (srt and docker only -- `IsloSandbox` has no
+# `set_protected`, so on the production backend the list is agent-enforced only).
+#
+# This job is the layer that does not run inside the cage. It re-checks the same list against the
+# delivered diff, so a guard bypass, a hand-edited `factory/*` branch, or a future backend with no
+# kernel enforcement still cannot land a control-plane change under factory authorship.
+#
+# It reads the protected list from the BASE revision, never from the pull request. Reading the
+# PR's own copy would let one diff shrink the list and edit the newly-unprotected file in the same
+# commit, passing green -- the gate would police only what the diff permitted it to police. A
+# missing base `factory.toml` is a hard failure for the same reason: deleting the file must not
+# disarm the check.
+#
+# Scope: only factory-authored branches. `deliver` force-updates the bot-owned `factory/*` branch,
+# so that prefix (or the `agent-authored` label) is what marks a change as machine-produced. Human
+# pull requests are unaffected -- a person may still change the confinement, on a normal branch,
+# under normal review.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  protected-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether this pull request is factory-authored
+        id: scope
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          set -euo pipefail
+          enforce=no
+          case "$HEAD_REF" in
+            factory/*) enforce=yes ;;
+          esac
+          for label in $LABELS; do
+            [ "$label" = "agent-authored" ] && enforce=yes
+          done
+          echo "enforce=$enforce" >> "$GITHUB_OUTPUT"
+          echo "head_ref=$HEAD_REF enforce=$enforce"
+
+      - name: Refuse control-plane paths in a factory-authored diff
+        if: steps.scope.outputs.enforce == 'yes'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # The list comes from the base revision. Never from the diff under review.
+          if ! git cat-file -e "${BASE_SHA}:factory.toml" 2>/dev/null; then
+            echo "::error::no factory.toml at base ${BASE_SHA}: refusing to run an unarmed gate"
+            exit 1
+          fi
+          git show "${BASE_SHA}:factory.toml" > /tmp/base-factory.toml
+          git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" > /tmp/changed.txt
+
+          python3 - <<'PY'
+          import pathlib, sys, tomllib
+
+          contract = tomllib.loads(pathlib.Path("/tmp/base-factory.toml").read_text())
+          protected = contract.get("paths", {}).get("protected", [])
+          if not isinstance(protected, list) or not protected:
+              print("::error::base factory.toml declares no paths.protected")
+              sys.exit(1)
+          entries = [str(p).strip().strip("/") for p in protected if str(p).strip()]
+
+          changed = [
+              line.strip()
+              for line in pathlib.Path("/tmp/changed.txt").read_text().splitlines()
+              if line.strip()
+          ]
+
+          # `tests/` is protected only for `fix` stages (build must be able to add tests), so a
+          # factory-authored diff touching tests is legitimate. Every other entry is absolute here.
+          waived = {"tests"}
+          rules = [e for e in entries if e not in waived]
+
+          def offends(path: str) -> str | None:
+              for entry in rules:
+                  if path == entry or path.startswith(entry + "/"):
+                      return entry
+              return None
+
+          hits = [(p, e) for p in changed for e in [offends(p)] if e]
+          for path, entry in hits:
+              print(f"::error file={path}::control-plane path is protected by '{entry}' in the "
+                    f"base factory.toml; a factory-authored change may not modify it")
+
+          print(f"checked {len(changed)} changed paths against {len(rules)} protected entries")
+          if hits:
+              print(
+                  "\nThis diff changes paths that govern the factory itself. Land it as a human "
+                  "pull request on a non-factory branch, under normal review, instead of under "
+                  "factory authorship."
+              )
+              sys.exit(1)
+          print("no protected path touched")
+          PY
+
+      - name: Skipped
+        if: steps.scope.outputs.enforce != 'yes'
+        run: echo "not a factory-authored branch; the protected-path gate does not apply"
