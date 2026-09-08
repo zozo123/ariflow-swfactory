@@ -11,6 +11,9 @@ actually reaches the sandbox instead of being silently reduced to something wide
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import textwrap
 import tomllib
 from pathlib import Path
 
@@ -171,6 +174,44 @@ def test_every_protected_entry_exists(contract: TargetContract) -> None:
     module would drop out of kernel enforcement silently."""
     for entry in contract.protected:
         assert (ROOT / entry).exists(), f"{entry} is protected but not present in the tree"
+
+
+def _run_gate(tmp_path: Path, changed: str) -> subprocess.CompletedProcess[str]:
+    """Execute the gate's embedded matcher against a synthetic diff.
+
+    The logic lives in a YAML heredoc, so it is invisible to this suite unless it is lifted out
+    and run. Without this the *enforcement* branch is only ever exercised on a factory-authored
+    branch -- which is exactly the branch nobody opens by hand, so a broken gate would sit green
+    for as long as it took someone to notice.
+    """
+    workflow = (ROOT / ".github" / "workflows" / "control-plane-gate.yml").read_text(encoding="utf-8")
+    body = workflow.split("python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+    code = textwrap.dedent(body)
+    base = tmp_path / "base-factory.toml"
+    base.write_text((ROOT / "factory.toml").read_text(encoding="utf-8"), encoding="utf-8")
+    changed_file = tmp_path / "changed.txt"
+    changed_file.write_text(changed, encoding="utf-8")
+    code = code.replace("/tmp/base-factory.toml", str(base)).replace("/tmp/changed.txt", str(changed_file))
+    return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+
+
+def test_the_gate_refuses_a_factory_authored_control_plane_change(tmp_path: Path) -> None:
+    done = _run_gate(tmp_path, "src/swfactory/sandbox.py\nblueprints/selfhost.toml\n")
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "src/swfactory/sandbox.py" in done.stdout
+    assert "protected by 'blueprints'" in done.stdout, "a directory prefix must match too"
+
+
+def test_the_gate_permits_ordinary_work(tmp_path: Path) -> None:
+    done = _run_gate(tmp_path, "docs/selfhost.md\nsrc/swfactory/metrics.py\n")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "no protected path touched" in done.stdout
+
+
+def test_the_gate_waives_tests_because_build_may_add_them(tmp_path: Path) -> None:
+    """``tests/`` is protected only for ``fix``, so a factory-authored diff may add tests."""
+    done = _run_gate(tmp_path, "tests/test_new_thing.py\n")
+    assert done.returncode == 0, done.stdout + done.stderr
 
 
 def test_the_root_contract_is_the_only_new_target_and_demo_still_works() -> None:
