@@ -69,6 +69,47 @@ readiness predicate plus a server-anchored age, not a tuned delay. Then make the
 lost race — re-read the subject just before mutating it, and report "another operator got there
 first" as a distinct conflict outcome rather than a crash or, worse, a silent overwrite.
 
+## A batch is not a loop with better ergonomics
+
+The moment an operator has a hundred gates, one-command-per-gate stops being an interface. But a
+command that answers a whole selection has a blast radius, and five properties earn it that power.
+
+**A dry run must be structurally unable to write.** Not "does not write" — *cannot*. Build the
+report as a pure function of the selection so the writer is never reached, and test it with a fake
+that panics on write, so the proof is in the shape of the code rather than in an observation that
+happened to hold. Then check the dry run against the live service too: count what it planned, and
+assert those same subjects are still unanswered afterwards. Compare identities, never counts — new
+work arrives while you are printing, so an equal count is luck and a changed one is not evidence.
+
+**Serialize per aggregate, parallelise across them.** Concurrent writes to *different* runs are
+free; two writes racing inside *one* run made the scheduler answer the second with HTTP 500 and
+fail that gate. Hold one write in flight per aggregate id and let the rest overlap — a busy factory
+is wide, not deep, so nearly all the speed survives. Bound the total too: a filter that matched
+everything must not open a socket per match against the service you are trying to help.
+
+**One bad subject must not abandon the rest.** Collect a per-subject outcome, keep every one in the
+report, and let the exit code reflect only genuine failure.
+
+**Distinguish "someone else got there first" from "this went wrong".** A conflict is the system
+working in a shared control room. A batch that exits non-zero for it teaches operators to stop
+reading its exit code, which is the most expensive thing a tool can teach.
+
+**Never report an outcome you cannot know.** A task that dies mid-write may or may not have landed
+its mutation. Reporting that as "skipped" with a zero exit is the one answer that is certainly
+wrong: mark it failed, exit non-zero, and tell the operator to go and re-read that subject.
+
+## Ship it so it can be installed and verified
+
+An operator client is only as good as the path to getting it. Publish a checksum file covering every
+asset, and have the installer verify it with no flag to skip — an installer that downloads a binary
+and runs it unchecked has only made the command shorter. Be honest in the docs about what that buys:
+it catches a truncated or swapped download, and it is not provenance, because the sums travel beside
+the file they describe.
+
+Rehearse the release before performing it. A publish pipeline that has never run is discovered on
+the day, in front of users, with a half-made release behind it — so give it a dry run that takes the
+identical build path and stops one step short of publishing.
+
 ## Name the claim you are making
 
 "It worked" is three different claims with three different forgers. Collapsing them into one green
@@ -158,3 +199,8 @@ face. A face added next year cannot remember a rule it never had to know.
 9. Untrusted text is sanitised before rendering, in shared code.
 10. Destructive infrastructure commands re-check ownership against a fresh listing at the moment of
     removal, and refuse when no owner is configured.
+11. A bulk action has a dry run that cannot write, serializes per aggregate, keeps a per-subject
+    outcome, treats a lost race as a conflict rather than a failure, and never reports an outcome
+    it cannot know.
+12. The published artifact can be installed and checksum-verified by someone who has never seen the
+    repository, and the release pipeline has been rehearsed rather than first run in public.
