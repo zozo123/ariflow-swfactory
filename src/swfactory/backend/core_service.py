@@ -67,7 +67,11 @@ def operator_projection(factory: Factory, cell_id: str) -> dict[str, Any]:
                 "next_action": decision.to_dict(),
             }
         )
-    cleanup_debt = bool(cell.get("compute") and not cell.get("cleanup") and cell.get("state") in {"success", "failed", "cancelled", "rejected"})
+    cleanup_debt = bool(
+        cell.get("compute")
+        and not cell.get("cleanup")
+        and cell.get("state") in {"success", "failed", "cancelled", "rejected"}
+    )
     return {
         "schema_version": 1,
         **truth,

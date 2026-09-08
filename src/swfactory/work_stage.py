@@ -115,8 +115,7 @@ def _execute_nodes(
     plan_text: str,
 ) -> tuple[int, dict[str, Any]]:
     declared_conflicts = [
-        {"left": left, "right": right, "files": list(files)}
-        for left, right, files in conflict_set(_nodes(plan))
+        {"left": left, "right": right, "files": list(files)} for left, right, files in conflict_set(_nodes(plan))
     ]
     current_head = stages._assert_workspace_head(ctx, "workgraph start")
     progress = _load_progress(ctx, plan, current_head)

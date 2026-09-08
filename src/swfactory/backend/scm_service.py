@@ -177,7 +177,9 @@ def _publish(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str
             ]
         )
         if not rows:
-            return MutationOutcome("definitely_absent", None, {"branch": branch}, "no open PR exists for deterministic branch")
+            return MutationOutcome(
+                "definitely_absent", None, {"branch": branch}, "no open PR exists for deterministic branch"
+            )
         row = rows[0]
         observed_body = str(row.get("body") or "")
         observed_url = str(row.get("url") or "")

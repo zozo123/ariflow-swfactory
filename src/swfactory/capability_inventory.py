@@ -103,7 +103,11 @@ def main(argv: list[str] | None = None) -> int:
     for row in document["claims"]:
         key = str(row["state"])
         counts[key] = counts.get(key, 0) + 1
-    print(json.dumps({"schema_version": SCHEMA_VERSION, "claims": len(document["claims"]), "states": counts}, sort_keys=True))
+    print(
+        json.dumps(
+            {"schema_version": SCHEMA_VERSION, "claims": len(document["claims"]), "states": counts}, sort_keys=True
+        )
+    )
     return 0
 
 

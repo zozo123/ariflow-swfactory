@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from swfactory import work_stage
 from swfactory.candidate_readiness import CandidateNotReady, build_manifest
 from swfactory.capability_inventory import load_inventory, support_matrix
 from swfactory.idempotency import (
@@ -15,7 +16,6 @@ from swfactory.idempotency import (
     OperationRef,
 )
 from swfactory.models import AgentResult, Plan, PlanTask
-from swfactory import work_stage
 
 
 def _sha(ch: str) -> str:

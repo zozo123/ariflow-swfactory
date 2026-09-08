@@ -87,9 +87,10 @@ class CoreMutationRequest:
             raise ValueError("mutation requires a canonical expected policy digest")
         if not self.target_tenant.strip():
             raise ValueError("target tenant is required")
-        if self.external_operation_key is not None:
-            if not self.external_operation_key.strip() or len(self.external_operation_key) > 256:
-                raise ValueError("external operation key must be nonempty and bounded")
+        if self.external_operation_key is not None and (
+            not self.external_operation_key.strip() or len(self.external_operation_key) > 256
+        ):
+            raise ValueError("external operation key must be nonempty and bounded")
         if self.intent_digest is not None:
             _validate_sha256_digest(self.intent_digest)
 
