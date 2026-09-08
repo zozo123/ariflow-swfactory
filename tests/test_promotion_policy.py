@@ -381,7 +381,7 @@ def test_the_control_plane_gate_does_not_scope_itself_by_branch_prefix() -> None
     # The script path is a variable, not a literal, and that is the point: it is resolved from the
     # BASE revision so a pull request cannot supply the rules that judge it. Asserting a hardcoded
     # `scripts/promotion_policy.py` here would be asserting that hardening away.
-    assert 'control-plane' in text and '"$SCRIPT" --policy "$POLICY" control-plane' in text
+    assert "control-plane" in text and '"$SCRIPT" --policy "$POLICY" control-plane' in text
     assert 'git show "$rev:scripts/promotion_policy.py"' in text, (
         "the gate must take its own script from the base revision, not from the diff under review"
     )

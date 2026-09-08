@@ -555,7 +555,9 @@ def audit_policy(policy: Policy, repo_root: Path) -> list[str]:
         # fan-in that runs unconditionally and inspects nothing is green whatever its needs did.
         runs = _run_text(aggregate)
         if "promotion_policy.py gate" not in runs:
-            problems.append(f"{aggregate_name} never runs `promotion_policy.py gate`; if: always() then decides nothing")
+            problems.append(
+                f"{aggregate_name} never runs `promotion_policy.py gate`; if: always() then decides nothing"
+            )
         else:
             for name in policy.mandatory_checks:
                 if f'--result "{name}=' not in runs:
