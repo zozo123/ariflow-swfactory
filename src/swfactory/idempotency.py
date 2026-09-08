@@ -5,9 +5,11 @@ The important rule is deliberately conservative: once an intent exists, its exte
 may repeat a request only when the caller explicitly marks the operation replay-safe and a
 reconciler has proved that the previous attempt is definitely absent.
 
-Operation identity is immutable.  Reusing one operation key for different content is rejected even
+Operation identity is immutable. Reusing one operation key for different content is rejected even
 before reconciliation, because idempotency without an intent digest can silently turn a caller bug
-into the wrong durable receipt.
+into the wrong durable receipt. Deterministic remote resources may additionally require observation
+before the first local attempt so a new epoch adopts an already-created effect instead of duplicating
+it.
 """
 
 from __future__ import annotations
@@ -167,8 +169,6 @@ class OperationJournal:
             row = self.get(ref.key)
             self._assert_identity(ref, row, intent_digest=intent_digest)
             if intent_digest is not None and row.get("intent_digest") is None:
-                # Upgrade old rows lazily. This preserves replay compatibility while making every
-                # subsequent call strict about the request content bound to the key.
                 self.db.execute(
                     "UPDATE operations SET intent_digest=?,updated_at=? WHERE operation_key=?",
                     (intent_digest, now, ref.key),
@@ -262,12 +262,14 @@ class OperationJournal:
         reconcile: Callable[[], MutationOutcome] | None = None,
         budget: RetryBudget | None = None,
         intent_digest: str | None = None,
+        observe_before_first_attempt: bool = False,
     ) -> Any:
-        """Execute once, replay committed output, otherwise reconcile before any retry.
+        """Execute once, replay committed output, otherwise observe/reconcile before safe replay.
 
         ``replay_safe=True`` alone is intentionally insufficient: a previous attempt can be replayed
-        only after ``reconcile()`` proves it is definitely absent. An intent digest makes reuse of a
-        logical operation key with different content a hard error.
+        only after ``reconcile()`` proves it is definitely absent. With
+        ``observe_before_first_attempt=True`` a newly-created local intent is observed remotely
+        before its first effect, which lets a new epoch adopt an existing deterministic resource.
         """
         existed = True
         try:
@@ -280,7 +282,9 @@ class OperationJournal:
             self._assert_identity(ref, row, intent_digest=intent_digest)
         if row["state"] == "committed":
             return row["result"]
-        if existed:
+
+        should_observe = existed or observe_before_first_attempt
+        if should_observe:
             if reconcile is None:
                 raise OperationInDoubt(ref.key, str(row["state"]))
             outcome = reconcile()
@@ -360,7 +364,9 @@ class OperationJournal:
         observed = (str(row.get("cell_id")), int(row.get("epoch", -1)), str(row.get("kind")))
         expected = (ref.cell_id, ref.epoch, ref.kind)
         if observed != expected:
-            raise OperationIdentityConflict(f"operation key {ref.key!r} is already bound to {observed!r}, not {expected!r}")
+            raise OperationIdentityConflict(
+                f"operation key {ref.key!r} is already bound to {observed!r}, not {expected!r}"
+            )
         stored_digest = row.get("intent_digest")
         if intent_digest is not None and stored_digest is not None and stored_digest != intent_digest:
             raise OperationIdentityConflict(f"operation key {ref.key!r} was reused with divergent intent")
