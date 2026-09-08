@@ -24,17 +24,18 @@ Factory Mesh adds no lifecycle authority.
 
 | Question | Authority |
 | --- | --- |
-| What runs next? | **Airflow** |
+| What runs next inside an admitted station lifecycle? | **Airflow** |
 | Which lifecycle incarnation may mutate? | **Factory Cell epoch** |
 | Did GitHub/provider mutation commit? | **operation journal + observed remote state** |
 | Is a claim about a result true? | **retained evidence** |
-| Which station is currently volunteering for a repo Cell? | **Factory Mesh coordination claim** |
+| Which cooperating station is currently volunteering for a repo Cell? | **Factory Mesh coordination claim** |
 | What did another station want me to notice? | **Factory Mesh signal** |
 
 A coordination claim is deliberately weaker than a Cell. It prevents two stations that cooperate
 through the same rendezvous from independently deciding to start the same repo-level work. It does
 **not** authorize a sandbox mutation, advance a Cell, dispatch an Airflow task, publish a branch, or
-merge a PR.
+merge a PR. Each station may have its own Airflow installation; the invariant is that lifecycle work
+is scheduled by Airflow, never by the mesh, an agent chat loop, GitHub Actions, or a provider.
 
 ## Topology
 
@@ -56,10 +57,17 @@ merge a PR.
 ```
 
 The rendezvous can be one existing `swfactory backend`; it does not need to be the backend that owns
-any station's Airflow installation. Set every participant's `SWF_MESH_URL` and `SWF_MESH_TOKEN` to
-the same authenticated endpoint.
+any station's Airflow installation. For a shared/multi-person deployment, configure **one dedicated
+rendezvous backend process** and point every participant's `SWF_MESH_URL` at it.
 
-For a single-machine setup, the normal backend at `http://localhost:8082` is enough.
+Give peers a dedicated `SWF_MESH_TOKEN` (at least 32 non-whitespace characters) that is **different
+from `SWF_BACKEND_TOKEN`**. The server accepts that credential only on `/v1/mesh/*`; it cannot
+transition Cells, proxy Airflow, publish through SCM, or use the other privileged backend routes. A
+backend administrator's normal backend token may still call mesh routes. Do not distribute the
+backend token merely to let people coordinate.
+
+For a single-machine/operator setup, `SWF_MESH_TOKEN` may be left unset and the normal backend token
+continues to work for mesh routes at `http://localhost:8082`.
 
 ## The three primitives
 
@@ -67,15 +75,22 @@ For a single-machine setup, the normal backend at `http://localhost:8082` is eno
 
 A station joins with a stable `station_id` and a fresh `incarnation_id`. Restarting the same station
 advances `lease_epoch`; the old process can no longer heartbeat, signal, claim, or release work.
+A station id is repository-bound, so it cannot silently move between repositories while keeping the
+same lease identity.
 
-This is process fencing, not authentication. The backend bearer token is still the credential.
+This is process fencing, not authentication. HTTP bearer authentication is a separate boundary.
 
 ### 2. Coordination claim
 
 A claim is keyed by `(repo, cell_id)` and carries both `cell_epoch` and its own monotonically
-increasing `claim_epoch`. One live claim exists at a time. Renewal by the same station preserves the
-claim epoch; takeover after expiry increments it. A stale releaser cannot delete the new owner's
+increasing `claim_epoch`. One current claim row exists at a time. Renewal by the same live station
+incarnation preserves the claim epoch. A takeover increments it when either the claim TTL expires
+**or the owning station lease dies/is replaced**. A stale releaser cannot delete the new owner's
 claim.
+
+That station-lease rule matters in practice: restarting a station does not make it wait for the
+longer claim TTL before it can resume the work. The old claim becomes visible as `orphaned_claim`,
+and a new live incarnation may immediately take it over with a higher claim epoch.
 
 Claims are useful before a station submits/activates work and during explicit handoff. They are not
 used as a substitute for Cell epoch fencing after lifecycle work starts.
@@ -95,7 +110,13 @@ addressed to one station. Supported kinds are:
 - `note` — human context that does not fit the stricter kinds.
 
 A signal may carry `cell_id`, `cell_epoch`, artifact references, a small JSON payload, `reply_to`, and
-`to_station`. Payloads are context only; consumers must never execute them as commands.
+`to_station`. Payloads are context only; consumers must never execute them as commands. Signals from
+a replaced/expired station lease remain historical records but no longer count as live competing
+intent.
+
+`to_station` is **routing, not confidentiality**. Holders of the same mesh credential are cooperating
+participants and can query the shared signal log (including with the client's `inbox --all`). Never
+put secrets, raw credentials, private keys, or other confidential payloads in mesh signals.
 
 ## Operator flow
 
@@ -104,7 +125,7 @@ station id, incarnation id, lease epoch, repo and rendezvous URL.
 
 ```bash
 export SWF_MESH_URL=https://mesh.example.internal
-export SWF_MESH_TOKEN='...same rendezvous token...'
+export SWF_MESH_TOKEN='...dedicated peer-only token, distinct from backend token...'
 
 # Announce one installation/process incarnation.
 uv run python -m swfactory.station_client join \
@@ -143,9 +164,9 @@ uv run python -m swfactory.station_client conflicts
 A long-running station should heartbeat at an interval comfortably below its lease TTL. A supervisor
 can do that; the mesh itself intentionally does not create a background scheduler.
 
-## HTTP contract
+## HTTP and credential contract
 
-All routes are authenticated `POST`s on the existing backend:
+All mesh routes are authenticated `POST`s on the existing backend:
 
 ```text
 /v1/mesh/join
@@ -160,25 +181,35 @@ All routes are authenticated `POST`s on the existing backend:
 /v1/mesh/conflicts
 ```
 
+When `SWF_MESH_TOKEN` is configured, it must be strong and distinct from `SWF_BACKEND_TOKEN`, and it
+is accepted only for the routes above. This is intentionally a coarse **repo-cooperator**
+credential, not per-message secrecy or per-user RBAC.
+
 The shared store lives at:
 
 ```text
 $SWF_STATE_ROOT/station-mesh.sqlite3
 ```
 
-SQLite is the current rendezvous implementation because the backend is already the serialized,
-authenticated control-plane boundary. The API is intentionally narrow enough to move to Postgres
-without changing station semantics.
+SQLite is the current single-rendezvous implementation. Run one mesh backend process for a given
+state file and let all stations use its HTTP endpoint; do not mount one SQLite file under several
+multi-primary backend processes. The API is intentionally narrow enough to move to Postgres (or
+another transactional shared store) without changing station semantics when horizontal mesh-server
+scaling is actually needed.
 
 ## Failure semantics
 
-- **Station restart:** new incarnation advances `lease_epoch`; stale process writes are refused.
+- **Station restart:** new incarnation advances `lease_epoch`; stale process writes are refused; its
+  old claim is orphaned and immediately takeoverable with a higher `claim_epoch`.
 - **Lost heartbeat:** station disappears from live peers; its still-unexpired claim is reported as
-  `orphaned_claim`, not silently stolen.
+  `orphaned_claim` and may be taken over rather than blocking until the claim TTL.
 - **Claim expiry:** a live station may take over; `claim_epoch` increments.
-- **Late release:** fenced by station lease + claim epoch; it cannot delete a takeover.
+- **Late release:** fenced by station lease + claim epoch; it cannot delete a takeover. Releasing a
+  claim that no longer exists is a coordination conflict, not an internal server error.
 - **Duplicate signal retry:** same `message_id` + same content returns the original signal; reusing
   the id with different content is refused.
+- **Station replacement:** signals from the old lease remain durable history but do not count as
+  live intent for the new incarnation.
 - **Two early intents:** both are retained and `conflicts` reports `competing_intents`; operators can
   converge before expensive work begins.
 - **Mesh outage:** already-running lifecycle work does not change authority. Airflow and Cell epochs
@@ -191,5 +222,5 @@ Do **not** turn Factory Mesh into a queue of executable commands. If a future fe
 normal authenticated admission path and be scheduled by Airflow.
 
 That keeps the system liquid at the edges — many stations, many humans, many agents — while the
-center remains deterministic: one scheduler, one Cell epoch, one mutation journal, one retained
-proof of what happened.
+center remains deterministic: Airflow-only lifecycle scheduling, fenced Cell mutation authority,
+one operation journal per mutation authority, and retained proof of what happened.
