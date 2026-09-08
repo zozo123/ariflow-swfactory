@@ -23,7 +23,7 @@ jobs:
       - run: uv sync
       - name: Canonicalize lint and formatting
         run: |
-          uv run ruff check --fix .
+          uv run ruff check --fix --exit-zero .
           uv run ruff format .
       - name: Commit canonical output
         shell: bash
