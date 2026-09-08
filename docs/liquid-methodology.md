@@ -481,9 +481,10 @@ The next convergence cycle should focus on a small set of measurable outcomes:
 5. Measure useful throughput, recovery, cost, and operator effort; promote control experiments only
    after they improve a retained baseline.
 
-The companion repository improvement issue supplies the ordered implementation bundles, dependencies,
-acceptance criteria, and deletion obligations. Use this methodology as its contract, and update the
-status/evidence map as each capability becomes demonstrable.
+[Repository improvement issue #2022](https://github.com/zozo123/ariflow-swfactory/issues/2022)
+supplies six ordered implementation bundles, dependencies, acceptance criteria, baseline validation
+findings, and deletion obligations. Use this methodology as its contract, and update the status/evidence
+map as each capability becomes demonstrable.
 
 When implementation and documentation disagree, record and repair the discrepancy. Preserve singular
 authority while resolving it; do not add another scheduler or control plane to make both descriptions true.

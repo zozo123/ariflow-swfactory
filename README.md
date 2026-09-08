@@ -351,5 +351,5 @@ acceptance standard and explain the remaining enforcement work.
 | Extend or review the factory | [Contributing](CONTRIBUTING.md), [review policy](REVIEW.md), [changelog](CHANGELOG.md) |
 
 Contribute a coherent change with an explicit invariant, failure behavior, evidence, and a plan to
-remove superseded paths. See the [repository improvement plan](docs/liquid-methodology.md#implementation-priorities)
+remove superseded paths. See the [repository improvement plan](https://github.com/zozo123/ariflow-swfactory/issues/2022)
 for the next convergence work. Licensed under [Apache 2.0](LICENSE).
