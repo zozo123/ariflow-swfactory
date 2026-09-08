@@ -216,11 +216,22 @@ jobs:
   # One blocking fan-in check for the supported release surface. It records the PR head, base and
   # tested checkout (GitHub's PR merge candidate) together with a digest of every required job's
   # result. If HEAD changes, concurrency cancels this run and a new manifest must be produced.
+  #
+  # `candidate-readiness` is a required status context on main and the mandatory legs it fans in
+  # are declared in .github/promotion-policy.yml -- one file, applied to the live settings by
+  # scripts/promotion_policy.py and diffed against them on every run of promotion-policy.yml.
+  # Adding a mandatory leg means editing that file and this `needs:` list together; the audit
+  # fails when they disagree. release.yml consumes the manifest this job seals.
   candidate-readiness:
     if: always() && (github.event_name == 'push' || github.base_ref == 'main')
     needs: [test, eval-suite, airflow-parity, airflow-main, rust, contract-equivalence]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # Re-reading the pull request's head and base at seal time, so evidence cannot be sealed
+      # against an identity that moved while the legs were running.
+      pull-requests: read
     env:
       HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
@@ -231,11 +242,56 @@ jobs:
       AIRFLOW_MAIN_RESULT: ${{ needs.airflow-main.result }}
       RUST_RESULT: ${{ needs.rust.result }}
       CONTRACT_RESULT: ${{ needs.contract-equivalence.result }}
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6
         with: { python-version: "3.12" }
       - run: uv sync
+
+      # The audit is what keeps `.github/promotion-policy.yml` and the workflows it governs from
+      # drifting apart -- a mandatory leg turned `continue-on-error`, an `if:` appended to this
+      # job, the gate step deleted. promotion-policy.yml runs it too, but that workflow is not a
+      # required context: a red run there does not stop a merge. Running it inside the required
+      # context is what makes it blocking.
+      - name: The policy still agrees with the workflows it governs
+        run: uv run python scripts/promotion_policy.py audit
+
+      # Concurrency cancels a superseded run, but cancellation is not instantaneous: a run whose
+      # legs finished against the previous head can reach this job after a force-push. Re-reading
+      # the identity from the API is the independent source that catches it. A pull request whose
+      # head or base cannot be read is refused rather than sealed unverified.
+      - name: Re-read the candidate identity that the legs actually ran against
+        id: identity
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          live=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha + " " + .base.sha')
+          echo "head=${live% *}" >> "$GITHUB_OUTPUT"
+          echo "base=${live#* }" >> "$GITHUB_OUTPUT"
+      # The promotion boundary itself, and the reason this job is a required context rather than a
+      # green name: a leg that was *skipped* reports neutral to the merge box, so a gate that only
+      # looks for `failure` seals evidence for a candidate nothing ran on. The policy script
+      # refuses every conclusion that is not `success`, names the leg, and says which one it was.
+      - name: Refuse any mandatory leg that is not success (skipped and cancelled included)
+        run: >-
+          uv run python scripts/promotion_policy.py gate
+          --result "test=$TEST_RESULT"
+          --result "eval-suite=$EVAL_RESULT"
+          --result "airflow-parity=$AIRFLOW_PARITY_RESULT"
+          --result "airflow-main=$AIRFLOW_MAIN_RESULT"
+          --result "rust=$RUST_RESULT"
+          --result "contract-equivalence=$CONTRACT_RESULT"
+          --head-sha "$HEAD_SHA"
+          --base-sha "$BASE_SHA"
+          --tested-sha "$TESTED_SHA"
+          --live-head "$LIVE_HEAD"
+          --live-base "$LIVE_BASE"
+        env:
+          LIVE_HEAD: ${{ steps.identity.outputs.head }}
+          LIVE_BASE: ${{ steps.identity.outputs.base }}
       - name: Materialize exact-candidate check evidence
         run: |
           set -euo pipefail

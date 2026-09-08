@@ -1,0 +1,83 @@
+# The promotion boundary, as data.
+#
+# GitHub branch protection lives in a settings page nobody diffs and nobody reviews. Issue #2048
+# was exactly that failure: a `candidate-readiness` job went green on every pull request while the
+# live API still required only `test` and `airflow-parity`, so the aggregate check was decoration.
+# This file is the authority on what protection *should* be; `scripts/promotion_policy.py apply`
+# writes it to the API and `... diff` fails loudly when the live settings have drifted from it.
+#
+# Nothing here changes a live setting on its own. A maintainer runs `apply` deliberately -- see
+# docs/promotion-policy.md, "Applying this file".
+
+schema_version: 1
+repository: zozo123/ariflow-swfactory
+branch: main
+
+# What GitHub must require before a merge. Two contexts only, both aggregates:
+#   candidate-readiness  fans in every mandatory leg below and seals SHA-bound evidence;
+#   protected-paths      refuses control-plane edits (control-plane-gate.yml).
+# Listing the legs individually here instead would re-create the original bug the moment a leg is
+# renamed: the required name keeps passing because nothing reports it any more.
+branch_protection:
+  required_status_checks:
+    strict: true # a stale base is not a tested candidate
+    contexts:
+      - candidate-readiness
+      - protected-paths
+  # False was the live value on 2026-09-08. An owner who can merge past a red candidate check is
+  # not gated by it, and the factory runs under an owner-scoped token.
+  enforce_admins: true
+  required_pull_request_reviews:
+    required_approving_review_count: 1
+    dismiss_stale_reviews: true
+    require_code_owner_reviews: true
+    # A push after approval is unreviewed code; without this, evidence approved for one head can
+    # ride in under another.
+    require_last_push_approval: true
+  required_conversation_resolution: true
+  required_linear_history: false # merge commits from the fan-in flow are expected
+  allow_force_pushes: false
+  allow_deletions: false
+
+checks:
+  # Every leg the supported release surface rests on. `candidate-readiness` refuses to seal
+  # evidence unless each of these reported `success` -- not skipped, not cancelled, not neutral.
+  mandatory:
+    - test
+    - eval-suite
+    - airflow-parity
+    - airflow-main
+    - rust
+    - contract-equivalence
+  # Deliberately advisory, and staying that way: their hosted-runner timing or provider sandbox is
+  # not yet a supported release claim (see config/capability-inventory.json). They are declared
+  # here so that "advisory" is a recorded decision rather than an untracked `continue-on-error`.
+  advisory:
+    - live-gate-e2e
+    - srt-smoke
+    - docker-smoke
+    - airflow-main-sandbox-toolset
+
+control_plane:
+  # The protected-paths gate applies to every pull request. The old gate armed itself only for
+  # `factory/*` branches, which made the branch name a privilege: renaming the branch disarmed it.
+  exemption_label: control-plane-maintenance
+  # A change to the confinement is a human maintenance action. These identities are the factory's
+  # own; a label applied by one of them does not exempt anything, or the agent would be able to
+  # widen its own cage in the same pull request that uses the wider cage.
+  factory_identities:
+    - github-actions[bot]
+    - swfactory-bot
+    - swfactory[bot]
+
+release:
+  # PR-merge-to-release identity rule. See docs/promotion-policy.md.
+  #
+  # Evidence is bound to a commit, but what ships is a *tree*. A release is admissible only when
+  # retained candidate evidence exists whose `tested_sha` names a commit with the same tree as the
+  # commit the tag points at. Commit identity may legitimately differ -- a fast-forward merge into
+  # main, a re-tag of the same content -- but the tree may not, because the tree is what was built
+  # and tested. A squash that changed so much as a whitespace character produces a different tree
+  # and has no evidence.
+  identity: tested-tree-equals-shipped-tree
+  evidence_artifact_prefix: candidate-readiness
