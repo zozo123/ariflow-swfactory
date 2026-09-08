@@ -12,6 +12,7 @@ from swfactory.backend.server import make_server
 
 BACKEND_TOKEN = "b" * 40
 MESH_TOKEN = "m" * 40
+REPO = "acme/widgets"
 
 
 def call(server, path: str, token: str, body: dict[str, Any]) -> tuple[int, Any]:
@@ -36,9 +37,9 @@ def call(server, path: str, token: str, body: dict[str, Any]) -> tuple[int, Any]
         connection.close()
 
 
-def test_mesh_token_is_scoped_to_mesh_routes(tmp_path, monkeypatch) -> None:
+def test_mesh_token_is_scoped_to_mesh_routes_and_repo(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("SWF_MESH_TOKEN", MESH_TOKEN)
-    factory = SimpleNamespace(token=BACKEND_TOKEN, state_root=tmp_path)
+    factory = SimpleNamespace(token=BACKEND_TOKEN, state_root=tmp_path, repo=REPO)
     server = make_server(factory, "127.0.0.1", 0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -49,7 +50,7 @@ def test_mesh_token_is_scoped_to_mesh_routes(tmp_path, monkeypatch) -> None:
             MESH_TOKEN,
             {
                 "station_id": "station_peer",
-                "repo": "acme/widgets",
+                "repo": REPO,
                 "incarnation_id": "inc_peer",
                 "operator": "peer",
             },
@@ -57,7 +58,7 @@ def test_mesh_token_is_scoped_to_mesh_routes(tmp_path, monkeypatch) -> None:
         assert status == 200
         assert lease["station_id"] == "station_peer"
 
-        status, peers = call(server, "/v1/mesh/peers", MESH_TOKEN, {"repo": "acme/widgets"})
+        status, peers = call(server, "/v1/mesh/peers", MESH_TOKEN, {"repo": REPO})
         assert status == 200
         assert [peer["station_id"] for peer in peers] == ["station_peer"]
 
@@ -68,8 +69,13 @@ def test_mesh_token_is_scoped_to_mesh_routes(tmp_path, monkeypatch) -> None:
         assert status == 401
         assert payload == {"detail": "factory backend token required"}
 
+        # Nor can the repo-cooperator token use this rendezvous as a namespace for another repo.
+        status, payload = call(server, "/v1/mesh/peers", MESH_TOKEN, {"repo": "other/repo"})
+        assert status == 409
+        assert REPO in payload["detail"]
+
         # A backend administrator remains allowed to inspect/use the mesh without a second token.
-        status, peers = call(server, "/v1/mesh/peers", BACKEND_TOKEN, {"repo": "acme/widgets"})
+        status, peers = call(server, "/v1/mesh/peers", BACKEND_TOKEN, {"repo": REPO})
         assert status == 200
         assert len(peers) == 1
     finally:
@@ -78,8 +84,15 @@ def test_mesh_token_is_scoped_to_mesh_routes(tmp_path, monkeypatch) -> None:
         thread.join(timeout=5)
 
 
+def test_shared_mesh_token_requires_explicit_repo_scope(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SWF_MESH_TOKEN", MESH_TOKEN)
+    factory = SimpleNamespace(token=BACKEND_TOKEN, state_root=tmp_path, repo="")
+    with pytest.raises(ValueError, match="SWF_REPO is required"):
+        make_server(factory, "127.0.0.1", 0)
+
+
 def test_mesh_token_must_be_strong_and_distinct(tmp_path, monkeypatch) -> None:
-    factory = SimpleNamespace(token=BACKEND_TOKEN, state_root=tmp_path)
+    factory = SimpleNamespace(token=BACKEND_TOKEN, state_root=tmp_path, repo=REPO)
     monkeypatch.setenv("SWF_MESH_TOKEN", "short")
     with pytest.raises(ValueError, match="at least 32"):
         make_server(factory, "127.0.0.1", 0)
