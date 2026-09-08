@@ -16,7 +16,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from swfactory.station_mesh import SignalKind, new_incarnation_id, station_id as stable_station_id
+from swfactory.station_mesh import SignalKind, new_incarnation_id
+from swfactory.station_mesh import station_id as stable_station_id
 
 DEFAULT_STATE = Path(".factory/station.json")
 
