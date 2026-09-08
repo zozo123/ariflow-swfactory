@@ -258,13 +258,17 @@ product's verification commands, validates patches, scans for secrets, and publi
 sandboxes receive no GitHub publishing credential. In backend-managed runs, GitHub publication
 credentials remain on the backend and workers use its SCM proxy.
 
-| Sandbox | Use and boundary |
-| --- | --- |
-| `local` | Scripted replay and development; no isolation boundary |
-| `srt` | Anthropic Sandbox Runtime filesystem and network restrictions on the local machine |
-| `docker` | Container execution for development and rehearsal; shares the host kernel |
-| `islo` | Remote MicroVM execution with configured gateway and environment |
-| `toolset` | Airflow common.ai sandbox adapter; capabilities depend on its configured backend |
+Every profile below carries its [capability claim](config/capability-inventory.json) and that
+claim's support level; a profile without a claim is an integration seam, not an available sandbox.
+
+<!-- capability-surface:sandboxes -->
+| Sandbox | Capability claim | Support | Use and boundary |
+| --- | --- | --- | --- |
+| `local` | [`sandbox.local-scripted`](config/capability-inventory.json) | test only | Scripted replay and development; no isolation boundary |
+| `srt` | [`sandbox.srt`](config/capability-inventory.json) | experimental | Anthropic Sandbox Runtime filesystem and network restrictions on the local machine |
+| `docker` | [`sandbox.docker`](config/capability-inventory.json) | experimental | Container execution for development and rehearsal; shares the host kernel |
+| `islo` | [`sandbox.islo`](config/capability-inventory.json) | experimental | Remote MicroVM execution with configured gateway and environment |
+| `toolset` | none | adapter | Airflow common.ai sandbox adapter; capabilities depend on its configured backend |
 
 Provider capabilities differ. A warm-start snapshot does not establish live-fork support. The
 Docker rehearsal mounts the host Docker socket and belongs on a host you control. Model credentials
@@ -314,6 +318,32 @@ contracts. Read capability claims at their demonstrated level:
 | Liquid bundle manifest | Declared coverage of 900 generated slices and 181 legacy ranks; not 1,081 independently proven features |
 | Provider and live scheduler checks | Behavior of the tested environment and scenario; inspect each check's result |
 | Native workgraph forks and recursive factories | Contracts and bounded primitives exist; these are not default end-to-end production guarantees |
+
+### Capability claims
+
+[`config/capability-inventory.json`](config/capability-inventory.json) is the single public truth for
+every claimed feature. The table below is generated from it, each `Verified by` reference resolves to
+a file or a CI job that exists, and a test refuses any sentence in this README or on the site that
+describes a capability more strongly than its claim.
+
+<!-- capability-inventory:start -->
+<!-- Generated from config/capability-inventory.json; run `uv run python -m swfactory.capability_inventory --write`. -->
+
+| Claim | Support | Runtime entry | Verified by |
+| --- | --- | --- | --- |
+| `airflow.lifecycle` | `supported` | `swfactory.backend.service.Factory.submit -> Airflow DAG run` | ci:airflow-parity required check plus scripts/stress_airflow.sh |
+| `mutation.github` | `supported` | `swfactory.core_capabilities.CoreCapabilityRuntime.execute_external via ControlKernel` | tests/test_core_capabilities.py (fenced, replayed and evidenced execute_external) |
+| `recovery.external-effects` | `supported` | `swfactory.idempotency.OperationJournal and swfactory.operation_recovery` | tests/test_recovery_acceptance.py |
+| `workgraph.serial` | `supported` | `swfactory.work_stage.build_and_test (the Airflow build task dags/blueprints.py selects) -> bounded Plan.work execution` | tests/test_workgraph_stage_execution.py |
+| `workgraph.provider-fork` | `experimental` | `swfactory.work_executor.WorkExecutor and swfactory.execution_binding` | tests/test_work_executor.py (parallel fan-out, conflict, crash and cancellation scenarios) |
+| `sandbox.local-scripted` | `test_only` | `swfactory demo` | ci:test required job (its e2e demo step) plus tests/test_stages_scripted.py |
+| `sandbox.srt` | `experimental` | `swfactory.sandbox.SrtSandbox` | ci:srt-smoke plus the SrtSandbox argv contracts in tests/test_sandbox_argv.py |
+| `sandbox.docker` | `experimental` | `swfactory.sandbox Docker path` | ci:docker-smoke |
+| `factory.generations` | `experimental` | `generation manifests and parent-owned promotion path` | tests/test_generation_contract.py |
+| `sandbox.islo` | `experimental` | `swfactory.sandbox.IsloSandbox (islo use / cp / rm control plane)` | ci:evals-islo in .github/workflows/evals.yml (a real claude run inside a MicroVM) plus the hermetic argv contracts in tests/test_sandbox_argv.py |
+| `selfhost.factory` | `experimental` | `swfactory run --blueprint selfhost (target dir is the repo root), executing swfactory.stages against the factory's own tree` | tests/test_selfhost.py (contract parses, every protected entry survives literal-prefix reduction, confinement modules are refused for build and fix, both gates are non-auto, one line serves both backends) |
+
+<!-- capability-inventory:end -->
 
 For development, install the locked Airflow group and run the repository checks:
 

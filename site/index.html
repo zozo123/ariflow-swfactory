@@ -102,16 +102,22 @@
           A sandbox is disposable compute, not a scheduler. Policy support is backend-specific.
           The factory owns the issue-to-PR route; providers supply the execution boundary.
         </p>
+        <p>
+          Each status below is the <code>support</code> value of that profile's row in
+          <a href="https://github.com/zozo123/ariflow-swfactory/blob/main/config/capability-inventory.json">
+            the capability inventory</a>, which is the single public truth for a claimed feature.
+          A profile with no claim is an integration seam.
+        </p>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Profile</th><th>Status</th><th>Boundary</th></tr>
+              <tr><th>Profile</th><th>Support</th><th>Boundary</th></tr>
             </thead>
             <tbody>
-              <tr data-sandbox="local"><td><code>local</code></td><td>built in</td><td>process execution; no kernel isolation claim</td></tr>
-              <tr data-sandbox="srt"><td><code>srt</code></td><td>built in</td><td>Sandbox Runtime policy boundary</td></tr>
-              <tr data-sandbox="docker"><td><code>docker</code></td><td>built in</td><td>container boundary</td></tr>
-              <tr data-sandbox="islo"><td><code>islo</code></td><td>built in</td><td>provider-backed disposable cell</td></tr>
+              <tr data-sandbox="local" data-capability="sandbox.local-scripted"><td><code>local</code></td><td>test only</td><td>process execution; no kernel isolation claim</td></tr>
+              <tr data-sandbox="srt" data-capability="sandbox.srt"><td><code>srt</code></td><td>experimental</td><td>Sandbox Runtime policy boundary</td></tr>
+              <tr data-sandbox="docker" data-capability="sandbox.docker"><td><code>docker</code></td><td>experimental</td><td>container boundary</td></tr>
+              <tr data-sandbox="islo" data-capability="sandbox.islo"><td><code>islo</code></td><td>experimental</td><td>provider-backed disposable cell</td></tr>
               <tr data-sandbox="toolset"><td><code>toolset</code></td><td>adapter</td><td><code>common-ai</code> <code>SandboxBackend</code></td></tr>
               <tr data-sandbox="daytona"><td><code>daytona</code></td><td>custom backend required</td><td>provider integration seam</td></tr>
               <tr data-sandbox="e2b"><td><code>e2b</code></td><td>custom backend required</td><td>provider integration seam</td></tr>
