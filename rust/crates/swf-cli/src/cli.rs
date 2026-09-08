@@ -92,6 +92,20 @@ pub enum Command {
     #[command(subcommand)]
     Cells(CellsCmd),
 
+    /// The durable admission queue: what is running, what is waiting, and what holds it up.
+    #[command(subcommand)]
+    Queue(QueueCmd),
+
+    /// External mutations that are in doubt or exhausted and still owe a repair.
+    #[command(subcommand)]
+    Operations(OperationsCmd),
+
+    /// One line for the whole fleet: cells, queue depth and repair debt.
+    Fleet,
+
+    /// The backend's contract versions, features and mutation readiness.
+    Compatibility,
+
     /// One task attempt's log.
     Logs(LogsArgs),
 
@@ -321,6 +335,43 @@ pub enum CellsCmd {
     History {
         /// `cell_` followed by 24 hexadecimal characters.
         cell_id: String,
+    },
+}
+
+/// `swf queue …`
+///
+/// Read-only, like every other view of the control plane: the queue is admitted and drained by
+/// the backend, and a client that could reorder it would be a second scheduler.
+#[derive(Debug, Subcommand)]
+pub enum QueueCmd {
+    /// Queue pressure, then the waiting work in position order.
+    List {
+        /// At most this many queued entries.
+        #[arg(long, default_value_t = 100, value_name = "N")]
+        limit: usize,
+    },
+
+    /// One queued item: how long it has waited and which limit is holding it.
+    Inspect {
+        /// The work id the submission was given.
+        work_id: String,
+    },
+}
+
+/// `swf operations …`
+#[derive(Debug, Subcommand)]
+pub enum OperationsCmd {
+    /// Every unresolved external-mutation debt.
+    List {
+        /// At most this many rows.
+        #[arg(long, default_value_t = 100, value_name = "N")]
+        limit: usize,
+    },
+
+    /// One mutation debt: its kind, its attempts and the error it last saw.
+    Inspect {
+        /// The operation key the backend records.
+        operation_key: String,
     },
 }
 
@@ -733,6 +784,59 @@ mod tests {
         assert!(approve.contains("--dry-run"), "{approve}");
         assert!(approve.contains("writes nothing"), "{approve}");
         assert!(approve.contains("ready"), "{approve}");
+    }
+
+    #[test]
+    fn the_operator_views_keep_the_spelling_they_shipped_with() {
+        // These verbs arrived through a parser of their own. Folding them into this tree is not
+        // allowed to re-spell them: a command name and its flags are semver surface (§D-E), and
+        // an operator's script must not notice which parser answered it.
+        let queue = Cli::try_parse_from(["swf", "queue", "list"]).expect("parse");
+        let Command::Queue(QueueCmd::List { limit }) = queue.command else {
+            panic!("expected queue list");
+        };
+        assert_eq!(
+            limit, 100,
+            "the read stays bounded when nothing says otherwise"
+        );
+
+        let item = Cli::try_parse_from(["swf", "queue", "inspect", "w-1"]).expect("parse");
+        let Command::Queue(QueueCmd::Inspect { work_id }) = item.command else {
+            panic!("expected queue inspect");
+        };
+        assert_eq!(work_id, "w-1");
+
+        let debt =
+            Cli::try_parse_from(["swf", "operations", "list", "--limit", "7"]).expect("parse");
+        let Command::Operations(OperationsCmd::List { limit }) = debt.command else {
+            panic!("expected operations list");
+        };
+        assert_eq!(limit, 7);
+
+        let one = Cli::try_parse_from(["swf", "operations", "inspect", "op-1"]).expect("parse");
+        let Command::Operations(OperationsCmd::Inspect { operation_key }) = one.command else {
+            panic!("expected operations inspect");
+        };
+        assert_eq!(operation_key, "op-1");
+
+        assert!(matches!(
+            Cli::try_parse_from(["swf", "fleet"])
+                .expect("parse")
+                .command,
+            Command::Fleet
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["swf", "compatibility"])
+                .expect("parse")
+                .command,
+            Command::Compatibility
+        ));
+
+        // The globals the shim carried are the globals this tree carries.
+        let global =
+            Cli::try_parse_from(["swf", "fleet", "--json", "--timeout", "5", "-v"]).expect("parse");
+        assert!(global.json && global.verbose == 1);
+        assert_eq!(global.timeout, Some(5.0));
     }
 
     #[test]

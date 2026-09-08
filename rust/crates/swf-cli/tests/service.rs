@@ -840,3 +840,128 @@ async fn a_gate_listing_cut_by_its_limit_says_so_without_changing_shape() {
          {warning}"
     );
 }
+
+/// A home whose only context reaches the factory backend at `url`, Airflow included.
+///
+/// In backend mode Airflow is proxied under `/v1/airflow`, so one server plays both roles and the
+/// two verbs being compared are configured identically — which is the point of the comparison.
+fn backend_home_for(url: &str) -> TempDir {
+    let home = TempDir::new().expect("tempdir");
+    let mut cmd = assert_cmd::Command::cargo_bin("swf").expect("the binary builds");
+    cmd.env("SWF_CONFIG", home.path().join("config.toml"))
+        .env_remove("SWF_CONTEXT")
+        .env_remove("XDG_CONFIG_HOME")
+        .env("SWF_BACKEND_TOKEN", BACKEND_TOKEN)
+        .args([
+            "context",
+            "add",
+            "t",
+            "--airflow-url",
+            url,
+            "--backend-url",
+            url,
+            "--dag",
+            "factory",
+            "--use",
+        ]);
+    cmd.assert().success();
+    home
+}
+
+/// A token the backend client will accept, so these tests reach the wire rather than the guard.
+const BACKEND_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+/// The first Ctrl-C must cancel in-flight work and say so, whichever verb was typed.
+///
+/// A verb that reached a runtime without the interrupt watcher dies from the default signal
+/// disposition instead: no `interrupted; stopping`, no exit code at all, and an HTTP request
+/// abandoned mid-flight rather than cancelled through the token the adapters honour.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_first_interrupt_cancels_in_flight_work_whatever_the_group() {
+    use std::process::Stdio;
+    use std::time::Duration as Wait;
+
+    let server = MockServer::start().await;
+    let stall = Wait::from_secs(60);
+    Mock::given(method("GET"))
+        .and(path("/v1/airflow/api/v2/dags/factory/dagRuns"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"dag_runs": [], "total_entries": 0}))
+                .set_delay(stall),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/queue"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(
+                    json!({"active": [], "queued": [], "limits": {}, "pressure": {
+                        "active": 0, "queued": 0, "oldest_wait_s": 0.0,
+                        "p50_wait_s": 0.0, "p95_wait_s": 0.0, "throttles": 0
+                    }}),
+                )
+                .set_delay(stall),
+        )
+        .mount(&server)
+        .await;
+
+    let home = backend_home_for(&server.uri());
+    let groups: [&[&str]; 2] = [&["runs", "list", "--dag", "factory"], &["queue", "list"]];
+    for args in groups {
+        let named = args.join(" ");
+        let before = server
+            .received_requests()
+            .await
+            .map(|r| r.len())
+            .unwrap_or(0);
+        let child = std::process::Command::new(assert_cmd::cargo::cargo_bin("swf"))
+            .env("SWF_CONFIG", home.path().join("config.toml"))
+            .env_remove("SWF_CONTEXT")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("NO_COLOR")
+            .env("SWF_BACKEND_TOKEN", BACKEND_TOKEN)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn swf");
+
+        // Interrupt only once the request is genuinely in flight: a signal delivered before the
+        // watcher is armed would prove nothing about the watcher.
+        let mut armed = false;
+        for _ in 0..200 {
+            let seen = server
+                .received_requests()
+                .await
+                .map(|r| r.len())
+                .unwrap_or(0);
+            if seen > before {
+                armed = true;
+                break;
+            }
+            tokio::time::sleep(Wait::from_millis(50)).await;
+        }
+        assert!(armed, "swf {named} never reached the server");
+
+        let killed = std::process::Command::new("kill")
+            .args(["-INT", &child.id().to_string()])
+            .status()
+            .expect("kill");
+        assert!(killed.success(), "could not interrupt swf {named}");
+
+        let out = child.wait_with_output().expect("wait");
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "swf {named} did not exit through the one exit table: {stderr}"
+        );
+        assert!(
+            stderr.contains("interrupted; stopping"),
+            "swf {named} never acknowledged the interrupt:\n{stderr}"
+        );
+    }
+}

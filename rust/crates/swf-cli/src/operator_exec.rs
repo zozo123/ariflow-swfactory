@@ -1,166 +1,69 @@
-//! Transitional thin command surface for the new backend operator views.
+//! Thin CLI rendering for the backend's operator views.
 //!
-//! This module owns argument spelling and rendering only. All context resolution, validation and
-//! backend access flows through `swf_app::OperatorOps` and the existing `FactoryApi` transport.
-//! It can therefore be folded into the main clap enum later without moving any business logic.
+//! Queue pressure, repair debt, the fleet summary and the compatibility report are chosen and
+//! validated in `swf-app::operator`, where `swf tui` reads exactly the same answers; this module
+//! only picks the human and JSON shapes. The context, the credential and the deadline come from
+//! [`Ctx::backend`], so these verbs connect the same way, honour the same `--timeout`, narrate the
+//! same `-v` line and are cancelled by the same Ctrl-C as every other verb the binary answers.
+//!
+//! This file used to carry a clap parser and a tokio runtime of its own. Both are gone: a second
+//! parser is a second `--help`, a second completion surface and a second usage envelope, which is
+//! the drift #197 exists to collapse.
 
-use std::io::Write;
-use std::time::Duration;
-
-use clap::{Parser, Subcommand};
-use swf_adapters::traits::DEFAULT_HTTP_TIMEOUT;
-use swf_app::context::ContextStore;
-use swf_app::ops::{OpsError, Result};
-use swf_app::OperatorOps;
+use swf_app::ops::Result;
 use swf_domain::operator::{
     BackendCapabilities, FleetSummary, OperationDebt, QueueEntry, QueueSnapshot,
 };
 use swf_domain::sanitize::sanitize_line;
-use tokio_util::sync::CancellationToken;
 
-use crate::exit::{self, Outcome};
+use crate::cli::{OperationsCmd, QueueCmd};
+use crate::exec::Ctx;
+use crate::exit::Outcome;
 
-#[derive(Debug, Parser)]
-#[command(name = "swf", disable_help_subcommand = true)]
-struct OperatorCli {
-    #[arg(long, global = true)]
-    context: Option<String>,
-    #[arg(long, global = true)]
-    json: bool,
-    #[arg(long, global = true)]
-    timeout: Option<f64>,
-    #[arg(long = "no-color", global = true)]
-    _no_color: bool,
-    #[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
-    _verbose: u8,
-    #[command(subcommand)]
-    command: OperatorCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum OperatorCommand {
-    /// Durable admission queue and pressure.
-    #[command(subcommand)]
-    Queue(QueueCmd),
-    /// In-doubt/exhausted external mutation repair debt.
-    #[command(subcommand)]
-    Operations(OperationCmd),
-    /// Fleet summary across cells, queue and repair debt.
-    Fleet,
-    /// Backend contract versions, features and mutation readiness.
-    Compatibility,
-}
-
-#[derive(Debug, Subcommand)]
-enum QueueCmd {
-    List {
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-    },
-    Inspect {
-        work_id: String,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum OperationCmd {
-    List {
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-    },
-    Inspect {
-        operation_key: String,
-    },
-}
-
-pub fn recognizes(argv: &[String]) -> bool {
-    argv.iter().skip(1).any(|arg| {
-        matches!(
-            arg.as_str(),
-            "queue" | "operations" | "fleet" | "compatibility"
-        )
-    })
-}
-
-pub fn start(argv: &[String]) -> i32 {
-    let cli = match OperatorCli::try_parse_from(argv) {
-        Ok(cli) => cli,
-        Err(err) => {
-            let _ = err.print();
-            return if err.use_stderr() { 2 } else { 0 };
-        }
-    };
-    let json = cli.json;
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            let failure = OpsError::operational(format!("cannot start the async runtime: {err}"));
-            return exit::report(
-                &failure,
-                json,
-                &mut std::io::stdout(),
-                &mut std::io::stderr(),
-            );
-        }
-    };
-    let cancel = CancellationToken::new();
-    runtime.block_on(async move {
-        let result = run(&cli, &cancel).await;
-        match result {
-            Ok(outcome) => outcome
-                .emit(json, &mut std::io::stdout())
-                .unwrap_or_else(|err| {
-                    let _ = writeln!(std::io::stderr(), "error: cannot write the answer: {err}");
-                    1
-                }),
-            Err(failure) => exit::report(
-                &failure,
-                json,
-                &mut std::io::stdout(),
-                &mut std::io::stderr(),
-            ),
-        }
-    })
-}
-
-async fn run(cli: &OperatorCli, cancel: &CancellationToken) -> Result<Outcome> {
-    let store = ContextStore::open()?;
-    let context = store.resolve(cli.context.as_deref())?;
-    let timeout = match cli.timeout {
-        Some(seconds) if seconds > 0.0 => Duration::from_secs_f64(seconds),
-        Some(_) => return Err(OpsError::usage("--timeout must be greater than zero")),
-        None => DEFAULT_HTTP_TIMEOUT,
-    };
-    let ops = OperatorOps::connect(&context, timeout)?;
-    match &cli.command {
-        OperatorCommand::Queue(QueueCmd::List { limit }) => {
-            let row = ops.queue(*limit, cancel).await?;
+/// `swf queue …`
+pub async fn queue(ctx: &Ctx, cmd: &QueueCmd) -> Result<Outcome> {
+    let ops = ctx.backend("the admission queue")?.operator()?;
+    match cmd {
+        QueueCmd::List { limit } => {
+            let row = ops.queue(*limit, &ctx.cancel).await?;
             Ok(outcome(render_queue(&row), &row))
         }
-        OperatorCommand::Queue(QueueCmd::Inspect { work_id }) => {
-            let row = ops.queue_item(work_id, cancel).await?;
+        QueueCmd::Inspect { work_id } => {
+            let row = ops.queue_item(work_id, &ctx.cancel).await?;
             Ok(outcome(render_queue_item(&row), &row))
         }
-        OperatorCommand::Operations(OperationCmd::List { limit }) => {
-            let rows = ops.operations(*limit, cancel).await?;
+    }
+}
+
+/// `swf operations …`
+pub async fn operations(ctx: &Ctx, cmd: &OperationsCmd) -> Result<Outcome> {
+    let ops = ctx.backend("external mutation repair debt")?.operator()?;
+    match cmd {
+        OperationsCmd::List { limit } => {
+            let rows = ops.operations(*limit, &ctx.cancel).await?;
             Ok(outcome(render_operations(&rows), &rows))
         }
-        OperatorCommand::Operations(OperationCmd::Inspect { operation_key }) => {
-            let row = ops.operation(operation_key, cancel).await?;
+        OperationsCmd::Inspect { operation_key } => {
+            let row = ops.operation(operation_key, &ctx.cancel).await?;
             Ok(outcome(render_operation(&row), &row))
         }
-        OperatorCommand::Fleet => {
-            let row = ops.fleet(cancel).await?;
-            Ok(outcome(render_fleet(&row), &row))
-        }
-        OperatorCommand::Compatibility => {
-            let row = ops.capabilities(cancel).await?;
-            Ok(outcome(render_compatibility(&row), &row))
-        }
     }
+}
+
+/// `swf fleet`
+pub async fn fleet(ctx: &Ctx) -> Result<Outcome> {
+    let ops = ctx.backend("the fleet summary")?.operator()?;
+    let row = ops.fleet(&ctx.cancel).await?;
+    Ok(outcome(render_fleet(&row), &row))
+}
+
+/// `swf compatibility`
+pub async fn compatibility(ctx: &Ctx) -> Result<Outcome> {
+    let ops = ctx
+        .backend("the backend compatibility report")?
+        .operator()?;
+    let row = ops.capabilities(&ctx.cancel).await?;
+    Ok(outcome(render_compatibility(&row), &row))
 }
 
 fn outcome<T: serde::Serialize>(human: String, value: &T) -> Outcome {
