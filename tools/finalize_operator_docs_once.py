@@ -24,8 +24,10 @@ swf gates approve --all --dag factory --state deferred --limit 25 --dry-run
 swf gates approve --all --dag factory --state deferred --limit 25 --yes
 ```""",
 }
+changed = False
 for old, new in replacements.items():
-    if old not in text:
-        raise SystemExit(f"expected placeholder missing: {old}")
-    text = text.replace(old, new)
-path.write_text(text)
+    if old in text:
+        text = text.replace(old, new)
+        changed = True
+if changed:
+    path.write_text(text)
