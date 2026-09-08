@@ -1,0 +1,29 @@
+name: workgraph-safety-patch
+on:
+  push:
+    branches: [fix/experimental-workgraph-safety]
+    paths: [.github/workflows/workgraph-safety-patch.yml]
+permissions:
+  contents: write
+jobs:
+  patch-and-prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with: {fetch-depth: 0}
+      - uses: astral-sh/setup-uv@v6
+      - run: python tools/patch_workgraph_safety.py
+      - run: uv sync
+      - run: |
+          uv run ruff check --fix src/swfactory/work_executor.py tests/test_work_executor_safety.py
+          uv run ruff format src/swfactory/work_executor.py tests/test_work_executor_safety.py
+          uv run ruff check src/swfactory/work_executor.py tests/test_work_executor_safety.py
+      - run: uv run pytest tests/test_work_executor_safety.py tests/test_work_executor.py tests/test_workgraph.py
+      - run: |
+          rm tools/patch_workgraph_safety.py .github/workflows/workgraph-safety-patch.yml
+          git config user.name "Yossi Eliaz"
+          git config user.email "zozo123@users.noreply.github.com"
+          git add -A
+          git commit -m "Fence unsafe experimental workgraph fan-in (#2055)"
+          git push origin HEAD:fix/experimental-workgraph-safety
