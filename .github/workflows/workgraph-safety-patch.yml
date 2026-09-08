@@ -16,6 +16,7 @@ jobs:
       - run: python tools/patch_workgraph_safety.py
       - run: uv sync
       - run: |
+          uv run ruff format src/swfactory/work_executor.py tests/test_work_executor_safety.py
           uv run ruff check --fix src/swfactory/work_executor.py tests/test_work_executor_safety.py
           uv run ruff format src/swfactory/work_executor.py tests/test_work_executor_safety.py
           uv run ruff check src/swfactory/work_executor.py tests/test_work_executor_safety.py
