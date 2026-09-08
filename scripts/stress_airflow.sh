@@ -22,11 +22,13 @@
 set -Eeuo pipefail
 
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-DAG_ID="stress"
+DAG_ID="${SWF_STRESS_DAG_ID:-stress}" # any installed line; `selfhost` targets the repo root
 TARGET_B="demo/target-b" # blueprints/stress.toml's second [[targets]].dir (materialised below)
-HEALTH_TIMEOUT_S=240
-PARSE_TIMEOUT_S=240
-RUN_TIMEOUT_S=1800
+HEALTH_TIMEOUT_S="${SWF_STRESS_HEALTH_TIMEOUT_S:-240}"
+PARSE_TIMEOUT_S="${SWF_STRESS_PARSE_TIMEOUT_S:-240}"
+# 1800 s fits two demo-calculator jobs. A root-target line runs the factory's own suite once per
+# job, so a wide fan-out needs more room than the default allows.
+RUN_TIMEOUT_S="${SWF_STRESS_RUN_TIMEOUT_S:-1800}"
 
 if [ $# -eq 0 ]; then set -- demo/issue.md demo/issue2.md; fi
 if [ $# -lt 2 ]; then
@@ -108,15 +110,35 @@ field() { "$PY" -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }
 # ---------------------------------------------------------------- work dir
 
 say "work dir $WORK"
-mkdir -p "$AIRFLOW_HOME" "$WORK/$(dirname "$TARGET_B")"
-# The blueprint's second target: a copy of demo/target, materialised here rather than committed
-# (the recorded patches carry blob hashes, so a "second" target has to BE that copy). A job
-# resolves its target dir against the worker's cwd before the checkout, and standalone — hence
-# every task — runs with cwd=$WORK.
-cp -R "$REPO/demo/target" "$WORK/$TARGET_B"
-find "$WORK/$TARGET_B" \( -name __pycache__ -o -name .pytest_cache -o -name .venv \) -prune \
-  -exec rm -rf {} + 2>/dev/null || true
-cd "$WORK"
+mkdir -p "$AIRFLOW_HOME"
+# A job resolves its target dir against the worker's cwd before the checkout, and standalone —
+# hence every task — inherits the cwd set here. So the cwd has to satisfy the line's targets, and
+# the two shapes need different ground:
+#
+#   dir != ""  the target lives inside the cwd. Materialise the blueprint's second target here
+#              rather than committing it (the recorded patches carry blob hashes, so a "second"
+#              target has to BE that copy).
+#   dir == ""  the target IS a factory checkout — this is the self-host line. A throwaway cwd has
+#              no factory.toml, so `seed_local_workdir` refuses before a task starts. Run from a
+#              clone instead, which satisfies the contract and still keeps the run off the
+#              operator's own tree.
+ROOT_TARGET="$("$PY" -c "
+from swfactory.blueprint import load
+
+print('1' if any(target.dir == '' for target in load('$DAG_ID').targets) else '0')
+")"
+if [ "$ROOT_TARGET" = "1" ]; then
+  say "root target: cloning the factory into \$WORK/factory (cwd must hold factory.toml)"
+  git clone -q --shared "$REPO" "$WORK/factory"
+  git -C "$WORK/factory" checkout -q "$(git -C "$REPO" rev-parse HEAD)"
+  cd "$WORK/factory"
+else
+  mkdir -p "$WORK/$(dirname "$TARGET_B")"
+  cp -R "$REPO/demo/target" "$WORK/$TARGET_B"
+  find "$WORK/$TARGET_B" \( -name __pycache__ -o -name .pytest_cache -o -name .venv \) -prune \
+    -exec rm -rf {} + 2>/dev/null || true
+  cd "$WORK"
+fi
 
 PORT="$("$PY" -c '
 import socket
