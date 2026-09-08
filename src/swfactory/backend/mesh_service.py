@@ -4,6 +4,11 @@ This module intentionally sits beside, not inside, lifecycle submission.  A stat
 shared backend as a rendezvous even when its own Airflow and Factory Cell stores are completely
 independent.  Nothing here dispatches a DAG, advances a Cell epoch, publishes to GitHub, or touches
 a sandbox.
+
+The SQLite implementation is a *single rendezvous service* boundary: run one mesh backend process
+for a given ``SWF_STATE_ROOT`` and let all remote stations talk to that HTTP endpoint.  It is not a
+multi-primary database protocol; a future Postgres implementation can preserve this API if the
+rendezvous itself needs horizontal scaling.
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from swfactory.station_mesh import StationMesh
+from swfactory.station_mesh import MeshError, StationMesh
 
 _MESHES: dict[Path, StationMesh] = {}
 _LOCK = threading.Lock()
@@ -132,13 +137,18 @@ def operation(factory: Any, path: str, body: dict[str, Any]) -> Any:
             ttl_s=body.get("ttl_s"),
         )
     if path == "/mesh/release":
-        mesh.release(
-            repo=body.get("repo"),
-            cell_id=body.get("cell_id"),
-            station_id=body.get("station_id"),
-            station_lease_epoch=_positive(body, "station_lease_epoch"),
-            claim_epoch=_positive(body, "claim_epoch"),
-        )
+        try:
+            mesh.release(
+                repo=body.get("repo"),
+                cell_id=body.get("cell_id"),
+                station_id=body.get("station_id"),
+                station_lease_epoch=_positive(body, "station_lease_epoch"),
+                claim_epoch=_positive(body, "claim_epoch"),
+            )
+        except KeyError as error:
+            # A late duplicate release is a coordination conflict, never an internal backend
+            # failure.  The caller must re-read claims instead of guessing who owns the Cell now.
+            raise MeshError("coordination claim no longer exists; re-read mesh claims") from error
         return {"released": True, "cell_id": body.get("cell_id")}
     if path == "/mesh/claims":
         return mesh.claims(
