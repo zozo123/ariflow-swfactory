@@ -20,6 +20,7 @@ from typing import Any
 
 from swfactory.control import ControlError
 
+from .core_service import operation as core_operation
 from .scm_service import operation as scm_operation
 from .service import Factory, Refused
 
@@ -112,6 +113,8 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                     status, payload = factory.compatibility(self.command, self.path[len(mount) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/scm/"):
                     status, payload = 200, scm_operation(factory, self.path[len(PREFIX) :], body)
+                elif self.command == "POST" and self.path.startswith(PREFIX + "/core/"):
+                    status, payload = 200, core_operation(factory, self.path[len(PREFIX) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/"):
                     status, payload = 200, factory.operation(self.path[len(PREFIX) :], body)
                 else:
@@ -125,10 +128,7 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
             except (ValueError, TypeError) as error:
                 status, payload = 400, {"detail": str(error)[:500]}
             except (ControlError, OSError, subprocess.SubprocessError):
-                status, payload = (
-                    502,
-                    {"detail": "backend service unavailable; mutation outcome may be unknown"},
-                )
+                status, payload = 502, {"detail": "backend service unavailable; mutation outcome may be unknown"}
             except Exception:
                 status, payload = 500, {"detail": "internal backend error"}
             self.reply(status, payload)
