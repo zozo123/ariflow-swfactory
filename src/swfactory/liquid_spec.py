@@ -93,6 +93,20 @@ class Concern:
 
 
 @dataclass(frozen=True)
+class FamilyArea:
+    """One named area of a family that carries rows of its own instead of domain entries.
+
+    The legacy snapshot reaches its ten areas by slug rather than by a ``domains:`` row, so their
+    ``runtime_anchor`` values would otherwise never be resolved -- and an unresolved anchor is
+    exactly what this file exists to make impossible.
+    """
+
+    slug: str
+    owner: str
+    runtime_anchor: str
+
+
+@dataclass(frozen=True)
 class Family:
     """Coverage metadata for a whole backlog family -- never one entry per numbered bundle."""
 
@@ -103,10 +117,21 @@ class Family:
     concerns_per_domain: int
     issues: int | None = None
     superseded_python: str | None = None
+    # The span this family claims, and how it was sliced before the collapse. These are the
+    # invariants `liquid_release` used to assert; without them the ranges are decoration.
+    span: tuple[int, int] | None = None
+    span_field: str | None = None
+    bundles: int | None = None
+    tranches: int | None = None
+    areas: tuple[FamilyArea, ...] = ()
 
     @property
     def cells(self) -> int:
         return self.domains * self.concerns_per_domain
+
+    @property
+    def span_width(self) -> int | None:
+        return None if self.span is None else self.span[1] - self.span[0] + 1
 
 
 @dataclass(frozen=True)
@@ -187,6 +212,11 @@ class LiquidSpec:
             "families": len(self.families),
             "matrix_cells": self.matrix_cells,
             "schema_version": self.schema_version,
+            "spans": {
+                family.id: {"range": list(family.span), "issues": family.issues}
+                for family in self.families
+                if family.span is not None
+            },
             "states": self.counts("state"),
             "support": self.counts("support"),
         }
@@ -300,7 +330,7 @@ def _concerns(document: dict[str, Any]) -> tuple[Concern, ...]:
     return tuple(concerns)
 
 
-def _families(document: dict[str, Any]) -> tuple[Family, ...]:
+def _families(document: dict[str, Any], *, owners: tuple[str, ...], root: Path) -> tuple[Family, ...]:
     raw = document.get("families")
     if not isinstance(raw, list) or not raw:
         raise LiquidSpecError("families must be a nonempty list of coverage metadata")
@@ -321,6 +351,39 @@ def _families(document: dict[str, Any]) -> tuple[Family, ...]:
         issues = row.get("issues")
         if issues is not None and (not isinstance(issues, int) or issues < 1):
             raise LiquidSpecError(f"family {ident}: issues must be a positive integer when present")
+
+        # The span. `liquid_release` asserted contiguity, disjointness and the totals; the ranges
+        # survived the collapse as YAML but nothing read them, so they were silently decorative.
+        span: tuple[int, int] | None = None
+        span_field: str | None = None
+        for field in ("issue_range", "rank_range"):
+            if field not in row:
+                continue
+            if span_field is not None:
+                raise LiquidSpecError(f"family {ident}: declare at most one of issue_range/rank_range")
+            bounds = row[field]
+            if (
+                not isinstance(bounds, list)
+                or len(bounds) != 2
+                or not all(isinstance(bound, int) for bound in bounds)
+                or bounds[0] < 1
+                or bounds[1] < bounds[0]
+            ):
+                raise LiquidSpecError(f"family {ident}: {field} must be [low, high] with 1 <= low <= high")
+            span, span_field = (int(bounds[0]), int(bounds[1])), field
+        if span is not None and issues is not None and span[1] - span[0] + 1 != issues:
+            raise LiquidSpecError(
+                f"family {ident}: {span_field} {list(span)} spans {span[1] - span[0] + 1} but issues says {issues}"
+            )
+
+        for field in ("bundles", "tranches"):
+            if field in row and (not isinstance(row[field], int) or row[field] < 1):
+                raise LiquidSpecError(f"family {ident}: {field} must be a positive integer")
+
+        areas = _areas(row, ident=ident, owners=owners, root=root)
+        if areas and len(areas) != int(row["domains"]):
+            raise LiquidSpecError(f"family {ident}: declares {row['domains']} domains but carries {len(areas)} areas")
+
         families.append(
             Family(
                 id=ident,
@@ -330,9 +393,63 @@ def _families(document: dict[str, Any]) -> tuple[Family, ...]:
                 concerns_per_domain=int(row["concerns_per_domain"]),
                 issues=issues,
                 superseded_python=(str(row["superseded_python"]) if row.get("superseded_python") else None),
+                span=span,
+                span_field=span_field,
+                bundles=(int(row["bundles"]) if "bundles" in row else None),
+                tranches=(int(row["tranches"]) if "tranches" in row else None),
+                areas=areas,
             )
         )
+    _assert_spans_tile(families)
     return tuple(families)
+
+
+def _areas(row: dict[str, Any], *, ident: str, owners: tuple[str, ...], root: Path) -> tuple[FamilyArea, ...]:
+    """Parse and RESOLVE a family's areas, so their anchors are held to the same bar as a domain."""
+    raw = row.get("areas")
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not raw:
+        raise LiquidSpecError(f"family {ident}: areas must be a nonempty list when present")
+    areas: list[FamilyArea] = []
+    seen: set[str] = set()
+    for entry in raw:
+        entry = _require(entry, frozenset({"slug", "owner", "runtime_anchor"}), f"family {ident} area")
+        slug = _text(entry, "slug", f"family {ident} area")
+        if slug in seen:
+            raise LiquidSpecError(f"family {ident}: duplicate area slug {slug!r}")
+        seen.add(slug)
+        owner = _text(entry, "owner", f"family {ident} area {slug}")
+        if owner not in owners:
+            raise LiquidSpecError(f"family {ident} area {slug}: unknown owner {owner!r}")
+        anchor = _text(entry, "runtime_anchor", f"family {ident} area {slug}")
+        resolve_anchor(anchor, root=root)
+        areas.append(FamilyArea(slug=slug, owner=owner, runtime_anchor=anchor))
+    return tuple(areas)
+
+
+def _assert_spans_tile(families: list[Family]) -> None:
+    """Spans of one kind must tile: sorted, contiguous, no gap and no overlap.
+
+    This is the invariant the old manifest carried and the collapse nearly dropped. Without it a
+    family can silently move its range, and the declared coverage stops meaning anything.
+    """
+    by_field: dict[tuple[str, str], list[Family]] = {}
+    for family in families:
+        if family.span is not None and family.span_field is not None:
+            by_field.setdefault((family.kind, family.span_field), []).append(family)
+    for (kind, field), group in sorted(by_field.items()):
+        ordered = sorted(group, key=lambda f: f.span or (0, 0))
+        for earlier, later in zip(ordered, ordered[1:], strict=False):
+            assert earlier.span is not None and later.span is not None  # narrowed by the filter
+            if later.span[0] <= earlier.span[1]:
+                raise LiquidSpecError(
+                    f"{kind} {field}: {earlier.id} {list(earlier.span)} overlaps {later.id} {list(later.span)}"
+                )
+            if later.span[0] != earlier.span[1] + 1:
+                raise LiquidSpecError(
+                    f"{kind} {field}: gap between {earlier.id} {list(earlier.span)} and {later.id} {list(later.span)}"
+                )
 
 
 def _domains(
@@ -446,7 +563,7 @@ def validate_spec(
             "narrative the product path carries"
         )
     concerns = _concerns(document)
-    families = _families(document)
+    families = _families(document, owners=owners, root=SOURCE_ROOT if source_root is None else source_root)
     domains = _domains(
         document,
         families=families,
@@ -456,8 +573,17 @@ def validate_spec(
     )
     for family in families:
         declared = sum(1 for row in domains if row.family == family.id)
+        # `if declared and ...` let a family with zero rows claim any number at all, which covered
+        # four of the six families. A liquid family must carry its rows; a family that reaches its
+        # domains by area is checked against len(areas) in _families instead.
+        if family.kind == "liquid" and not declared:
+            raise LiquidSpecError(f"family {family.id}: kind 'liquid' must carry its domain rows")
         if declared and declared != family.domains:
             raise LiquidSpecError(f"family {family.id}: declares {family.domains} domains but {declared} rows exist")
+        if not declared and not family.areas and family.kind != "research":
+            raise LiquidSpecError(
+                f"family {family.id}: carries neither domain rows nor areas, so its domain count is unfalsifiable"
+            )
         if family.concerns_per_domain != len(concerns):
             raise LiquidSpecError(
                 f"family {family.id}: concerns_per_domain {family.concerns_per_domain} does not "
