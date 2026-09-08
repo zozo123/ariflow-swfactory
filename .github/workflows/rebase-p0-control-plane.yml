@@ -1,0 +1,30 @@
+name: rebase-p0-control-plane
+on:
+  push:
+    branches: [fix/p0-control-plane-e2e]
+    paths: [.github/workflows/rebase-p0-control-plane.yml]
+permissions:
+  contents: write
+jobs:
+  integrate-and-prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with: {fetch-depth: 0}
+      - uses: astral-sh/setup-uv@v6
+      - name: Merge current main into P0 branch
+        run: |
+          git config user.name "Yossi Eliaz"
+          git config user.email "zozo123@users.noreply.github.com"
+          git fetch origin main
+          git merge --no-edit origin/main
+      - run: uv sync
+      - name: Prove combined operation + drain/cancel contracts
+        run: uv run pytest tests/test_backend_control_plane.py tests/test_operation_single_writer.py tests/test_liquid_convergence.py tests/test_cells.py tests/test_control.py
+      - name: Remove integration helper and push proven head
+        run: |
+          rm .github/workflows/rebase-p0-control-plane.yml
+          git add -A
+          git commit -m "Integrate durable single-writer into control-plane P0 fixes"
+          git push origin HEAD:fix/p0-control-plane-e2e
