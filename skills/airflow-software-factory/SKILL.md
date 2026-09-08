@@ -139,3 +139,20 @@ Classify failures before retrying:
 When reporting the result, state the route used, target, boundary, gate decisions, review
 disposition, PR URL if created, and anything intentionally not executed. State verification
 evidence at the level it actually reaches — reported, published, or independently verified.
+
+## Discover and install reusable skills
+
+Keep skill discovery and installation on the trusted operator/orchestrator side. Skills are reusable
+instructions and tools; they do not gain lifecycle, publication, or credential authority.
+
+Use Vercel's canonical discovery skill when a reusable capability may already exist:
+
+```bash
+npx skills add vercel-labs/skills@find-skills -y
+npx skills find <query> --owner vercel-labs
+```
+
+The repository exposes the same identities through `swfactory.skills_connector`, including the
+factory skill, the outer-harness skill, and `vercel-labs/skills@find-skills`. Read
+[references/skills-sh.md](references/skills-sh.md) before changing distribution metadata,
+installing networked skills as part of an operator workflow, or diagnosing skills.sh indexing.
