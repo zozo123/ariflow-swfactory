@@ -1,0 +1,1094 @@
+# The Liquid matrix as data.
+#
+# The backlog generators produced a 90-domain x 10-concern matrix (900 cells) plus a legacy
+# snapshot and three research waves.  That matrix used to exist as 41 near-identical Python
+# modules (liquid_bundle_*, physics_bundle_*, legacy_bundle_*) whose only content was this
+# metadata.  C10 of the methodology says more issue slices must not imply more permanent
+# abstractions, so the matrix lives here, as data, and `python -m swfactory.liquid_spec`
+# proves it is not fiction: every runtime_anchor below must resolve to a real module or
+# attribute under src/swfactory/, and every capability_claim must exist in
+# config/capability-inventory.json.
+#
+# The file is declarative.  Naming a domain does not make it work.  `state` and `support`
+# use the same vocabulary as config/capability-inventory.json, and default to
+# declared/unsupported -- aspirational, not covered.  A row is promoted only when it points
+# at a validated capability claim.  Do not promote a row to widen the green area.
+
+schema_version: 1
+
+# The intuitive core, which is all the product needs: exploration entropy narrows to a
+# stabilized shape and then converges on evidence.  The statistical-mechanics framing
+# (Jarzynski, Crooks, nucleation, Onsager) is research vocabulary and lives in
+# docs/non-equilibrium-factory.md, not in the runtime's cognitive path.
+doctrine:
+  phases: [exploration, stabilization, convergence]
+  research_notes: docs/non-equilibrium-factory.md
+
+# The seven canonical owning roles.  A domain row's owner must be one of these.
+owners: [authority, airflow, workgraph, recovery, security, evidence, operator]
+
+# The concern axis, declared ONCE.  Every domain row below is crossed with all ten,
+# which is where 90 x 10 = 900 comes from.  `metric` is the boring, measurable production
+# signal for that concern; these ten replace the physics scalars.
+concerns:
+  - id: C01
+    name: invariant
+    action: assert_invariant
+    metric: in_doubt_operations
+    question: "Does the rule hold, and is a violation refused rather than absorbed?"
+  - id: C02
+    name: persistence
+    action: persist
+    metric: cleanup_debt
+    question: "Does the state survive restart in one durable store, with nothing left dangling?"
+  - id: C03
+    name: api
+    action: expose_versioned_api
+    metric: failure_rate
+    question: "Is the surface versioned, and does an unknown version get refused?"
+  - id: C04
+    name: runtime
+    action: dispatch_from_airflow
+    metric: queue_depth
+    question: "Is Airflow the only thing that starts, retries or cancels this?"
+  - id: C05
+    name: operator
+    action: inspect_or_repair
+    metric: cancellation_lag
+    question: "Can an operator see the truth and repair it without surgery?"
+  - id: C06
+    name: security
+    action: authorize
+    metric: sandbox_saturation
+    question: "Is the effect authorised before it happens, and does policy fail closed?"
+  - id: C07
+    name: recovery
+    action: recover
+    metric: retry_rate
+    question: "After a crash or a lost response, does this converge to committed or absent?"
+  - id: C08
+    name: scale
+    action: throttle
+    metric: cost
+    question: "Under load does this throttle at a bounded gate instead of degrading?"
+  - id: C09
+    name: evidence
+    action: measure_and_seal
+    metric: time_to_evidence
+    question: "Is every claim backed by a retained artefact bound to an exact commit?"
+  - id: C10
+    name: stabilize
+    action: stabilize_and_delete_superseded
+    metric: time_to_merge
+    question: "Is the superseded path deleted, so coverage grew without new abstractions?"
+
+# Families are coverage metadata.  One entry per family, never one per numbered bundle.
+families:
+  - id: Liquid500
+    kind: liquid
+    state: declared
+    issue_range: [255, 754]
+    issues: 500
+    bundles: 10
+    domains: 50
+    concerns_per_domain: 10
+    superseded_python: "src/swfactory/liquid_bundle_01..10.py (superseded by this file)"
+  - id: Liquid400
+    kind: liquid
+    state: declared
+    issue_range: [755, 1154]
+    issues: 400
+    bundles: 8
+    domains: 40
+    concerns_per_domain: 10
+    superseded_python: "src/swfactory/liquid_bundle_11..18.py (superseded by this file)"
+  - id: LegacySnapshot
+    kind: legacy
+    state: declared
+    rank_range: [1, 181]
+    issues: 181
+    tranches: 4
+    domains: 10
+    concerns_per_domain: 10
+    snapshot_cutoff: "2026-09-06T22:22:21Z"
+    superseded_python: "src/swfactory/legacy_bundle_01..04.py + legacy_issue_runtime.py (superseded by this file)"
+    # The ten legacy areas are the same domains named above, reached by their own slugs.
+    areas:
+      - { slug: cell-control-plane, owner: authority, runtime_anchor: swfactory.cells }
+      - { slug: airflow-lifecycle, owner: airflow, runtime_anchor: swfactory.airflow_binding }
+      - { slug: operator, owner: operator, runtime_anchor: swfactory.inspection }
+      - { slug: workgraph-sandbox, owner: workgraph, runtime_anchor: swfactory.parallel_workers }
+      - { slug: persistence-reconciliation, owner: recovery, runtime_anchor: swfactory.operation_recovery }
+      - { slug: security-policy, owner: security, runtime_anchor: swfactory.security_contract }
+      - { slug: evidence-observability, owner: evidence, runtime_anchor: swfactory.lifecycle_evidence }
+      - { slug: github-intake-publication, owner: recovery, runtime_anchor: swfactory.backend_scm }
+      - { slug: deployment-supply-chain, owner: operator, runtime_anchor: swfactory.runtime }
+      - { slug: factory-generations, owner: authority, runtime_anchor: swfactory.generations }
+  - id: Ocean120
+    kind: research
+    state: research
+    issues: 120
+    domains: 12
+    concerns_per_domain: 10
+    superseded_python: "src/swfactory/physics_bundle_*.py + physics_wave_runtime.py (research only)"
+    research_notes: docs/non-equilibrium-factory.md
+    note: >-
+      Statistical-mechanics stress model.  Advisory and observational only: it never held
+      lifecycle authority.  Kept as coverage metadata so the history is not lost; it must
+      not appear in the product's cognitive path.
+  - id: Phase240
+    kind: research
+    state: research
+    issues: 240
+    domains: 24
+    concerns_per_domain: 10
+    superseded_python: "src/swfactory/physics_bundle_*.py + physics_wave_runtime.py (research only)"
+    research_notes: docs/non-equilibrium-factory.md
+    note: >-
+      Statistical-mechanics stress model.  Advisory and observational only: it never held
+      lifecycle authority.  Kept as coverage metadata so the history is not lost; it must
+      not appear in the product's cognitive path.
+  - id: StatMech360
+    kind: research
+    state: research
+    issues: 360
+    domains: 36
+    concerns_per_domain: 10
+    superseded_python: "src/swfactory/physics_bundle_*.py + physics_wave_runtime.py (research only)"
+    research_notes: docs/non-equilibrium-factory.md
+    note: >-
+      Statistical-mechanics stress model.  Advisory and observational only: it never held
+      lifecycle authority.  Kept as coverage metadata so the history is not lost; it must
+      not appear in the product's cognitive path.
+
+# The 90 domain rows.  `id` is `<family>.<slug>` because six slugs appear in both liquid
+# families with DIFFERENT owners; those rows carry a `note` and must be reconciled before
+# either is promoted.  `runtime_anchor` is `module` or `module:attribute`, dotted from
+# `swfactory`, and the checker fails if it does not resolve.
+domains:
+  - id: liquid500.cell-authority
+    slug: cell-authority
+    family: Liquid500
+    bundle: liquid500-01
+    owner: authority
+    state: declared
+    support: unsupported
+    invariant: "Every managed run is bound to exactly one durable Factory Cell identity, and a write from a stale epoch is refused rather than reordered."
+    runtime_anchor: swfactory.cells:CellIdentity
+    evidence_requirement: "A journal record showing a stale-epoch write refused while the current epoch's write commits."
+  - id: liquid500.airflow-lifecycle
+    slug: airflow-lifecycle
+    family: Liquid500
+    bundle: liquid500-01
+    owner: airflow
+    state: validated
+    support: supported
+    invariant: "Apache Airflow is the only lifecycle scheduler; no other component may start, retry or cancel a managed run."
+    runtime_anchor: swfactory.airflow_binding:AirflowBinding
+    evidence_requirement: "A green airflow-parity check plus a scheduler log proving the run's transitions came only from Airflow."
+    capability_claim: airflow.lifecycle
+  - id: liquid500.plan-work
+    slug: plan-work
+    family: Liquid500
+    bundle: liquid500-01
+    owner: workgraph
+    state: validated
+    support: supported
+    invariant: "Plan.work executes only inside the Airflow-owned build stage, honours declared dependencies and conflicts, and fans in deterministically."
+    runtime_anchor: swfactory.parallel_workers:SevenWorkerPool
+    evidence_requirement: "A workgraph execution report whose node order satisfies the declared dependency graph on a rerun."
+    capability_claim: workgraph.serial
+  - id: liquid500.sandbox-lifecycle
+    slug: sandbox-lifecycle
+    family: Liquid500
+    bundle: liquid500-01
+    owner: workgraph
+    state: validated
+    support: test_only
+    invariant: "A sandbox is created, used and reclaimed within one Cell epoch, and its reclamation is recorded even when the run fails."
+    runtime_anchor: swfactory.sandbox:Sandbox
+    evidence_requirement: "A cleanup receipt for every sandbox created during the run, with zero unreclaimed sandboxes at exit."
+    capability_claim: sandbox.local-scripted
+  - id: liquid500.provider-capabilities
+    slug: provider-capabilities
+    family: Liquid500
+    bundle: liquid500-01
+    owner: workgraph
+    state: experimental
+    support: experimental
+    invariant: "A provider is used only through capabilities it has proven in conformance, never through assumed behaviour."
+    runtime_anchor: swfactory.provider_conformance:capability_report
+    evidence_requirement: "A conformance report per provider, refreshed on the tested commit, listing the capabilities actually exercised."
+    capability_claim: workgraph.provider-fork
+    follow_up: "Promote only when the fork path has a conformance result for every declared capability on the tested commit."
+  - id: liquid500.mutation-journal
+    slug: mutation-journal
+    family: Liquid500
+    bundle: liquid500-02
+    owner: recovery
+    state: validated
+    support: supported
+    invariant: "Every external side effect is journalled with its operation identity and intent digest before it is attempted."
+    runtime_anchor: swfactory.idempotency:OperationJournal
+    evidence_requirement: "A journal row per external effect whose intent digest matches the request that produced it."
+    capability_claim: recovery.external-effects
+  - id: liquid500.cleanup-reconciliation
+    slug: cleanup-reconciliation
+    family: Liquid500
+    bundle: liquid500-02
+    owner: recovery
+    state: validated
+    support: supported
+    invariant: "Ambiguous effects stay in_doubt until observation proves them committed or definitely absent; a stale epoch may not repair them."
+    runtime_anchor: swfactory.operation_recovery:plan_recovery
+    evidence_requirement: "A reconciliation pass that drains in-doubt operations to committed or absent with the observation that decided each."
+    capability_claim: recovery.external-effects
+  - id: liquid500.admission-backpressure
+    slug: admission-backpressure
+    family: Liquid500
+    bundle: liquid500-02
+    owner: authority
+    state: declared
+    support: unsupported
+    invariant: "Admission is bounded and durable: overload throttles at the gate instead of spawning a second scheduler."
+    runtime_anchor: swfactory.durable_admission
+    evidence_requirement: "Queue-depth and admission-refusal counters from a saturation run showing bounded concurrency."
+  - id: liquid500.github-intake
+    slug: github-intake
+    family: Liquid500
+    bundle: liquid500-02
+    owner: recovery
+    state: declared
+    support: unsupported
+    invariant: "Intake is idempotent per issue identity, so a redelivered or replayed intake cannot create a second run."
+    runtime_anchor: swfactory.intake_policy
+    evidence_requirement: "A replayed intake payload that produces no second run, with the dedupe decision recorded."
+  - id: liquid500.github-publication
+    slug: github-publication
+    family: Liquid500
+    bundle: liquid500-02
+    owner: recovery
+    state: validated
+    support: supported
+    invariant: "Every managed GitHub write carries the current Cell epoch, policy and operation identity, and is replay-safe."
+    runtime_anchor: swfactory.backend_scm:BackendScm
+    evidence_requirement: "A publication receipt bound to head/base SHAs plus the journal row proving single-commit semantics."
+    capability_claim: mutation.github
+  - id: liquid500.repo-coordination
+    slug: repo-coordination
+    family: Liquid500
+    bundle: liquid500-03
+    owner: authority
+    state: declared
+    support: unsupported
+    invariant: "Concurrent runs against the same repository serialise on a durable lock rather than racing on the remote."
+    runtime_anchor: swfactory.repo_coordination
+    evidence_requirement: "A two-run race trace showing one run waiting and neither losing writes."
+  - id: liquid500.ci-topology
+    slug: ci-topology
+    family: Liquid500
+    bundle: liquid500-03
+    owner: workgraph
+    state: declared
+    support: unsupported
+    invariant: "The required-check set is declared, and a candidate is judged only against checks that actually ran on the tested commit."
+    runtime_anchor: swfactory.ci_topology
+    evidence_requirement: "The required-check list resolved for the tested SHA alongside each check's conclusion."
+  - id: liquid500.workspace-materialization
+    slug: workspace-materialization
+    family: Liquid500
+    bundle: liquid500-03
+    owner: workgraph
+    state: declared
+    support: unsupported
+    invariant: "A workspace is materialised from a named commit and is discarded rather than reused across epochs."
+    runtime_anchor: swfactory.workspace_materialization
+    evidence_requirement: "A materialisation record naming the source commit and the workspace's disposal."
+  - id: liquid500.storage-backend
+    slug: storage-backend
+    family: Liquid500
+    bundle: liquid500-03
+    owner: recovery
+    state: declared
+    support: unsupported
+    invariant: "Durable state lives in one backend store; no component keeps authoritative state outside it."
+    runtime_anchor: swfactory.backend_store
+    evidence_requirement: "A restart test proving all authoritative state survived in the backend store alone."
+  - id: liquid500.schema-migrations
+    slug: schema-migrations
+    family: Liquid500
+    bundle: liquid500-03
+    owner: recovery
+    state: declared
+    support: unsupported
+    invariant: "Schema changes are forward-only and applied before the code that depends on them serves traffic."
+    runtime_anchor: swfactory.backend_store
+    evidence_requirement: "A migration log showing the applied version and a clean start on the migrated store."
+  - id: liquid500.contract-versioning
+    slug: contract-versioning
+    family: Liquid500
+    bundle: liquid500-04
+    owner: authority
+    state: declared
+    support: unsupported
+    invariant: "Cross-language and cross-process contracts are versioned, and an unknown version is refused rather than guessed."
+    runtime_anchor: swfactory.contracts
+    evidence_requirement: "Contract fixture equivalence across implementations plus a refusal on an unknown version."
+  - id: liquid500.evidence-ledger
+    slug: evidence-ledger
+    family: Liquid500
+    bundle: liquid500-04
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "Every claim a run makes is backed by a retained artefact; an unbacked claim is refused."
+    runtime_anchor: swfactory.evidence_store
+    evidence_requirement: "A ledger entry per claim, each resolving to a retained artefact digest."
+  - id: liquid500.observability-otel
+    slug: observability-otel
+    family: Liquid500
+    bundle: liquid500-04
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "Runs emit correlated traces and metrics keyed by Cell identity and epoch."
+    runtime_anchor: swfactory.metrics
+    evidence_requirement: "A trace for one run whose spans all carry the same cell id and epoch."
+  - id: liquid500.slo-alerting
+    slug: slo-alerting
+    family: Liquid500
+    bundle: liquid500-04
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "Service objectives are measured from boring counters (queue depth, failure rate, retry rate) and alert before budget exhaustion."
+    runtime_anchor: swfactory.metrics
+    evidence_requirement: "An alert fired from recorded counters with the burn-rate window that triggered it."
+  - id: liquid500.cost-accounting
+    slug: cost-accounting
+    family: Liquid500
+    bundle: liquid500-04
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "Every run's cost is attributed to its Cell and is visible before promotion."
+    runtime_anchor: swfactory.metrics
+    evidence_requirement: "A per-run cost record attributed to a cell id, reconciled against the provider bill."
+  - id: liquid500.security-boundaries
+    slug: security-boundaries
+    family: Liquid500
+    bundle: liquid500-05
+    owner: security
+    state: experimental
+    support: experimental
+    invariant: "A coding sandbox is confined by the kernel, not by convention, and holds no publication secret."
+    runtime_anchor: swfactory.security_boundary
+    evidence_requirement: "A confinement test showing an attempted write outside the workspace denied by the sandbox runtime."
+    capability_claim: sandbox.srt
+    follow_up: "Promote only when kernel-enforced confinement is a required check rather than an opt-in smoke job."
+  - id: liquid500.secret-brokerage
+    slug: secret-brokerage
+    family: Liquid500
+    bundle: liquid500-05
+    owner: security
+    state: declared
+    support: unsupported
+    invariant: "Secrets are brokered per operation by the backend; agents receive capabilities, never long-lived credentials."
+    runtime_anchor: swfactory.security_contract
+    evidence_requirement: "A brokerage log showing scoped, short-lived grants and no secret present in the sandbox environment."
+  - id: liquid500.policy-engine
+    slug: policy-engine
+    family: Liquid500
+    bundle: liquid500-05
+    owner: security
+    state: declared
+    support: unsupported
+    invariant: "Policy is evaluated before the effect and fails closed on evaluation error."
+    runtime_anchor: swfactory.security_contract
+    evidence_requirement: "A policy decision record per external effect, including a fail-closed refusal case."
+  - id: liquid500.multitenancy
+    slug: multitenancy
+    family: Liquid500
+    bundle: liquid500-05
+    owner: security
+    state: declared
+    support: unsupported
+    invariant: "One tenant's run cannot read, write or starve another tenant's state."
+    runtime_anchor: swfactory.worker_security
+    evidence_requirement: "An isolation test across two tenants showing no cross-read and bounded per-tenant share."
+  - id: liquid500.provenance-sbom
+    slug: provenance-sbom
+    family: Liquid500
+    bundle: liquid500-05
+    owner: security
+    state: declared
+    support: unsupported
+    invariant: "Every published artefact carries provenance identifying the commit, builder and inputs that produced it."
+    runtime_anchor: swfactory.provenance
+    evidence_requirement: "An SBOM plus signed provenance attestation resolving to the tested commit."
+    note: "Slug also used by the other liquid family with a different owner; reconcile ownership before promoting either row."
+  - id: liquid500.release-promotion
+    slug: release-promotion
+    family: Liquid500
+    bundle: liquid500-06
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "Promotion is a parent-owned decision made against sealed evidence for an exact commit, never against a moving branch."
+    runtime_anchor: swfactory.generations
+    evidence_requirement: "A promotion record naming head/base/tested SHAs and the evidence digest it accepted."
+    note: "Slug also used by the other liquid family with a different owner; reconcile ownership before promoting either row."
+  - id: liquid500.deployment-ha
+    slug: deployment-ha
+    family: Liquid500
+    bundle: liquid500-06
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "Losing any single control-plane process loses no durable state and no in-flight run."
+    runtime_anchor: swfactory.runtime
+    evidence_requirement: "A kill-one-process drill showing every in-flight run resumed from durable state."
+  - id: liquid500.disaster-recovery
+    slug: disaster-recovery
+    family: Liquid500
+    bundle: liquid500-06
+    owner: recovery
+    state: declared
+    support: unsupported
+    invariant: "The factory can be rebuilt from the durable store plus the repository, with no hidden local state."
+    runtime_anchor: swfactory.reconcile
+    evidence_requirement: "A restore-from-backup drill that reproduces the run inventory and drains in-doubt operations."
+    note: "Slug also used by the other liquid family with a different owner; reconcile ownership before promoting either row."
+  - id: liquid500.operator-cli
+    slug: operator-cli
+    family: Liquid500
+    bundle: liquid500-06
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "The CLI exposes the same operations as the backend contract and refuses anything the backend would refuse."
+    runtime_anchor: swfactory.cli
+    evidence_requirement: "CLI-versus-backend parity output over the shared contract fixtures."
+  - id: liquid500.operator-tui
+    slug: operator-tui
+    family: Liquid500
+    bundle: liquid500-06
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "The operator surface shows the durable truth (state, epoch, evidence) and never invents a state the store does not hold."
+    runtime_anchor: swfactory.product_surface
+    evidence_requirement: "A TUI snapshot diffed against the backend's state response for the same run."
+  - id: liquid500.backend-api
+    slug: backend-api
+    family: Liquid500
+    bundle: liquid500-07
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "The backend contract is versioned and additive; a client on an older minor version keeps working."
+    runtime_anchor: swfactory.backend.service:Factory
+    evidence_requirement: "Contract tests run against the previous released client version."
+  - id: liquid500.config-validation
+    slug: config-validation
+    family: Liquid500
+    bundle: liquid500-07
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "Configuration is validated at load; an invalid configuration refuses to start rather than degrading."
+    runtime_anchor: swfactory.contracts
+    evidence_requirement: "A start-up refusal on a malformed configuration with the failing field named."
+  - id: liquid500.webhooks
+    slug: webhooks
+    family: Liquid500
+    bundle: liquid500-07
+    owner: recovery
+    state: declared
+    support: unsupported
+    invariant: "Webhook delivery is verified, deduplicated and replay-safe."
+    runtime_anchor: swfactory.webhook
+    evidence_requirement: "A replayed signed delivery that changes no state, with the dedupe decision recorded."
+  - id: liquid500.human-gates
+    slug: human-gates
+    family: Liquid500
+    bundle: liquid500-07
+    owner: airflow
+    state: declared
+    support: unsupported
+    invariant: "An approval is durable, attributable and epoch-bound; it cannot be replayed into a later epoch."
+    runtime_anchor: swfactory.lifecycle_evidence
+    evidence_requirement: "A stored approval record with approver identity and epoch, plus a rejected cross-epoch replay."
+  - id: liquid500.fault-injection
+    slug: fault-injection
+    family: Liquid500
+    bundle: liquid500-07
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "Injected faults degrade a run into a recorded, recoverable state, never into silent partial success."
+    runtime_anchor: swfactory.fault_evidence
+    evidence_requirement: "A fault-injection report mapping each injected fault to the recovery path it took."
+    note: "Slug also used by the other liquid family with a different owner; reconcile ownership before promoting either row."
+  - id: liquid500.conformance
+    slug: conformance
+    family: Liquid500
+    bundle: liquid500-08
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "A provider or harness is declared usable only after the conformance suite passes on the tested commit."
+    runtime_anchor: swfactory.provider_conformance
+    evidence_requirement: "A conformance result set for the tested commit covering every declared capability."
+  - id: liquid500.benchmarks
+    slug: benchmarks
+    family: Liquid500
+    bundle: liquid500-08
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "Performance claims come from a recorded benchmark on a named environment, not from estimates."
+    runtime_anchor: swfactory.evals
+    evidence_requirement: "A benchmark run artefact naming the environment, commit and measured distribution."
+    note: "Slug also used by the other liquid family with a different owner; reconcile ownership before promoting either row."
+  - id: liquid500.performance
+    slug: performance
+    family: Liquid500
+    bundle: liquid500-08
+    owner: workgraph
+    state: declared
+    support: unsupported
+    invariant: "Throughput and latency are bounded by declared limits; exceeding a limit throttles rather than degrades correctness."
+    runtime_anchor: swfactory.metrics
+    evidence_requirement: "Latency and throughput percentiles from a load run against the declared limits."
+  - id: liquid500.cache
+    slug: cache
+    family: Liquid500
+    bundle: liquid500-08
+    owner: workgraph
+    state: declared
+    support: unsupported
+    invariant: "A cache is an accelerator only; a cold cache changes speed, never the result."
+    runtime_anchor: swfactory.state
+    evidence_requirement: "A cold-versus-warm run pair producing identical results."
+  - id: liquid500.artifacts
+    slug: artifacts
+    family: Liquid500
+    bundle: liquid500-08
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "Run artefacts are content-addressed and retained for the promotion window."
+    runtime_anchor: swfactory.evidence_store
+    evidence_requirement: "An artefact manifest with digests plus a retention check inside the promotion window."
+  - id: liquid500.factory-generations
+    slug: factory-generations
+    family: Liquid500
+    bundle: liquid500-09
+    owner: authority
+    state: experimental
+    support: experimental
+    invariant: "A child generation is promoted only by its parent, against sealed evidence, and can be rolled back."
+    runtime_anchor: swfactory.generations:Generation
+    evidence_requirement: "A generation manifest plus the parent's promotion decision and a rehearsed rollback."
+    capability_claim: factory.generations
+    follow_up: "Promote only when a parent-owned promotion and a rehearsed rollback both run in CI."
+    note: "Slug also used by the other liquid family with a different owner; reconcile ownership before promoting either row."
+  - id: liquid500.self-improvement
+    slug: self-improvement
+    family: Liquid500
+    bundle: liquid500-09
+    owner: authority
+    state: declared
+    support: unsupported
+    invariant: "A self-change follows the same gates as any other change; the factory gets no privileged path into itself."
+    runtime_anchor: swfactory.generations
+    evidence_requirement: "The candidate-readiness manifest for the self-change, identical in shape to any other candidate's."
+  - id: liquid500.planner-quality
+    slug: planner-quality
+    family: Liquid500
+    bundle: liquid500-09
+    owner: workgraph
+    state: declared
+    support: unsupported
+    invariant: "A plan is rejected when it is unexecutable (missing files, cyclic dependencies) rather than partially executed."
+    runtime_anchor: swfactory.parallel_workers
+    evidence_requirement: "A rejected-plan record naming the structural defect, plus the eval score for accepted plans."
+  - id: liquid500.agent-evaluation
+    slug: agent-evaluation
+    family: Liquid500
+    bundle: liquid500-09
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "Agent capability is claimed only from recorded eval runs on a pinned suite."
+    runtime_anchor: swfactory.evals
+    evidence_requirement: "Eval run evidence for the pinned suite on the tested commit."
+  - id: liquid500.local-demo
+    slug: local-demo
+    family: Liquid500
+    bundle: liquid500-09
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "The demo path exercises the real control plane with a scripted agent and a local remote, with nothing stubbed in the kernel."
+    runtime_anchor: swfactory.runtime
+    evidence_requirement: "A green demo run in CI using the local runner and local git remote."
+  - id: liquid500.docs-dx
+    slug: docs-dx
+    family: Liquid500
+    bundle: liquid500-10
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "Documented behaviour matches runtime behaviour; a doc claim without a runtime anchor is a defect."
+    runtime_anchor: swfactory.inspection
+    evidence_requirement: "A docs-to-anchor check resolving every documented capability to a runtime path."
+  - id: liquid500.test-architecture
+    slug: test-architecture
+    family: Liquid500
+    bundle: liquid500-10
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "Tests are hermetic and deterministic; a test that needs the network is a defect, not a flake."
+    runtime_anchor: swfactory.ci_topology
+    evidence_requirement: "A test run with the network unavailable, plus repeated runs showing no order dependence."
+  - id: liquid500.fuzz-property
+    slug: fuzz-property
+    family: Liquid500
+    bundle: liquid500-10
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "Contract and journal invariants hold under randomised input, not only on curated cases."
+    runtime_anchor: swfactory.evals
+    evidence_requirement: "A property/fuzz run artefact with the seed corpus and any shrunk counterexample."
+  - id: liquid500.architecture-health
+    slug: architecture-health
+    family: Liquid500
+    bundle: liquid500-10
+    owner: authority
+    state: declared
+    support: unsupported
+    invariant: "More issue slices must not add permanent abstractions; superseded paths are deleted, not parked."
+    runtime_anchor: swfactory.authority
+    evidence_requirement: "A module and dependency census showing the count fell or held while coverage rose."
+  - id: liquid500.stabilization-readiness
+    slug: stabilization-readiness
+    family: Liquid500
+    bundle: liquid500-10
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "A slice is done only when its evidence is sealed and its superseded path is gone."
+    runtime_anchor: swfactory.trust_evidence
+    evidence_requirement: "A stabilization record listing the sealed evidence and the deleted superseded path."
+  - id: liquid400.authority-transfer
+    slug: authority-transfer
+    family: Liquid400
+    bundle: liquid400-01
+    owner: authority
+    state: declared
+    support: unsupported
+    invariant: "Authority moves by epoch increment; the old holder is fenced out before the new one acts."
+    runtime_anchor: swfactory.authority
+    evidence_requirement: "A transfer trace showing the old epoch fenced before the new epoch's first write."
+  - id: liquid400.epoch-fencing
+    slug: epoch-fencing
+    family: Liquid400
+    bundle: liquid400-01
+    owner: airflow
+    state: declared
+    support: unsupported
+    invariant: "A write carrying an epoch lower than the Cell's current epoch is refused, always."
+    runtime_anchor: swfactory.cells:StaleEpoch
+    evidence_requirement: "A fencing test with a stale-epoch write refused and the refusal journalled."
+  - id: liquid400.airflow-recovery
+    slug: airflow-recovery
+    family: Liquid400
+    bundle: liquid400-01
+    owner: workgraph
+    state: declared
+    support: unsupported
+    invariant: "A scheduler restart resumes managed runs from durable state without duplicating external effects."
+    runtime_anchor: swfactory.airflow_binding
+    evidence_requirement: "A restart drill showing resumed runs and no duplicate journal effects."
+  - id: liquid400.mapped-task-cancel
+    slug: mapped-task-cancel
+    family: Liquid400
+    bundle: liquid400-01
+    owner: recovery
+    state: declared
+    support: unsupported
+    invariant: "Cancellation is durable and wins: a cancelled run stops issuing effects within a bounded lag."
+    runtime_anchor: swfactory.lifecycle
+    evidence_requirement: "Measured cancellation lag from request to last effect, with no effect after the stop."
+  - id: liquid400.approval-durability
+    slug: approval-durability
+    family: Liquid400
+    bundle: liquid400-01
+    owner: security
+    state: declared
+    support: unsupported
+    invariant: "An approval survives restart and stays bound to the epoch and artefact it approved."
+    runtime_anchor: swfactory.lifecycle_evidence
+    evidence_requirement: "A restart test showing the approval intact and still epoch-bound."
+  - id: liquid400.sandbox-provision
+    slug: sandbox-provision
+    family: Liquid400
+    bundle: liquid400-02
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "A sandbox is provisioned with a declared toolset and no ambient credentials."
+    runtime_anchor: swfactory.sandbox
+    evidence_requirement: "A provisioning record listing the toolset and an environment scan showing no ambient secret."
+  - id: liquid400.sandbox-reclaim
+    slug: sandbox-reclaim
+    family: Liquid400
+    bundle: liquid400-02
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "Every provisioned sandbox is reclaimed, and the reclamation is receipted even after a crash."
+    runtime_anchor: swfactory.cleanup_receipt
+    evidence_requirement: "Cleanup receipts matching provisioning records one to one, including a crash case."
+  - id: liquid400.provider-drift
+    slug: provider-drift
+    family: Liquid400
+    bundle: liquid400-02
+    owner: authority
+    state: declared
+    support: unsupported
+    invariant: "Provider behaviour drift is detected by conformance before it reaches a managed run."
+    runtime_anchor: swfactory.provider_conformance
+    evidence_requirement: "A conformance diff against the previous recorded provider profile."
+  - id: liquid400.operation-replay
+    slug: operation-replay
+    family: Liquid400
+    bundle: liquid400-02
+    owner: airflow
+    state: declared
+    support: unsupported
+    invariant: "A replayed operation returns the original recorded result rather than performing the effect twice."
+    runtime_anchor: swfactory.idempotency:OperationJournal
+    evidence_requirement: "A replay test returning the original result with no second external effect."
+  - id: liquid400.mutation-observation
+    slug: mutation-observation
+    family: Liquid400
+    bundle: liquid400-02
+    owner: workgraph
+    state: declared
+    support: unsupported
+    invariant: "An effect is declared committed only from remote observation, never from local optimism."
+    runtime_anchor: swfactory.idempotency
+    evidence_requirement: "An observation record naming the remote marker that proved the effect."
+  - id: liquid400.cleanup-debt
+    slug: cleanup-debt
+    family: Liquid400
+    bundle: liquid400-03
+    owner: recovery
+    state: declared
+    support: unsupported
+    invariant: "Cleanup debt is measured and drained; unreclaimed resources are visible, not forgotten."
+    runtime_anchor: swfactory.cleanup_receipt
+    evidence_requirement: "A cleanup-debt counter trending to zero with the reclamation receipts."
+  - id: liquid400.admission-fairness
+    slug: admission-fairness
+    family: Liquid400
+    bundle: liquid400-03
+    owner: security
+    state: declared
+    support: unsupported
+    invariant: "Under load no admitted tenant or repository is starved beyond a declared bound."
+    runtime_anchor: swfactory.durable_admission
+    evidence_requirement: "Per-tenant admission shares from a saturation run against the declared bound."
+  - id: liquid400.queue-starvation
+    slug: queue-starvation
+    family: Liquid400
+    bundle: liquid400-03
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "Queue depth is bounded and observable; a growing queue throttles intake."
+    runtime_anchor: swfactory.durable_admission
+    evidence_requirement: "Queue-depth timeseries from a saturation run showing intake throttled."
+  - id: liquid400.repo-races
+    slug: repo-races
+    family: Liquid400
+    bundle: liquid400-03
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "Two runs touching the same branch cannot both believe they won."
+    runtime_anchor: swfactory.repo_coordination
+    evidence_requirement: "A race trace showing one write accepted and the other refused, both journalled."
+  - id: liquid400.git-publication
+    slug: git-publication
+    family: Liquid400
+    bundle: liquid400-03
+    owner: authority
+    state: declared
+    support: unsupported
+    invariant: "A git publication is atomic from the caller's view: it either lands once or is provably absent."
+    runtime_anchor: swfactory.backend_scm
+    evidence_requirement: "A publication journal row plus remote observation proving landed-once or absent."
+  - id: liquid400.webhook-replay
+    slug: webhook-replay
+    family: Liquid400
+    bundle: liquid400-04
+    owner: airflow
+    state: declared
+    support: unsupported
+    invariant: "A replayed webhook is recognised as a replay and produces no new effect."
+    runtime_anchor: swfactory.webhook
+    evidence_requirement: "A replay test showing the delivery recognised and no second effect journalled."
+  - id: liquid400.intake-dedupe
+    slug: intake-dedupe
+    family: Liquid400
+    bundle: liquid400-04
+    owner: workgraph
+    state: declared
+    support: unsupported
+    invariant: "Two intakes for the same issue identity collapse to one run, whichever arrives first."
+    runtime_anchor: swfactory.intake_policy
+    evidence_requirement: "A concurrent double-intake test producing exactly one run."
+  - id: liquid400.workspace-isolation
+    slug: workspace-isolation
+    family: Liquid400
+    bundle: liquid400-04
+    owner: recovery
+    state: declared
+    support: unsupported
+    invariant: "A run cannot read or write another run's workspace."
+    runtime_anchor: swfactory.workspace_materialization
+    evidence_requirement: "A cross-workspace access attempt denied by the sandbox boundary."
+  - id: liquid400.artifact-integrity
+    slug: artifact-integrity
+    family: Liquid400
+    bundle: liquid400-04
+    owner: security
+    state: declared
+    support: unsupported
+    invariant: "An artefact's digest is verified before it is trusted as evidence."
+    runtime_anchor: swfactory.provenance
+    evidence_requirement: "A verification log plus a rejected tampered-artefact case."
+  - id: liquid400.cache-consistency
+    slug: cache-consistency
+    family: Liquid400
+    bundle: liquid400-04
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "A stale cache entry is detected and discarded rather than served."
+    runtime_anchor: swfactory.state
+    evidence_requirement: "A staleness test showing the entry invalidated on the underlying change."
+  - id: liquid400.storage-migration
+    slug: storage-migration
+    family: Liquid400
+    bundle: liquid400-05
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "A store migration is rehearsed on a copy and reversible before it touches the authoritative store."
+    runtime_anchor: swfactory.backend_store
+    evidence_requirement: "A rehearsal log on a restored copy plus the tested rollback path."
+  - id: liquid400.evidence-sealing
+    slug: evidence-sealing
+    family: Liquid400
+    bundle: liquid400-05
+    owner: authority
+    state: declared
+    support: unsupported
+    invariant: "Evidence is sealed to an exact head/base/tested identity and cannot be re-pointed afterwards."
+    runtime_anchor: swfactory.evidence_store
+    evidence_requirement: "A sealed manifest digest that changes when any of head, base or tested SHA changes."
+  - id: liquid400.provenance-sbom
+    slug: provenance-sbom
+    family: Liquid400
+    bundle: liquid400-05
+    owner: airflow
+    state: declared
+    support: unsupported
+    invariant: "Every published artefact carries provenance identifying the commit, builder and inputs that produced it."
+    runtime_anchor: swfactory.provenance
+    evidence_requirement: "An SBOM plus signed provenance attestation resolving to the tested commit."
+    note: "Slug also used by the other liquid family with a different owner; reconcile ownership before promoting either row."
+  - id: liquid400.otel-correlation
+    slug: otel-correlation
+    family: Liquid400
+    bundle: liquid400-05
+    owner: workgraph
+    state: declared
+    support: unsupported
+    invariant: "A single run is traceable end to end across control plane, scheduler and sandbox by one correlation identity."
+    runtime_anchor: swfactory.metrics
+    evidence_requirement: "One trace spanning all three layers for a single run id."
+  - id: liquid400.slo-budget
+    slug: slo-budget
+    family: Liquid400
+    bundle: liquid400-05
+    owner: recovery
+    state: declared
+    support: unsupported
+    invariant: "Error budget is computed from recorded counters and gates promotion when exhausted."
+    runtime_anchor: swfactory.metrics
+    evidence_requirement: "A budget computation from recorded counters plus a promotion blocked on exhaustion."
+  - id: liquid400.cost-attribution
+    slug: cost-attribution
+    family: Liquid400
+    bundle: liquid400-06
+    owner: security
+    state: declared
+    support: unsupported
+    invariant: "Cost is attributable per Cell, per run and per provider without manual reconciliation."
+    runtime_anchor: swfactory.metrics
+    evidence_requirement: "A cost breakdown by cell, run and provider reconciled to the provider total."
+  - id: liquid400.secret-scope
+    slug: secret-scope
+    family: Liquid400
+    bundle: liquid400-06
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "A secret's scope is the narrowest that completes the operation, and its use is recorded."
+    runtime_anchor: swfactory.security_contract
+    evidence_requirement: "A grant record per secret use naming the scope and the operation it served."
+  - id: liquid400.policy-drift
+    slug: policy-drift
+    family: Liquid400
+    bundle: liquid400-06
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "Deployed policy matches declared policy; drift blocks writes rather than being tolerated."
+    runtime_anchor: swfactory.security_boundary
+    evidence_requirement: "A drift check comparing deployed to declared policy, with writes blocked on mismatch."
+  - id: liquid400.tenant-isolation
+    slug: tenant-isolation
+    family: Liquid400
+    bundle: liquid400-06
+    owner: authority
+    state: declared
+    support: unsupported
+    invariant: "Tenant boundaries hold in storage, sandboxes and evidence, not only in the API layer."
+    runtime_anchor: swfactory.worker_security
+    evidence_requirement: "An isolation probe across storage, sandbox and evidence surfaces for two tenants."
+  - id: liquid400.release-promotion
+    slug: release-promotion
+    family: Liquid400
+    bundle: liquid400-06
+    owner: airflow
+    state: declared
+    support: unsupported
+    invariant: "Promotion is a parent-owned decision made against sealed evidence for an exact commit, never against a moving branch."
+    runtime_anchor: swfactory.generations
+    evidence_requirement: "A promotion record naming head/base/tested SHAs and the evidence digest it accepted."
+    note: "Slug also used by the other liquid family with a different owner; reconcile ownership before promoting either row."
+  - id: liquid400.rollback
+    slug: rollback
+    family: Liquid400
+    bundle: liquid400-07
+    owner: workgraph
+    state: declared
+    support: unsupported
+    invariant: "Any promotion can be rolled back to the previously sealed generation without manual surgery."
+    runtime_anchor: swfactory.generations
+    evidence_requirement: "A rehearsed rollback restoring the prior generation and its evidence pointer."
+  - id: liquid400.disaster-recovery
+    slug: disaster-recovery
+    family: Liquid400
+    bundle: liquid400-07
+    owner: recovery
+    state: declared
+    support: unsupported
+    invariant: "The factory can be rebuilt from the durable store plus the repository, with no hidden local state."
+    runtime_anchor: swfactory.reconcile
+    evidence_requirement: "A restore-from-backup drill that reproduces the run inventory and drains in-doubt operations."
+    note: "Slug also used by the other liquid family with a different owner; reconcile ownership before promoting either row."
+  - id: liquid400.cli-contract
+    slug: cli-contract
+    family: Liquid400
+    bundle: liquid400-07
+    owner: security
+    state: declared
+    support: unsupported
+    invariant: "The CLI's surface is generated from the same contract the backend serves, so the two cannot drift."
+    runtime_anchor: swfactory.cli
+    evidence_requirement: "A drift check comparing CLI surface to the served contract."
+  - id: liquid400.tui-parity
+    slug: tui-parity
+    family: Liquid400
+    bundle: liquid400-07
+    owner: evidence
+    state: declared
+    support: unsupported
+    invariant: "The TUI answers the same questions as the CLI and backend for the same run."
+    runtime_anchor: swfactory.product_surface
+    evidence_requirement: "A parity capture of the same run across TUI, CLI and backend responses."
+  - id: liquid400.backend-versioning
+    slug: backend-versioning
+    family: Liquid400
+    bundle: liquid400-07
+    owner: operator
+    state: declared
+    support: unsupported
+    invariant: "A backend version change is additive within a major version and refuses unknown majors."
+    runtime_anchor: swfactory.contracts
+    evidence_requirement: "Version-negotiation tests across the supported range plus a refusal on an unknown major."
+  - id: liquid400.fault-injection
+    slug: fault-injection
+    family: Liquid400
+    bundle: liquid400-08
+    owner: authority
+    state: declared
+    support: unsupported
+    invariant: "Injected faults degrade a run into a recorded, recoverable state, never into silent partial success."
+    runtime_anchor: swfactory.fault_evidence
+    evidence_requirement: "A fault-injection report mapping each injected fault to the recovery path it took."
+    note: "Slug also used by the other liquid family with a different owner; reconcile ownership before promoting either row."
+  - id: liquid400.benchmarks
+    slug: benchmarks
+    family: Liquid400
+    bundle: liquid400-08
+    owner: airflow
+    state: declared
+    support: unsupported
+    invariant: "Performance claims come from a recorded benchmark on a named environment, not from estimates."
+    runtime_anchor: swfactory.evals
+    evidence_requirement: "A benchmark run artefact naming the environment, commit and measured distribution."
+    note: "Slug also used by the other liquid family with a different owner; reconcile ownership before promoting either row."
+  - id: liquid400.fuzzing
+    slug: fuzzing
+    family: Liquid400
+    bundle: liquid400-08
+    owner: workgraph
+    state: declared
+    support: unsupported
+    invariant: "Randomised input cannot drive the control plane into an unrecorded state."
+    runtime_anchor: swfactory.evals
+    evidence_requirement: "A fuzz run with the corpus and journal states reached, all recognised."
+  - id: liquid400.factory-generations
+    slug: factory-generations
+    family: Liquid400
+    bundle: liquid400-08
+    owner: recovery
+    state: experimental
+    support: experimental
+    invariant: "A child generation is promoted only by its parent, against sealed evidence, and can be rolled back."
+    runtime_anchor: swfactory.generations
+    evidence_requirement: "A generation manifest plus the parent's promotion decision and a rehearsed rollback."
+    capability_claim: factory.generations
+    follow_up: "Promote only when a parent-owned promotion and a rehearsed rollback both run in CI."
+    note: "Slug also used by the other liquid family with a different owner; reconcile ownership before promoting either row."
+  - id: liquid400.stabilization-health
+    slug: stabilization-health
+    family: Liquid400
+    bundle: liquid400-08
+    owner: security
+    state: declared
+    support: unsupported
+    invariant: "Vocabulary, module count and dead paths trend down while measured coverage trends up."
+    runtime_anchor: swfactory.trust_evidence
+    evidence_requirement: "A census comparing module count, dead-path count and covered domains across two commits."

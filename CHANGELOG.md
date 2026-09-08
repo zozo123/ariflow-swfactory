@@ -6,8 +6,41 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-09-08
+
+### Removed
+
+- Collapsed the Liquid/physics/legacy vocabulary layer: 67 files, 2,445 lines. The 18
+  `liquid_bundle_*`, 18 `physics_bundle_*` and 4 `legacy_bundle_*` modules were declarative
+  coverage metadata expressed as Python — `execute`, `execute_wave` and `run` were pure functions
+  returning frozen dataclasses, so nothing executed. With them go `liquid_bundle_engine`,
+  `physics_wave_runtime`, `legacy_issue_runtime`, `liquid_release`, `non_equilibrium`, the five
+  dead `liquid_*_runtime` modules, the seven single-test `liquid_*` shims, and their tests. This is
+  the methodology's own C10 applied to itself: more issue slices must not imply more permanent
+  abstractions. `liquid_security_runtime` and `liquid_workgraph_runtime` are retained — they are
+  imported by `core_capabilities` and `backend.scm_service`.
+- The statistical-mechanics vocabulary (Jarzynski, Crooks, Onsager, nucleation, the
+  Ocean120/Phase240/StatMech360 waves) is out of the product path and documented in
+  [docs/research/](docs/research/README.md) with the falsifiable-prediction bar it must clear to
+  return. The one idea worth keeping needs no equations: create entropy where exploration benefits
+  from it, destroy it before promotion.
+
 ### Added
 
+- `config/liquid-spec.yaml` and `python -m swfactory.liquid_spec`: the 90-domain x 10-concern
+  matrix as data, with a checker that resolves every `runtime_anchor` to real code under
+  `src/swfactory/` -- all 45 on the domain rows and all 10 on the legacy areas -- and every
+  `capability_claim` to `config/capability-inventory.json`. It also carries forward the invariants
+  the old manifest asserted: each span must agree with its issue count, spans of one kind must tile
+  contiguously with no gap or overlap, and the totals (500 + 400 = 900 liquid issues, 181 legacy
+  ranks) are reported in the checker's JSON summary so a change to them is visible rather than
+  silent. The
+  matrix is now falsifiable rather than decorative, and `state`/`support` keep declared scope
+  separate from validated behaviour. It replaces `swfactory.liquid_release` as the required check.
+- The checker reports `duplicate_slugs`, which surfaces a defect the old gate could not see: the
+  90 domain slots hold only 84 distinct slugs, and five of the six duplicates carried contradicting
+  owners. `BundleSpec.validate` checked uniqueness only within one bundle and the manifest counted
+  slots, so "one owner per domain" was never an invariant.
 - Shared CLI/DAG graphic in the README and website, plus an interactive 11-station walkthrough
   that pauses at both simulated human gates. It is explicitly illustrative and makes no live calls.
 - Rewritten README with a concise console/backend setup; the full deployment reference is preserved

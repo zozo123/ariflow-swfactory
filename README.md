@@ -323,7 +323,7 @@ uv run --group airflow ruff check .
 uv run --group airflow ruff format --check .
 uv run --group airflow pytest
 uv run --group airflow swfactory demo
-uv run --group airflow python -m swfactory.liquid_release
+uv run --group airflow python -m swfactory.liquid_spec
 uv run --group airflow python -m swfactory.evals
 ```
 

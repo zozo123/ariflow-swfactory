@@ -1,6 +1,6 @@
 [project]
 name = "swfactory"
-version = "2.1.0"
+version = "2.2.0"
 description = "Apache Airflow software factory: GitHub work orders become verified pull requests through isolated agent work cells and human release gates."
 readme = "README.md"
 license = "Apache-2.0"
