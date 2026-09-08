@@ -38,14 +38,6 @@ fn start() -> i32 {
     let argv: Vec<String> = std::env::args().collect();
     let wants_json = argv.iter().any(|arg| arg == "--json");
 
-    // Queue/repair/fleet/compatibility were added during the liquid-development stabilization.
-    // Their parser is temporarily isolated so the huge legacy clap enum does not become a merge
-    // hotspot. The commands immediately delegate to the shared swf-app/FactoryApi path; no service
-    // or business logic is duplicated. Issue #197 tracks folding this spelling shim into cli.rs.
-    if operator_command(&argv) {
-        return operator_exec::start(&argv);
-    }
-
     let cli = match Cli::try_parse_from(&argv) {
         Ok(cli) => cli,
         Err(err) => {
@@ -112,30 +104,6 @@ fn start() -> i32 {
     })
 }
 
-fn operator_command(argv: &[String]) -> bool {
-    if !operator_exec::recognizes(argv) {
-        return false;
-    }
-    let mut index = 1;
-    while index < argv.len() {
-        let arg = argv[index].as_str();
-        if matches!(arg, "--context" | "--timeout") {
-            index += 2;
-            continue;
-        }
-        if arg.starts_with("--context=") || arg.starts_with("--timeout=") {
-            index += 1;
-            continue;
-        }
-        if arg.starts_with('-') {
-            index += 1;
-            continue;
-        }
-        return matches!(arg, "queue" | "operations" | "fleet" | "compatibility");
-    }
-    false
-}
-
 /// Cancel in-flight work on the first Ctrl-C, and let the second one end the process.
 fn watch_for_interrupt(cancel: CancellationToken) {
     tokio::spawn(async move {
@@ -175,16 +143,34 @@ mod tests {
     }
 
     #[test]
-    fn operator_dispatch_ignores_global_option_values() {
-        let argv = vec!["swf", "--context", "fleet", "doctor"]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        assert!(!operator_command(&argv));
-        let argv = vec!["swf", "--json", "queue", "list"]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        assert!(operator_command(&argv));
+    fn every_operator_verb_reaches_the_one_parser() {
+        // The shim these verbs used to be diverted into is gone, so `--context fleet` is a context
+        // named "fleet" and `swf fleet` is the verb — a distinction the old argv scan had to make
+        // for itself, and the one place it could get it wrong.
+        let one = Cli::try_parse_from(["swf", "--context", "fleet", "doctor"]).expect("parse");
+        assert_eq!(one.context.as_deref(), Some("fleet"));
+        assert!(matches!(one.command, Command::Doctor));
+
+        for argv in [
+            vec!["swf", "--json", "queue", "list"],
+            vec!["swf", "queue", "inspect", "w1"],
+            vec!["swf", "operations", "list"],
+            vec!["swf", "operations", "inspect", "op1"],
+            vec!["swf", "fleet"],
+            vec!["swf", "compatibility"],
+        ] {
+            let spelled = argv.join(" ");
+            let cli = Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{spelled}: {err}"));
+            assert!(
+                matches!(
+                    cli.command,
+                    Command::Queue(_)
+                        | Command::Operations(_)
+                        | Command::Fleet
+                        | Command::Compatibility
+                ),
+                "{spelled} did not reach an operator verb"
+            );
+        }
     }
 }

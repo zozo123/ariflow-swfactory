@@ -1,13 +1,10 @@
 //! Thin CLI rendering for durable Factory Cells.
 //!
 //! Validation and transport live in `swf-app::cells`; this module only chooses human/JSON shapes.
+//! The context, the credential and the deadline are not decided here either — they come from
+//! [`Ctx::backend`], the one place the whole binary settles what a backend-served view connects to.
 
-use std::time::Duration;
-
-use swf_adapters::traits::DEFAULT_HTTP_TIMEOUT;
-use swf_app::cells::CellOps;
-use swf_app::context::ContextStore;
-use swf_app::ops::{OpsError, Result};
+use swf_app::ops::Result;
 use swf_domain::cell::{CellEvent, CellRecord};
 use swf_domain::sanitize::sanitize_line;
 
@@ -16,14 +13,7 @@ use crate::exec::Ctx;
 use crate::exit::Outcome;
 
 pub async fn run(ctx: &Ctx, cmd: &CellsCmd) -> Result<Outcome> {
-    let store = ContextStore::open()?;
-    let context = store.resolve(ctx.cli.context.as_deref())?;
-    let timeout = match ctx.cli.timeout {
-        Some(seconds) if seconds > 0.0 => Duration::from_secs_f64(seconds),
-        Some(_) => return Err(OpsError::usage("--timeout must be greater than zero")),
-        None => DEFAULT_HTTP_TIMEOUT,
-    };
-    let cells = CellOps::connect(&context, timeout)?;
+    let cells = ctx.backend("durable Factory Cells")?.cells()?;
 
     match cmd {
         CellsCmd::List { limit } => {

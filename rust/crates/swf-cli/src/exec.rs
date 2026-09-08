@@ -11,8 +11,11 @@
 //! after, so a mutation that was refused at the prompt never reached a service at all.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
+use swf_adapters::traits::DEFAULT_HTTP_TIMEOUT;
+use swf_app::cells::CellOps;
 use swf_app::context::{Auth, Context, ContextStore};
 use swf_app::delivery::VerifyOpts;
 use swf_app::gates::{AnswerOpts, BatchOutcome, BatchReport, Decision, GateFilter, Selection};
@@ -20,6 +23,7 @@ use swf_app::logs::LogOpts;
 use swf_app::ops::{JobFilter, Ops, OpsError, Result};
 use swf_app::stack::StackAction;
 use swf_app::submit::SubmitRequest;
+use swf_app::OperatorOps;
 use swf_domain::doctor;
 use swf_domain::evidence::DeliveryReport;
 use swf_domain::ids::{DeliveryId, GateId, JobId, RunRef};
@@ -79,6 +83,19 @@ impl Ctx {
         Ok(self.store()?.resolve(self.cli.context.as_deref())?)
     }
 
+    /// The HTTP deadline this invocation asked for.
+    ///
+    /// One reading of `--timeout` for the whole binary. A command group that computed its own
+    /// would be a group where `--timeout 0` meant something different from everywhere else, and
+    /// the operator would find out on the one command they most wanted bounded.
+    fn timeout(&self) -> Result<Duration> {
+        match self.cli.timeout {
+            Some(seconds) if seconds > 0.0 => Ok(Duration::from_secs_f64(seconds)),
+            Some(_) => Err(OpsError::usage("--timeout must be greater than zero")),
+            None => Ok(DEFAULT_HTTP_TIMEOUT),
+        }
+    }
+
     /// The operations layer, connected.
     fn ops(&self) -> Result<Ops> {
         self.ops_for(self.context()?)
@@ -90,14 +107,69 @@ impl Ctx {
             "context {} -> {}",
             context.name, context.airflow_url
         ));
-        match self.cli.timeout {
-            Some(seconds) if seconds > 0.0 => {
-                Ops::connect_with_timeout(context, std::time::Duration::from_secs_f64(seconds))
-            }
-            Some(_) => Err(OpsError::usage("--timeout must be greater than zero")),
-            None => Ops::connect(context),
-        }
+        Ops::connect_with_timeout(context, self.timeout()?)
     }
+
+    /// The one way a backend-only command group gets a connection.
+    ///
+    /// `--direct` is a deliberate choice with a documented contract: a direct context uses its own
+    /// Airflow credentials, local `gh`/`islo` and local metrics, and is never widened past them
+    /// (`docs/factory-backend.md`). So the groups the backend alone can serve have to refuse it
+    /// here, in words, *before* anything is connected. Connecting first and letting the local
+    /// adapters fail would answer with whatever `gh` or Airflow complained about, and an operator
+    /// would read a factory problem where the truth is that this context cannot see the queue at
+    /// all — which is exactly how somebody ends up believing they went through the backend.
+    pub fn backend(&self, group: &str) -> Result<Backend> {
+        let context = self.context()?;
+        let timeout = self.timeout()?;
+        let Some(url) = backend_endpoint(&context) else {
+            return Err(OpsError::operational(format!(
+                "{group} is served only by the factory backend, and context {:?} is explicitly \
+                 direct; swf never widens direct mode to local credentials to answer it",
+                context.name
+            ))
+            .with_hint(format!(
+                "give it a backend: swf context add {} --airflow-url {} --backend-url URL --force, \
+                 then export SWF_BACKEND_TOKEN",
+                context.name, context.airflow_url
+            )));
+        };
+        self.note(&format!("context {} -> {url}", context.name));
+        Ok(Backend { context, timeout })
+    }
+}
+
+/// A backend the operator's configuration actually names, and the deadline to reach it with.
+///
+/// Every backend-served view is built from one of these, so the context, the credential and the
+/// timeout are settled once per process rather than once per command group.
+pub struct Backend {
+    context: Context,
+    timeout: Duration,
+}
+
+impl Backend {
+    /// The durable Factory Cell views.
+    pub fn cells(&self) -> Result<CellOps> {
+        CellOps::connect(&self.context, self.timeout)
+    }
+
+    /// The queue, repair-debt, fleet and compatibility views.
+    pub fn operator(&self) -> Result<OperatorOps> {
+        OperatorOps::connect(&self.context, self.timeout)
+    }
+}
+
+/// The factory backend this invocation would reach, or `None` for an explicitly direct context.
+///
+/// `SWF_BACKEND_URL` overrides the stored `backend_url` for one process — the same override
+/// `swf-app` applies when it builds `Ops` — so the question has to be asked after it and not
+/// before, or an operator who exported it would be told they are in direct mode while they are
+/// demonstrably not.
+fn backend_endpoint(context: &Context) -> Option<String> {
+    let url = std::env::var("SWF_BACKEND_URL").unwrap_or_else(|_| context.backend_url.clone());
+    let url = url.trim().to_string();
+    (!url.is_empty()).then_some(url)
 }
 
 /// Who Airflow will record as the respondent, as far as this client can tell.
@@ -130,6 +202,10 @@ pub async fn run(ctx: &Ctx) -> Result<Outcome> {
         Command::Runs(cmd) => runs_cmd(ctx, cmd).await,
         Command::Jobs(cmd) => jobs_cmd(ctx, cmd).await,
         Command::Cells(cmd) => crate::cell_exec::run(ctx, cmd).await,
+        Command::Queue(cmd) => crate::operator_exec::queue(ctx, cmd).await,
+        Command::Operations(cmd) => crate::operator_exec::operations(ctx, cmd).await,
+        Command::Fleet => crate::operator_exec::fleet(ctx).await,
+        Command::Compatibility => crate::operator_exec::compatibility(ctx).await,
         Command::Logs(args) => logs_cmd(ctx, args).await,
         Command::Gates(cmd) => gates_cmd(ctx, cmd).await,
         Command::Deliveries(cmd) => deliveries_cmd(ctx, cmd).await,
