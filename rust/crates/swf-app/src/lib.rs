@@ -9,6 +9,7 @@ pub mod attention;
 pub mod backend_context;
 pub mod cells;
 pub mod context;
+pub mod control_attention;
 pub mod control_plane;
 pub mod delivery;
 pub mod doctor;
@@ -22,5 +23,6 @@ pub mod submit;
 
 pub use backend_context::BackendContext;
 pub use context::{Auth, Context, ContextStore};
+pub use control_attention::ControlAttention;
 pub use operator::OperatorOps;
 pub use ops::{Ops, OpsError};
