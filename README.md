@@ -1,79 +1,28 @@
-<p align="center">
-  <img src="site/factory-line.webp" alt="A software change moving through isolated work cells from issue to reviewed pull request" width="1200" />
-</p>
+# Airflow Software Factory
 
-<h1 align="center">Airflow Software Factory</h1>
+**Durable intent. Disposable execution. Deterministic convergence.**
 
-<p align="center"><strong>Turn GitHub issues into tested, reviewed pull requests—with a traceable path through every decision.</strong></p>
+[![CI](https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml/badge.svg)](https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![Airflow 3.3.1](https://img.shields.io/badge/Airflow-3.3.1-017CEE?logo=apacheairflow&logoColor=white)](pyproject.toml)
+[![Alpha](https://img.shields.io/badge/status-alpha-orange)](#status-and-verification)
+[![Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-<p align="center">
-  <a href="https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml/badge.svg" /></a>
-  <a href="pyproject.toml"><img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" /></a>
-  <a href="pyproject.toml"><img alt="Airflow 3.3.1 pinned" src="https://img.shields.io/badge/Airflow-3.3.1-017CEE?logo=apacheairflow&logoColor=white" /></a>
-  <a href="pyproject.toml"><img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-orange" /></a>
-  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-D22128" /></a>
-  <a href="https://skills.sh/zozo123/ariflow-swfactory"><img alt="skills.sh" src="https://skills.sh/b/zozo123/ariflow-swfactory" /></a>
-</p>
+Turn GitHub work orders into reviewable pull requests through a defined process: specification,
+plan, human approval, implementation, tests, review, and retained evidence. Apache Airflow owns the
+managed lifecycle; isolated coding workers perform the work; the trusted factory publishes the result.
+People decide what reaches `main`.
 
-<p align="center">
-  <a href="#quickstart">Quickstart</a> ·
-  <a href="https://zozo123.github.io/ariflow-swfactory/#factory-demo">Interactive demo</a> ·
-  <a href="OPERATIONS.md">Deployment guide</a> ·
-  <a href="docs/swf.md">CLI &amp; TUI</a> ·
-  <a href="#agent-skill">Agent skill</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a>
-</p>
+[Quickstart](#quickstart) · [Liquid methodology](#the-liquid-methodology) ·
+[Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
+[Interactive demo](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Agent skills](#agent-skills)
 
-`swfactory` runs coding agents through a defined software delivery process: capture intent,
-write a specification, approve a plan, implement, test, review, and publish a pull request.
-Each issue gets its own work cell, bounded repair loops, and an evidence trail committed alongside
-the change. People approve the intent and plan, then decide what to merge.
-
-**Airflow schedules. Python executes and publishes. Rust gives you the control room.**
-
-Use it when you need repeatable agent workflows across repositories, visible approval queues,
-and enough evidence to understand why a change was delivered or blocked. The project is **alpha**;
-start with the local replay and a repository you can use for evaluation.
-
-## Agent skill
-
-Install the factory as an agent skill through Vercel's open `skills` ecosystem:
-
-```sh
-npx skills add zozo123/ariflow-swfactory --skill airflow-software-factory
-```
-
-Or use it without installing:
-
-```sh
-npx skills use zozo123/ariflow-swfactory@airflow-software-factory
-```
-
-[Browse **airflow-software-factory** on skills.sh](https://skills.sh/zozo123/ariflow-swfactory/airflow-software-factory) ·
-[Read the skill source](skills/airflow-software-factory/SKILL.md)
-
-The skill lives at the standard `skills/airflow-software-factory/SKILL.md` discovery path, so the
-Vercel `skills` CLI can find it directly from this repository.
-
-## Why a software factory?
-
-Generating a patch is one step. A repeatable delivery process also needs clear requirements,
-fresh test results, bounded retries, approvals, recovery, and a record of what happened.
-
-| You need | The factory provides |
-| --- | --- |
-| A repeatable process | Versioned TOML blueprints defining stages, repositories, approval gates, and limits |
-| Human control | Intent and plan gates, decisions bound to artifact digests, and human merge |
-| Constrained execution | Stage-specific agent tools, protected paths, isolated worker options, and separate publishing authority |
-| Bounded work | Build/fix limits, review-fix limits, model budgets, timeouts, and mapped-job concurrency limits |
-| Inspectable results | Specifications, plans, review findings, approvals, metrics, and agent records in the delivered branch |
-| Operations beyond one run | Durable webhook intake, run journals, recovery inspection, and a shared CLI/TUI operations layer |
+![A software change moving through work cells from issue to reviewed pull request](site/factory-line.webp)
 
 ## Quickstart
 
-You need **Git**, **Python 3.12**, and **[uv](https://docs.astral.sh/uv/getting-started/installation/)**.
-Dependency installation needs network access; the replay itself needs no model key, GitHub token,
-Docker, Airflow, or Rust.
+Install **Git**, **Python 3.12**, and **[uv](https://docs.astral.sh/uv/getting-started/installation/)**,
+then run the bundled replay:
 
 ```sh
 git clone https://github.com/zozo123/ariflow-swfactory.git
@@ -82,77 +31,153 @@ uv sync --locked
 uv run swfactory demo
 ```
 
-The demo applies a small change to the bundled calculator project using authored agent fixtures.
-It exercises the default pipeline, including a failed build and repair, automatically answers
-the demo gates, and publishes to a local Git remote. **It makes no model calls and opens no GitHub PR.**
+The replay uses authored agent fixtures to change a calculator project, fail a build, repair it,
+review the result, and deliver to a local Git remote. Demo approvals are automatic. Dependency
+installation needs network access; the replay needs **no model key, GitHub token, Airflow, Docker,
+or Rust**. It makes no model calls and opens no GitHub PR.
 
-At completion, the terminal prints the stage report and local delivery location. The machine-readable
-report is saved at `.factory/<run_id>/report.json`; the working checkout and host journal live
-under that same run directory. Inspect saved runs with:
+The terminal prints the stage report and delivery location. Find the machine-readable report at
+`.factory/<run_id>/report.json` and the local PR description at `.factory/<run_id>/pr.md`.
 
 ```sh
 uv run swfactory state list
 ```
 
-Prefer a visual first? [Step through the interactive factory](https://zozo123.github.io/ariflow-swfactory/#factory-demo).
-It illustrates the stages and simulated approvals; it is not a recording of a live agent run.
+Prefer to explore visually? The [interactive walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo)
+illustrates the workflow and approval decisions using simulated data.
 
-## How a change moves through the factory
+## What the factory gives you
 
-One submitted work order creates an Airflow run. Each **issue × selected target** becomes an
-independent mapped job. The default blueprint follows this route:
+Generating a patch is one step. Delivering it repeatedly requires an explicit contract for how the
+change is approved, verified, published, and recovered when execution fails.
+
+| Need | Mechanism | Result |
+| --- | --- | --- |
+| Repeatable delivery | Versioned TOML blueprints and a product verification contract | The same stages, gates, and limits for each work order |
+| Human control | Intent and plan approvals bound to artifact digests | Review the decision before implementation; retain who approved what |
+| Parallel work | Airflow task mapping over issue × target jobs | Independent jobs with bounded concurrency |
+| Bounded execution | Stage budgets, timeouts, build attempts, and review repair limits | Explicit success, refusal, or blocked outcomes |
+| Recoverable ownership | Durable Factory Cells, epochs, and operation journals | Work identity survives a worker; managed mutations can be reconciled |
+| Inspectable delivery | Evidence committed alongside the change; CLI/TUI inspection | Trace requirements, approvals, tests, and review back to the PR |
+
+## The Liquid methodology
+
+> **Create entropy where exploration benefits from it; destroy entropy before promotion.**
+
+Liquid Software Factory applies the same discipline to running the product and developing the
+factory itself: explore through independent implementation lanes, compare contracts and evidence,
+then converge on one maintained implementation. **Parallelism is cheap. Authority is singular.**
+
+| May change or disappear | Must remain durable and authoritative |
+| --- | --- |
+| Workers, agent sessions, sandboxes, VMs, containers | Factory Cell identity, current epoch, work order, and lifecycle binding |
+| Speculative branches, experiments, temporary adapters | Approved contracts, mutation history, evidence, and publication state |
+| Intermediate implementations and work graphs | The accepted plan revision and the final repository state |
+
+The method has six operating rules:
+
+1. **Keep one lifecycle authority.** Airflow schedules managed work; `Plan.work` describes bounded
+   dependencies inside a stage. Agents, providers, admission controls, and GitHub Actions do not
+   become additional lifecycle schedulers.
+2. **Separate identity from compute.** A Factory Cell owns one issue × target across attempts.
+   A sandbox is a temporary execution instance; replacing it does not grant new authority.
+3. **Fence and reconcile mutations.** Bind effects to `(cell_id, epoch, operation_key)`. Reject stale
+   writers, deduplicate retries, and observe ambiguous external outcomes before replay.
+4. **Explore within limits.** Use independent lanes with clear outputs, budgets, deadlines, and
+   cancellation. Domain × concern matrices reveal gaps; issue count measures coverage.
+5. **Collapse before integration.** Compare alternatives against shared contracts, keep the canonical
+   implementation, migrate callers, and delete superseded paths. PR boundaries follow coherent changes.
+6. **Promote evidence for the exact candidate.** Validate the stabilization result, check its SHA has
+   not changed, and require an explicit merge or promotion decision.
 
 ```mermaid
 flowchart TD
-    I["Issue and target"] --> S["Setup and intent"]
-    S --> G1{"Approve intent?"}
-    G1 -->|Approve| P["Specification and plan"]
-    P --> G2{"Approve plan?"}
-    G2 -->|Approve| B["Build and test"]
-    B -->|Tests fail; budget remains| F["Fix implementation"]
+    W["Work order and shared contracts"] --> A["Implementation lane A"]
+    W --> B["Implementation lane B"]
+    W --> C["Implementation lane C"]
+    A --> F["Compare contracts and evidence"]
+    B --> F
+    C --> F
+    F --> K["Keep one canonical implementation"]
+    F --> D["Migrate callers and delete duplicates"]
+    K --> S["Stabilization branch"]
+    D --> S
+    S --> G{"Candidate passes required checks?"}
+    G -->|No| F
+    G -->|Yes, SHA unchanged| P["Explicit promotion to main"]
+```
+
+This is the development method, not a claim that the default executor launches competing sandbox
+forks. The [full methodology](docs/liquid-methodology.md) defines the seven ownership roles, ten
+concerns, recovery cases, capability boundaries, evidence requirements, factory generations, and
+completion criteria. It also records the Liquid500 + Liquid400 fan-in and its verification limits.
+
+## Architecture and lifecycle
+
+| Component | Owns | Entry point |
+| --- | --- | --- |
+| Apache Airflow | Managed lifecycle scheduling, mapped jobs, retries, and human approval waits | [Blueprint DAGs](dags/blueprints.py) |
+| Factory Cell control plane | Durable issue × target identity, epoch, and managed mutation records | [Cells](src/swfactory/cells.py), [backend](src/swfactory/backend/) |
+| Python `swfactory` | Stage execution, verification, trusted publication, local replay, and backend service | [Runtime](src/swfactory/runtime.py), [stages](src/swfactory/stages.py) |
+| Rust `swf` | Operator CLI/TUI for submission, gates, inspection, and delivery verification | [Operator reference](docs/swf.md) |
+| Agent and sandbox adapters | Stage-scoped work in replaceable compute | [Execution design](docs/design.md) |
+
+One submission creates an Airflow run. Each **issue × selected target** becomes a mapped job.
+Installed blueprints define DAGs; new issues supply data rather than new Python DAG definitions.
+The [default blueprint](blueprints/default.toml) follows this delivery route:
+
+```mermaid
+flowchart TD
+    I["Setup and intent"] --> A{"Approve intent?"}
+    A -->|Yes| P["Specification and plan"]
+    P --> G{"Approve plan?"}
+    G -->|Yes| B["Build and test"]
+    B -->|Failed; budget remains| F["Fix implementation"]
     F --> B
-    B -->|Tests pass| R["Review and bounded fixes"]
-    R -->|Approved| D["Publish PR and evidence"]
-    R -->|Blockers remain| X["Publish blocked or rejected evidence PR"]
-    G1 -->|Reject| X
-    G2 -->|Reject| X
+    B -->|Passed| R["Review and bounded repairs"]
+    R -->|Accepted| D["Publish PR and evidence"]
+    R -->|Blockers remain| X["Publish labeled evidence PR"]
+    A -->|Rejected| X
+    G -->|Rejected| X
     D --> H["Human merge decision"]
 ```
 
-The diagram shows the delivery route; metrics and teardown surround the execution lifecycle.
-Exhausted build attempts or policy failures stop progression. A rejected gate or unresolved review
-can produce an explicitly labeled evidence PR: its existence does not mean the change passed.
+Metrics and teardown surround this route. Exhausted build attempts and policy failures stop
+progression. Rejected gates or unresolved review blockers can produce a `[REJECTED]` or `[BLOCKED]`
+evidence PR; publication alone does not mean acceptance.
 
-Airflow loads one DAG per installed blueprint. Issue-specific dependencies stay in validated
-`plan.json` data, so every new issue does not create a new scheduler DAG. The default stage path
-uses one governed build/review cell; native sandbox forks require provider capability and lineage
-evidence. See [lifecycle graphs and fork semantics](docs/lifecycle.md).
+`Plan.work` validates up to 64 issue-specific nodes, their dependencies, and declared files.
+`parallel_safe` marks fork candidates. The default stage path still uses one governed build/review
+cell; provider-native fork execution requires additional integration and lineage evidence.
+See [managed lifecycle and fork semantics](docs/lifecycle.md).
 
-### What a delivery contains
+### What arrives with a change
 
-The factory commits its evidence under `docs/factory/<issue>/`, relative to the configured target
-directory. Depending on how far the run progressed, this includes:
+Evidence is committed under `docs/factory/<issue>/`, relative to the product target directory.
+Which artifacts exist depends on how far execution progressed.
 
-| Artifact | What you can inspect |
+| Artifact | Purpose |
 | --- | --- |
-| `intent.md` | The original work order |
-| `spec.md` | Requirements and open questions |
-| `plan.md` / `plan.json` | The human-readable plan and structured files, steps, tests, and risks |
-| `approvals.json` | Gate decisions, actor, time, and the digest of the approved artifact |
-| `review.json` | Review verdict and remaining findings |
-| `metrics.json` | Recorded stage timing, spend, and delivery signals |
+| `intent.md`, `spec.md` | Original work order, requirements, and open questions |
+| `plan.md`, `plan.json` | Planned files, steps, tests, risks, and optional work graph |
+| `approvals.json` | Gate decision, actor, time, and approved artifact digest |
+| `review.json` | Review verdict, findings, and remaining blockers |
+| `metrics.json` | Recorded timing, spend, and delivery signals |
 | `agent/` | Agent result envelopes and copied audit records |
 
-The operator's [delivery verifier](docs/swf.md) distinguishes workflow success, publication, and
-independent re-verification. A successful run alone does not prove the delivered code is correct.
+Host journals under `.factory/` are control state, kept outside the coding agent's authority.
+The [delivery verifier](docs/swf.md) treats workflow completion, PR publication, and independent
+verification as separate results.
 
-## Run your first real issue
+## Run a real issue
 
-There are two small configuration files: the **product repository** declares how to verify its
-code, and the **factory repository** declares how work may proceed.
+Start with a repository you can use for evaluation. The project is **alpha**. A real run requires
+configured GitHub access, a supported agent environment, and model/provider credentials; it can
+incur costs and publish a PR.
 
-**1. Give the product a verification contract.** Add `factory.toml` at the target directory's
-root. For a Python project using pytest, an example is:
+### 1. Define how the product is verified
+
+Add `factory.toml` at the product target's root. For a Python project with pytest in its `dev` group:
 
 ```toml
 [commands]
@@ -166,60 +191,30 @@ junit = ".factory/junit.xml"
 protected = ["factory.toml", ".github/"]
 ```
 
-Adapt these commands to your project. Tests must be non-interactive, fail with a nonzero exit
-code, and write fresh JUnit XML. The factory requires this contract instead of guessing how to
-test your repository. See the [bundled example](demo/target/factory.toml).
+Adapt the commands and paths to the product. Tests must run non-interactively, return a nonzero
+exit code on failure, and produce fresh JUnit XML. The factory refuses a target without this
+contract. See the [bundled example](demo/target/factory.toml).
 
-**2. Configure the production line.** Copy [blueprints/default.toml](blueprints/default.toml)
-to `blueprints/your-product.toml`. Set `[blueprint].name = "your-product"`, change the target
-repository and base branch, and set `dir = ""` for a repository-root target. Keep or adjust the
-stages, gates, limits, and sandbox settings. The supplied default line targets this repo's demo.
+### 2. Configure the factory line
 
-| Default policy | Value |
-| --- | --- |
-| Approval gates | After intent and plan; 24-hour timeout each |
-| Build attempts / review fix rounds | 3 / 1 |
-| Model budget | $2 per stage; $8 per issue × target job |
-| Airflow stage timeout / mapped-job concurrency | 3 hours / 4 |
-| islo sandbox lifetime | 48 hours; longer than either approval timeout |
+Copy [blueprints/default.toml](blueprints/default.toml) to `blueprints/your-product.toml`. Set
+`[blueprint].name = "your-product"`, choose the target `repo` and `base_branch`, and use `dir = ""`
+for a repository-root target. The supplied line targets this repository's calculator demo.
 
-These are configured limits, not measured costs or completion-time promises. Operational `SWF_*`
-settings can override line defaults; submitted targets can only narrow the installed line's scope.
+The defaults are two approval gates with 24-hour timeouts, three build attempts, one review repair
+round, a $2 model budget per stage and $8 per job, a three-hour stage timeout, and four concurrent
+mapped jobs. These are configured limits, not cost or latency measurements. Operational `SWF_*`
+settings can override line defaults. Submitted targets can only narrow the installed line's scope.
 
-**3. Prepare the worker and run a preflight.** Follow the
-[real-repository setup](OPERATIONS.md#run-it-on-a-real-github-repository) for GitHub access,
-Claude Code authentication, and an islo worker environment. Then, from the factory checkout:
+### 3. Deploy, connect, and submit
 
-```sh
-uv run swfactory doctor \
-  --blueprint your-product --agent claude --sandbox islo --scm github
+Follow [real-repository setup](OPERATIONS.md#run-it-on-a-real-github-repository), then the
+[Docker rehearsal](docs/docker.md) or [hosted islo deployment](docs/islo.md). Configure the
+[factory backend](docs/factory-backend.md) with installed blueprints, Airflow access, and service
+credentials. Its default address is loopback port `8082`.
 
-uv run swfactory run \
-  --blueprint your-product --issue 42 \
-  --agent claude --sandbox islo --scm github --approve prompt
-```
-
-Use an actual issue in your configured repository. This command runs the line directly and asks
-for approvals in your terminal. It makes paid model calls and can publish a GitHub PR.
-Use the Airflow deployment below for scheduled, concurrent work and approvals that survive a
-disconnected operator. Both paths share the Python stage implementation.
-
-## Operate with Airflow and the Rust console
-
-The two command names have different jobs:
-
-| Command / component | Responsibility |
-| --- | --- |
-| `swfactory` — Python | Run stages and demos; serve the backend; receive webhooks; inspect local recovery state |
-| `swf` — Rust CLI and TUI | Submit work, inspect jobs, review gates, and verify deliveries through the backend |
-| Apache Airflow | Schedule blueprint DAGs, map jobs, retry tasks, and wait for human input |
-
-Start with the [Docker rehearsal](docs/docker.md) or [hosted islo deployment](docs/islo.md),
-then configure the [Python factory backend](docs/factory-backend.md). The backend needs the
-installed blueprints, an existing Airflow service, and the relevant service credentials. It listens
-on loopback port `8082` by default and requires `SWF_BACKEND_TOKEN`.
-
-[Install `swf`](docs/swf.md#install), set the same backend token on your operator machine, and connect:
+[Install the Rust console](docs/swf.md#install) and set `SWF_BACKEND_TOKEN` on the operator machine
+to the same secret configured on the backend. With the services running:
 
 ```sh
 swf context add local --backend-url http://localhost:8082 \
@@ -227,95 +222,134 @@ swf context add local --backend-url http://localhost:8082 \
 swf doctor
 swf submit --blueprint your-product --issue 42
 swf attention
+swf gates list
 swf tui
 ```
 
-For terminal automation or individual approvals:
+Use a real issue number from the configured product repository. Review individual gates with
+`swf gates review '<gate-id>'`, then answer with `swf gates approve '<gate-id>'` using the exact
+ID returned by `swf gates list`. Gate writes recheck readiness and the TUI binds the decision to
+the evidence revision under review. Inspect published results with `swf deliveries list`.
+
+<details>
+<summary>Direct CLI rehearsal without an Airflow service</summary>
+
+After configuring the line and the islo/Claude/GitHub environment described above:
 
 ```sh
-swf jobs list
-swf gates list
-swf gates review '<gate-id>'
-swf gates approve '<gate-id>'
-swf deliveries list
+uv run swfactory doctor \
+  --blueprint your-product --agent claude --sandbox islo --scm github
+uv run swfactory run \
+  --blueprint your-product --issue 42 \
+  --agent claude --sandbox islo --scm github --approve prompt
 ```
 
-Use the exact ID returned by `swf gates list`. Gate writes recheck readiness; the TUI binds an
-approval to the evidence revision under review. Context files store credential environment-variable
-names, not secret values. Backend failure never silently switches the console to local credentials.
+This invokes the shared Python stages directly with terminal approvals. It can publish a real PR.
+It does not provide a backend-managed Airflow lifecycle or establish managed Cell authority merely
+by sharing stage code. Use the deployed path for managed concurrency, durable approval waits, and
+centralized publication.
+
+</details>
 
 ## Execution and trust boundaries
 
-The trusted Python control plane runs verification commands, validates patches, and publishes to
-GitHub. Coding cells receive no GitHub publishing credential. Agent tools are restricted by stage;
-the orchestrator owns the authoritative approval artifacts, stage journal, and budget accounting.
-The Rust console uses the backend API; Airflow integration uses the public REST API.
+Coding agents receive stage-specific tools and protected-path rules. Trusted Python code runs the
+product's verification commands, validates patches, scans for secrets, and publishes. Coding
+sandboxes receive no GitHub publishing credential. In backend-managed runs, GitHub publication
+credentials remain on the backend and workers use its SCM proxy.
 
-| Worker | Intended use |
+| Sandbox | Use and boundary |
 | --- | --- |
-| `local` | Scripted replays and development; no isolation boundary |
-| `srt` | Local agent execution with Anthropic Sandbox Runtime filesystem and network restrictions |
-| `docker` | Container-based testing and local stack rehearsal; shares the host kernel |
-| `islo` | Remote MicroVM work cells with a configured gateway and environment |
-| `toolset` | Airflow common.ai sandbox adapter; capabilities depend on the configured backend |
+| `local` | Scripted replay and development; no isolation boundary |
+| `srt` | Anthropic Sandbox Runtime filesystem and network restrictions on the local machine |
+| `docker` | Container execution for development and rehearsal; shares the host kernel |
+| `islo` | Remote MicroVM execution with configured gateway and environment |
+| `toolset` | Airflow common.ai sandbox adapter; capabilities depend on its configured backend |
 
-Provider support is not interchangeable. Check the [sandbox design](docs/design.md) and selected
-deployment guide before changing a line. A warm-start snapshot is not proof of live sandbox forking.
-The Docker rehearsal mounts the host Docker socket; run it on a host you control.
+Provider capabilities differ. A warm-start snapshot does not establish live-fork support. The
+Docker rehearsal mounts the host Docker socket and belongs on a host you control. Model credentials
+are supplied only through the selected agent/provider configuration; backend and publishing secrets
+stay outside coding sandboxes.
 
-The backend token grants operator authority within a trusted deployment. Marking an Airflow run
-failed does not itself kill worker processes or remove sandboxes; cleanup is a separate operation.
-See [security reporting](SECURITY.md) and [run recovery](docs/run-recovery.md).
+The backend token grants operator authority within a trusted deployment. Context files store
+credential environment-variable names, not secret values; backend failure does not silently switch
+to local credentials. Stopping an Airflow run does not itself kill every process or reclaim its
+sandbox. Follow the [recovery guide](docs/run-recovery.md) for inspection and cleanup, and
+[SECURITY.md](SECURITY.md) for security reporting.
 
-## Develop and verify
+## Agent skills
 
-From a checkout with the quickstart dependencies installed:
+Two repository skills cover adoption and operation. Installing a skill gives an assistant
+instructions; it does not deploy Airflow or provision a backend.
 
-```sh
-uv run ruff check .
-uv run ruff format --check .
-uv run pytest
-uv run swfactory demo
-uv run python -m swfactory.evals
-```
-
-The default suite and scripted evals require no model keys. Add the Airflow dependency group for
-scheduler tests; Rust contributors need a Rust toolchain:
-
-```sh
-uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py
-cargo test --locked --manifest-path rust/Cargo.toml --workspace
-```
-
-Scripted evals check pipeline behavior and policy, including repair loops and blocked outcomes.
-They do not measure a live model's judgment. See [evals](docs/evals.md),
-[current CI runs](https://github.com/zozo123/ariflow-swfactory/actions), and the recorded
-[blocked delivery](https://github.com/zozo123/ariflow-swfactory/pull/2) and
-[clean delivery](https://github.com/zozo123/ariflow-swfactory/pull/3).
-
-## Find your way around
-
-| Task | Start here |
+| Skill | Use it for |
 | --- | --- |
-| Deploy and run a real repository | [Operations guide](OPERATIONS.md) |
-| Configure the backend and operator access | [Factory backend](docs/factory-backend.md) |
-| Use the CLI, TUI, gates, and delivery verification | [Operator reference](docs/swf.md) |
-| Understand lifecycle graphs and work dependencies | [Managed lifecycle](docs/lifecycle.md) |
-| Receive GitHub webhooks and recover dispatches | [Webhook intake](docs/webhooks.md) |
-| Inspect interrupted runs and ownership | [Recovery guide](docs/run-recovery.md) |
-| Compose with Astronomer Blueprint | [Composition guide](docs/astronomer-blueprint.md) |
-| Change execution behavior | [Stages](src/swfactory/stages.py), [runtime](src/swfactory/runtime.py), [DAGs](dags/blueprints.py) |
-| Change the operator interface | [Rust workspace](rust/README.md) |
-| Understand decisions and limitations | [Design](docs/design.md), [changelog](CHANGELOG.md) |
-
-To give a coding assistant the repository's adoption and operation instructions, install the
-[factory skill](skills/airflow-software-factory/SKILL.md):
+| [`airflow-software-factory`](skills/airflow-software-factory/SKILL.md) | Adopt, configure, deploy, and operate the factory |
+| [`swfactory`](skills/swfactory/SKILL.md) | Drive an existing factory as an outer coding harness with stable session identity |
 
 ```sh
-npx skills add zozo123/ariflow-swfactory --skill airflow-software-factory
+npx skills add zozo123/ariflow-swfactory --skill airflow-software-factory --skill swfactory
 ```
 
-[Browse it on skills.sh](https://skills.sh/zozo123/ariflow-swfactory/airflow-software-factory).
+[Browse the catalog](https://skills.sh/zozo123/ariflow-swfactory) · [Installation details](skills/README.md)
 
-Contributions are welcome: follow [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[review contract](REVIEW.md). Licensed under [Apache 2.0](LICENSE).
+For a configured harness, keep `(harness, factory_id)` stable throughout one session:
+
+```sh
+scripts/swf_harness.sh codex codex-session-17 --blueprint your-product --issue 42
+```
+
+The wrapper submits through `swf`; Airflow continues to own lifecycle scheduling. See
+[harness setup](docs/harnesses.md) and [concurrent harness methodology](docs/harness-concurrency-methodology.md).
+
+## Status and verification
+
+This is an alpha implementation with executable delivery paths and a broader set of architectural
+contracts. Read capability claims at their demonstrated level:
+
+| Evidence | What it establishes |
+| --- | --- |
+| Local replay and scripted evals | Pipeline behavior, repair paths, policy outcomes, and retained artifacts |
+| Cell, journal, and backend tests | The specific identity, mutation, and recovery behaviors exercised |
+| Liquid bundle manifest | Declared coverage of 900 generated slices and 181 legacy ranks; not 1,081 independently proven features |
+| Provider and live scheduler checks | Behavior of the tested environment and scenario; inspect each check's result |
+| Native workgraph forks and recursive factories | Contracts and bounded primitives exist; these are not default end-to-end production guarantees |
+
+For development, install the locked Airflow group and run the repository checks:
+
+```sh
+uv sync --locked --group airflow
+uv run --group airflow ruff check .
+uv run --group airflow ruff format --check .
+uv run --group airflow pytest
+uv run --group airflow swfactory demo
+uv run --group airflow python -m swfactory.liquid_release
+uv run --group airflow python -m swfactory.evals
+```
+
+Rust contributors also run the workspace's formatting, clippy, test, and release-build checks;
+see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Rust workspace](rust/README.md).
+
+[CI](.github/workflows/ci.yml) gives internal fan-out PRs the fast Python gate and main-targeted
+PRs the integration matrix. The pinned live-gate, SRT, Docker, and upstream sandbox-toolset jobs
+currently use `continue-on-error`; the separate [eval workflow](.github/workflows/evals.yml) is
+path-filtered, scheduled, or manually triggered, and real-agent jobs need configured secrets.
+**A green badge does not mean every live path passed.** The
+[methodology's promotion rules](docs/liquid-methodology.md#ci-and-promotion) define the stronger
+acceptance standard and explain the remaining enforcement work.
+
+## Documentation and contribution
+
+| Goal | Start here |
+| --- | --- |
+| Understand and apply Liquid development | [Methodology](docs/liquid-methodology.md) |
+| Deploy or run against GitHub | [Operations](OPERATIONS.md), [Docker](docs/docker.md), [islo](docs/islo.md) |
+| Operate Cells, jobs, approvals, and deliveries | [CLI/TUI](docs/swf.md), [backend API](docs/factory-backend.md) |
+| Design lifecycle and parallel work | [Lifecycle](docs/lifecycle.md), [architecture](docs/design.md) |
+| Receive work and recover interruptions | [Webhooks](docs/webhooks.md), [run recovery](docs/run-recovery.md) |
+| Evaluate behavior and control proposals | [Evals](docs/evals.md), [non-equilibrium control doctrine](docs/non-equilibrium-factory.md) |
+| Extend or review the factory | [Contributing](CONTRIBUTING.md), [review policy](REVIEW.md), [changelog](CHANGELOG.md) |
+
+Contribute a coherent change with an explicit invariant, failure behavior, evidence, and a plan to
+remove superseded paths. See the [repository improvement plan](https://github.com/zozo123/ariflow-swfactory/issues/2022)
+for the next convergence work. Licensed under [Apache 2.0](LICENSE).
