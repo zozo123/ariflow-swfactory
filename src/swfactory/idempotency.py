@@ -1,9 +1,15 @@
 """Durable idempotency and reconciliation primitives for external factory side effects.
 
 The important rule is deliberately conservative: once an intent exists, its external outcome is
-*unknown* until either a committed result is present or a reconciler proves what happened.  A
-retry may repeat a request only when the caller explicitly marks the operation replay-safe and a
+*unknown* until either a committed result is present or a reconciler proves what happened. A retry
+may repeat a request only when the caller explicitly marks the operation replay-safe and a
 reconciler has proved that the previous attempt is definitely absent.
+
+Operation identity is immutable. Reusing one operation key for different content is rejected even
+before reconciliation, because idempotency without an intent digest can silently turn a caller bug
+into the wrong durable receipt. Deterministic remote resources may additionally require observation
+before the first local attempt so a new epoch adopts an already-created effect instead of duplicating
+it.
 """
 
 from __future__ import annotations
@@ -24,6 +30,10 @@ OperationState = Literal["intent", "in_doubt", "reconciling", "committed", "exha
 
 class OperationError(RuntimeError):
     pass
+
+
+class OperationIdentityConflict(OperationError):
+    """An operation key was reused for a different Cell/epoch/kind or request intent."""
 
 
 class OperationInDoubt(OperationError):
@@ -82,6 +92,7 @@ class RetryBudget:
 DEFAULT_BUDGETS: dict[str, RetryBudget] = {
     "airflow_dispatch": RetryBudget(3, 1.0, 30.0),
     "github_publish": RetryBudget(4, 1.0, 60.0),
+    "github_issue": RetryBudget(4, 1.0, 60.0),
     "sandbox_cleanup": RetryBudget(5, 1.0, 60.0),
 }
 
@@ -94,7 +105,7 @@ class OperationJournal:
     """SQLite local journal with crash-safe intents and bounded reconciliation metadata.
 
     The API intentionally stays storage-shaped so a Postgres implementation can preserve the same
-    state machine.  A committed operation is replayed from its stored result.  Any non-terminal
+    state machine. A committed operation is replayed from its stored result. Any non-terminal
     pre-existing intent is fail-closed by default.
     """
 
@@ -126,7 +137,8 @@ class OperationJournal:
                     attempts INTEGER NOT NULL DEFAULT 0,
                     last_error TEXT,
                     observation_json TEXT,
-                    next_attempt_at REAL
+                    next_attempt_at REAL,
+                    intent_digest TEXT
                 )"""
             )
             columns = {row["name"] for row in self.db.execute("PRAGMA table_info(operations)")}
@@ -135,28 +147,39 @@ class OperationJournal:
                 "last_error": "TEXT",
                 "observation_json": "TEXT",
                 "next_attempt_at": "REAL",
+                "intent_digest": "TEXT",
             }
             for name, ddl in additions.items():
                 if name not in columns:
                     self.db.execute(f"ALTER TABLE operations ADD COLUMN {name} {ddl}")
             self.db.execute("CREATE INDEX IF NOT EXISTS operations_unresolved ON operations(state, updated_at)")
 
-    def begin(self, ref: OperationRef) -> str:
-        """Create the durable intent if absent and return the current state."""
+    def begin(self, ref: OperationRef, *, intent_digest: str | None = None) -> str:
+        """Create a durable intent if absent and verify immutable operation identity."""
+        self._validate_ref(ref)
+        self._validate_digest(intent_digest)
         now = time.time()
         with self.lock, self.db:
             self.db.execute(
                 """INSERT OR IGNORE INTO operations(
-                    operation_key,cell_id,epoch,kind,state,result_json,updated_at,attempts
-                ) VALUES(?,?,?,?,?,?,?,0)""",
-                (ref.key, ref.cell_id, ref.epoch, ref.kind, "intent", None, now),
+                    operation_key,cell_id,epoch,kind,state,result_json,updated_at,attempts,intent_digest
+                ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (ref.key, ref.cell_id, ref.epoch, ref.kind, "intent", None, now, 0, intent_digest),
             )
+            row = self.get(ref.key)
+            self._assert_identity(ref, row, intent_digest=intent_digest)
+            if intent_digest is not None and row.get("intent_digest") is None:
+                self.db.execute(
+                    "UPDATE operations SET intent_digest=?,updated_at=? WHERE operation_key=?",
+                    (intent_digest, now, ref.key),
+                )
         return str(self.get(ref.key)["state"])
 
     def start_attempt(self, ref: OperationRef, *, budget: RetryBudget | None = None) -> int:
         budget = budget or budget_for(ref.kind)
         with self.lock, self.db:
             row = self.get(ref.key)
+            self._assert_identity(ref, row)
             attempts = int(row.get("attempts") or 0)
             if attempts >= budget.max_attempts:
                 self.db.execute(
@@ -175,6 +198,7 @@ class OperationJournal:
     def mark_in_doubt(self, ref: OperationRef, error: BaseException | str) -> None:
         detail = str(error)[:2000]
         with self.lock, self.db:
+            self._assert_identity(ref, self.get(ref.key))
             self.db.execute(
                 """UPDATE operations SET state='in_doubt', last_error=?, updated_at=?
                    WHERE operation_key=? AND state!='committed'""",
@@ -183,16 +207,13 @@ class OperationJournal:
 
     def mark_observation(self, ref: OperationRef, outcome: MutationOutcome) -> None:
         payload = json.dumps(
-            {
-                "status": outcome.status,
-                "evidence": outcome.evidence,
-                "detail": outcome.detail,
-            },
+            {"status": outcome.status, "evidence": outcome.evidence, "detail": outcome.detail},
             sort_keys=True,
             separators=(",", ":"),
         )
         state: OperationState = "refused" if outcome.status == "refused" else "reconciling"
         with self.lock, self.db:
+            self._assert_identity(ref, self.get(ref.key))
             self.db.execute(
                 """UPDATE operations SET state=?, observation_json=?, updated_at=?
                    WHERE operation_key=? AND state!='committed'""",
@@ -203,6 +224,7 @@ class OperationJournal:
         budget = budget or budget_for(ref.kind)
         when = time.time() + budget.delay(attempt, ref.key)
         with self.lock, self.db:
+            self._assert_identity(ref, self.get(ref.key))
             self.db.execute(
                 "UPDATE operations SET next_attempt_at=?, updated_at=? WHERE operation_key=?",
                 (when, time.time(), ref.key),
@@ -212,6 +234,7 @@ class OperationJournal:
     def commit(self, ref: OperationRef, result: Any) -> None:
         payload = json.dumps(result, sort_keys=True, separators=(",", ":"))
         with self.lock, self.db:
+            self._assert_identity(ref, self.get(ref.key))
             cur = self.db.execute(
                 """UPDATE operations SET state='committed', result_json=?, last_error=NULL,
                    next_attempt_at=NULL, updated_at=? WHERE operation_key=?""",
@@ -238,22 +261,30 @@ class OperationJournal:
         replay_safe: bool = False,
         reconcile: Callable[[], MutationOutcome] | None = None,
         budget: RetryBudget | None = None,
+        intent_digest: str | None = None,
+        observe_before_first_attempt: bool = False,
     ) -> Any:
-        """Execute once, replay committed output, otherwise reconcile before any retry.
+        """Execute once, replay committed output, otherwise observe/reconcile before safe replay.
 
-        `replay_safe=True` alone is intentionally insufficient: a previous attempt can be replayed
-        only after `reconcile()` proves it is definitely absent.
+        ``replay_safe=True`` alone is intentionally insufficient: a previous attempt can be replayed
+        only after ``reconcile()`` proves it is definitely absent. With
+        ``observe_before_first_attempt=True`` a newly-created local intent is observed remotely
+        before its first effect, which lets a new epoch adopt an existing deterministic resource.
         """
         existed = True
         try:
             row = self.get(ref.key)
         except KeyError:
             existed = False
-            self.begin(ref)
+            self.begin(ref, intent_digest=intent_digest)
             row = self.get(ref.key)
+        else:
+            self._assert_identity(ref, row, intent_digest=intent_digest)
         if row["state"] == "committed":
             return row["result"]
-        if existed:
+
+        should_observe = existed or observe_before_first_attempt
+        if should_observe:
             if reconcile is None:
                 raise OperationInDoubt(ref.key, str(row["state"]))
             outcome = reconcile()
@@ -274,6 +305,18 @@ class OperationJournal:
         self.commit(ref, result)
         return result
 
+    def observe(self, ref: OperationRef, observer: Callable[[], MutationOutcome]) -> MutationOutcome:
+        """Record one external observation without guessing or automatically replaying the effect."""
+        row = self.get(ref.key)
+        self._assert_identity(ref, row)
+        if row["state"] == "committed":
+            return MutationOutcome("committed", row["result"], row.get("observation"), "journal is committed")
+        outcome = observer()
+        self.mark_observation(ref, outcome)
+        if outcome.status == "committed":
+            self.commit(ref, outcome.result)
+        return outcome
+
     def unresolved(self, *, limit: int = 100, due_only: bool = False) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), 1000))
         query = "SELECT * FROM operations WHERE state!='committed'"
@@ -292,3 +335,38 @@ class OperationJournal:
             row["observation"] = json.loads(row.pop("observation_json")) if row.get("observation_json") else None
             result.append(row)
         return result
+
+    @staticmethod
+    def _validate_ref(ref: OperationRef) -> None:
+        if not ref.cell_id.startswith("cell_"):
+            raise OperationIdentityConflict("operation must carry a Factory Cell id")
+        if ref.epoch < 1 or not ref.kind.strip() or not ref.key.strip():
+            raise OperationIdentityConflict("operation reference is incomplete")
+
+    @staticmethod
+    def _validate_digest(intent_digest: str | None) -> None:
+        if intent_digest is not None and not intent_digest.startswith("sha256:"):
+            raise OperationIdentityConflict("intent digest must use sha256:<hex>")
+        if intent_digest is not None:
+            value = intent_digest.removeprefix("sha256:")
+            if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+                raise OperationIdentityConflict("intent digest must be a lowercase SHA-256 digest")
+
+    def _assert_identity(
+        self,
+        ref: OperationRef,
+        row: dict[str, Any],
+        *,
+        intent_digest: str | None = None,
+    ) -> None:
+        self._validate_ref(ref)
+        self._validate_digest(intent_digest)
+        observed = (str(row.get("cell_id")), int(row.get("epoch", -1)), str(row.get("kind")))
+        expected = (ref.cell_id, ref.epoch, ref.kind)
+        if observed != expected:
+            raise OperationIdentityConflict(
+                f"operation key {ref.key!r} is already bound to {observed!r}, not {expected!r}"
+            )
+        stored_digest = row.get("intent_digest")
+        if intent_digest is not None and stored_digest is not None and stored_digest != intent_digest:
+            raise OperationIdentityConflict(f"operation key {ref.key!r} was reused with divergent intent")

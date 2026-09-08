@@ -3,7 +3,7 @@
 This module deliberately does not schedule work. Apache Airflow remains the only lifecycle
 scheduler. The purpose of this facade is to make the core cross-cutting invariant executable:
 
-    one Factory Cell + one epoch + one operation key
+    one Factory Cell + one epoch + one operation key + one immutable intent
 
 must be carried consistently through Airflow ownership, authorization, policy fencing, durable
 idempotency, Cell history, and retained evidence.
@@ -71,6 +71,8 @@ class CoreMutationRequest:
     parts: tuple[str, ...] = ()
     secret_scope: str | None = None
     replay_safe: bool = False
+    external_operation_key: str | None = None
+    intent_digest: str | None = None
 
     def validate(self) -> None:
         self.airflow.validate()
@@ -85,6 +87,12 @@ class CoreMutationRequest:
             raise ValueError("mutation requires a canonical expected policy digest")
         if not self.target_tenant.strip():
             raise ValueError("target tenant is required")
+        if self.external_operation_key is not None and (
+            not self.external_operation_key.strip() or len(self.external_operation_key) > 256
+        ):
+            raise ValueError("external operation key must be nonempty and bounded")
+        if self.intent_digest is not None:
+            _validate_sha256_digest(self.intent_digest)
 
 
 @dataclass(frozen=True)
@@ -193,18 +201,21 @@ class CoreCapabilityRuntime:
 
         The callable must return a durable receipt, not a credential. Results are redacted before
         they enter the operation journal, so secret-shaped values cannot become replay material.
+        If the caller supplies a logical operation key, the journal binds it to one immutable
+        ``intent_digest``; changing the requested content behind the same key fails closed.
         """
         request.validate()
         cell = self._current_cell(request.airflow.cell_id, request.airflow.epoch)
         self._require_airflow_owner(cell, request.airflow)
         current_policy_digest = self._require_policy(cell)
 
-        key = operation_key(
+        key = request.external_operation_key or operation_key(
             request.kind,
             request.airflow.cell_id,
             str(request.airflow.epoch),
             *request.parts,
         )
+        intent_digest = request.intent_digest or self._request_digest(request, key)
         envelope = MutationEnvelope(
             cell_id=request.airflow.cell_id,
             epoch=request.airflow.epoch,
@@ -260,12 +271,14 @@ class CoreCapabilityRuntime:
             replay_safe=request.replay_safe,
             reconcile=wrapped_reconcile,
             budget=budget,
+            intent_digest=intent_digest,
         )
         receipt_digest = self._result_digest(result)
         cell_payload = {
             "resource": request.resource.value,
             "capability": request.capability.value,
             "status": "committed",
+            "intent_digest": intent_digest,
             "result_digest": receipt_digest,
         }
         self._cell_effect_once(
@@ -386,11 +399,7 @@ class CoreCapabilityRuntime:
         return self._mutation_evidence_once(
             envelope,
             kind="airflow_bound",
-            payload={
-                "dag_id": binding.dag_id,
-                "run_id": binding.run_id,
-                "map_index": binding.map_index,
-            },
+            payload={"dag_id": binding.dag_id, "run_id": binding.run_id, "map_index": binding.map_index},
         )
 
     def _mutation_evidence_once(
@@ -419,3 +428,31 @@ class CoreCapabilityRuntime:
     def _result_digest(result: Any) -> str:
         payload = json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False)
         return "result:" + hashlib.sha256(payload.encode()).hexdigest()
+
+    @staticmethod
+    def _request_digest(request: CoreMutationRequest, key: str) -> str:
+        payload = {
+            "cell_id": request.airflow.cell_id,
+            "epoch": request.airflow.epoch,
+            "dag_id": request.airflow.dag_id,
+            "run_id": request.airflow.run_id,
+            "map_index": request.airflow.map_index,
+            "resource": request.resource.value,
+            "capability": request.capability.value,
+            "actor": request.actor,
+            "kind": request.kind,
+            "policy_digest": request.expected_policy_digest,
+            "target_tenant": request.target_tenant,
+            "parts": list(request.parts),
+            "operation_key": key,
+        }
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def _validate_sha256_digest(value: str) -> None:
+    if not value.startswith("sha256:"):
+        raise ValueError("intent digest must use sha256:<hex>")
+    digest = value.removeprefix("sha256:")
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise ValueError("intent digest must be a lowercase SHA-256 digest")
