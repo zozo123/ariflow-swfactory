@@ -290,17 +290,25 @@ class CellStore:
             return self.get(cell_id)
 
     def record(self, mutation: Mutation) -> None:
-        with self.lock:
-            row = self.get(mutation.cell_id)
-            if row["epoch"] != mutation.epoch:
-                raise StaleEpoch(mutation.cell_id)
-            with self.db:
-                self._append(mutation)
+        """Append one mutation receipt, fenced on the Cell's epoch by the append itself."""
+        with self.lock, self.db:
+            self._append(mutation)
 
     def _append(self, mutation: Mutation) -> None:
+        """Insert one event only while the Cell still stands at the mutation's epoch.
+
+        The epoch check is a WHERE clause on the insert rather than a preceding SELECT because the
+        two must not be separable. ``self.lock`` is a ``threading.Lock``: it orders callers inside
+        this process that share this object, and orders nothing at all against a second connection
+        or a second process. Reading the epoch and then appending leaves a window in which a
+        takeover completes between them, and the event that lands in that window is a receipt for
+        work whose authority had already moved -- an effect attributed to an epoch that no longer
+        owns it. One statement closes the window under SQLite's write lock.
+        """
         try:
-            self.db.execute(
-                "INSERT INTO cell_events(cell_id,epoch,operation_key,kind,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+            cur = self.db.execute(
+                "INSERT INTO cell_events(cell_id,epoch,operation_key,kind,payload_json,created_at) "
+                "SELECT ?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM cells WHERE cell_id=? AND epoch=?)",
                 (
                     mutation.cell_id,
                     mutation.epoch,
@@ -308,10 +316,14 @@ class CellStore:
                     mutation.kind,
                     json.dumps(mutation.payload, sort_keys=True, separators=(",", ":")),
                     time.time(),
+                    mutation.cell_id,
+                    mutation.epoch,
                 ),
             )
         except sqlite3.IntegrityError as exc:
             raise DuplicateOperation(mutation.operation_key) from exc
+        if cur.rowcount != 1:
+            raise StaleEpoch(f"{mutation.cell_id}: epoch {mutation.epoch} is no longer current")
 
     @staticmethod
     def _decode(row: sqlite3.Row) -> dict[str, Any]:

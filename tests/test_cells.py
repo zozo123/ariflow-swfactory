@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from swfactory.cell_runtime import bind_jobs, identity_for_job
-from swfactory.cells import SCHEMA_VERSION, CellBusy, CellStore, StaleEpoch
+from swfactory.cells import SCHEMA_VERSION, CellBusy, CellStore, Mutation, StaleEpoch
 
 
 def _job(index: int = 0) -> dict[str, object]:
@@ -149,3 +149,38 @@ def test_python_accepts_the_shared_factory_cell_v1_wire_fixture() -> None:
     assert [event["seq"] for event in history] == [1, 2]
     assert all(event["epoch"] == cell["epoch"] for event in history)
     assert history[0]["operation_key"] == "activation:3"
+
+
+def test_old_epoch_receipt_is_refused_after_a_takeover_on_another_connection(tmp_path: Path) -> None:
+    """#2041: the epoch check and the event append must be one atomic write.
+
+    Two independent ``CellStore`` objects on the same file, which is the point: ``self.lock`` is a
+    ``threading.Lock``, so it orders callers inside one process that share one object and orders
+    nothing against a second connection. ``record`` used to SELECT the epoch and then INSERT. A
+    takeover landing between those two statements left the append accepted at an epoch that no
+    longer owned the work -- a receipt for an effect whose authority had already moved.
+
+    This is deterministic rather than timing-dependent: the takeover simply completes first, which
+    is exactly the state the old read-then-write would have been holding a stale answer for.
+    """
+    db = tmp_path / "cells.db"
+    writer, taker = CellStore(db), CellStore(db)
+    try:
+        identity = identity_for_job(_job())
+        cell = writer.activate(identity, actor="intake")
+        cell_id, epoch = cell["cell_id"], int(cell["epoch"])
+
+        assert taker.take_epoch(cell_id, epoch, actor="recovery") == epoch + 1
+
+        with pytest.raises(StaleEpoch):
+            writer.record(Mutation(cell_id, epoch, "publish:stale", "external_mutation", {"pr": 7}))
+
+        kinds = [event["kind"] for event in taker.history(cell_id)]
+        assert "external_mutation" not in kinds, f"stale receipt was appended anyway: {kinds}"
+
+        # The new owner can still record at the epoch it actually holds.
+        writer.record(Mutation(cell_id, epoch + 1, "publish:current", "external_mutation", {"pr": 8}))
+        assert "external_mutation" in [event["kind"] for event in taker.history(cell_id)]
+    finally:
+        writer.close()
+        taker.close()

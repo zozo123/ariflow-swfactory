@@ -8,6 +8,7 @@ from swfactory.authority import ResourceKind
 from swfactory.cells import CellStore, StaleEpoch, operation_key
 from swfactory.core_capabilities import (
     AirflowBinding,
+    CellNotActive,
     CoreCapabilityError,
     CoreCapabilityRuntime,
     CoreMutationRequest,
@@ -253,3 +254,63 @@ def test_issue_local_workgraph_stays_bounded(runtime: CoreCapabilityRuntime) -> 
     plan = runtime.compile_work([WorkNode(f"n{i}") for i in range(8)], max_width=7)
     assert max(len(layer) for layer in plan.layers) <= 7
     assert set(node for layer in plan.layers for node in layer) == {f"n{i}" for i in range(8)}
+
+
+def test_cancelled_cell_refuses_publication_before_the_provider_callback(
+    runtime: CoreCapabilityRuntime,
+) -> None:
+    """#2041: a current epoch is not permission to publish.
+
+    A real runtime accepted a Cell already in ``cancelled`` and ran its publication callback.
+    Identity, binding and policy all still checked out -- none of them asks whether the work is
+    still live. The refusal must land *before* the callback, so assert on the call counter rather
+    than only on the exception.
+    """
+    policy, cell, airflow, request = prepared(runtime)
+    runtime.cells.patch(cell["cell_id"], int(cell["epoch"]), "test:cancel", state="cancelled")
+
+    calls: list[int] = []
+
+    def provider():
+        calls.append(1)  # pragma: no cover - reaching this is the defect
+        return {"pr": 7}
+
+    with pytest.raises(CellNotActive) as excinfo:
+        runtime.execute_external(request, provider)
+    assert calls == [], "the provider callback ran: the Cell was fenced too late or not at all"
+    assert "cancelled" in str(excinfo.value)
+    assert ResourceKind.GITHUB_PUBLICATION.value in str(excinfo.value)
+
+
+def test_terminal_cell_still_permits_cleanup_and_replay(runtime: CoreCapabilityRuntime) -> None:
+    """The fence is operation-specific, and it must not swallow observation.
+
+    Cancelling work is worse than useless if it strands the sandbox that work created, so cleanup
+    stays reachable. Replaying an already-committed receipt is likewise observation, not a new
+    effect: refusing it would break the idempotency that stops a redelivered Airflow task from
+    opening a second pull request.
+    """
+    policy, cell, airflow, request = prepared(runtime)
+    first = runtime.execute_external(request, lambda: {"pr": 7})
+    assert first.replayed is False
+
+    runtime.cells.patch(cell["cell_id"], int(cell["epoch"]), "test:cancel", state="cancelled")
+
+    replayed = runtime.execute_external(request, lambda: {"pr": 999})
+    assert replayed.replayed is True and replayed.result == first.result
+
+    cleanup = replace(
+        request,
+        resource=ResourceKind.CLEANUP,
+        kind="sandbox_cleanup",
+        parts=("teardown",),
+    )
+    assert runtime.execute_external(cleanup, lambda: {"released": True}).result == {"released": True}
+
+
+def test_binding_a_run_to_a_terminal_cell_is_refused(runtime: CoreCapabilityRuntime) -> None:
+    """Binding claims a Cell for new work, so it obeys the same fence as publication."""
+    policy, cell, airflow, request = prepared(runtime)
+    runtime.cells.patch(cell["cell_id"], int(cell["epoch"]), "test:cancel", state="cancelled")
+    with pytest.raises(CellNotActive):
+        runtime.bind_airflow(replace(airflow, run_id="run-42", dag_id="software_factory"))

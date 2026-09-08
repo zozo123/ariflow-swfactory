@@ -19,6 +19,7 @@ from typing import Any
 
 from swfactory.authority import MutationAuthority, ResourceKind
 from swfactory.cells import (
+    TERMINAL_STATES,
     CellBusy,
     CellIdentity,
     CellStore,
@@ -37,6 +38,18 @@ from swfactory.trust_evidence import TrustedEvidence, validate_mutation_policy
 
 class CoreCapabilityError(RuntimeError):
     """The canonical core capability contract was violated."""
+
+
+class CellNotActive(CoreCapabilityError):
+    """A terminal Cell was asked to create a new external effect."""
+
+
+# Resources a terminal Cell may still act on. Cancelling work is worse than useless if it also
+# strands the sandbox and the branches that work created, so cleanup and evidence stay reachable
+# after the Cell is done. Everything else -- publication above all -- is fenced: a current epoch
+# proves the caller is not stale, and that is a different question from whether the work it belongs
+# to is still authorised to reach the outside world.
+TERMINAL_EFFECT_RESOURCES = frozenset({ResourceKind.CLEANUP, ResourceKind.EVIDENCE})
 
 
 @dataclass(frozen=True)
@@ -149,6 +162,7 @@ class CoreCapabilityRuntime:
         """Bind the authoritative Airflow run to the durable Cell epoch exactly once."""
         binding.validate()
         cell = self._current_cell(binding.cell_id, binding.epoch)
+        self._refuse_terminal_effect(cell, ResourceKind.AIRFLOW_RUN)
         key = operation_key(
             "airflow_bind",
             binding.cell_id,
@@ -247,6 +261,12 @@ class CoreCapabilityRuntime:
 
         ref = OperationRef(request.airflow.cell_id, request.airflow.epoch, request.kind, key)
         replayed = self._already_committed(key)
+        # Ordered deliberately: reading back a receipt the journal already holds is observation, not
+        # a new effect, and it must keep working on a terminal Cell. Refusing it would break the
+        # idempotent replay that stops a redelivered Airflow task from opening a second pull
+        # request. Only a call that would actually reach the provider is fenced.
+        if not replayed:
+            self._refuse_terminal_effect(cell, request.resource)
 
         def durable_call() -> Any:
             return redact(fn())
@@ -316,10 +336,33 @@ class CoreCapabilityRuntime:
         }
 
     def _current_cell(self, cell_id: str, epoch: int) -> dict[str, Any]:
+        """Resolve the Cell and prove the caller's epoch is still the current one.
+
+        Epoch is the only question answered here. Lifecycle state is checked separately, at the
+        point where a new effect would actually be created, because replaying a receipt the journal
+        has already committed must stay possible on a terminal Cell.
+        """
         cell = self.cells.get(cell_id)
         if int(cell["epoch"]) != epoch:
             raise StaleEpoch(f"{cell_id}: expected epoch {epoch}, current {cell['epoch']}")
         return cell
+
+    @staticmethod
+    def _refuse_terminal_effect(cell: dict[str, Any], resource: ResourceKind) -> None:
+        """Refuse a NEW external effect from a Cell whose lifecycle has already concluded.
+
+        A real runtime accepted a Cell already in ``cancelled`` and ran its publication callback,
+        because identity, binding and policy all still checked out. They would: none of them asks
+        whether the work is still live. Cancelled and rejected work must not publish, and a Cell
+        that already succeeded must not publish a second time.
+        """
+        state = str(cell.get("state") or "")
+        if state in TERMINAL_STATES and resource not in TERMINAL_EFFECT_RESOURCES:
+            raise CellNotActive(
+                f"{cell['cell_id']} is {state}: {resource.value} may not create a new external "
+                f"effect (permitted on a terminal Cell: "
+                f"{', '.join(sorted(r.value for r in TERMINAL_EFFECT_RESOURCES))})"
+            )
 
     @staticmethod
     def _require_airflow_owner(cell: dict[str, Any], binding: AirflowBinding) -> None:
