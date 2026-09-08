@@ -173,9 +173,7 @@ def test_old_epoch_receipt_is_refused_after_a_takeover_on_another_connection(tmp
         assert taker.take_epoch(cell_id, epoch, actor="recovery") == epoch + 1
 
         with pytest.raises(StaleEpoch):
-            writer.record(
-                Mutation(cell_id, epoch, "publish:stale", "external_mutation", {"pr": 7})
-            )
+            writer.record(Mutation(cell_id, epoch, "publish:stale", "external_mutation", {"pr": 7}))
 
         kinds = [event["kind"] for event in taker.history(cell_id)]
         assert "external_mutation" not in kinds, f"stale receipt was appended anyway: {kinds}"
