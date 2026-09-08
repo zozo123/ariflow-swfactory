@@ -68,7 +68,11 @@ impl OperatorOps {
     ///
     /// The backend remains the persistence authority; this method performs only bounded reads and
     /// then feeds one pure projection shared by CLI/TUI callers.
-    pub async fn attention(&self, limit: usize, cancel: &CancellationToken) -> Result<ControlAttention> {
+    pub async fn attention(
+        &self,
+        limit: usize,
+        cancel: &CancellationToken,
+    ) -> Result<ControlAttention> {
         validate_limit(limit)?;
         let queue = self.queue(limit, cancel).await?;
         let operations = self.operations(limit, cancel).await?;

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -31,7 +31,7 @@ def test_stale_human_response_cannot_publish_after_cell_epoch_moves() -> None:
         "cell-1",
         2,
         "a" * 64,
-        datetime.now(timezone.utc),
+        datetime.now(UTC),
     )
     with pytest.raises(PermissionError, match="stale Cell authority"):
         authorize_gate(policy, stale)

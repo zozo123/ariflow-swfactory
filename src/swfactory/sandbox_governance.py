@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Iterable, Mapping, Sequence
 
 
 def _hash(value: object) -> str:
@@ -106,7 +106,9 @@ class Conflict:
     paths: tuple[str, ...]
 
 
-def classify_workgraph_conflicts(results: Sequence[WorkNodeResult], *, protected_paths: Iterable[str] = ()) -> tuple[Conflict, ...]:
+def classify_workgraph_conflicts(
+    results: Sequence[WorkNodeResult], *, protected_paths: Iterable[str] = ()
+) -> tuple[Conflict, ...]:
     conflicts: list[Conflict] = []
     protected = frozenset(protected_paths)
     for result in results:
@@ -135,9 +137,7 @@ def authorize_fan_in(results: Sequence[WorkNodeResult], *, protected_paths: Iter
         raise ValueError("fan-in requires at least one result")
     conflicts = classify_workgraph_conflicts(results, protected_paths=protected_paths)
     if conflicts:
-        detail = "; ".join(
-            f"{row.kind}:{','.join(row.nodes)}:{','.join(row.paths)}" for row in conflicts
-        )
+        detail = "; ".join(f"{row.kind}:{','.join(row.nodes)}:{','.join(row.paths)}" for row in conflicts)
         raise RuntimeError("workgraph fan-in refused: " + detail)
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -33,7 +33,7 @@ def test_existing_remote_effect_is_adopted_only_when_identity_matches() -> None:
 
 def test_retry_policy_respects_authority_budget_backoff_and_replay_safety() -> None:
     absent = Observation(Outcome.ABSENT)
-    future = datetime.now(timezone.utc) + timedelta(minutes=1)
+    future = datetime.now(UTC) + timedelta(minutes=1)
     assert RetryPolicy(0, 3, future, True, True).next_action(absent) == RecoveryAction.WAIT
     assert RetryPolicy(0, 3, None, False, True).next_action(absent) == RecoveryAction.REFUSE
     assert RetryPolicy(3, 3, None, True, True).next_action(absent) == RecoveryAction.REFUSE
@@ -88,7 +88,7 @@ def test_callback_reconciliation_is_epoch_fenced_and_idempotent() -> None:
 
 
 def test_backup_manifest_refuses_partial_or_mixed_schema() -> None:
-    manifest = BackupManifest(2, datetime.now(timezone.utc), {"cells": "a", "operations": "b"}, "f" * 64)
+    manifest = BackupManifest(2, datetime.now(UTC), {"cells": "a", "operations": "b"}, "f" * 64)
     manifest.validate(expected_schema=2, required_stores={"cells", "operations"})
     with pytest.raises(RuntimeError, match="unsupported"):
         manifest.validate(expected_schema=3, required_stores={"cells"})

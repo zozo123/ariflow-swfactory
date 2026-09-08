@@ -30,7 +30,10 @@ def test_owned_resource_cleanup_is_epoch_and_activity_fenced() -> None:
     assert authorize_cleanup(item, observation(item), current_epoch=2, active=True) == CleanupDecision.KEEP
     assert authorize_cleanup(item, observation(item), current_epoch=2, active=False) == CleanupDecision.REMOVE
     assert authorize_cleanup(item, observation(item), current_epoch=3, active=False) == CleanupDecision.REMOVE
-    assert authorize_cleanup(item, ResourceObservation("x", {}, False), current_epoch=2, active=False) == CleanupDecision.REFUSE
+    assert (
+        authorize_cleanup(item, ResourceObservation("x", {}, False), current_epoch=2, active=False)
+        == CleanupDecision.REFUSE
+    )
 
 
 def test_cleanup_debt_cannot_be_settled_by_another_cell() -> None:

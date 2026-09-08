@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
-
 
 SUPPORT_ORDER = {"unsupported": 0, "test_only": 1, "experimental": 2, "supported": 3}
 

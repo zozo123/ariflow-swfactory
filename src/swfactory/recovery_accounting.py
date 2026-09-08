@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Mapping
 
 
 class Outcome(StrEnum):
@@ -78,7 +78,7 @@ class RetryPolicy:
             return RecoveryAction.OBSERVE
         if self.attempts >= self.max_attempts or observation.status == Outcome.EXHAUSTED:
             return RecoveryAction.REFUSE
-        if self.retry_at is not None and self.retry_at > datetime.now(timezone.utc):
+        if self.retry_at is not None and self.retry_at > datetime.now(UTC):
             return RecoveryAction.WAIT
         if observation.status == Outcome.ABSENT and self.replay_safe:
             return RecoveryAction.RETRY
