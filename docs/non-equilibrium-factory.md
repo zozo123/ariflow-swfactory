@@ -39,7 +39,7 @@ as an **entropy-production proxy**, not literal joules per kelvin. Persistent ne
 model/sign-convention alarm: inspect the chosen affinities rather than pretending the second law was
 violated by a CI system.
 
-Implementation: `src/swfactory/non_equilibrium.py`.
+Status: research only. There is no implementation in the product path; see [docs/research/](research/).
 
 ## 2. Max entropy is a default for uncertainty, not an excuse for randomness
 
@@ -251,7 +251,7 @@ Physics-informed control sits **below** these invariants:
 10. Promotion requires evidence and explicit authority; child factories cannot self-promote.
 
 `src/swfactory/core_capabilities.py` is the cross-cutting execution seam for these invariants.
-`src/swfactory/non_equilibrium.py` is the advisory physics/ensemble layer.
+This document is the advisory physics/ensemble layer, and it is research only: no module under `src/swfactory/` implements it.
 
 ## 12. Acceptance standard
 

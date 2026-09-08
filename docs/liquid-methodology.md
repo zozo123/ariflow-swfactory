@@ -227,7 +227,7 @@ Cell authority, Airflow, workgraphs, evidence, security, operators, and other se
 | C09 | Evidence and SLOs | What demonstrates correctness, provenance, latency, and cost? |
 | C10 | Stabilization and entropy collapse | Which overlapping paths disappear, and what verifies the survivor? |
 
-The axes are explicit in the [bundle engine](../src/swfactory/liquid_bundle_engine.py). A matrix
+The axes are explicit in the [Liquid spec](../config/liquid-spec.yaml). A matrix
 cell is a completeness question. Several cells may resolve to the same primitive; some may be
 inapplicable with a documented reason. It is not a requirement for ten implementations per domain.
 
@@ -264,7 +264,7 @@ removal condition, and migration plan.
 
 Legacy vocabulary is absorbed through a documented mapping to canonical Cell, Airflow, workgraph,
 persistence, security, evidence, GitHub, deployment, generation, and operator concepts. The
-[legacy adapter](../src/swfactory/legacy_issue_runtime.py) records that mapping. Old issue wording
+[legacy family in the Liquid spec](../config/liquid-spec.yaml) records that mapping. Old issue wording
 does not require an obsolete implementation family to live forever.
 
 ### Stabilize before main
@@ -299,7 +299,7 @@ executor currently launches multiple candidate sandboxes for one issue.
 ## Historical fan-in and what it proves
 
 [PR #1196](https://github.com/zozo123/ariflow-swfactory/pull/1196) records the original
-`stabilize/liquid-all` fan-in. The current [Liquid manifest](../src/swfactory/liquid_release.py)
+`stabilize/liquid-all` fan-in. The current [Liquid manifest](../config/liquid-spec.yaml)
 checks these declared bundles and legacy ranks:
 
 | Wave | Coverage model | Integration units |
@@ -313,7 +313,7 @@ checks these declared bundles and legacy ranks:
 Reproduce the structural check from the repository root:
 
 ```sh
-uv run python -m swfactory.liquid_release
+uv run python -m swfactory.liquid_spec
 ```
 
 The manifest checks bundle shape, declared source counts, contiguous/non-overlapping spans, and
@@ -327,7 +327,7 @@ they are not a substitute for retained check results or a claim that current `ma
 
 Later [PR #2016](https://github.com/zozo123/ariflow-swfactory/pull/2016) records Ocean120,
 Phase240, and StatMech360: a further 720 declared slots. Their
-[aggregate coverage test](../tests/test_physics_bundle_coverage.py) has the same limitation:
+[Liquid spec checker](../src/swfactory/liquid_spec.py) has the same limitation:
 coverage and routing are distinct from integrated, measured runtime capability. The original 900
 is a historical wave size, not a claim about the entire current backlog or product feature count.
 
@@ -466,7 +466,7 @@ These links are starting points for review, not blanket capability certification
 | Shared capability contract | [Core runtime](../src/swfactory/core_capabilities.py), [focused tests](../tests/test_core_capabilities.py) | The backend currently uses `ControlKernel`; adopt one canonical path without retaining parallel authority |
 | Inner work | [Plan model](../src/swfactory/models.py), [workgraph](../src/swfactory/workgraph.py), [lifecycle contract](lifecycle.md) | Wire bounded native fork/merge execution before advertising it |
 | Evidence and claims | [Trusted evidence](../src/swfactory/trust_evidence.py), [public capabilities](../src/swfactory/public_capabilities.py) | Link acceptance criteria and claims to retained runtime evidence |
-| Matrix and legacy scope | [Bundle engine](../src/swfactory/liquid_bundle_engine.py), [manifest](../src/swfactory/liquid_release.py), [legacy mapping](../src/swfactory/legacy_issue_runtime.py) | Track declared coverage separately from integrated, validated behavior |
+| Matrix and legacy scope | [Liquid spec](../config/liquid-spec.yaml), [checker](../src/swfactory/liquid_spec.py) | The spec resolves every `runtime_anchor` to real code, so declared coverage is falsifiable rather than asserted; `state`/`support` keep it separate from validated behavior |
 | Providers and generations | [Provider conformance](../src/swfactory/provider_conformance.py), [generations](../src/swfactory/generations.py) | Publish measured support boundaries and govern candidate promotion |
 | Operators and recovery | [Rust console](../rust/README.md), [recovery guide](run-recovery.md), [backend](factory-backend.md) | Prove cross-surface agreement and repair from durable state after interruption |
 

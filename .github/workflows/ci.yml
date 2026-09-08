@@ -18,7 +18,7 @@ jobs:
       - run: uv sync
       - run: uv run ruff check . && uv run ruff format --check .
       - run: uv run pytest
-      - run: uv run python -m swfactory.liquid_release
+      - run: uv run python -m swfactory.liquid_spec
       - run: uv run python -m swfactory.capability_inventory
       - name: e2e demo (scripted agent, local runner, local git remote)
         run: uv run swfactory demo
