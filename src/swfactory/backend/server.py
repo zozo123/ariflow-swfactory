@@ -118,7 +118,11 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                 credential = self.headers.get("Authorization", "").encode()
                 mesh_route = self.command == "POST" and self.path.startswith(PREFIX + "/mesh/")
                 backend_ok = hmac.compare_digest(credential, backend_authorization)
-                mesh_ok = bool(mesh_authorization) and mesh_route and hmac.compare_digest(credential, mesh_authorization)
+                mesh_ok = (
+                    bool(mesh_authorization)
+                    and mesh_route
+                    and hmac.compare_digest(credential, mesh_authorization)
+                )
                 if not (backend_ok or mesh_ok):
                     raise Refused(401, "factory backend token required")
                 if self.headers.get("Transfer-Encoding"):
