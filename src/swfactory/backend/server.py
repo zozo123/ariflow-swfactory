@@ -49,6 +49,8 @@ def _json_default(value: Any) -> Any:
 def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> ThreadingHTTPServer:
     mesh_token = os.getenv("SWF_MESH_TOKEN", "")
     if mesh_token:
+        if not getattr(factory, "repo", ""):
+            raise ValueError("SWF_REPO is required when SWF_MESH_TOKEN enables a shared mesh")
         if len(mesh_token) < 32 or any(c.isspace() for c in mesh_token):
             raise ValueError("SWF_MESH_TOKEN must contain at least 32 non-whitespace characters")
         if hmac.compare_digest(mesh_token.encode(), factory.token.encode()):
@@ -154,7 +156,7 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
             except (ControlError, OSError, subprocess.SubprocessError):
                 status, payload = 502, {"detail": "backend service unavailable; mutation outcome may be unknown"}
             except (OperationError, CellError, MeshError) as error:
-                # Durable control-plane and mesh refusals are specific answers, not crashes.  A
+                # Durable control-plane and mesh refusals are specific answers, not crashes. A
                 # stale station lease or a competing coordination claim deserves the same honest
                 # conflict surface as a stale Cell epoch or in-doubt external mutation.
                 status, payload = 409, {"detail": str(error)[:500]}
