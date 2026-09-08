@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Iterable, Mapping, Sequence
 
 
 class WorkOrderState(StrEnum):
@@ -111,7 +111,7 @@ class ManagedWorkOrder:
             }
         )
 
-    def transition(self, target: WorkOrderState) -> "ManagedWorkOrder":
+    def transition(self, target: WorkOrderState) -> ManagedWorkOrder:
         if target not in _ALLOWED[self.state]:
             raise ValueError(f"invalid work-order transition {self.state} -> {target}")
         return ManagedWorkOrder(
@@ -239,8 +239,8 @@ class ScheduleLimits:
     def next_tick(self, now: datetime) -> datetime:
         if now.tzinfo is None:
             raise ValueError("now must be timezone-aware")
-        origin = self.origin.astimezone(timezone.utc)
-        current = now.astimezone(timezone.utc)
+        origin = self.origin.astimezone(UTC)
+        current = now.astimezone(UTC)
         if current < origin:
             return self.origin
         elapsed = current - origin

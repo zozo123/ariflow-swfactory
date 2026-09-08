@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -18,7 +18,7 @@ from swfactory.sandbox_governance import (
 
 def test_stale_human_response_cannot_publish_after_cell_epoch_moves() -> None:
     policy = HumanGate("publish", True, "cell-1", 3, "a" * 64)
-    stale = GateResponse("publish", "operator", "approve", "cell-1", 2, "a" * 64, datetime.now(timezone.utc))
+    stale = GateResponse("publish", "operator", "approve", "cell-1", 2, "a" * 64, datetime.now(UTC))
     with pytest.raises(PermissionError, match="stale Cell authority"):
         authorize_gate(policy, stale)
 

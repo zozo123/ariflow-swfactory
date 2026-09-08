@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Mapping
 
 
 def _digest(value: object) -> str:
@@ -60,7 +60,9 @@ class IncidentLedger:
         self.states[key] = IncidentState.CREATING
         return key
 
-    def record_created(self, identity: IncidentIdentity, issue_number: int, issue_url: str, content: Mapping[str, object]) -> IncidentReceipt:
+    def record_created(
+        self, identity: IncidentIdentity, issue_number: int, issue_url: str, content: Mapping[str, object]
+    ) -> IncidentReceipt:
         key = identity.key
         if issue_number <= 0 or not issue_url:
             raise ValueError("created incident requires an issue identity")

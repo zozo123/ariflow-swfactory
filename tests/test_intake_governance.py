@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -50,14 +50,14 @@ def test_managed_work_order_binds_every_cell_to_one_snapshot() -> None:
 
 def test_human_gate_rejects_auto_and_stale_artifacts() -> None:
     policy = HumanGate("publish", True, "cell-1", 2, "a" * 64)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with pytest.raises(PermissionError, match="automatically"):
         authorize_gate(policy, GateResponse("publish", "auto", "approve", "cell-1", 2, "a" * 64, now))
     with pytest.raises(PermissionError, match="stale artifacts"):
         authorize_gate(policy, GateResponse("publish", "yossi", "approve", "cell-1", 2, "b" * 64, now))
-    assert authorize_gate(
-        policy, GateResponse("publish", "yossi", "approve", "cell-1", 2, "a" * 64, now)
-    ).actor == "yossi"
+    assert (
+        authorize_gate(policy, GateResponse("publish", "yossi", "approve", "cell-1", 2, "a" * 64, now)).actor == "yossi"
+    )
 
 
 def test_backlog_selection_is_bounded_and_explains_skips() -> None:
@@ -80,15 +80,13 @@ def test_backlog_selection_is_bounded_and_explains_skips() -> None:
 
 def test_schedule_limits_are_explicit_and_timezone_aware() -> None:
     limits = ScheduleLimits(
-        origin=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        origin=datetime(2026, 1, 1, tzinfo=UTC),
         period=timedelta(days=1),
         max_active_runs=1,
         max_cells=4,
         run_timeout=timedelta(hours=20),
     )
-    assert limits.next_tick(datetime(2026, 1, 1, 12, tzinfo=timezone.utc)) == datetime(
-        2026, 1, 2, tzinfo=timezone.utc
-    )
+    assert limits.next_tick(datetime(2026, 1, 1, 12, tzinfo=UTC)) == datetime(2026, 1, 2, tzinfo=UTC)
     assert limits.admit_run(active_runs=0, active_cells=2, requested_cells=2) == (True, "admitted")
     assert limits.admit_run(active_runs=1, active_cells=0, requested_cells=1) == (False, "active-run-limit")
 
