@@ -19,7 +19,9 @@ jobs:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
       - name: Apply single-writer patch
-        run: python tools/patch_operation_single_writer.py
+        run: |
+          python tools/patch_operation_single_writer.py
+          python tools/patch_operation_retry_fix.py
       - name: Install
         run: uv sync
       - name: Format and lint
@@ -30,7 +32,7 @@ jobs:
         run: uv run pytest tests/test_operation_single_writer.py tests/test_liquid_convergence.py tests/test_core_capabilities.py
       - name: Commit proven implementation only
         run: |
-          rm tools/patch_operation_single_writer.py .github/workflows/operation-single-writer-patch.yml
+          rm tools/patch_operation_single_writer.py tools/patch_operation_retry_fix.py .github/workflows/operation-single-writer-patch.yml
           git config user.name "Yossi Eliaz"
           git config user.email "zozo123@users.noreply.github.com"
           git add -A
