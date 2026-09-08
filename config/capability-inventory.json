@@ -151,7 +151,7 @@
       "environment": "islo MicroVM agent cells in production and local Docker sandboxes on a developer box; in both the orchestrator holds the only GitHub credential",
       "test": "tests/test_selfhost.py (contract parses, every protected entry survives literal-prefix reduction, confinement modules are refused for build and fix, both gates are non-auto, one line serves both backends)",
       "evidence": [
-        "required check: control-plane-gate (re-checks the base-revision protected list against the PR diff)"
+        "advisory check: control-plane-gate (base-revision protected list vs the PR diff; not required on main)"
       ],
       "follow_up": "No end-to-end evidence exists yet: no self-hosted run has produced a merged pull request on either backend. Before any change of state, archive one full self-hosted run per backend (islo and docker) whose PR a human merged, and settle whether `islo use --init minimal` executes the repo-root islo.yaml setup script that installs uv."
     }

@@ -68,7 +68,10 @@ jobs:
             exit 1
           fi
           git show "${BASE_SHA}:factory.toml" > /tmp/base-factory.toml
-          git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" > /tmp/changed.txt
+          # Three dots, not two: a two-dot diff reports commits on the base that are absent
+          # from the head as PR content, so an un-rebased branch gets blamed for files it
+          # never touched. The gate must see the merge-base delta only.
+          git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > /tmp/changed.txt
 
           python3 - <<'PY'
           import pathlib, sys, tomllib

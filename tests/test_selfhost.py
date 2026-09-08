@@ -154,7 +154,7 @@ def test_both_sandbox_backends_are_declared_in_the_capability_inventory() -> Non
         assert by_id[claim_id]["state"] == "experimental"
         assert by_id[claim_id]["follow_up"], "an experimental claim owes a follow_up"
     assert by_id["selfhost.factory"]["evidence"] == [
-        "required check: control-plane-gate (re-checks the base-revision protected list against the PR diff)"
+        "advisory check: control-plane-gate (base-revision protected list vs the PR diff; not required on main)"
     ], "no self-hosted run has been archived yet; do not claim end-to-end evidence"
 
 
@@ -193,6 +193,79 @@ def _run_gate(tmp_path: Path, changed: str) -> subprocess.CompletedProcess[str]:
     changed_file.write_text(changed, encoding="utf-8")
     code = code.replace("/tmp/base-factory.toml", str(base)).replace("/tmp/changed.txt", str(changed_file))
     return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_the_gate_ignores_base_drift(tmp_path: Path) -> None:
+    """The gate must diff the merge-base, not the base tip.
+
+    A two-dot ``git diff BASE HEAD`` reports commits that are on the base but absent from the head
+    as if the pull request had made them, so an un-rebased branch is blamed for files it never
+    touched. That is not hypothetical: the collapse PR modifies ``.github/workflows/ci.yml`` and
+    ``pyproject.toml``, both protected entries, so once it lands every un-rebased ``factory/*``
+    branch would fail a two-dot gate. The lifted-matcher tests cannot catch this because they feed
+    the matcher a changed-file list instead of running git, so this one drives real repositories.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "factory.toml").write_text((ROOT / "factory.toml").read_text(encoding="utf-8"))
+    (repo / "untouched.py").write_text("x = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    merge_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    # The pull request: one innocuous file, no protected path.
+    _git(repo, "checkout", "-q", "-b", "factory/work")
+    (repo / "docs_note.md").write_text("note\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "pr work")
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    # Meanwhile the base advances, touching a PROTECTED path the branch never saw.
+    _git(repo, "checkout", "-q", "main")
+    (repo / "pyproject.toml").write_text("[project]\nname='x'\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base drift into a protected path")
+    base_tip = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    assert base_tip != merge_base, "the base must have advanced for this test to mean anything"
+
+    def changed(spec: str) -> list[str]:
+        out = subprocess.run(
+            ["git", "diff", "--name-only", spec],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return [line for line in out.stdout.splitlines() if line.strip()]
+
+    two_dot = changed(f"{base_tip}..{head}")
+    three_dot = changed(f"{base_tip}...{head}")
+
+    # This is the bug, pinned: two dots invent a protected-path change out of base drift.
+    assert "pyproject.toml" in two_dot
+    # Three dots see only what the branch actually did.
+    assert three_dot == ["docs_note.md"], three_dot
+    assert "pyproject.toml" not in three_dot
+
+    workflow = (ROOT / ".github" / "workflows" / "control-plane-gate.yml").read_text(encoding="utf-8")
+    assert '"${BASE_SHA}...${HEAD_SHA}"' in workflow, "the gate must use a three-dot diff"
 
 
 def test_the_gate_refuses_a_factory_authored_control_plane_change(tmp_path: Path) -> None:
