@@ -268,6 +268,11 @@ class Factory:
         self.control.mutate(ref, apply, replay_safe=True, reconcile=reconcile)
 
     def submit(self, body: dict[str, Any]) -> dict[str, Any]:
+        # Admission readiness belongs to the shared use case, not one HTTP route. Every caller --
+        # canonical work-orders, the Airflow compatibility mount, and future internal callers --
+        # must cross this guard before a reservation, Cell activation, or remote mutation exists.
+        if not self.capabilities()["mutation_ready"]:
+            raise Refused(503, "backend is draining or not mutation-ready")
         line = self._line(text(body, "line"))
         issues = body.get("issues")
         if not isinstance(issues, list) or not issues or len(issues) > 1000:
@@ -453,7 +458,26 @@ class Factory:
         if method == "PATCH" and len(segments) == 2 and body == {"is_paused": False}:
             return self.airflow(method, path, body)
         if method == "PATCH" and len(segments) == 4 and segments[2] == "dagRuns" and body == {"state": "failed"}:
-            return self.airflow(method, path, body)
+            dag_id, run_id = segments[1], segments[3]
+            managed = [
+                cell
+                for cell in self.cell_store.list(limit=1000)
+                if cell.get("airflow_dag_id") == dag_id
+                and cell.get("airflow_run_id") == run_id
+                and (cell.get("state") not in TERMINAL_STATES or cell.get("state") == "cancelled")
+            ]
+            if not managed:
+                return self.airflow(method, path, body)
+            for cell in managed:
+                self._transition(
+                    {
+                        "cell_id": cell["cell_id"],
+                        "epoch": int(cell["epoch"]),
+                        "state": "cancelled",
+                        "operation_key": f"operator:airflow-stop:{run_id}:{cell['cell_id']}",
+                    }
+                )
+            return 200, {"state": "failed", "managed_cells": len(managed)}
         if (
             method == "PATCH"
             and len(segments) == 8
@@ -549,6 +573,58 @@ class Factory:
             "bottlenecks": bottlenecks,
         }
 
+    def _journal_airflow_cancel(self, cell: dict[str, Any]) -> dict[str, Any]:
+        """Stop one managed Airflow run through the same durable operation journal as dispatch.
+
+        The Cell is cancelled *before* this method is called. Capacity is released only after this
+        operation is committed or observation proves the run is already terminal, so an ambiguous
+        stop can never admit replacement work while the old run may still be alive.
+        """
+        dag_id = str(cell.get("airflow_dag_id") or "")
+        run_id = str(cell.get("airflow_run_id") or "")
+        if not dag_id or not run_id:
+            return {"state": "no_remote_run"}
+        path = "/dags/" + urllib.parse.quote(dag_id, safe="") + "/dagRuns/" + urllib.parse.quote(run_id, safe="")
+        ref = OperationRef.build(str(cell["cell_id"]), int(cell["epoch"]), "airflow_cancel", dag_id, run_id)
+
+        def apply() -> dict[str, Any]:
+            payload = self._checked_airflow("PATCH", path, {"state": "failed"})
+            return payload if isinstance(payload, dict) else {"state": "failed"}
+
+        def reconcile() -> MutationOutcome:
+            status, payload = self.airflow("GET", path, None)
+            if status == 404:
+                return MutationOutcome(
+                    "committed",
+                    {"state": "absent", "dag_run_id": run_id},
+                    {"status": status, "dag_run_id": run_id},
+                    "managed Airflow run is absent",
+                )
+            if status == 200 and isinstance(payload, dict):
+                state = str(payload.get("state") or "")
+                if state in {"failed", "success"}:
+                    return MutationOutcome(
+                        "committed",
+                        payload,
+                        {"status": status, "state": state, "dag_run_id": run_id},
+                        "managed Airflow run is terminal",
+                    )
+                return MutationOutcome(
+                    "definitely_absent",
+                    None,
+                    {"status": status, "state": state, "dag_run_id": run_id},
+                    "managed Airflow run is still live",
+                )
+            return MutationOutcome(
+                "ambiguous",
+                None,
+                {"status": status, "dag_run_id": run_id},
+                "managed Airflow cancellation outcome is unknown",
+            )
+
+        result = self.control.mutate(ref, apply, replay_safe=True, reconcile=reconcile)
+        return result if isinstance(result, dict) else {"state": "failed"}
+
     def _transition(self, body: dict[str, Any]) -> dict[str, Any]:
         cell_id = text(body, "cell_id")
         epoch = body.get("epoch")
@@ -558,7 +634,7 @@ class Factory:
         if requested not in {"running", "success", "failed", "cancelled", "rejected", "cleaned"}:
             raise ValueError("invalid lifecycle state")
         operation_key = text(
-            {"operation_key": body.get("operation_key") or f"airflow:{requested}"},
+            {"operation_key": body.get("operation_key") or f"operator:{requested}"},
             "operation_key",
             max_len=256,
         )
@@ -605,6 +681,13 @@ class Factory:
                 )
             except DuplicateOperation:
                 updated = self._cell(cell_id)
+            if (
+                requested == "cancelled"
+                and not operation_key.startswith("airflow:")
+                and updated.get("airflow_dag_id")
+                and updated.get("airflow_run_id")
+            ):
+                self._journal_airflow_cancel(updated)
             released = (
                 self.control.release_cell(cell_id, epoch=epoch, state=requested) if requested in TERMINAL_STATES else []
             )
