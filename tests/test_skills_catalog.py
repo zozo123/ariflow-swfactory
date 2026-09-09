@@ -52,5 +52,5 @@ def test_trusted_skills_cli_is_version_pinned_everywhere_it_executes() -> None:
     workflow = (ROOT / ".github" / "workflows" / "skills-catalog.yml").read_text()
     assert "skills@latest" not in connector
     assert "skills@latest" not in workflow
-    assert expected in connector
+    assert f'SKILLS_CLI_VERSION = "{SKILLS_CLI_VERSION}"' in connector
     assert expected in workflow
