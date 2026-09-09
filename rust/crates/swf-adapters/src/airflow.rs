@@ -650,14 +650,56 @@ fn log_line(entry: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Object(map) => {
             let event = map.get("event").and_then(Value::as_str).unwrap_or_default();
+            // Airflow 3 logs a failed task as the event "Task failed with exception" and puts the
+            // exception itself in a sibling `error_detail`. Rendering the event alone told the
+            // operator that something failed and nothing whatever about what: `scripts/swf_e2e.sh`
+            // has a session refused publication because another one holds the branch, and the
+            // refusal names the branch, the sha it will not overwrite and how to proceed -- all of
+            // which `swf logs` dropped. `logs` is the command someone runs to find out why, so the
+            // why has to survive the boundary.
+            let event = match exception_of(map) {
+                Some(exception) if event.is_empty() => exception,
+                Some(exception) => format!("{event}: {exception}"),
+                None => event.to_string(),
+            };
             match map.get("timestamp").and_then(Value::as_str) {
                 Some(ts) if !ts.is_empty() => format!("{ts} {event}"),
-                _ => event.to_string(),
+                _ => event,
             }
         }
         other => other.to_string(),
     };
     sanitize_line(&raw)
+}
+
+/// `<type>: <value>` for every exception in a structured entry's `error_detail`, or None.
+///
+/// The type and the value only, never the frames: a stack trace per line would bury the message in
+/// a log an operator is reading, and the frames are still in Airflow's own log for anyone who wants
+/// them. Both halves are optional on the wire, so an entry carrying only one still says something.
+fn exception_of(map: &Map<String, Value>) -> Option<String> {
+    let shown: Vec<String> = map
+        .get("error_detail")?
+        .as_array()?
+        .iter()
+        .filter_map(|detail| {
+            let kind = detail
+                .get("exc_type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let value = detail
+                .get("exc_value")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match (kind, value) {
+                ("", "") => None,
+                ("", value) => Some(value.to_string()),
+                (kind, "") => Some(kind.to_string()),
+                (kind, value) => Some(format!("{kind}: {value}")),
+            }
+        })
+        .collect();
+    (!shown.is_empty()).then(|| shown.join("; "))
 }
 
 #[async_trait]
@@ -1057,6 +1099,48 @@ mod tests {
         // The reason this happens at the boundary and not at the renderer.
         let hostile = log_line(&json!({"event": "safe\u{1b}[2Jcleared\u{1b}]0;retitle\u{7}"}));
         assert_eq!(hostile, "safecleared");
+    }
+
+    #[test]
+    fn a_failed_task_says_what_the_exception_was() {
+        // Shaped like Airflow 3's own failure entry: the event names nothing, `error_detail` holds
+        // the message. `swf logs` used to print the first half and drop the second, which is the
+        // difference between "your session was refused because another one holds that branch" and
+        // "Task failed with exception".
+        let failed = log_line(&json!({
+            "timestamp": "2026-09-03T08:00:00Z",
+            "event": "Task failed with exception",
+            "error_detail": [{
+                "exc_type": "StageError",
+                "exc_value": "[scm] factory/DEMO-1-ab12 on the remote is at 83887d9f30a2, which \
+        this factory instance did not publish. Refusing to overwrite it.",
+                "frames": [{"filename": "scm.py", "lineno": 163, "name": "_apply_and_push"}],
+            }],
+        }));
+        assert!(
+            failed.contains("Task failed with exception: StageError: [scm]"),
+            "{failed}"
+        );
+        assert!(failed.contains("Refusing to overwrite it."), "{failed}");
+        assert!(
+            !failed.contains("_apply_and_push"),
+            "frames belong in Airflow's log, not this one"
+        );
+
+        // Every field of `error_detail` is optional on the wire, and an entry without one must not
+        // start printing "None" or lose the event it does have.
+        assert_eq!(
+            log_line(&json!({"event": "done", "error_detail": [{"exc_notes": []}]})),
+            "done"
+        );
+        assert_eq!(
+            log_line(&json!({"event": "", "error_detail": [{"exc_type": "StageError"}]})),
+            "StageError"
+        );
+        assert_eq!(
+            log_line(&json!({"event": "done", "error_detail": "not an array"})),
+            "done"
+        );
     }
 
     #[tokio::test]
