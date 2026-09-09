@@ -381,13 +381,17 @@ def test_run_budget_is_seeded_from_the_orchestrator_log(tmp_path: Path) -> None:
         _agent(ctx, "plan", 1, "prompt", None)
     assert agent.calls == 1 and ctx.budget_seeded and ctx.spent_usd == 8.5
     assert seed_budget(ctx) == 8.5  # idempotent: seeded once per process
-    ok = _unit_ctx(
-        tmp_path,
-        _MemSandbox({"factory.toml": contract}),
-        _CostlyAgent(0.4),
-        max_budget_usd=8.0,
-    )
-    assert _agent(ok, "plan", 1, "prompt", None).cost_usd == 0.4 and ok.spent_usd == 7.9
+    # A second process sees 7.5 (stage log, adopted once as the floor) + 1.0 (the ledger's record of
+    # the call above, which no stage record describes because `_agent` was driven directly) = 8.5,
+    # and refuses. This test used to expect that process to spend 0.4 more and land at 7.9: the
+    # seed was `max(stage_log, ledger)`, which discarded the ledger's 1.0 in favour of the larger
+    # stage-log figure -- real money made free by the arithmetic (#2073). The refusal is the fix.
+    later = _CostlyAgent(0.4)
+    ok = _unit_ctx(tmp_path, _MemSandbox({"factory.toml": contract}), later, max_budget_usd=8.0)
+    with pytest.raises(StageError, match="run budget exhausted before plan.1"):
+        _agent(ok, "plan", 1, "prompt", None)
+    assert later.calls == 0, "a process that inherits an exhausted ceiling must not reach the provider"
+    assert seed_budget(ok) == 8.5
     assert [r.stage for r in load_stage_results(ok)] == ["intent", "spec"]
 
 
