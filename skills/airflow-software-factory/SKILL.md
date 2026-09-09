@@ -67,7 +67,7 @@ Require these invariants:
 The swfactory blueprint defines one production route. Astronomer Blueprint can compose that route
 inside a larger workflow. Its `software_factory` template selects an existing route and passes
 issues or target filters to the child DAG, preserving the child's approvals. Read
-`docs/astronomer-blueprint.md` before adding this composition layer.
+`docs/astronomer-blueprint.md` (or `docs/dag-factory.md` for YAML-first shops) before adding this composition layer.
 
 Use the target's `factory.toml` as the command contract. Do not guess package managers, test
 commands, source paths, or protected paths. Keep generated JUnit below `.factory/`.
