@@ -87,19 +87,19 @@ services:
       start_period: 120s
     restart: unless-stopped
 
+  # Intake, not scheduling: it submits work orders to the backend, which admits them and hands
+  # Airflow the run. It holds no Airflow credential, so it cannot create an unmanaged run at all.
   webhook:
     <<: *common
     command: ["bash", "deploy/docker/webhook.sh"]
     depends_on:
-      airflow:
+      backend:
         condition: service_started
     environment:
       <<: *common-env
-      AIRFLOW_URL: http://airflow:8080
-      SWF_AIRFLOW_HTTP_HOSTS: airflow
-      AIRFLOW_USER: ${AIRFLOW_USER:-admin}
-      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-}
-      AIRFLOW_TOKEN: ${AIRFLOW_TOKEN:-}
+      SWF_BACKEND_URL: http://backend:8082
+      SWF_BACKEND_HTTP_HOSTS: backend
+      SWF_BACKEND_TOKEN: ${SWF_BACKEND_TOKEN:-}
       SWF_WEBHOOK_SECRET: ${SWF_WEBHOOK_SECRET:-}
       SWF_WEBHOOK_PORT: "8081"
       SWF_WEBHOOK_INBOX: /opt/airflow_home/webhooks/inbox.sqlite3

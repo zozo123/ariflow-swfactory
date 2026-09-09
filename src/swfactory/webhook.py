@@ -1,16 +1,21 @@
-"""GitHub -> Airflow webhook receiver for the orchestrator sandbox. Stdlib only.
+"""GitHub -> managed work-order webhook receiver for the orchestrator sandbox. Stdlib only.
 
 The factory itself runs on islo: one long-lived ``swf-orchestrator`` sandbox hosts
 ``airflow standalone`` and this receiver on port 8081. GitHub posts to an islo incoming webhook
 (``islo webhook incoming create --deliver-to-port 8081 --path /webhooks/github ...``), islo
 verifies the HMAC and de-duplicates on ``X-GitHub-Delivery``, and delivers the request to this
-process, which durably queues the event before replying. A background dispatcher creates one
-stable Airflow DAG run and verifies the existing run after an ambiguous submission::
+process, which durably queues the event before replying. A background dispatcher then submits one
+work order per delivery to the backend's managed admission boundary::
 
-    issues.labeled  label "factory"         -> POST /api/v2/dags/factory/dagRuns {"issues": ["<n>"]}
-    issues.labeled  label "factory:<name>"  -> POST /api/v2/dags/<name>/dagRuns  {"issues": ["<n>"]}
+    issues.labeled  label "factory"         -> POST /v1/work-orders {"line": "factory", ...}
+    issues.labeled  label "factory:<name>"  -> POST /v1/work-orders {"line": "<name>", ...}
     issue_comment.created "@factory run [<name>]" on an issue -> same as above
     pull_request.*, factory:blocked / factory:rejected (deliver's PR labels), else -> ignored
+
+The backend owns admission: it reserves capacity, activates the Factory Cells and hands Airflow the
+run with its ``_factory_cells`` bindings. Talking to Airflow from here instead (``work_orders=None``)
+is LEGACY: those runs are unmanaged, and nothing fences a second one against them. Airflow remains
+the only lifecycle scheduler either way -- this receiver decides admission, never timing.
 
 ``route`` is pure and unit-tested; ``verify_signature`` implements GitHub's ``sha256=`` scheme
 for the case where the receiver is exposed without islo in front (``--secret-env``); the HTTP
@@ -47,6 +52,10 @@ COMMENT_COMMAND = "@factory run"
 WEBHOOK_PATH = "/webhooks/github"
 HEALTH_PATH = "/healthz"
 READY_PATH = "/readyz"
+WORK_ORDERS_PATH = "/v1/work-orders"
+# Every GitHub-shaped intake submits under one actor so that the same label, arriving twice through
+# two channels, hashes to the *same* work order instead of racing two admissions at one Cell.
+MANAGED_ACTOR = "github"
 SIGNATURE_HEADER = "X-Hub-Signature-256"
 SIGNATURE_PREFIX = "sha256="
 # Labels ``deliver`` writes on PRs; a labeled event carrying one is never a dispatch.
@@ -75,6 +84,20 @@ class Trigger:
         if self.dag_run_id is not None:
             body["dag_run_id"] = self.dag_run_id
         return body
+
+
+@dataclass(frozen=True)
+class WorkOrders:
+    """The managed admission boundary an intake submits through.
+
+    Present = managed mode: the receiver never touches Airflow, so a run can never exist without
+    the backend's durable admission, capacity accounting and Factory Cell bindings behind it.
+    Absent = legacy direct-Airflow mode, kept only for a sandbox with no backend in front of it.
+    """
+
+    url: str
+    token: str
+    actor: str = MANAGED_ACTOR
 
 
 # ---------------------------------------------------------------- routing (pure)
@@ -203,8 +226,12 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect()).open
 
 
-def _safe_airflow_base(url: str, env: Mapping[str, str] | None = None) -> str:
-    """Require HTTPS, except for loopback or an explicitly named internal HTTP host."""
+def _safe_base(url: str, *, what: str, allow_var: str, env: Mapping[str, str] | None = None) -> str:
+    """Require HTTPS, except for loopback or an explicitly named internal HTTP host.
+
+    The backend bearer token buys the same mutations an Airflow token does, so it is held to the
+    same rule: a credential never leaves this process over plaintext to a host nobody named.
+    """
 
     env = os.environ if env is None else env
     parsed = urllib.parse.urlsplit(url)
@@ -218,15 +245,23 @@ def _safe_airflow_base(url: str, env: Mapping[str, str] | None = None) -> str:
             try:
                 _ = parsed.port
             except ValueError as error:
-                raise ValueError("Airflow URL has an invalid port") from error
-    allowed_http = {item.strip().lower() for item in env.get("SWF_AIRFLOW_HTTP_HOSTS", "").split(",") if item.strip()}
+                raise ValueError(f"{what} URL has an invalid port") from error
+    allowed_http = {item.strip().lower() for item in env.get(allow_var, "").split(",") if item.strip()}
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError("Airflow URL must not contain credentials, query, or fragment")
+        raise ValueError(f"{what} URL must not contain credentials, query, or fragment")
     if parsed.scheme == "https" and host:
         return url.rstrip("/")
     if parsed.scheme == "http" and (loopback or host in allowed_http):
         return url.rstrip("/")
-    raise ValueError("Airflow URL must use HTTPS; HTTP hosts require SWF_AIRFLOW_HTTP_HOSTS")
+    raise ValueError(f"{what} URL must use HTTPS; HTTP hosts require {allow_var}")
+
+
+def _safe_airflow_base(url: str, env: Mapping[str, str] | None = None) -> str:
+    return _safe_base(url, what="Airflow", allow_var="SWF_AIRFLOW_HTTP_HOSTS", env=env)
+
+
+def _safe_backend_base(url: str, env: Mapping[str, str] | None = None) -> str:
+    return _safe_base(url, what="Backend", allow_var="SWF_BACKEND_HTTP_HOSTS", env=env)
 
 
 def _post_json(url: str, payload: Mapping[str, Any], *, headers: Mapping[str, str], opener: Opener) -> tuple[int, str]:
@@ -308,6 +343,46 @@ def trigger_airflow(trigger: Trigger, *, airflow_url: str, token: str, opener: O
     return str(run_id) if run_id else text.strip()
 
 
+def submit_work_order(
+    trigger: Trigger,
+    backend: WorkOrders,
+    *,
+    opener: Opener = _NO_REDIRECT_OPENER,
+) -> dict[str, Any]:
+    """``POST {backend.url}/v1/work-orders`` -- the one managed admission boundary.
+
+    The backend owns everything past this call: whether the order is admitted or queued, which
+    Factory Cells it binds, and whether an Airflow run is created at all. The receiver deliberately
+    learns none of that; it only needs a durable receipt naming the work order, so a redelivery can
+    be recognised as the same admission instead of becoming a second one. Refusals arrive as
+    ``HTTPError`` and stay refusals -- there is no Airflow fallback to launder them into a run.
+    """
+    base = _safe_backend_base(backend.url)
+    if _valid_name(trigger.dag_id) is None:
+        raise ValueError("invalid webhook line name")
+    # Only the fields the canonical route admits on. The inbox's own ``_swfactory_webhook`` block is
+    # receiver bookkeeping; sending it would change the request digest and split the work identity
+    # a second channel has to collide with.
+    order: dict[str, Any] = {"line": trigger.dag_id, "actor": backend.actor}
+    for key in ("issues", "targets"):
+        value = trigger.conf.get(key)
+        if value:
+            order[key] = list(value)
+    _, text = _post_json(
+        base + WORK_ORDERS_PATH,
+        order,
+        headers={"Authorization": f"Bearer {backend.token}"},
+        opener=opener,
+    )
+    try:
+        document = json.loads(text)
+    except ValueError:
+        raise RuntimeError("backend returned an invalid work-order receipt") from None
+    if not isinstance(document, Mapping) or not isinstance(document.get("submission_id"), str):
+        raise RuntimeError("backend returned an incomplete work-order receipt")
+    return dict(document)
+
+
 def token_provider_from_env(
     airflow_url: str,
     env: Mapping[str, str] | None = None,
@@ -331,21 +406,24 @@ def token_provider_from_env(
 def make_handler(
     *,
     airflow_url: str,
-    token_provider: TokenProvider,
+    token_provider: TokenProvider | None,
     secret: str | None = None,
     opener: Opener = _NO_REDIRECT_OPENER,
     log: Callable[[str], None] | None = None,
     inbox: DeliveryInbox | None = None,
     dispatcher: Dispatcher | None = None,
+    work_orders: WorkOrders | None = None,
 ) -> type[BaseHTTPRequestHandler]:
-    """Build the request handler class bound to one Airflow and one token source.
+    """Build the request handler class bound to one submission boundary and one credential.
 
-    ``POST /webhooks/github`` -> 202 ``{"routed": true, "dag_id", "dag_run_id"}`` when the event
-    dispatches, 200 ``{"routed": false}`` when it is ignored, 400 on bad JSON, 401 on a bad
-    signature (only when ``secret`` is set), 502 when Airflow refuses. ``GET /healthz`` -> 200.
-    With an inbox, 202 means the dispatch envelope is committed, not that Airflow is reachable.
-    Redeliveries reuse the receipt. The synchronous path remains for embedded callers.
-    Log lines carry the delivery id and the outcome, never the body or a secret.
+    ``POST /webhooks/github`` -> 202 when the event is admitted, 200 ``{"routed": false}`` when it
+    is ignored, 400 on bad JSON, 401 on a bad signature (only when ``secret`` is set). With an
+    inbox, 202 means the dispatch envelope is committed, not that the far side is reachable, and
+    redeliveries reuse the receipt. The synchronous path remains for embedded callers: in managed
+    mode it forwards the backend's own 409/422/429/503 so a drain or a capacity refusal is not
+    mistaken for an outage, and a 502 stays reserved for a boundary that could not be reached.
+    ``GET /healthz`` -> 200. Log lines carry the delivery id and the outcome, never the body or a
+    secret.
     """
     emit = log if log is not None else lambda line: print(line, file=sys.stderr, flush=True)
 
@@ -420,7 +498,11 @@ def make_handler(
             if inbox is not None:
                 self._enqueue(trigger, payload, body, delivery, event)
                 return
+            if work_orders is not None:
+                self._submit_now(trigger, delivery, event)
+                return
             try:
+                assert token_provider is not None  # enforced by make_server
                 run_id = trigger_airflow(trigger, airflow_url=airflow_url, token=token_provider(), opener=opener)
             except urllib.error.HTTPError as e:
                 detail = e.read().decode("utf-8", errors="replace")[:500]
@@ -441,6 +523,39 @@ def make_handler(
                     "dag_id": trigger.dag_id,
                     "conf": trigger.conf,
                     "dag_run_id": run_id,
+                },
+                delivery,
+                event,
+            )
+
+        def _submit_now(self, trigger: Trigger, delivery: str, event: str) -> None:
+            """Inboxless managed mode: the backend's own refusal is what the caller is told.
+
+            A drain, a capacity refusal or an immutable-work conflict is forwarded with its status
+            instead of being flattened into 502, because each one means something different to the
+            sender and none of them is "Airflow is down".
+            """
+            assert work_orders is not None
+            try:
+                receipt = submit_work_order(trigger, work_orders, opener=opener)
+            except urllib.error.HTTPError as e:
+                e.close()
+                status = e.code if e.code in {409, 422, 429, 503} else 502
+                detail = {"error": f"work order refused ({e.code})", "dag_id": trigger.dag_id}
+                self._reply(status, detail, delivery, event)
+                return
+            except (urllib.error.URLError, OSError, RuntimeError, ValueError) as e:
+                self._reply(502, {"error": f"backend unreachable: {e}", "dag_id": trigger.dag_id}, delivery, event)
+                return
+            self._reply(
+                202,
+                {
+                    "routed": True,
+                    "dag_id": trigger.dag_id,
+                    "conf": trigger.conf,
+                    "submission_id": receipt["submission_id"],
+                    "state": receipt.get("state"),
+                    "dag_run_id": receipt.get("run_id"),
                 },
                 delivery,
                 event,
@@ -515,16 +630,19 @@ def make_server(
     port: int,
     *,
     airflow_url: str,
-    token_provider: TokenProvider,
+    token_provider: TokenProvider | None = None,
     secret: str | None = None,
     opener: Opener = _NO_REDIRECT_OPENER,
     host: str = "0.0.0.0",
     log: Callable[[str], None] | None = None,
     inbox: DeliveryInbox | None = None,
     max_attempts: int = 12,
+    work_orders: WorkOrders | None = None,
 ) -> HTTPServer:
     """A bound (not yet serving) ``ThreadingHTTPServer``; ``port=0`` picks an ephemeral port
     (``server.server_address[1]``) — what the tests use."""
+    if work_orders is None and token_provider is None:
+        raise ValueError("legacy direct-Airflow mode needs an Airflow token provider")
     dispatcher = None
     if inbox is not None:
         dispatcher = Dispatcher(
@@ -534,6 +652,7 @@ def make_server(
             opener=opener,
             log=log or (lambda line: print(line, file=sys.stderr, flush=True)),
             max_attempts=max_attempts,
+            work_orders=work_orders,
         )
     handler = make_handler(
         airflow_url=airflow_url,
@@ -543,6 +662,7 @@ def make_server(
         log=log,
         inbox=inbox,
         dispatcher=dispatcher,
+        work_orders=work_orders,
     )
 
     class Server(ThreadingHTTPServer):
@@ -561,12 +681,13 @@ def serve(
     port: int,
     *,
     airflow_url: str,
-    token_provider: TokenProvider,
+    token_provider: TokenProvider | None = None,
     secret: str | None = None,
     opener: Opener = _NO_REDIRECT_OPENER,
     host: str = "0.0.0.0",
     inbox: DeliveryInbox | None = None,
     max_attempts: int = 12,
+    work_orders: WorkOrders | None = None,
 ) -> None:
     """Run the receiver until interrupted (``swfactory webhook serve``)."""
     server = make_server(
@@ -578,11 +699,15 @@ def serve(
         host=host,
         inbox=inbox,
         max_attempts=max_attempts,
+        work_orders=work_orders,
     )
     bound = server.server_address[1]
+    # The banner names the boundary this receiver actually submits through, so an operator can see
+    # from one line whether runs will be managed or legacy unmanaged Airflow writes.
+    destination = f"{work_orders.url}{WORK_ORDERS_PATH}" if work_orders else f"{airflow_url} (LEGACY unmanaged)"
     print(
         f"webhook: listening on {host}:{bound} (POST {WEBHOOK_PATH}, GET {HEALTH_PATH}) -> "
-        f"{airflow_url} signature={'local' if secret else 'upstream (islo)'}",
+        f"{destination} signature={'local' if secret else 'upstream (islo)'}",
         file=sys.stderr,
         flush=True,
     )

@@ -1,10 +1,13 @@
 name: dispatch-factory
-# A GitHub issue labeled `factory` enters the software factory: this workflow triggers the
-# Airflow DAG of the same-named blueprint with conf {"issues": ["<number>"]}.
-#   label `factory`        -> DAG `factory` (blueprints/default.toml)
-#   label `factory:<name>` -> DAG `<name>`  (blueprints/<name>.toml)
-# `factory:blocked` is a PR label written by deliver, never a dispatch. The Airflow API URL/token
-# live in the repo secrets AIRFLOW_URL and AIRFLOW_TOKEN; when they are missing the run exits 0
+# A GitHub issue labeled `factory` enters the software factory through the *managed* boundary: this
+# workflow submits a work order to the backend, which admits it, reserves capacity, binds its
+# Factory Cells and only then hands Airflow a run.
+#   label `factory`        -> line `factory` (blueprints/default.toml)
+#   label `factory:<name>` -> line `<name>`  (blueprints/<name>.toml)
+# It never posts to Airflow itself: a run created that way would carry no `_factory_cells`, so it
+# would get none of the durable admission, capacity or Cell fencing every other intake path has.
+# `factory:blocked` is a PR label written by deliver, never a dispatch. The backend URL/token live
+# in the repo secrets SWF_BACKEND_URL and SWF_BACKEND_TOKEN; when they are missing the run exits 0
 # with a notice. GitHub-hosted dispatch requires HTTPS and never follows redirects with the token.
 on:
   issues:
@@ -13,32 +16,45 @@ permissions:
   contents: read
   issues: read
 jobs:
-  trigger:
+  submit:
     if: >-
       (github.event.label.name == 'factory' || startsWith(github.event.label.name, 'factory:'))
       && github.event.label.name != 'factory:blocked'
     runs-on: ubuntu-latest
     env:
-      AIRFLOW_URL: ${{ secrets.AIRFLOW_URL }}
-      AIRFLOW_TOKEN: ${{ secrets.AIRFLOW_TOKEN }}
+      SWF_BACKEND_URL: ${{ secrets.SWF_BACKEND_URL }}
+      SWF_BACKEND_TOKEN: ${{ secrets.SWF_BACKEND_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       LABEL: ${{ github.event.label.name }}
     steps:
-      - name: Trigger the blueprint's DAG
+      - name: Submit a managed work order
         run: |
-          dag="${LABEL#factory:}"     # "factory" stays "factory"; "factory:<name>" -> "<name>"
-          if [ -z "$AIRFLOW_URL" ] || [ -z "$AIRFLOW_TOKEN" ]; then
-            echo "::notice::AIRFLOW_URL / AIRFLOW_TOKEN secrets not set; skipping dispatch of issue #$ISSUE_NUMBER to DAG $dag"
+          line="${LABEL#factory:}"    # "factory" stays "factory"; "factory:<name>" -> "<name>"
+          if [ -z "$SWF_BACKEND_URL" ] || [ -z "$SWF_BACKEND_TOKEN" ]; then
+            echo "::notice::SWF_BACKEND_URL / SWF_BACKEND_TOKEN secrets not set; skipping submission of issue #$ISSUE_NUMBER to line $line"
             exit 0
           fi
-          case "$AIRFLOW_URL" in
+          case "$SWF_BACKEND_URL" in
             https://*) ;;
-            *) echo "::error::AIRFLOW_URL must use https:// for GitHub-hosted dispatch"; exit 1 ;;
+            *) echo "::error::SWF_BACKEND_URL must use https:// for GitHub-hosted dispatch"; exit 1 ;;
           esac
-          payload=$(printf '{"logical_date": null, "conf": {"issues": ["%s"]}}' "$ISSUE_NUMBER")
-          curl --fail-with-body --silent --show-error \
+          # The actor is the same one the webhook receiver submits under, so the same label arriving
+          # through both channels hashes to one work order instead of racing two admissions.
+          payload=$(printf '{"line": "%s", "actor": "github", "issues": ["%s"]}' "$line" "$ISSUE_NUMBER")
+          body=$(mktemp)
+          code=$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
             --proto '=https' --proto-redir '=https' --max-redirs 0 -X POST \
-            "${AIRFLOW_URL%/}/api/v2/dags/${dag}/dagRuns" \
-            -H "Authorization: Bearer $AIRFLOW_TOKEN" \
+            "${SWF_BACKEND_URL%/}/v1/work-orders" \
+            -H "Authorization: Bearer $SWF_BACKEND_TOKEN" \
             -H "Content-Type: application/json" \
-            --data "$payload"
+            --data "$payload")
+          state=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("state",""))' "$body" 2>/dev/null || true)
+          case "$code" in
+            # Admitted or durably queued: both are accepted work. "queued" is not a failure and not
+            # a run -- the backend delivers it to Airflow when capacity frees up.
+            200) echo "::notice::issue #$ISSUE_NUMBER submitted to line $line (state=${state:-submitted})" ;;
+            429) echo "::error::factory refused issue #$ISSUE_NUMBER: no capacity for line $line"; exit 1 ;;
+            503) echo "::error::factory backend is draining; issue #$ISSUE_NUMBER was not admitted"; exit 1 ;;
+            409) echo "::error::issue #$ISSUE_NUMBER already has a finished work order on line $line"; exit 1 ;;
+            *)   echo "::error::work-order submission failed with HTTP $code"; exit 1 ;;
+          esac

@@ -8,7 +8,7 @@ a full rehearsal of the pipeline, not a trust boundary — see "Honest limits" b
 ```
 host  ─┬─ docker compose (deploy/docker/compose.yml)
        │    airflow   : airflow standalone, UI+API :8080, DAGs from <repo>/dags     (start.sh)
-       │    webhook   : swfactory webhook serve :8081 --airflow-url http://airflow:8080 (webhook.sh)
+       │    webhook   : swfactory webhook serve :8081 --backend-url http://backend:8082 (webhook.sh)
        │        both from swfactory-airflow:local (airflow.Dockerfile); the repo is bind-mounted at
        │        its HOST path (${PWD}:${PWD}) and is the working dir; volumes: airflow-home, venv, uv-cache
        │        airflow also gets /var/run/docker.sock  (root-equivalent on the host, see limits)

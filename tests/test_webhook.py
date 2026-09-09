@@ -395,6 +395,45 @@ def test_server_maps_airflow_failure_to_502() -> None:
         thread.join(timeout=5)
 
 
+def test_the_inboxless_receiver_forwards_a_backend_drain_instead_of_inventing_a_run() -> None:
+    """The embedded synchronous path is an intake too: a drain must reach the sender as a drain,
+    and must not fall through to an Airflow write nobody admitted."""
+    calls: list[str] = []
+
+    class Backend(FakeOpener):
+        def __call__(self, req, timeout=None):  # noqa: ANN001
+            calls.append(req.full_url)
+            raise urllib.error.HTTPError(req.full_url, 503, "draining", None, io.BytesIO(b"{}"))
+
+    opener = Backend()
+    server = webhook.make_server(
+        0,
+        airflow_url=AIRFLOW,
+        secret=None,
+        opener=opener,
+        host="127.0.0.1",
+        log=lambda _line: None,
+        work_orders=webhook.WorkOrders("http://127.0.0.1:8082", token="backend-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        body = json.dumps(issue_payload("labeled", label="factory")).encode()
+        status, data = post(port, body, {"X-GitHub-Event": "issues"})
+        assert status == 503, data
+        assert calls == ["http://127.0.0.1:8082/v1/work-orders"], "no Airflow call, and no retry past it"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_managed_mode_needs_no_airflow_token_but_legacy_mode_does() -> None:
+    with pytest.raises(ValueError, match="Airflow token provider"):
+        webhook.make_server(0, airflow_url=AIRFLOW, host="127.0.0.1", log=lambda _line: None)
+
+
 # ---------------------------------------------------------------- CLI
 
 

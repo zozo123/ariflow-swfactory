@@ -817,12 +817,23 @@ class Factory:
             if not isinstance(conf, dict) or set(conf) - {"issues", "targets"}:
                 raise ValueError("only issues and installed targets can be submitted")
             submission = self.submit({"line": segments[1], **conf})
-            if submission.get("state") != "submitted":
-                raise Refused(
-                    429,
-                    f"factory admission {submission.get('state')}: {submission.get('reason')}",
-                )
-            return 201, {"dag_run_id": submission["run_id"]}
+            state = str(submission.get("state"))
+            if state == "submitted":
+                return 201, {"dag_run_id": submission["run_id"]}
+            if state == "queued":
+                # A queued order is admitted and durable -- it holds a place in the queue and will
+                # be delivered when capacity frees up. Answering 429 said the opposite (throw it
+                # away and resend), and 201 with a run id would invent a run that does not exist.
+                # 202 with no dag_run_id is the only shape that is true: accepted, not yet running.
+                return 202, {
+                    "state": "queued",
+                    "submission_id": submission["submission_id"],
+                    "reason": submission.get("reason"),
+                    "position": submission.get("position"),
+                    "limiting": submission.get("limiting"),
+                    "detail": "work order is admitted and queued for capacity; no DAG run exists yet",
+                }
+            raise Refused(429, f"factory admission {state}: {submission.get('reason')}")
         if method == "PATCH" and len(segments) == 2 and body == {"is_paused": False}:
             return self.airflow(method, path, body)
         if method == "PATCH" and len(segments) == 4 and segments[2] == "dagRuns" and body == {"state": "failed"}:

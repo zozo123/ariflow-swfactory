@@ -1,21 +1,38 @@
 # Durable GitHub intake
 
-`swfactory webhook serve` commits each admitted dispatch to SQLite before returning HTTP 202.
-The request does not wait for an Airflow login or API call. A background worker drains the inbox,
-including work accepted before the receiver restarted. This follows GitHub's recommendation to
+`swfactory webhook serve` commits each admitted delivery to SQLite before returning HTTP 202.
+The request does not wait for the backend. A background worker drains the inbox, including work
+accepted before the receiver restarted. This follows GitHub's recommendation to
 [respond within ten seconds and process deliveries asynchronously](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks).
+
+The worker submits one **work order** per delivery to the backend's managed boundary
+(`POST /v1/work-orders`). The backend owns everything past that call: durable admission, capacity
+accounting, Factory Cell activation and the Airflow write itself, so a webhook-triggered run is
+managed exactly like one submitted from the console. Airflow remains the only lifecycle scheduler;
+the receiver decides admission, never timing.
 
 ```sh
 export SWF_WEBHOOK_INBOX=/var/lib/swfactory/webhooks/inbox.sqlite3
-export AIRFLOW_URL=https://airflow.example.com
-# Supply AIRFLOW_TOKEN or AIRFLOW_USER + AIRFLOW_PASSWORD, and SWF_WEBHOOK_SECRET.
+export SWF_BACKEND_URL=https://factory-backend.example.com
+export SWF_BACKEND_TOKEN=...    # the backend bearer token
+# SWF_WEBHOOK_SECRET enables local HMAC verification.
 uv run swfactory webhook serve
 ```
 
 The default inbox is `.factory/webhooks/inbox.sqlite3` relative to the receiver's working
 directory. Both Docker and islo entrypoints set it to `$AIRFLOW_HOME/webhooks/inbox.sqlite3`,
-beside the persistent Airflow state. An existing credential file lets the receiver start while
-Airflow's API is still unavailable. The first boot waits for credentials to be generated.
+beside the persistent Airflow state.
+
+Every GitHub-shaped intake — this receiver and `.github/workflows/dispatch.yml` — submits under the
+actor `github`, so the same label arriving through both channels hashes to one work order and meets
+the same immutable-work and Factory Cell checks instead of racing two admissions.
+
+### Legacy direct-Airflow mode
+
+Without `--backend-url` the receiver posts DAG runs straight to Airflow (`AIRFLOW_TOKEN`, or
+`AIRFLOW_USER` + `AIRFLOW_PASSWORD`) and says so on startup. Those runs carry no `_factory_cells`,
+so they get no admission record, no capacity accounting and no Cell fencing. It exists only for a
+sandbox with no backend in front of it.
 
 ## What gets admitted
 
@@ -97,12 +114,22 @@ the child DAG's normal validation still applies when Airflow runs it.
 | `SWF_WEBHOOK_INBOX` / `--inbox` | `.factory/webhooks/inbox.sqlite3` | Persistent database path |
 | `SWF_WEBHOOK_MAX_PENDING` / `--max-pending` | `10000` | Maximum pending, dispatching and dead receipts combined |
 | `SWF_WEBHOOK_MAX_ATTEMPTS` / `--max-attempts` | `12` | Claims before a delivery becomes dead |
+| `SWF_BACKEND_URL` / `--backend-url` | unset (legacy Airflow mode) | Managed work-order boundary |
+| `SWF_BACKEND_TOKEN` / `--backend-token-env` | `SWF_BACKEND_TOKEN` | Env var holding the backend bearer token |
 
 `GET /healthz` is process liveness. `GET /readyz` checks database readability, worker liveness
 and intake capacity, and returns counts plus the oldest pending age. It intentionally does not
-require Airflow connectivity: the inbox can accept work during an outage. Monitor dead counts
+require backend connectivity: the inbox can accept work during an outage. Monitor dead counts
 and pending age separately. A successful 202 means durable admission, never that a job passed.
+
 The response's `state` is the receipt snapshot at admission; inspect again for current progress.
+
+A receipt names the work order the backend admitted (`work_order_id`) and the state it answered
+with (`admission_state`). `submitted` means the order was handed to Airflow; `queued` means it is
+durably admitted and waiting for capacity, and no run exists yet. `swfactory webhook inspect
+<delivery-id>` prints both. A backend refusal is never answered by writing to Airflow behind its
+back: a drain (503) and a capacity refusal (429) retry with backoff, while a conflict (409) or an
+unsupported line (422) goes dead for an operator to look at.
 
 Intake returns 503 before acknowledgment when storage is unavailable or capacity is exhausted.
 Invalid repository routing or a missing delivery identity returns 422. A failed HMAC is 401.
