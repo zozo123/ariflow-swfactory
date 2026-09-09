@@ -8,6 +8,7 @@ on:
       - ".claude-plugin/**"
       - "src/swfactory/skills_connector.py"
       - "tests/test_skills_connector.py"
+      - "tests/test_skills_catalog.py"
       - ".github/workflows/skills-catalog.yml"
   push:
     branches: [main]
@@ -17,6 +18,7 @@ on:
       - ".claude-plugin/**"
       - "src/swfactory/skills_connector.py"
       - "tests/test_skills_connector.py"
+      - "tests/test_skills_catalog.py"
       - ".github/workflows/skills-catalog.yml"
 
 permissions:
@@ -56,13 +58,23 @@ jobs:
           assert plugin["name"] == "airflow-software-factory"
           PY
 
-      - name: Vercel skills CLI discovers repository skills
-        run: npx -y skills@latest add . --list
+      - name: Pinned Vercel skills CLI discovers repository skills
+        run: npx -y skills@1.5.25 add . --list
+
+      - name: Public GitHub source discovers both skills after merge
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$(npx -y skills@1.5.25 add zozo123/ariflow-swfactory --list)"
+          printf '%s\n' "$output"
+          grep -F "airflow-software-factory" <<<"$output"
+          grep -F "swfactory" <<<"$output"
 
       - name: Connector unit tests
         run: |
           uv sync
-          uv run pytest tests/test_skills_connector.py
+          uv run pytest tests/test_skills_connector.py tests/test_skills_catalog.py
 
       - name: Connector catalog is executable
         run: uv run python -m swfactory.skills_connector catalog
