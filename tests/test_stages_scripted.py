@@ -246,7 +246,15 @@ def test_metrics_and_approvals(run) -> None:
 def test_bare_remote_has_branch_with_trailers(run) -> None:
     _, tmp, _ = run
     remote = tmp / "run" / "remote.git"
-    branch = f"factory/DEMO-1-{RUN_ID}"
+    # Keyed on the work, not the run: `sha256(repo, target, issue)`, so two factory instances
+    # working this issue x target converge on ONE ref instead of one branch each (and one pull
+    # request each). Derived here rather than hardcoded, so the test states the rule.
+    from swfactory.config import Config
+    from swfactory.publication_identity import publication_key
+
+    defaults = Config(issue="demo/issue.md")
+    branch = f"factory/DEMO-1-{publication_key(defaults.repo, defaults.target_dir, 'DEMO-1')}"
+    assert RUN_ID not in branch, "the publish ref must not depend on which run produced it"
     heads = _git("show-ref", "--heads", cwd=remote)
     assert f"refs/heads/{branch}" in heads and "refs/heads/main" in heads
     log = _git("log", "--format=%an%n%B---", f"main..{branch}", cwd=remote)

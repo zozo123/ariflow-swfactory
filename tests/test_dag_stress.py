@@ -185,6 +185,16 @@ def _expected_jobs() -> tuple[dict[str, Any], ...]:
     return tuple(load(DAG_ID).jobs(CONF))
 
 
+def _job_cfg(stress: dict, job_idx: int):
+    """The Config ``swfactory.runtime`` builds for one job -- the source the branch is derived from."""
+    from swfactory import runtime
+    from swfactory.blueprint import load
+
+    bp = load(DAG_ID)
+    run_id = _run_id(stress["run_id"], job_idx)
+    return runtime.job_config(bp, _expected_jobs()[job_idx], run_id=run_id, root=stress["cwd"])
+
+
 def _job_dirs(stress: dict, job_idx: int) -> tuple[Path, Path]:
     """``(run_dir, workdir)`` of one job, derived exactly as ``swfactory.runtime`` derives them."""
     from swfactory import runtime
@@ -284,7 +294,12 @@ def test_each_job_publishes_its_own_pr_on_its_own_remote(stress: dict) -> None:
             text=True,
             check=True,
         ).stdout.split()
-        assert sorted(refs) == sorted(["refs/heads/main", f"refs/heads/factory/{issue_id}-{run_dir.name}"])
+        # Keyed on the work, not the run dir: two instances on one issue share one ref.
+        from swfactory.publication_identity import publication_key
+
+        job_cfg = _job_cfg(stress, idx)
+        branch = f"factory/{issue_id}-{publication_key(job_cfg.repo, job_cfg.target_dir, issue_id)}"
+        assert sorted(refs) == sorted(["refs/heads/main", f"refs/heads/{branch}"])
 
 
 def test_each_job_records_both_gates_and_its_own_metrics(stress: dict) -> None:

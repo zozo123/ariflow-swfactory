@@ -204,8 +204,13 @@ def test_github_publish_argv(calls: list[list[str]]) -> None:
     assert "https://github.com/o/r.git" in clone
     assert any(c[0] == "git" and c[-2:] == ["checkout", "-b", "factory/42-abc"][-2:] for c in calls)
     assert any("am" in c and "--3way" in c for c in calls)
-    # bot-owned factory/* refs are force-pushed so a retried deliver can re-publish the branch
-    assert any(c[0] == "git" and c[1:] == ["push", "-u", "--force", "origin", "factory/42-abc"] for c in calls)
+    # bot-owned factory/* refs are re-published under a LEASE, never a blind force: the branch is
+    # keyed on the work rather than the run, so a second factory instance pushes this same ref and
+    # a blind force would replace a commit its reviewer had already read. With no ref on the remote
+    # yet (this fake reports none) there is nothing to lease against and the push is plain.
+    assert any(c[0] == "git" and c[1:] == ["push", "-u", "origin", "factory/42-abc"] for c in calls)
+    assert not any("--force" in c for c in calls if c and c[0] == "git" and "push" in c)
+    assert any(c[:2] == ["git", "ls-remote"] for c in calls), "the lease needs the observed sha"
     pr_list = next(c for c in calls if c[:3] == ["gh", "pr", "list"])
     assert pr_list[pr_list.index("--head") + 1] == "factory/42-abc"
     assert "--state" in pr_list and pr_list[pr_list.index("--state") + 1] == "open"
@@ -472,7 +477,7 @@ def test_github_publish_reuses_open_pr(monkeypatch: pytest.MonkeyPatch) -> None:
     assert edit[edit.index("--title") + 1] == "T2" and "--body-file" in edit
     assert edit[edit.index("--add-label") + 1] == "factory"
     assert not any(c[:3] == ["gh", "pr", "create"] for c in recorded)
-    assert any(c[:1] == ["git"] and "--force" in c and "push" in c for c in recorded)
+    assert any(c[:1] == ["git"] and "push" in c for c in recorded)
 
 
 def test_git_runs_with_background_maintenance_disabled(tmp_path: Path) -> None:

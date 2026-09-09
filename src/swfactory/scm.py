@@ -21,6 +21,7 @@ import yaml
 
 from swfactory.config import Config
 from swfactory.models import Issue, StageError
+from swfactory.publication_identity import PublicationIdentity, adopts
 
 BOT_NAME = "swfactory-bot"
 BOT_EMAIL = "swfactory-bot@users.noreply.github.com"
@@ -130,7 +131,7 @@ def _pr_markdown(title: str, labels: Sequence[str], body: str) -> str:
     return f"# {title}\n\nlabels: {', '.join(labels) or '(none)'}\n\n{body.rstrip()}\n"
 
 
-def _apply_and_push(clone: Path, *, branch: str, patch: bytes) -> None:
+def _apply_and_push(clone: Path, *, branch: str, patch: bytes, instance: str = "") -> None:
     """checkout -b, `git am --3way` the patch (keeps bot author + trailers), push -u.
 
     ``factory/*`` is the bot-owned namespace: a retry of ``deliver`` rebuilds the same branch
@@ -139,8 +140,83 @@ def _apply_and_push(clone: Path, *, branch: str, patch: bytes) -> None:
     """
     _run(["git", "checkout", "-b", branch], clone)
     _run(["git", *_GIT_IDENT, "am", "--3way"], clone, input=patch)
-    force = ["--force"] if branch.startswith(FACTORY_BRANCH_PREFIX) else []
-    _run(["git", "push", "-u", *force, "origin", branch], clone)
+    if not branch.startswith(FACTORY_BRANCH_PREFIX):
+        _run(["git", "push", "-u", "origin", branch], clone)
+        return
+    # Compare-and-swap against WHAT THIS INSTANCE LAST PUSHED, not against what it just observed.
+    # The branch is keyed on the work rather than the run (see `Ctx.branch`), so a second factory
+    # instance working the same issue pushes THIS ref. Leasing against the observed sha is not
+    # enough: the second instance observes the first one's commit, does not contain it (a fresh
+    # `git am` on the base), and force-pushes straight over it with a perfectly valid lease. The
+    # question is not "did the ref move since I looked" but "is the thing on the remote mine".
+    #
+    # `git am` restamps committer dates, so a retry of THIS run produces commits that are not
+    # descendants of the ones it pushed before -- which is why a retry legitimately needs a force
+    # and cannot be expressed as a fast-forward.
+    remote_head = _remote_head(clone, branch)
+    if not remote_head:
+        _run(["git", "push", "-u", "origin", branch], clone)
+        _record_published_head(clone, instance, branch)
+        return
+    mine = _published_head(instance, branch)
+    if mine != remote_head:
+        raise StageError(
+            "scm",
+            f"{branch} on the remote is at {remote_head[:12]}, which this factory instance did not "
+            f"publish{f' (it last published {mine[:12]})' if mine else ''}. Another instance is "
+            "working this issue. Refusing to overwrite it; adopt its pull request instead.",
+            retryable=False,
+        )
+    try:
+        _run(["git", "push", "-u", f"--force-with-lease={branch}:{remote_head}", "origin", branch], clone)
+    except StageError as error:
+        if _is_lease_refusal(str(error)):
+            raise StageError(
+                "scm",
+                f"another factory instance moved {branch} while this one was publishing; refusing "
+                "to overwrite it. Re-run deliver: it will adopt the existing pull request.",
+                retryable=True,
+            ) from error
+        raise
+    _record_published_head(clone, instance, branch)
+
+
+def _published_head(instance: str, branch: str) -> str:
+    """The sha this instance last pushed to ``branch``, or "" if it never has.
+
+    Keyed by instance, so two instances in one process (a test, a harness) do not read each
+    other's pushes as their own.
+    """
+    return _PUBLISHED_HEADS.get((instance, branch), "")
+
+
+def _record_published_head(clone: Path, instance: str, branch: str) -> None:
+    _PUBLISHED_HEADS[(instance, branch)] = _run(["git", "rev-parse", "HEAD"], clone).strip()
+
+
+# What each instance has published, per ref, for this process's lifetime. Deliberately conservative
+# across a restart: a fresh process finds a ref it does not recognise and REFUSES rather than
+# forcing. That costs one adopted pull request on a restarted retry; the opposite default costs a
+# reviewer's commit. The failure being prevented is the expensive one.
+_PUBLISHED_HEADS: dict[tuple[str, str], str] = {}
+
+
+def _remote_head(clone: Path, branch: str) -> str:
+    """The sha the remote currently holds for ``branch``, or "" when it has no such ref."""
+    out = _run(["git", "ls-remote", "origin", f"refs/heads/{branch}"], clone)
+    first = out.split(maxsplit=1)
+    return first[0] if first else ""
+
+
+def _is_lease_refusal(message: str) -> bool:
+    """Whether a push failure is the lease refusing, rather than a network or auth problem.
+
+    Distinguished because they call for opposite responses: a lease refusal means another writer
+    is live and this instance must adopt rather than retry harder, while a transport error is
+    worth retrying as-is.
+    """
+    lowered = message.lower()
+    return "stale info" in lowered or "force-with-lease" in lowered or "fetch first" in lowered
 
 
 # ---------------------------------------------------------------- patch policy (pure)
@@ -311,14 +387,21 @@ class LocalGitScm:
         body: str,
         labels: Sequence[str],
         allowed_prefixes: Sequence[str] | None = None,
+        identity: PublicationIdentity | None = None,
     ) -> str:
-        """Policy-check the patch, push ``branch`` into the bare remote, write/print ``pr.md``."""
+        """Policy-check the patch, push ``branch`` into the bare remote, write/print ``pr.md``.
+
+        The local remote is a real git repository, so it is the same compare-and-swap the GitHub
+        path gets: a scripted or demo run of two instances against one bare repo behaves the way
+        two managed factories against one GitHub repo behave.
+        """
         _check_patch(patch, allowed_prefixes)
         self._ensure_remote()
+        identity = identity or PublicationIdentity.from_branch(branch)
         with tempfile.TemporaryDirectory(prefix="swf-clone-") as tmp:
             clone = Path(tmp) / "clone"
             _run(["git", "clone", "--quiet", str(self.remote_dir), str(clone)], None)
-            _apply_and_push(clone, branch=branch, patch=patch)
+            _apply_and_push(clone, branch=branch, patch=patch, instance=identity.instance)
         self.run_dir.mkdir(parents=True, exist_ok=True)
         pr = self.run_dir / "pr.md"
         text = _pr_markdown(title, labels, body)
@@ -429,6 +512,7 @@ class GitHubScm:
         body: str,
         labels: Sequence[str],
         allowed_prefixes: Sequence[str] | None = None,
+        identity: PublicationIdentity | None = None,
     ) -> str:
         """Policy check -> shallow clone of base -> checkout -b -> git am --3way -> push -> PR.
 
@@ -437,6 +521,8 @@ class GitHubScm:
         """
         _check_patch(patch, allowed_prefixes)
         self._require_token()
+        identity = identity or PublicationIdentity.from_branch(branch)
+        key, marker_block = identity.key, identity.marker()
         with tempfile.TemporaryDirectory(prefix="swf-clone-") as tmp:
             clone = Path(tmp) / "clone"
             _run(
@@ -449,11 +535,13 @@ class GitHubScm:
             # Persist the helper in the clone so `git push` uses it (empty value resets globals).
             _run(["git", "config", "--add", "credential.helper", ""], clone)
             _run(["git", "config", "--add", "credential.helper", self._helper], clone)
-            _apply_and_push(clone, branch=branch, patch=patch)
+            _apply_and_push(clone, branch=branch, patch=patch, instance=identity.instance)
             self._ensure_labels(labels)
             body_file = Path(tmp) / "pr-body.md"
-            body_file.write_text(body, encoding="utf-8")
-            if existing := self._open_pr_url(branch):
+            # The marker travels in the body because the body is the one PR field every instance
+            # can read and none can write without the repository credential it already needs.
+            body_file.write_text(body + "\n\n" + marker_block + "\n", encoding="utf-8")
+            if existing := (self._open_pr_url(branch) or self._adopted_pr_url(key)):
                 _run(
                     [
                         "gh", "pr", "edit", existing, "--title", title,
@@ -504,6 +592,31 @@ class GitHubScm:
     def _ensure_labels(self, labels: Sequence[str]) -> None:
         for label in labels:
             _run(["gh", "label", "create", label, "--repo", self.repo, "--force"], None)
+
+    def _adopted_pr_url(self, key: str) -> str | None:
+        """Url of the open PR another instance already opened for this work, or None.
+
+        Keyed on the marker in the body, not on the head branch. Two instances now converge on one
+        branch, so the branch lookup usually suffices -- but a pull request opened before that
+        change, or one whose branch was renamed, is still THIS work, and opening a second one for
+        it is the failure this exists to prevent. The marker is parsed strictly (see
+        `publication_identity.adopts`) so a key quoted in a log excerpt cannot adopt the wrong PR.
+        """
+        out = _run(
+            [
+                "gh", "pr", "list", "--repo", self.repo, "--state", "open",
+                "--limit", "100", "--json", "url,body",
+            ],
+            None,
+        )  # fmt: skip
+        try:
+            rows = json.loads(out or "[]")
+        except ValueError:
+            return None
+        for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, dict) and adopts(str(row.get("body") or ""), key):
+                return str(row.get("url") or "") or None
+        return None
 
     def _open_pr_url(self, branch: str) -> str | None:
         """Url of the open PR whose head is ``branch``, or None."""
