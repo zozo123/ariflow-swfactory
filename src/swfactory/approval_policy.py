@@ -14,7 +14,8 @@ nowhere:
 Two properties this file exists to hold:
 
 * A gate a blueprint declares as human is satisfied only by an identified answer to *that* gate, on
-  *that* Cell epoch, over *that* artifact digest. ``SWF_APPROVE=auto`` is not an approver.
+  *that* Cell epoch, over *that* artifact digest, for *those* accepted inputs
+  (``swfactory.accepted_inputs``). ``SWF_APPROVE=auto`` is not an approver.
 * "Nobody answered" is never "approved". The only thing that may stand in for a missing response is
   an explicitly declared replay fixture (``SWF_GATE_REPLAY``), which is refused outright for
   backend-managed work.
@@ -187,7 +188,41 @@ def approval_from_response(
     folded = actor.casefold()
     if folded == AUTO_ACTOR.casefold() or folded.startswith(REPLAY_ACTOR_PREFIX.casefold()):
         raise StageError("policy", f"gate {gate!r} response claims the reserved actor {actor!r}")
-    return Approval(gate=gate, decision=decision, actor=actor, mode="human", at=datetime.now(UTC))  # type: ignore[arg-type]
+    responded_at = _responded_at(response)
+    if responded_at is None:
+        # Fail closed here rather than downstream. This function parses a STORED response, so the
+        # answer time is what later separates a person answering again from an old XCom being read
+        # twice after a re-accept. The HITL event always carries it; a response shape that omits it
+        # is the shape a replay would have.
+        raise StageError(
+            "policy", f"gate {gate!r} response carries no answer time, so it cannot be dated to these inputs"
+        )
+    return Approval(
+        gate=gate,  # type: ignore[arg-type]
+        decision=decision,
+        actor=actor,
+        mode="human",
+        at=datetime.now(UTC),
+        responded_at=responded_at,
+    )
+
+
+def _responded_at(response: Mapping[str, Any]) -> datetime | None:
+    """The HITL event's own answer time, when it carries one.
+
+    Carried through so recording can refuse an answer given before the current admission. Parsed
+    leniently and left as None on anything unrecognised: the check treats a missing timestamp as
+    stale, so a shape this cannot read fails closed rather than open.
+    """
+    raw = response.get("responded_at")
+    if isinstance(raw, datetime):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
 
 
 def check_recorded(
@@ -198,10 +233,23 @@ def check_recorded(
     managed: bool,
     cell_id: str | None,
     cell_epoch: int | None,
+    inputs_digest: str | None,
 ) -> None:
-    """Re-check one recorded decision at continuation time. Raises on anything short of authority."""
+    """Re-check one recorded decision at continuation time. Raises on anything short of authority.
+
+    ``inputs_digest`` has no default on purpose: a caller that forgets it would silently publish on
+    an approval given for other inputs, which is the whole failure this parameter exists to stop.
+    """
     if approval.gate != gate:
         raise StageError("policy", f"approval for gate {gate!r} is recorded against gate {approval.gate!r}")
+    if approval.inputs_digest != inputs_digest:
+        # The artifact digest proves the approver saw this plan.md; it says nothing about the issue
+        # text, blueprint and policy the remaining stages will execute. An answer given for other
+        # accepted inputs is not authority over these -- it has to be answered again.
+        raise StageError(
+            "policy",
+            f"approval for gate {gate!r} was given for accepted inputs {approval.inputs_digest}, not {inputs_digest}",
+        )
     if approval.cell_id != cell_id or approval.cell_epoch != cell_epoch:
         # An answer is authority over one Cell epoch only: without this an approvals.json carried
         # into a fenced-off epoch (or another Cell's workspace) would still read as approved.

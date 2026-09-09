@@ -376,6 +376,37 @@ def state_inspect(
         raise typer.Exit(1)
 
 
+@state_app.command("reaccept")
+def state_reaccept(
+    run_id: Annotated[str, typer.Argument(help="saved factory run ID")],
+    actor: Annotated[str, typer.Option(help="who is re-opening this epoch's inputs")],
+    reason: Annotated[str, typer.Option(help="why they changed, e.g. 'issue #7 edited by author'")],
+    root: Annotated[Path, typer.Option(help="directory containing saved run directories")] = Path(".factory"),
+) -> None:
+    """Retire this run's accepted inputs so the next task admits the current ones, on the record.
+
+    The documented answer to "the issue was edited mid-run": without it a changed input is a stuck
+    Cell. Every earlier approval keeps the digest it was given for, so delivery refuses on it and
+    every gate must be answered again -- this re-opens the inputs, it does not re-authorize them.
+    Backend-managed Cells re-accept by advancing their epoch through the backend instead.
+    """
+    from swfactory import accepted_inputs
+    from swfactory.paths import confined_path, validate_run_id
+    from swfactory.state import RunState
+
+    try:
+        state = RunState(confined_path(Path(root).expanduser().resolve(), validate_run_id(run_id)))
+        retired = accepted_inputs.reaccept(state, actor=actor, reason=reason)
+    except (OSError, ValueError) as error:
+        typer.echo(f"saved state unavailable: {error}", err=True)
+        raise typer.Exit(2) from error
+    except StageError as error:
+        typer.echo(f"cannot re-accept: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"retired {retired.digest}; the next task admits the current inputs.")
+    typer.echo("Re-answer every gate: approvals given for the retired inputs no longer publish.")
+
+
 # ---------------------------------------------------------------- webhook (orchestrator on islo)
 
 webhook_app = typer.Typer(

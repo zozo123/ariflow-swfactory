@@ -38,7 +38,10 @@ def write_run_metrics(
     total_cost_usd: float | None = None,
 ) -> dict:
     """Assemble run metrics and persist them through the host-owned artifact store."""
+    from swfactory import accepted_inputs
     from swfactory.stages import denied_tool_calls  # runtime: stages imports this module
+
+    pinned = accepted_inputs.stored(ctx.state)
 
     by_stage = {s.stage: s for s in stages}
     build = by_stage.get("build_and_test", StageResult(stage="build_and_test")).numbers
@@ -75,6 +78,10 @@ def write_run_metrics(
         ),
         "approvers": [a.actor for a in approvals],
         "approvals": [a.model_dump(mode="json") for a in approvals],
+        # The publication receipt names the same accepted inputs the approvals were given for, so
+        # "what was approved" and "what was published" are one comparison, not an investigation.
+        "inputs_digest": pinned.digest if pinned is not None else None,
+        "policy_sha256": pinned.policy_sha256 if pinned is not None else None,
     }
     ctx.write_artifact(f"{ctx.art}/metrics.json", json.dumps(data, indent=2) + "\n")
     return data

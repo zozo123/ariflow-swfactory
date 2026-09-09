@@ -4,6 +4,12 @@ CLI and Airflow tasks must produce the same run identity/workspace. Backend-mana
 add one extra trust boundary: their cell binding is persisted in host-owned control state and their
 GitHub SCM is a credential-free backend proxy from the first issue read onward. Airflow still
 schedules the work; the backend alone owns GitHub publication credentials and mutation fencing.
+
+Every context also passes through ``swfactory.accepted_inputs``: the first one admits an immutable
+snapshot of the issue, blueprint, policy and target this epoch is executing, and every later one is
+checked against it. Because Airflow rebuilds the whole Ctx per task -- reloading the blueprint,
+re-fetching the issue and re-reading the worker's ``SWF_*`` environment each time -- this is the
+only place where drift can be caught before a stage body, an agent call or a publication.
 """
 
 from __future__ import annotations
@@ -14,6 +20,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from swfactory import accepted_inputs
 from swfactory.config import FACTORY_ROOT, Config, protected_globs
 from swfactory.models import StageError
 from swfactory.paths import (
@@ -133,22 +140,20 @@ def build_ctx(
     overrides: dict[str, Any] | None = None,
     agent: Agent | None = None,
     root: Path | None = None,
+    enforce_inputs: bool = True,
 ) -> Ctx:
+    """``enforce_inputs=False`` is for cleanup only -- see ``ctx_for``."""
     cfg = job_config(bp, job, run_id=run_id, overrides=overrides, root=root)
     binding = _cell_binding(job)
-    ctx = ctx_for(
+    return ctx_for(
         cfg,
         blueprint=bp,
         run_dir=job_run_dir(cfg, root),
         agent=agent,
         scm_override=_managed_scm(cfg, binding),
+        cell_binding=binding,
+        enforce_inputs=enforce_inputs,
     )
-    if binding is not None:
-        ctx.state.write_control(
-            "cell.json",
-            json.dumps(binding, sort_keys=True, separators=(",", ":")) + "\n",
-        )
-    return ctx
 
 
 def ctx_for(
@@ -158,7 +163,16 @@ def ctx_for(
     run_dir: Path,
     agent: Agent | None = None,
     scm_override: Scm | None = None,
+    cell_binding: dict[str, Any] | None = None,
+    enforce_inputs: bool = True,
 ) -> Ctx:
+    """Build the run's Ctx and admit (or re-check) the inputs this epoch accepted.
+
+    ``enforce_inputs=False`` neither admits nor refuses: it exists for teardown, which must still be
+    able to close a sandbox belonging to an epoch whose inputs drifted -- a refusal there would leak
+    the very cell cleanup exists to close. Every path that can produce work or publish it leaves the
+    flag at its default.
+    """
     run_dir = Path(run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -169,6 +183,8 @@ def ctx_for(
                 run_dir=run_dir,
                 agent=agent,
                 scm_override=scm_override,
+                cell_binding=cell_binding,
+                enforce_inputs=enforce_inputs,
             )
     except RunBusyError as error:
         raise StageError("sandbox", str(error), retryable=True) from error
@@ -183,6 +199,8 @@ def _prepare_ctx(
     run_dir: Path,
     agent: Agent | None,
     scm_override: Scm | None,
+    cell_binding: dict[str, Any] | None = None,
+    enforce_inputs: bool = True,
 ) -> Ctx:
     from swfactory.agent import make_agent
 
@@ -194,6 +212,31 @@ def _prepare_ctx(
         protected = protected_globs(base_repo)
     scm = scm_override or make_scm(cfg, run_dir, base_repo=base_repo, base_ref=cfg.base_branch)
     issue = scm.fetch_issue(cfg.issue if cfg.issue.strip().isdigit() else locate(cfg.issue))
+    state = RunState(run_dir)
+    # Admission BEFORE make_sandbox/make_agent: a refused task must not have started a MicroVM or
+    # constructed an agent, let alone reached a stage body. Reading the issue above is the only I/O
+    # that has to precede this, because the issue is one of the things being compared.
+    current = accepted_inputs.snapshot(
+        cfg,
+        blueprint,
+        issue,
+        cell_id=(cell_binding or {}).get("cell_id"),
+        cell_epoch=(cell_binding or {}).get("epoch"),
+        managed=bool((cell_binding or {}).get("managed")),
+    )
+    if enforce_inputs:
+        accepted_inputs.admit(state, current)
+    # After the fence, not before. A refused task used to rewrite this run's cell binding on its way
+    # out, so the record of which Cell epoch owns the directory reflected a task that was turned
+    # away. `managed` is inside the snapshot for the same reason: it decides who owns the epoch, and
+    # a fence that pins the epoch while leaving that flag loose is pinning the wrong half. Flipping
+    # it off used to be admitted silently, and it lifts both the local re-accept refusal and the
+    # ban on a replay fixture authorizing managed work.
+    if cell_binding is not None:
+        state.write_control(
+            "cell.json",
+            json.dumps(cell_binding, sort_keys=True, separators=(",", ":")) + "\n",
+        )
     return Ctx(
         cfg=cfg,
         sb=make_sandbox(cfg, issue.id, protected=protected, repo=cfg.repo, run_dir=run_dir),

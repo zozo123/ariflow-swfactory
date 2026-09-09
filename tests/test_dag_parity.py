@@ -328,19 +328,27 @@ class _Ti:
 
 def _ctx_on(tmp_path: Path):
     """A real ``Ctx`` over a LocalSandbox, so record/metrics write to files we can read back."""
+    from swfactory import accepted_inputs
     from swfactory.config import Config
     from swfactory.models import Issue
     from swfactory.sandbox import LocalSandbox
     from swfactory.stages import Ctx
 
-    return Ctx(
-        cfg=Config(issue="demo/issue.md", run_id="abcd1234"),
+    cfg = Config(issue="demo/issue.md", run_id="abcd1234")
+    issue = Issue(id="DEMO-1", title="t", body="")
+    ctx = Ctx(
+        cfg=cfg,
         sb=LocalSandbox(tmp_path / "work"),
         agent=SimpleNamespace(kind="scripted"),
         scm=SimpleNamespace(kind="local"),
-        issue=Issue(id="DEMO-1", title="t", body=""),
+        issue=issue,
         run_dir=tmp_path / "run",
     )
+    # Pin the run the way `_prepare_ctx` does on its first context. Recording reads the accepted
+    # inputs fail-closed, so a Ctx straight from the constructor would be an unpinned run that no
+    # production path can produce.
+    accepted_inputs.admit(ctx.state, accepted_inputs.snapshot(cfg, None, issue))
+    return ctx
 
 
 @pytest.mark.parametrize("stage", ["intent", "plan"])
@@ -362,6 +370,9 @@ def test_record_task_persists_rejection_then_skips_the_line(
         "chosen_options": ["Reject"],
         "params_input": {},
         "responded_by_user": {"id": "u1", "name": "alice"},
+        # The HITL event's own answer time. Recording refuses a stored response without one,
+        # because that is what dates the answer to the inputs the run admitted.
+        "responded_at": "2099-01-01T00:00:00Z",
     }
     with pytest.raises(AirflowSkipException, match=f"{stage} rejected by alice"):
         record({"job_idx": 0}, ti=_Ti(rejected), dag_run=dag_run)

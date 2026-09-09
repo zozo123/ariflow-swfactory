@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from swfactory import stages
+from swfactory import accepted_inputs, stages
 from swfactory.approval_policy import (
     approval_from_response,
     check_recorded,
@@ -63,18 +63,26 @@ ttl_s = 86400
 
 def _ctx(tmp_path: Path, *, gate_replay: str | None = None):
     """A real ``Ctx`` over a LocalSandbox so recording and validation touch real files."""
+    from swfactory import accepted_inputs
     from swfactory.config import Config
     from swfactory.models import Issue
     from swfactory.sandbox import LocalSandbox
 
-    return stages.Ctx(
-        cfg=Config(issue="demo/issue.md", run_id="abcd1234", gate_replay=gate_replay),
+    cfg = Config(issue="demo/issue.md", run_id="abcd1234", gate_replay=gate_replay)
+    issue = Issue(id="DEMO-1", title="t", body="")
+    ctx = stages.Ctx(
+        cfg=cfg,
         sb=LocalSandbox(tmp_path / "work"),
         agent=SimpleNamespace(kind="scripted"),
         scm=SimpleNamespace(kind="local"),
-        issue=Issue(id="DEMO-1", title="t", body=""),
+        issue=issue,
         run_dir=tmp_path / "run",
     )
+    # Pin the run the way `_prepare_ctx` does on the first context. Recording and publication read
+    # the accepted inputs fail-closed, so a Ctx built straight from the constructor -- which no
+    # production path does -- would otherwise be testing an unpinned run that cannot exist.
+    accepted_inputs.admit(ctx.state, accepted_inputs.snapshot(cfg, None, issue))
+    return ctx
 
 
 def _with_artifacts(ctx, text: str = "# intent\n"):
@@ -99,8 +107,18 @@ def _fixture(tmp_path: Path, actor: str = "smoke", decision: str = "approve") ->
     return str(path)
 
 
-def _human(actor: str = "alice") -> dict:
-    return {"chosen_options": ["Approve"], "params_input": {}, "responded_by_user": {"id": "u1", "name": actor}}
+def _human(actor: str = "alice", responded_at: str = "2099-01-01T00:00:00Z") -> dict:
+    """A HITL response shaped like the provider's own event, which carries `responded_at`.
+
+    The timestamp is what tells a fresh answer from an old XCom read twice after a re-accept, so a
+    fixture that omitted it would be testing a shape the operator never produces.
+    """
+    return {
+        "chosen_options": ["Approve"],
+        "params_input": {},
+        "responded_by_user": {"id": "u1", "name": actor},
+        "responded_at": responded_at,
+    }
 
 
 # ------------------------------------------------- SWF_APPROVE cannot override a declared gate
@@ -240,6 +258,9 @@ def test_continuation_refuses_a_wrong_epoch_or_stale_artifact(tmp_path: Path) ->
                 managed=True,
                 cell_id=CELL_ID,
                 cell_epoch=4,
+                # The run's real digest: this case is about the Cell binding, so the inputs check
+                # must not be the thing that fires. Passing None would test the wrong refusal.
+                inputs_digest=accepted_inputs.digest_of(ctx.state),
             )
     _bind_cell(ctx, epoch=3)
     ctx.write_artifact(f"{ctx.art}/intent.md", "# intent, rewritten after approval\n")
@@ -261,7 +282,13 @@ def test_continuation_refuses_an_automatic_decision_on_a_human_gate() -> None:
     )
     with pytest.raises(StageError, match="declared human"):
         check_recorded(
-            gate="intent", gate_mode="human", approval=automatic, managed=False, cell_id=None, cell_epoch=None
+            gate="intent",
+            gate_mode="human",
+            approval=automatic,
+            managed=False,
+            cell_id=None,
+            cell_epoch=None,
+            inputs_digest=None,
         )
 
 
@@ -271,7 +298,11 @@ def test_rejection_keeps_its_terminal_behaviour(tmp_path: Path) -> None:
     rejection = approval_from_response(
         gate="intent",
         gate_mode="human",
-        response={"chosen_options": ["Reject"], "responded_by_user": {"name": "alice"}},
+        response={
+            "chosen_options": ["Reject"],
+            "responded_by_user": {"name": "alice"},
+            "responded_at": "2099-01-01T00:00:00Z",
+        },
     )
     stages.record_approval(ctx, rejection)
     rejected, gate = stages._validate_approvals(ctx, stages._load_approvals(ctx))
@@ -299,7 +330,15 @@ def test_replay_fixture_cannot_authorize_managed_work(tmp_path: Path) -> None:
         gate="intent", gate_mode="human", response=None, fixture_path=_fixture(tmp_path), managed=False
     )
     with pytest.raises(StageError, match="replay-fixture"):
-        check_recorded(gate="intent", gate_mode="human", approval=replayed, managed=True, cell_id=None, cell_epoch=None)
+        check_recorded(
+            gate="intent",
+            gate_mode="human",
+            approval=replayed,
+            managed=True,
+            cell_id=None,
+            cell_epoch=None,
+            inputs_digest=None,
+        )
 
 
 def test_a_malformed_replay_fixture_fails_closed(tmp_path: Path) -> None:
@@ -454,6 +493,10 @@ def _stamped(ctx, gate: str, **overrides) -> Approval:
         "artifact_sha256": digest,
         "cell_id": CELL_ID,
         "cell_epoch": 3,
+        "inputs_digest": accepted_inputs.digest_of(ctx.state),
+        # After the current admission, so the staleness check reads it as a fresh answer. An answer
+        # predating the pin is a separate test.
+        "responded_at": "2099-01-01T00:00:00Z",
     }
     return Approval(**{**base, **overrides})
 
@@ -572,3 +615,54 @@ def test_a_reserved_actor_cannot_be_impersonated_by_changing_its_case(actor: str
     with pytest.raises(StageError) as caught:
         approval_from_response(gate="intent", gate_mode="human", response=response)
     assert "reserved actor" in str(caught.value)
+
+
+def test_a_stale_answer_cannot_be_re_recorded_after_the_inputs_were_re_accepted(tmp_path: Path) -> None:
+    """H1: the pin binds the approval RECORD, not the approval CHANNEL.
+
+    `record_<stage>` builds its Approval from the raw operator response, so it arrives with no
+    inputs digest and recording stamps whatever is pinned now. After a re-accept, an ordinary
+    Airflow task clear or retry re-recorded alice's old answer against the NEW inputs and it
+    validated cleanly — her yes to one plan silently becoming her yes to another. No attacker
+    needed, and it falsified the documented promise that every gate must be answered again.
+
+    The answer's own timestamp is what separates a person answering again from an old XCom being
+    read twice.
+    """
+    ctx = _with_artifacts(_ctx(tmp_path))
+    answered = "2026-05-01T00:00:00Z"
+    ctx.state.write_control(accepted_inputs.ADMITTED_AT_FILE, "2026-04-01T00:00:00+00:00\n")
+    stages.record_approval(
+        ctx, approval_from_response(gate="intent", gate_mode="human", response=_human(responded_at=answered))
+    )
+
+    # The re-accept, and the admission that follows it, both happen after alice answered. The two
+    # times are written explicitly rather than left to the wall clock, so the test states the
+    # ordering it depends on instead of hoping for it.
+    accepted_inputs.reaccept(ctx.state, actor="maintainer", reason="the blueprint limit changed")
+    accepted_inputs.admit(ctx.state, accepted_inputs.snapshot(ctx.cfg, None, ctx.issue))
+    ctx.state.write_control(accepted_inputs.ADMITTED_AT_FILE, "2026-06-01T00:00:00+00:00\n")
+
+    with pytest.raises(StageError, match="was given before this run admitted"):
+        stages.record_approval(
+            ctx, approval_from_response(gate="intent", gate_mode="human", response=_human(responded_at=answered))
+        )
+
+    # A person answering again, after the re-accept, is recorded normally and against the new pin.
+    stages.record_approval(ctx, approval_from_response(gate="intent", gate_mode="human", response=_human()))
+    recorded = {a.gate: a for a in stages._load_approvals(ctx)}["intent"]
+    assert recorded.actor == "alice"
+    assert recorded.inputs_digest == accepted_inputs.digest_of(ctx.state)
+
+
+def test_an_automatic_or_replay_decision_is_not_treated_as_stale(tmp_path: Path) -> None:
+    """The mirror. Those decisions are produced by the runtime at record time rather than pulled
+    from an operator's XCom, so a retry re-derives them under whatever is pinned now — there is no
+    stale answer to launder, and refusing them would strand every automatic gate."""
+    ctx = _with_artifacts(_ctx(tmp_path, gate_replay=_fixture(tmp_path)))
+    accepted_inputs.reaccept(ctx.state, actor="maintainer", reason="policy changed")
+    accepted_inputs.admit(ctx.state, accepted_inputs.snapshot(ctx.cfg, None, ctx.issue))
+
+    replayed = approval_from_response(gate="intent", gate_mode="human", response=None, fixture_path=ctx.cfg.gate_replay)
+    assert replayed.mode == "replay" and replayed.responded_at is None
+    stages.record_approval(ctx, replayed)  # must not raise

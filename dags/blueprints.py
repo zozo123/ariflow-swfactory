@@ -75,11 +75,15 @@ def run_id_for(dag_run_id: str, job_idx: int) -> str:
     return _impl(dag_run_id, job_idx)
 
 
-def _ctx(name: str, job: dict[str, Any], dag_run_id: str):
+def _ctx(name: str, job: dict[str, Any], dag_run_id: str, *, enforce_inputs: bool = True):
+    """``build_ctx`` re-reads the blueprint, the issue and this worker's environment every task, so
+    it is also where the epoch's accepted inputs are admitted and re-checked (see
+    ``swfactory.accepted_inputs``). ``enforce_inputs=False`` is for teardown only: cleanup must
+    still close the sandbox of an epoch whose inputs drifted, or the refusal leaks a live cell."""
     from swfactory.blueprint import load
     from swfactory.runtime import build_ctx
 
-    return build_ctx(load(name), job, run_id=run_id_for(dag_run_id, int(job["job_idx"])))
+    return build_ctx(load(name), job, run_id=run_id_for(dag_run_id, int(job["job_idx"])), enforce_inputs=enforce_inputs)
 
 
 def _stage_fn(stage: str):
@@ -230,7 +234,7 @@ def _teardown_task(name: str):
     def teardown(job: dict, **context: Any) -> None:
         from swfactory import stages
 
-        stages.teardown(_ctx(name, job, context["dag_run"].run_id))
+        stages.teardown(_ctx(name, job, context["dag_run"].run_id, enforce_inputs=False))
         _cell_transition(job, "cleaned", context, "teardown")
 
     return teardown

@@ -164,4 +164,7 @@ def test_cli_run_derives_its_config_with_job_config(tmp_path: Path, monkeypatch:
         "run_dir": job_run_dir(cfg),
         "agent": None,
         "scm_override": None,
+        # the epoch's accepted inputs are admitted/re-checked in ctx_for, for the CLI too
+        "cell_binding": None,
+        "enforce_inputs": True,
     }

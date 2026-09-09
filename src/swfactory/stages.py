@@ -41,6 +41,7 @@ import typer
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from swfactory import accepted_inputs
 from swfactory import metrics as metrics_mod
 from swfactory.agent import POLICIES, Agent, Policy, render_prompt
 from swfactory.approval_policy import GateMode, check_recorded, replay_approval
@@ -611,47 +612,18 @@ def setup(ctx: Ctx) -> StageResult:
     """Prepare the sandbox: repo, bot identity, baseline, work branch, deps, base sha, contract."""
     t0 = time.monotonic()
     sb = ctx.sb
-    policy = {
-        "config": {
-            name: getattr(ctx.cfg, name)
-            for name in (
-                "sandbox",
-                "agent",
-                "scm",
-                "approve",
-                "tests",
-                "crabbox_provider",
-                "max_build_iterations",
-                "max_review_fixes",
-                "max_turns",
-                "max_budget_usd_per_stage",
-                "max_budget_usd",
-                "gate_timeout_h",
-                "stage_timeout_h",
-                "max_parallel_jobs",
-                "gateway_profile",
-                "islo_environment",
-                "sandbox_ttl_s",
-                "sandbox_idle_s",
-                "islo_snapshot",
-                "toolset_backend",
-                "toolset_workdir",
-                "srt_allowed_domains",
-                "docker_image",
-                "docker_credentials",
-                "docker_network",
-                "docker_user",
-                "allow_local_agent",
-            )
-        },
-        "blueprint": ctx.blueprint.model_dump(mode="json") if ctx.blueprint else None,
-    }
+    # One definition of "the execution policy", shared with the epoch pin: two lists here and in
+    # accepted_inputs would drift, and a knob present in only one of them is fenced by neither.
     policy_sha256 = hashlib.sha256(
-        json.dumps(policy, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            accepted_inputs.policy_document(ctx.cfg, ctx.blueprint),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
     ).hexdigest()
     identity = _dumps(
         {
-            "schema": 2,
+            "schema": 3,  # bumped with the policy document: schema 2 hashed a narrower policy
             "run_id": ctx.cfg.run_id,
             "blueprint": ctx.cfg.blueprint,
             "issue_id": ctx.issue.id,
@@ -1019,14 +991,17 @@ def record_approval(ctx: Ctx, approval: Approval) -> None:
     decisions from task attempts.
 
     Recording is where the answer is fenced: the host stamps the artifact digest the approver was
-    shown and the Cell epoch the run is executing as. An answer that already claims a different
-    Cell/epoch is refused instead of being restamped, so a response cannot be carried across epochs
-    and re-recorded as current.
+    shown, the Cell epoch the run is executing as, and the inputs that epoch was admitted with. An
+    answer that already claims a different Cell/epoch is refused instead of being restamped, so a
+    response cannot be carried across epochs and re-recorded as current.
     """
     path = f"{ctx.art}/approvals.json"
     artifact = _gate_artifact(ctx, approval.gate)
     digest = hashlib.sha256(ctx.read_artifact(artifact).encode("utf-8")).hexdigest()
     cell_id, cell_epoch, _managed = cell_evidence(ctx)
+    # `require`, not `digest_of`: an unpinned run returns None, and `None == None` used to
+    # validate a whole approval set with null digests. Publication must fail closed.
+    inputs_digest = accepted_inputs.require(ctx.state).digest
     if (approval.cell_id is not None and approval.cell_id != cell_id) or (
         approval.cell_epoch is not None and approval.cell_epoch != cell_epoch
     ):
@@ -1045,7 +1020,41 @@ def record_approval(ctx: Ctx, approval: Approval) -> None:
             f"decision for gate {approval.gate!r} was given for artifact "
             f"{approval.artifact_sha256[:12]}, but {artifact} now digests to {digest[:12]}",
         )
-    approval = approval.model_copy(update={"artifact_sha256": digest, "cell_id": cell_id, "cell_epoch": cell_epoch})
+    # Same rule as the artifact digest above: an answer that already names accepted inputs is
+    # CHECKED, never restamped. Restamping would let a decision given before a deliberate
+    # re-accept be re-recorded as if it had been given for the inputs that replaced them.
+    # H1: the pin binds the approval RECORD, not the approval CHANNEL. `record_<stage>` builds its
+    # Approval from the raw operator response, so it arrives with no inputs digest and recording
+    # stamps whatever is pinned now. After a re-accept, an ordinary Airflow task clear or retry
+    # therefore re-recorded a stale answer against the new inputs and it validated cleanly. The
+    # answer's own timestamp is what distinguishes a person answering again from an old XCom being
+    # read twice.
+    # Human answers only. An "auto" default and a replay-fixture decision are produced by the
+    # runtime at record time, not pulled from an operator's XCom, so a retry re-derives them under
+    # whatever is pinned now -- there is no stale answer to launder. Applying the check to them
+    # would refuse every automatic gate, which is the over-fencing that gets a check switched off.
+    if approval.responded_at is not None and accepted_inputs.answered_before_admission(
+        ctx.state, approval.responded_at
+    ):
+        raise StageError(
+            "policy",
+            f"the answer recorded for gate {approval.gate!r} was given before this run admitted "
+            f"{inputs_digest}, so it was not given for these inputs; answer the gate again",
+        )
+    if approval.inputs_digest is not None and approval.inputs_digest != inputs_digest:
+        raise StageError(
+            "policy",
+            f"decision for gate {approval.gate!r} was given for accepted inputs "
+            f"{approval.inputs_digest}, but this run executes {inputs_digest}",
+        )
+    approval = approval.model_copy(
+        update={
+            "artifact_sha256": digest,
+            "cell_id": cell_id,
+            "cell_epoch": cell_epoch,
+            "inputs_digest": inputs_digest,
+        }
+    )
     data = _read_json(ctx, path, [])
     if not isinstance(data, list):
         raise StageError("policy", "approvals.json must contain a JSON array")
@@ -1107,9 +1116,13 @@ def pr_body(
         for s in stages
     ]
     parts.append("## Stages\n" + _md_table(["stage", "status", "duration s", "cost usd", "numbers"], stage_rows))
+    pinned = accepted_inputs.stored(ctx.state)
     parts.append(
         "## Provenance\n"
         f"- run `{ctx.cfg.run_id}` · agent `{ctx.agent.kind}` · sandbox `{ctx.sb.name}`\n"
+        f"- accepted inputs `{pinned.digest if pinned else 'unpinned'}` "
+        f"(policy `{pinned.policy_sha256[:12] if pinned else '-'}`) — every approval above was "
+        "given for these\n"
         f"- artifact chain: `{ctx.art}/` (intent, spec, plan, review, approvals, metrics, agent/)\n"
         f"- commits authored by `{BOT_NAME}` with Factory-Run / Factory-Stage / Agent trailers"
     )
@@ -1153,6 +1166,9 @@ def _validate_approvals(ctx: Ctx, approvals: list[Approval]) -> tuple[bool, str 
         raise StageError("policy", f"approvals name unknown gates: {unknown}")
 
     cell_id, cell_epoch, managed = cell_evidence(ctx)
+    # `require`, not `digest_of`: an unpinned run returns None, and `None == None` used to
+    # validate a whole approval set with null digests. Publication must fail closed.
+    inputs_digest = accepted_inputs.require(ctx.state).digest
     processed: set[str] = set()
     rejected_gate: str | None = None
     for gate in gates:
@@ -1179,6 +1195,7 @@ def _validate_approvals(ctx: Ctx, approvals: list[Approval]) -> tuple[bool, str 
             managed=managed,
             cell_id=cell_id,
             cell_epoch=cell_epoch,
+            inputs_digest=inputs_digest,
         )
         if approval.decision == "reject":
             rejected_gate = gate.name
@@ -1353,6 +1370,7 @@ def build_report(ctx: Ctx, approvals: list[Approval]) -> RunReport:
     return RunReport(
         run_id=ctx.cfg.run_id,
         issue_id=ctx.issue.id,
+        inputs_digest=accepted_inputs.digest_of(ctx.state),
         agent=ctx.agent.kind,
         sandbox=ctx.sb.name,
         scm=ctx.scm.kind,
