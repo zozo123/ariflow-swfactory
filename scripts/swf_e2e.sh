@@ -25,10 +25,12 @@
 #   scripts/swf_e2e.sh [issue ...]          # default: demo/issue.md demo/issue2.md
 #
 # Env: SWF_E2E_KEEP=1        keep the work dir (standalone home, run dirs, logs, config) after exit
-#      SWF_E2E_LEGS=...      which legs to run, space separated (default "direct backend")
-#                            the two-session leg always runs after them: it is the only leg that
-#                            fails the way a real deployment does, with several harness sessions on
-#                            one repository at once
+#      SWF_E2E_LEGS=...      which legs to run, space separated (default "direct backend
+#                            two-sessions"). `two-sessions` is the only leg that fails the way a
+#                            real deployment does, with several harness sessions on one repository
+#                            at once; it needs no other leg and can be run alone.
+#      SWF_E2E_ROLE=session-b  internal: this boot is the SECOND instance of the two-sessions leg,
+#                            sharing only SWF_E2E_ARENA's bare repositories with the parent run
 #      SWF_AIRFLOW_NO_SYNC=1 use an installed Airflow main overlay instead of the pinned release
 #      SWF_BIN=<path>        an already-built `swf` (default: cargo build --release in rust/)
 #      SWF_GATE_SETTLE_SECS  how long a gate must have existed before `swf` will answer it
@@ -36,9 +38,10 @@
 #                            CI runner — and read the failure it prevents above settle_run.
 #
 # No keys and no network: scripted agent, local sandbox, local git remote. Exit code is non-zero if
-# either leg cannot answer a gate through `swf`, any job's evidence is missing, any delivery fails
+# a leg cannot answer a gate through `swf`, any job's evidence is missing, any delivery fails
 # independent verification, the snapshot `swf` renders disagrees with `swfactory herd`'s of the same
-# server, or `swf doctor` cannot succeed against a healthy backend.
+# server, `swf doctor` cannot succeed against a healthy backend, or two sessions working one issue
+# leave two branches, two pull requests, or a replaced commit behind.
 set -Eeuo pipefail
 
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -46,7 +49,7 @@ DAG_ID="stress"
 TARGET_B="demo/target-b"   # blueprints/stress.toml's second [[targets]].dir, materialised below
 E2E_REPO="zozo123/ariflow-swfactory"
 HEALTH_TIMEOUT_S=240; PARSE_TIMEOUT_S=240; BACKEND_TIMEOUT_S=60; RUN_TIMEOUT_S=1800
-LEGS="${SWF_E2E_LEGS:-direct backend}"
+LEGS="${SWF_E2E_LEGS:-direct backend two-sessions}"
 
 if [ $# -eq 0 ]; then set -- demo/issue.md demo/issue2.md; fi
 if [ $# -lt 2 ]; then
@@ -54,8 +57,16 @@ if [ $# -lt 2 ]; then
   exit 2
 fi
 ISSUES=("$@")
-EXPECTED_JOBS=$(( $# * 2 ))          # issues x targets
-EXPECTED_GATES=$(( $# * 2 * 2 ))     # issues x targets x (intent, plan)
+# Set per leg by `expect_fan_out`, because the two-session leg deliberately submits ONE issue: what
+# it proves is two sessions meeting on one issue x target, and a second issue would only buy two
+# more jobs that never collide. Everything downstream counts against these, never against $#.
+LEG_ISSUES=(); EXPECTED_JOBS=0; EXPECTED_GATES=0
+
+expect_fan_out() { # expect_fan_out <issue ...>
+  LEG_ISSUES=("$@")
+  EXPECTED_JOBS=$(( $# * 2 ))        # issues x targets
+  EXPECTED_GATES=$(( $# * 2 * 2 ))   # issues x targets x (intent, plan)
+}
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/swf-e2e.XXXXXX")"
 export AIRFLOW_HOME="$WORK/airflow_home"
@@ -133,6 +144,15 @@ export PATH="$BIN:$PATH"
 py() { "$PY" - "$@"; }   # a heredoc script with arguments; stdin carries the script, never data
 field() { "$PY" -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }
 port() { "$PY" -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
+# Where the workers put job <idx> of dag run <id>. Asked of the runtime rather than restated here:
+# `run_id_for` is the only definition of that mapping, and a second copy of it in this script would
+# be a harness that agrees with the factory only until someone changes one of them.
+job_dir() { # job_dir <dag_run_id> <job_idx>
+  "$PY" -c 'import sys
+from swfactory.runtime import run_id_for
+print(run_id_for(sys.argv[1], int(sys.argv[2])))' "$1" "$2" |
+    { read -r rid; printf '%s/.factory/%s\n' "$WORK" "$rid"; }
+}
 
 # ---------------------------------------------------------------- work dir and environment
 
@@ -238,15 +258,18 @@ wait_parsed() {
 
 # ---------------------------------------------------------------- 1. connect + doctor
 #
-# The only step that differs between the legs. Everything after it is identical.
+# The only step that differs between the `direct` and `backend` legs; everything after it is
+# identical. The mode defaults to the leg's name, because for those two the leg IS the connection
+# mode. The two-session leg passes one explicitly: what IT varies is that there are two sessions,
+# not which credential each console holds.
 connect() {
-  local auth=() secret file
-  case "$MODE" in
+  local how="${1:-$MODE}" auth=() secret file
+  case "$how" in
     direct) auth=(--direct --user admin --password-env SWF_E2E_PASSWORD) ;;
     # No Airflow credential at all — the backend holds it, and --airflow-url is only the browser
     # address the console prints. This is the invocation docs/factory-backend.md documents.
     backend) auth=(--backend-url "$BACKEND_URL") ;;
-    *) fail "unknown leg $MODE" ;;
+    *) fail "unknown connection mode $how" ;;
   esac
   say "[$MODE] swf context add $CTX"
   "$SWF" context add "$CTX" "${auth[@]}" --airflow-url "$BASE" --repo "$E2E_REPO" \
@@ -262,7 +285,7 @@ connect() {
   "$SWF" context list
 
   say "[$MODE] swf doctor"
-  if [ "$MODE" = backend ]; then
+  if [ "$how" = backend ]; then
     # #1217: `/v1/doctor` answered rows carrying `status` but no `ok`. `swf_domain::doctor::Check`
     # has `ok: bool` with no default and no alias, so every row failed to deserialize, the whole
     # response was discarded, and `swf doctor` printed one fabricated failure blaming the operator's
@@ -291,9 +314,9 @@ PY
 
 # ---------------------------------------------------------------- 2. submit
 submit_run() {
-  say "[$MODE] swf submit: ${#ISSUES[@]} issues x 2 targets"
+  say "[$MODE] swf submit: ${#LEG_ISSUES[@]} issues x 2 targets"
   local args=() issue
-  for issue in "${ISSUES[@]}"; do args+=(--issue "$issue"); done
+  for issue in "${LEG_ISSUES[@]}"; do args+=(--issue "$issue"); done
   "$SWF" submit --blueprint "$DAG_ID" "${args[@]}" --json >"$LEG/submit.json"
   cat "$LEG/submit.json"
   RUN_ID="$(field run_id <"$LEG/submit.json")"
@@ -464,7 +487,7 @@ operator_surface() {
   # way this leg does.
   say "[$MODE] swf tui (a real terminal, this live factory, then q)"
   "$PY" "$REPO/scripts/tui_smoke.py" --bin "$SWF" --key 2 \
-    --expect "$DAG_ID" --expect "${ISSUES[0]}" --expect "success" --out "$LEG/tui-frame.txt" ||
+    --expect "$DAG_ID" --expect "${LEG_ISSUES[0]}" --expect "success" --out "$LEG/tui-frame.txt" ||
     fail "[$MODE] swf tui did not render, quit and restore the terminal"
   sed -n '1,26p' "$LEG/tui-frame.txt"
 }
@@ -492,14 +515,11 @@ snapshot_equivalence() {
 # target's own test command there. Nothing is taken from the worker's workdir.
 verify_deliveries() {
   say "[$MODE] swf deliveries verify (independent re-run from a clean checkout)"
-  local verified=0 job_id idx run_id remote branch
+  local verified=0 job_id idx remote branch
   while read -r job_id; do
     [ -n "${job_id:-}" ] || continue
     idx="${job_id##*#}"
-    run_id="$("$PY" -c 'import sys
-from swfactory.runtime import run_id_for
-print(run_id_for(sys.argv[1], int(sys.argv[2])))' "$RUN_ID" "$idx")"
-    remote="$WORK/.factory/$run_id/remote.git"
+    remote="$(job_dir "$RUN_ID" "$idx")/remote.git"
     [ -d "$remote" ] || fail "[$MODE] job $idx published nothing: no $remote"
     branch="$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/factory/*' | head -1)"
     [ -n "$branch" ] || fail "[$MODE] job $idx has no factory/* branch in $remote"
@@ -524,104 +544,287 @@ print(run_id_for(sys.argv[1], int(sys.argv[2])))' "$RUN_ID" "$idx")"
 leg() {
   MODE="$1"; LEG="$WORK/$MODE"; CTX="e2e-$MODE"; mkdir -p "$LEG"
   say "############ leg: $MODE"
+  expect_fan_out "${ISSUES[@]}"
   connect; wait_parsed; submit_run; settle_run
   collect_jobs; operator_surface; snapshot_equivalence; verify_deliveries
   [ "$STATE" = success ] || fail "[$MODE] run state=$STATE"
-  say "[$MODE] OK: $DAG_ID/$RUN_ID green — ${#ISSUES[@]} issues x 2 targets, $ANSWERED gates \
+  say "[$MODE] OK: $DAG_ID/$RUN_ID green — ${#LEG_ISSUES[@]} issues x 2 targets, $ANSWERED gates \
 answered through swf, $EXPECTED_JOBS deliveries independently verified"
 }
 
 # ---------------------------------------------------------------- many sessions, one repository
 #
-# Every leg above is ONE factory instance. This one is two, and it is the only leg that can fail the
+# Every leg above is ONE factory session. This one is two, and it is the only leg that can fail the
 # way a real deployment fails: several harness sessions -- each in its own Claude Code / Codex / pi
-# loop, each with its own state root -- working one repository at the same time.
+# loop -- working one repository at the same time. Both walk the SAME pipeline through the SAME live
+# Airflow the legs above booted: intent gate, spec, plan gate, build, review, deliver, every gate
+# answered through `swf`. Nothing here calls the scm seam directly; the version that did was proving
+# git's compare-and-swap, which git already guarantees, rather than the factory's use of it.
 #
 # What it must prove is not that both sessions succeed. It is that the SECOND one does not quietly
 # undo the first: one branch, one pull request, and no commit replaced behind a reviewer's back.
+#
+# TWO HONEST LIMITS, because a proof that overstates itself is worse than none:
+#
+#  * ONE Airflow, so ONE worker cwd, so ONE `.factory` tree. `swfactory.publication_identity`
+#    derives a session's name from the state root it owns, and on this path that root is the job's
+#    own run directory (`runtime.job_config` rewrites `workdir` to `<root>/.factory/<run_id>/work`
+#    for every host sandbox). Two dag runs therefore are two names, which is what the fence reads --
+#    but they are not two state TREES. Giving each session its own would take either a second
+#    Airflow (a second boot and a second metadata database, for a property this already exercises)
+#    or a per-submission state-root knob the product does not have. A second `swfactory backend` is
+#    worse than useless: the workers know exactly one SWF_BACKEND_URL, so it would hold credentials
+#    nobody dials. So: two consoles, two dag runs, one Airflow -- said out loud rather than implied.
+#
+#  * SEQUENTIAL, not racing. "B must not undo A" only means anything once A is on the remote; two
+#    simultaneous submissions would pick the winner by scheduler luck and assert nothing either way.
+#    Session A finishes, THEN session B submits the same issue x target and meets it.
+#
+# The shared remote is a symlink per (issue x target). `scm = local` gives every RUN its own bare
+# repository under its run dir -- which is why the legs above can verify deliveries in isolation,
+# and exactly why they can never see this failure: a second run meets an EMPTY repository and pushes
+# into it without ever asking who was there. `LocalGitScm` resolves `<run dir>/remote.git`, so
+# pointing both sessions' at one bare repo makes them share the repository and nothing else, which
+# is the premise: two instances share a repository and no store, no scheduler and no credential.
 two_sessions() {
-  say "############ leg: two sessions, one repository"
-  local arena="$WORK/two-sessions" remote="$WORK/two-sessions/origin.git"
-  local key branch a_head b_rc
-  rm -rf "$arena"; mkdir -p "$arena"
+  MODE=two-sessions
+  say "############ leg: $MODE — two factory instances, one repository"
+  ARENA="$WORK/two-sessions"; rm -rf "$ARENA"; mkdir -p "$ARENA"
+  two_sessions_branches
 
-  git init -q --bare -b main "$remote"
-  git clone -q "$remote" "$arena/seed"
-  printf 'seed\n' >"$arena/seed/README.md"
-  git -C "$arena/seed" add -A
-  git -C "$arena/seed" -c user.name=e2e -c user.email=e2e@example.com commit -qm seed
-  git -C "$arena/seed" push -q origin main
+  # -- session A: this instance. A whole run of the line, and the delivery every assertion is about.
+  MODE=sess-a; LEG="$WORK/sess-a"; CTX="e2e-sess-a"; mkdir -p "$LEG"
+  say "[$MODE] session A submits ${LEG_ISSUES[0]}"
+  connect direct; wait_parsed; submit_run
+  share_remotes "$RUN_ID" A
+  settle_run; collect_jobs
+  [ "$STATE" = success ] || fail "[$MODE] session A did not finish: state=$STATE"
+  verify_deliveries          # its own report, re-proved from a clean clone of the SHARED remote
+  cp "$LEG/job-ids.txt" "$ARENA/a-job-ids.txt"
+  : >"$ARENA/tips.txt"
+  local idx
+  for idx in $(seq 0 $((${#TS_ORIGINS[@]} - 1))); do
+    TS_TIPS[idx]="$(git -C "${TS_ORIGINS[$idx]}" rev-parse "refs/heads/${TS_BRANCHES[$idx]}" 2>/dev/null || true)"
+    [ -n "${TS_TIPS[$idx]}" ] ||
+      fail "[$MODE] session A published no ${TS_BRANCHES[$idx]} into ${TS_ORIGINS[$idx]}"
+    printf '%s\n' "${TS_TIPS[$idx]}" >>"$ARENA/tips.txt"
+    printf 'session A holds %s at %s\n' "${TS_BRANCHES[$idx]}" "${TS_TIPS[$idx]:0:12}"
+  done
 
-  # Both sessions resolve the SAME publication key from (repo, target, issue) without talking to
-  # each other -- that is the whole mechanism, so read it from the runtime rather than restating it.
-  key="$("$PY" -c 'from swfactory.publication_identity import publication_key
-print(publication_key("o/r", "demo/target", "DEMO-1"))')"
-  branch="factory/DEMO-1-$key"
+  # -- session B: ANOTHER instance. This script again, as a child, with its own Airflow, backend,
+  # config and state root -- and therefore its own `Factory-Instance` -- sharing nothing with A but
+  # the bare repositories in the arena. The first version of this leg ran B as a second dag run in
+  # the same Airflow; the fence let it through, correctly, because one Airflow is one state root is
+  # one instance, and a second run of one's own work is a retry. The proof needs two instances, and
+  # the only honest way to have two is to boot two.
+  MODE=two-sessions
+  say "[$MODE] session B: a second factory instance boots and submits the same issue x target"
+  SWF_E2E_ROLE=session-b SWF_E2E_ARENA="$ARENA" SWF_E2E_KEEP=1 SWF_BIN="$SWF" \
+    bash "$REPO/scripts/swf_e2e.sh" "${ISSUES[@]}" >"$ARENA/session-b.log" 2>&1 ||   # not $0: we cd into $WORK
+    { tail -40 "$ARENA/session-b.log" >&2; fail "[$MODE] session B's harness failed (log: $ARENA/session-b.log)"; }
+  grep -E '^(  loser:|  stress/)' "$ARENA/session-b.log" || true
+  B_WORK="$(cat "$ARENA/b-work.txt")"
+  local i=0
+  while read -r dir; do TS_B_DIRS[i]="$dir"; i=$((i + 1)); done <"$ARENA/b-dirs.txt"
 
-  "$PY" - "$remote" "$arena" "$branch" <<'PYEOF' >"$arena/session-a.log" 2>&1
+  two_sessions_assert
+  [ "${SWF_E2E_KEEP:-}" = "1" ] || rm -rf "$B_WORK"
+}
+
+# The branch each session must converge on, asked of the runtime: `publication_key(repo, target,
+# issue)` is instance-independent by construction, and a copy of that rule here would let the
+# harness and the factory disagree about which work is "the same work" -- the one thing this leg is
+# about. Job order is the fan-out's own: `Blueprint.jobs` walks (issue x target) in target order, so
+# line N of this file describes job N. Session B reads the file A wrote rather than recomputing it,
+# so a disagreement between the two would be visible instead of silently making two branches.
+two_sessions_branches() {
+  TS_BRANCHES=(); TS_ORIGINS=(); TS_TIPS=(); TS_A_DIRS=(); TS_B_DIRS=()
+  expect_fan_out "${ISSUES[0]}"   # one issue x the blueprint's two targets = two jobs per session
+  if [ ! -s "$ARENA/branches.txt" ]; then
+    "$PY" - "$DAG_ID" "${LEG_ISSUES[0]}" <<'PY' >"$ARENA/branches.txt"
 import sys
 from pathlib import Path
-from swfactory.publication_identity import PublicationIdentity, publication_key
-from swfactory.scm import LocalGitScm
 
-remote, arena, branch = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
-patch = (
-    "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n"
-    "From: swfactory-bot <bot@example.com>\nDate: Mon, 1 Jan 2026 00:00:00 +0000\n"
-    "Subject: [PATCH] session A\n\nFactory-Instance: session-a\n---\n"
-    " demo/target/a.txt | 1 +\n 1 file changed, 1 insertion(+)\n\n"
-    "diff --git a/demo/target/a.txt b/demo/target/a.txt\nnew file mode 100644\n"
-    "index 0000000..0000001\n--- /dev/null\n+++ b/demo/target/a.txt\n@@ -0,0 +1 @@\n+A\n-- \n2.39.0\n"
-).encode()
-LocalGitScm(remote, arena / "run-a").publish(
-    branch=branch, patch=patch, title="A", body="A", labels=["factory"],
-    identity=PublicationIdentity(key=publication_key("o/r", "demo/target", "DEMO-1"), instance="session-a"),
-)
-PYEOF
-  a_head="$(git -C "$remote" rev-parse "refs/heads/$branch")"
-  printf 'session A published %s at %s\n' "$branch" "${a_head:0:12}"
+from swfactory.blueprint import load
+from swfactory.publication_identity import publication_key
+from swfactory.runtime import locate
+from swfactory.scm import parse_issue_file
 
-  # Session B: a different instance, same work, no knowledge of A. It must be refused rather than
-  # replace A's commit -- and `|| true` because the refusal IS the pass condition here.
-  b_rc=0
-  "$PY" - "$remote" "$arena" "$branch" <<'PYEOF' >"$arena/session-b.log" 2>&1 || b_rc=$?
-import sys
-from pathlib import Path
-from swfactory.publication_identity import PublicationIdentity, publication_key
-from swfactory.scm import LocalGitScm
+blueprint, issue_path = sys.argv[1], sys.argv[2]
+# `locate`, because this script runs from the work dir and the issue path is the factory-relative
+# one the workers are given: resolving it any other way would read a different issue than the run.
+issue = parse_issue_file(Path(locate(issue_path)))
+for target in load(blueprint).targets:
+    key = publication_key(target.repo, target.dir, issue.id)
+    print(f"{issue.id}\t{target.dir}\tfactory/{issue.id}-{key}")
+PY
+  fi
+  local issue_id target branch
+  while IFS="$(printf '\t')" read -r issue_id target branch; do
+    TS_ART="docs/factory/$issue_id"    # the committed artifact chain, relative to the target dir
+    TS_ORIGINS[${#TS_BRANCHES[@]}]="$ARENA/origin-${#TS_BRANCHES[@]}.git"
+    TS_BRANCHES[${#TS_BRANCHES[@]}]="$branch"
+    printf 'issue %s x %s -> %s\n' "$issue_id" "$target" "$branch"
+  done <"$ARENA/branches.txt"
+  [ "${#TS_BRANCHES[@]}" -eq "$EXPECTED_JOBS" ] ||
+    fail "[$MODE] ${#TS_BRANCHES[@]} publication keys for $EXPECTED_JOBS jobs"
+}
 
-remote, arena, branch = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
-patch = (
-    "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n"
-    "From: swfactory-bot <bot@example.com>\nDate: Mon, 1 Jan 2026 00:00:00 +0000\n"
-    "Subject: [PATCH] session B\n\nFactory-Instance: session-b\n---\n"
-    " demo/target/b.txt | 1 +\n 1 file changed, 1 insertion(+)\n\n"
-    "diff --git a/demo/target/b.txt b/demo/target/b.txt\nnew file mode 100644\n"
-    "index 0000000..0000001\n--- /dev/null\n+++ b/demo/target/b.txt\n@@ -0,0 +1 @@\n+B\n-- \n2.39.0\n"
-).encode()
-LocalGitScm(remote, arena / "run-b").publish(
-    branch=branch, patch=patch, title="B", body="B", labels=["factory"],
-    identity=PublicationIdentity(key=publication_key("o/r", "demo/target", "DEMO-1"), instance="session-b"),
-)
-PYEOF
-  [ "$b_rc" -ne 0 ] || fail "[two-sessions] session B published over session A instead of being refused"
-  grep -q "published by session-a, not by this one (session-b)" "$arena/session-b.log" \
-    || fail "[two-sessions] session B failed, but not with the refusal that names the other writer"
+# The child's half: the second instance, running in its own boot. It knows the arena and nothing
+# else about A -- which is the situation two harness sessions on one repository are actually in.
+session_b() {
+  MODE=sess-b; LEG="$WORK/sess-b"; CTX="e2e-sess-b"; mkdir -p "$LEG"
+  ARENA="$SWF_E2E_ARENA"
+  two_sessions_branches
+  local i=0
+  while read -r tip; do TS_TIPS[i]="$tip"; i=$((i + 1)); done <"$ARENA/tips.txt"
+  say "[$MODE] session B submits the SAME issue x target into the same repository"
+  connect direct; wait_parsed; submit_run
+  share_remotes "$RUN_ID" B
+  printf '%s\n' "${TS_B_DIRS[@]}" >"$ARENA/b-dirs.txt"
+  printf '%s\n' "$WORK" >"$ARENA/b-work.txt"
+  # `settle_run` answers B's gates and polls to a terminal state; it does not require success, and B
+  # must not succeed. Its gate count still has to hold: a session refused at `deliver` is one that
+  # walked the whole line first, and one that died in `setup` would answer no gates at all.
+  settle_run; collect_jobs
+  cp "$LEG/job-ids.txt" "$ARENA/b-job-ids.txt"
+  [ "$STATE" = failed ] ||
+    fail "[$MODE] session B ended $STATE — it published over session A, or never reached deliver"
+  session_b_refused
+  two_sessions_reports_agree
+}
 
-  # The three things a reviewer actually cares about.
-  [ "$(git -C "$remote" rev-parse "refs/heads/$branch")" = "$a_head" ] \
-    || fail "[two-sessions] session A's commit was replaced"
-  [ "$(git -C "$remote" for-each-ref --format='%(refname)' 'refs/heads/factory/*' | wc -l | tr -d ' ')" = 1 ] \
-    || fail "[two-sessions] two sessions produced two factory branches"
-  git -C "$remote" cat-file -e "$a_head:demo/target/a.txt" \
-    || fail "[two-sessions] session A's file is gone from the published tree"
+# 4. The loser says WHY. A session that failed for an unrelated reason -- a flaky test, a dead
+#    sandbox -- must never read as this proof passing, so the refusal has to be in the loser's OWN
+#    log and has to identify what it refused to overwrite. `deliver` is retried, and the first attempt
+#    is the one that met the branch, so read every attempt it made. This runs in the child because
+#    the log lives in the child's Airflow, which is gone by the time the parent asserts.
+session_b_refused() {
+  local idx job attempt want
+  for idx in $(seq 0 $((${#TS_ORIGINS[@]} - 1))); do
+    job="$(grep "#${idx}\$" "$ARENA/b-job-ids.txt" | head -1)"
+    [ -n "$job" ] || fail "[$MODE] session B has no job $idx to read a log from"
+    : >"$ARENA/refusal-$idx.txt"
+    for attempt in 1 2 3; do
+      "$SWF" logs "$job" --task deliver --attempt "$attempt" >>"$ARENA/refusal-$idx.txt" 2>/dev/null || true
+    done
+    for want in "Refusing to overwrite" "${TS_BRANCHES[$idx]}" "${TS_TIPS[$idx]:0:12}"; do
+      grep -qF -- "$want" "$ARENA/refusal-$idx.txt" || {
+        tail -30 "$ARENA/refusal-$idx.txt" >&2
+        fail "[$MODE] session B's deliver log never names '$want' — it failed for another reason"
+      }
+    done
+    grep -m1 -F "Refusing to overwrite" "$ARENA/refusal-$idx.txt" | sed 's/^/  loser: /'
+  done
+}
 
-  say "[two-sessions] OK: one branch, A's commit intact at ${a_head:0:12}, B refused naming the holder"
+# Point every job of dag run <id> at the shared bare repository for its (issue x target), and record
+# where that job's run directory is. Between `submit` and the first gate answer, which is the whole
+# width of the pipeline before `deliver` -- the only stage that touches the remote.
+share_remotes() { # share_remotes <dag_run_id> <A|B>
+  local run="$1" side="$2" idx dir
+  for idx in $(seq 0 $((${#TS_ORIGINS[@]} - 1))); do
+    dir="$(job_dir "$run" "$idx")"
+    if [ "$side" = A ]; then TS_A_DIRS[idx]="$dir"; else TS_B_DIRS[idx]="$dir"; fi
+    mkdir -p "$dir"
+    # -n, not a plain -s: were a real remote already there, the link would be created INSIDE it and
+    # the two sessions would silently stop sharing anything while every assertion still passed.
+    ln -s -n "${TS_ORIGINS[$idx]}" "$dir/remote.git" ||
+      fail "[$MODE] job $idx already has a remote of its own at $dir/remote.git"
+  done
+}
+
+# What a reviewer of this repository actually cares about, once both instances are done. The remote
+# is the witness: it is the one thing both instances wrote to, and it is still here.
+two_sessions_assert() {
+  MODE=two-sessions
+  local idx origin branch tip prs dir heads holder
+  for idx in $(seq 0 $((${#TS_ORIGINS[@]} - 1))); do
+    origin="${TS_ORIGINS[$idx]}"; branch="${TS_BRANCHES[$idx]}"
+    say "[$MODE] job $idx: $branch"
+
+    # 1. ONE branch for this issue x target. Two sessions that each opened their own would both
+    #    report success while a reviewer read half the work on each.
+    heads="$(git -C "$origin" for-each-ref --format='%(refname:short)' 'refs/heads/factory/*' | tr '\n' ' ')"
+    [ "$(printf '%s' "$heads" | wc -w | tr -d ' ')" = 1 ] ||
+      fail "[$MODE] factory branches in $origin: '$heads' — expected exactly 1"
+    [ "${heads% }" = "$branch" ] ||
+      fail "[$MODE] the surviving branch is '${heads% }', not the one the publication key names"
+
+    # 2. ONE pull request. `pr.md` is the local scm's PR and is written only after a push that was
+    #    allowed, so counting them counts publications rather than attempts.
+    prs=0
+    for dir in "${TS_A_DIRS[$idx]}" "${TS_B_DIRS[$idx]}"; do
+      [ -f "$dir/pr.md" ] && prs=$((prs + 1))
+    done
+    [ "$prs" -eq 1 ] ||
+      fail "[$MODE] $prs pull requests for one issue x target — the second session opened its own"
+    [ -f "${TS_A_DIRS[$idx]}/pr.md" ] || fail "[$MODE] the one pull request is not the winner's"
+    [ ! -f "${TS_B_DIRS[$idx]}/pr.md" ] ||
+      fail "[$MODE] session B wrote a pull request for work it did not publish"
+
+    # 3. The winner is untouched: the same tip, and its work still IN that tip's tree. A fence that
+    #    let B rewrite the branch and then restore A's sha would pass a tip check on its own.
+    tip="$(git -C "$origin" rev-parse "refs/heads/$branch")"
+    [ "$tip" = "${TS_TIPS[$idx]}" ] ||
+      fail "[$MODE] $branch moved from ${TS_TIPS[$idx]:0:12} to ${tip:0:12} after session B ran"
+    git -C "$origin" cat-file -e "$tip:$TS_ART/plan.md" 2>/dev/null ||
+      fail "[$MODE] the winner's artifact chain is not in the tree at ${tip:0:12}"
+
+    # 5. The two instances really were two. The tip's own trailer names the instance that holds it,
+    #    and B's refusal must name that same id as the holder -- and not as itself. A leg whose two
+    #    "sessions" shared one state root would prove a retry, which is the mistake this leg made once.
+    holder="$(git -C "$origin" log -1 --format='%(trailers:key=Factory-Instance,valueonly)' "$tip" | head -1)"
+    [ -n "$holder" ] || fail "[$MODE] the tip at ${tip:0:12} carries no Factory-Instance trailer"
+    grep -qF -- "published by $holder, not by this one" "$ARENA/refusal-$idx.txt" ||
+      fail "[$MODE] session B's refusal does not name $holder as the holder of ${tip:0:12}"
+    echo "  one branch, one pull request, tip still ${tip:0:12} held by $holder with the winner's chain in it"
+  done
+
+  say "[$MODE] OK: two factory instances, one repository — ${#TS_ORIGINS[@]} issue x target(s), one \
+branch and one pull request each, session A's commits intact, session B refused naming the holder"
+}
+
+# Neither session's account of itself may claim a delivery the remote does not have. A's is already
+# re-proved by `verify_deliveries` from a clean clone of the shared remote; B's has to be proved
+# EMPTY, because "the run failed" and "the run published nothing" are not the same sentence and a
+# report that quietly says the second would be the expensive kind of wrong.
+two_sessions_reports_agree() {
+  say "[$MODE] session B's own report, against the remote it did not write"
+  local job out
+  while read -r job; do
+    [ -n "${job:-}" ] || continue
+    out="$LEG/inspect-$(echo "$job" | tr '/#:' '___').json"
+    "$SWF" jobs inspect "$job" --json >"$out" || fail "[$MODE] swf jobs inspect $job"
+    py "$out" "$job" <<'PY' || fail "[$MODE] session B's report disagrees with the remote"
+"""A refused session must report the refusal, never a delivery."""
+
+import json, sys
+
+job = json.load(open(sys.argv[1]))
+# Task ids are task-group qualified (`job.deliver`); the first version of this check keyed on the
+# bare name, found nothing, and therefore could never fail -- which is the opposite of a check.
+tasks = {t["task_id"].rsplit(".", 1)[-1]: t.get("state") for t in job.get("tasks") or []}
+print(f"  {sys.argv[2]}: job={job.get('state')} deliver={tasks.get('deliver')}")
+if tasks.get("deliver") != "failed":
+    sys.exit(f"  deliver is {tasks.get('deliver')!r}; a refused publication is a FAILED deliver, nothing else")
+if job.get("state") != "failed":
+    sys.exit(f"  it reports itself {job.get('state')!r} with nothing on the remote")
+PY
+  done <"$ARENA/b-job-ids.txt"
 }
 
 boot_airflow
 mint_admin
 start_backend
-for mode in $LEGS; do leg "$mode"; done
-case " $LEGS " in *" two-sessions "*) : ;; *) two_sessions ;; esac
-say "OK: the same factory, proved through ${LEGS// /, }, and two sessions on one repository"
+# `two-sessions` is a leg like any other, so it can be run alone: SWF_E2E_LEGS=two-sessions is the
+# whole cross-session proof for the price of one boot. It ran unconditionally after the others when
+# it was a Python snippet against the scm seam and cost seconds; now it is two dag runs.
+if [ "${SWF_E2E_ROLE:-}" = "session-b" ]; then
+  session_b   # this boot IS the second instance of the two-sessions leg; the parent asserts
+  exit 0
+fi
+for mode in $LEGS; do
+  case "$mode" in two-sessions) two_sessions ;; *) leg "$mode" ;; esac
+done
+say "OK: the same factory, proved through ${LEGS// /, }"
