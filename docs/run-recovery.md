@@ -74,6 +74,51 @@ Atomic control/artifact writes now sync both content and directory entries. Newl
 directories and control-file removals are synced as well. Symlinks that escape the run's state or
 artifact root are refused.
 
+## The inputs one epoch accepted
+
+Airflow rebuilds a whole `Ctx` for every task: the blueprint is reloaded from the worker's disk,
+the issue is fetched again, and `Config` re-reads that worker's `SWF_*` environment. So the first
+context of a run admits an immutable snapshot of what it is executing — issue content, resolved
+blueprint, effective policy and target identity — into `state/accepted-inputs.json`, and every
+later context recomputes it and compares. Admission happens inside `runtime.ctx_for`, before the
+sandbox and agent are constructed, so a drifted task refuses before any agent or provider I/O
+rather than after the model has written code.
+
+Its digest (`inputs:<sha256>`) is stamped onto every recorded approval next to the artifact digest
+and the Cell/epoch, and is re-checked at continuation, so an answer given for one set of inputs
+cannot publish another. The execution report (`RunReport.inputs_digest`), the publication receipt
+(`metrics.json`) and the PR body all quote the same value.
+
+`state/accepted-inputs.jsonl` is the append-only history: one `accepted` record per admission and
+one `superseded` record per deliberate re-accept.
+
+**Policy vs. operational settings.** Only settings that describe what a run may do are fenced
+(`accepted_inputs.POLICY_SETTINGS`: sandbox and agent kind, loop bounds and budgets, egress
+allowlist, image, credential *mode*, gate timeouts). Per-worker paths and ownership
+(`OPERATIONAL_SETTINGS`: `fixtures_dir`, `workdir`, `record_dir`, `sandbox_owner`, and the
+`gate_replay` path) may differ between workers. `tests/test_accepted_inputs.py` asserts every
+`Config` field is classified, so a new knob cannot land outside both sets.
+
+**Gate replay.** `SWF_GATE_REPLAY` is split across that line: the fixture path is operational, its
+*content* is policy, because the file answers release gates. The snapshot pins `sha256(fixture)`.
+Pointing a second worker at its own identical copy is fine; changing the answers, or introducing a
+fixture where the epoch was admitted without one, refuses.
+
+**When the inputs genuinely changed.** A changed input is a new epoch, not a stuck Cell:
+
+```sh
+uv run swfactory state reaccept <run-id> --actor alice --reason "issue #7 edited by author"
+```
+
+This records who re-opened the epoch and why, then retires the pin so the *next* task admits the
+current inputs. It re-opens the inputs; it does not re-authorize them — every earlier approval
+keeps the digest it was given for, so delivery refuses on it and every gate must be answered
+again. A backend-managed Cell refuses this route: advance its epoch through the backend instead,
+which is the same fence one level up.
+
+Teardown is the one context built with `enforce_inputs=False`. Cleanup is not work, and a refusal
+that leaked the sandbox it exists to close would be a worse outcome than closing it.
+
 ## Budget handling across attempts
 
 After acquiring stage ownership, the runtime refreshes its recorded spend. This also covers a

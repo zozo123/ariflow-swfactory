@@ -262,7 +262,10 @@ class Approval(BoundaryModel):
     answered by the operator's own default) or "replay" (an explicitly declared replay fixture,
     which ``approval_policy.check_recorded`` refuses for managed work). ``cell_id``/``cell_epoch``
     and ``artifact_sha256`` fence the answer to one Cell epoch and one artifact, so it cannot be
-    replayed against a different epoch or a changed artifact.
+    replayed against a different epoch or a changed artifact. ``inputs_digest`` fences it to the
+    inputs that epoch was admitted with (``swfactory.accepted_inputs``): an artifact digest only
+    proves the approver saw *this* plan.md, not that the issue, blueprint and policy behind it
+    are still the ones the rest of the line will execute.
     """
 
     gate: Literal["intent", "plan"]
@@ -273,6 +276,11 @@ class Approval(BoundaryModel):
     mode: Literal["human", "auto", "replay"] = "human"
     cell_id: str | None = None
     cell_epoch: int | None = Field(default=None, ge=1)
+    inputs_digest: str | None = Field(default=None, pattern=r"^inputs:[a-f0-9]{64}$")
+    # The operator's own answer time, straight from the HITL event. Recording refuses an answer
+    # that predates the current admission, because such an answer cannot have been given for the
+    # inputs this run now holds -- see accepted_inputs.answered_before_admission.
+    responded_at: datetime | None = None
 
 
 class StageResult(BoundaryModel):
@@ -294,6 +302,9 @@ class RunReport(BoundaryModel):
     scm: str
     stages: list[StageResult]
     approvals: list[Approval]
+    # The accepted inputs every approval here was given for; the publication receipt
+    # (metrics.json and the PR body) quotes the same value, so the three cannot disagree.
+    inputs_digest: str | None = Field(default=None, pattern=r"^inputs:[a-f0-9]{64}$")
     pr_url: str | None = None
     tests_passed: bool = False
     total_cost_usd: float = Field(default=0.0, ge=0)

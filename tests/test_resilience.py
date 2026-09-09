@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 
+from swfactory import accepted_inputs
 from swfactory.agent import POLICIES, ClaudeAgent, ScriptedAgent
 from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
 from swfactory.blueprint import load
@@ -227,10 +228,24 @@ def ctx_on(
         issue=Issue(id=ISSUE_ID, title="add percent_change", body="body"),
         run_dir=tmp_path / "run",
     )
+    # Pin the run the way `_prepare_ctx` does on its first context. Publication reads the accepted
+    # inputs fail-closed, so a Ctx built straight from the constructor -- which no production path
+    # does -- would otherwise be an unpinned run that cannot exist, and its refusal would mask the
+    # one each of these tests is actually asserting.
+    accepted_inputs.admit(ctx.state, accepted_inputs.snapshot(ctx.cfg, None, ctx.issue))
     if seed_artifacts:
         for path, content in sb.files.items():
             if path.startswith(f"{ctx.art}/"):
                 ctx.state.write_artifact(path, content)
+        # Seeded approvals stand for ones an earlier stage recorded against this run, so they carry
+        # the digest recording would have stamped. Without it every fixture would be refused for
+        # the wrong reason and no test could reach the behaviour it is about.
+        approvals_path = f"{ctx.art}/approvals.json"
+        if approvals_path in sb.files:
+            rows = json.loads(sb.files[approvals_path])
+            for row in rows:
+                row.setdefault("inputs_digest", accepted_inputs.digest_of(ctx.state))
+            ctx.state.write_artifact(approvals_path, json.dumps(rows))
     if base := sb.files.get(".factory/base"):
         ctx.state.write_control("base", base)
     head = sb.results.setdefault("git rev-parse HEAD", out("head0000\n")).stdout.strip()
@@ -635,6 +650,9 @@ def delivery_ctx(
             "actor": "alice",
             "at": at,
             "artifact_sha256": hashlib.sha256(content.encode()).hexdigest(),
+            # The digest recording would have stamped. These stand for decisions an earlier stage
+            # recorded against this run, so they are bound to the inputs it accepted.
+            "inputs_digest": accepted_inputs.digest_of(ctx.state),
         }
         for gate, content in (("intent", intent_text), ("plan", plan_text))
     ]
