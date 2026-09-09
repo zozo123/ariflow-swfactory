@@ -57,7 +57,7 @@ artifact = "plan.md"
 timeout_h = 2
 mode = "auto"
 [sandbox]
-ttl_s = 86400
+ttl_s = 172800
 """
 
 

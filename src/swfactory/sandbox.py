@@ -40,6 +40,7 @@ from typing import Protocol, runtime_checkable
 from swfactory.config import Config
 from swfactory.models import RunResult, StageError
 from swfactory.paths import confined_path, confined_posix_path, normalize_relative_path
+from swfactory.sandbox_contract import compute_lost
 from swfactory.state import RunState
 
 # Exit code reported when a command is killed by the timeout (mirrors coreutils `timeout`).
@@ -112,6 +113,12 @@ class Sandbox(Protocol):
 
     def ensure(self) -> None:
         """Create the sandbox if missing (idempotent)."""
+        ...
+
+    def alive(self) -> bool:
+        """True while the provider still holds this sandbox AND its ``workdir``. False once the
+        TTL expired, it was removed, or the checkout is gone. Never creates anything: that is
+        ``ensure``'s job, and the stage runtime decides whether re-creating is allowed."""
         ...
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
@@ -284,6 +291,9 @@ class LocalSandbox:
         """Create the directory and initialise a git repo on ``main`` if none exists."""
         self.root.mkdir(parents=True, exist_ok=True)
         self._host_git_init()
+
+    def alive(self) -> bool:
+        return self.root.is_dir()
 
     def _host_git_init(self) -> None:
         """``git init`` on the host, never through a confined shell (idempotent). Shared by all
@@ -614,12 +624,23 @@ def _dedupe(items: Sequence[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
 
+#: Run-state record that this run provisioned its islo cell (``ensure`` succeeded once). Its
+#: presence is what turns "not in ``islo ls``" from "not created yet" into "lost".
+ISLO_STATE_FILE = "islo-sandbox.json"
+
+
 class IsloSandbox:
     """An islo MicroVM created from ``--source`` (read-only clone) and addressed by a stable name.
 
     The same name on every call makes ``islo use`` create-if-needed the idempotency mechanism
     across Airflow tasks and workers. ``--auto-resume on_activity`` wakes a paused VM on the
     next ``islo use``; ``islo cp`` does not, so ``_cp`` retries once after ``islo resume``.
+
+    Create-if-needed cuts both ways: once ``--delete-after`` has fired (a gate outlived the TTL)
+    the same command quietly hands a later task a fresh, empty VM. So the first use in each
+    process checks ``alive()`` against the run-state record ``ensure`` left, and refuses with a
+    named reason instead. ``ensure`` itself is exempt: ``stages.setup`` decides whether
+    re-provisioning from durable state is allowed before it calls it.
     """
 
     def __init__(
@@ -635,8 +656,11 @@ class IsloSandbox:
         factory_root: Path,
         snapshot: str | None = None,
         owner: str | None = None,
+        state: RunState | None = None,
     ) -> None:
         self.owner = owner
+        self.state = state
+        self._attached = False
         self.name = name
         self.source = source
         self.gateway_profile = gateway_profile
@@ -697,9 +721,47 @@ class IsloSandbox:
                 f"islo use {self.name} failed (rc={res.exit_code}): {res.stderr.strip()}",
                 retryable=True,
             )
+        self._attached = True
+        if self.state is not None:
+            record = {"name": self.name, "ttl_s": self.ttl_s}
+            self.state.write_control(ISLO_STATE_FILE, json.dumps(record, separators=(",", ":")) + "\n")
+
+    def alive(self) -> bool:
+        """Listed by ``islo ls`` (own scope, not ``deleted``) and the checkout directory is there.
+        Neither probe carries ``--source``, so neither can create. A failing ``islo ls`` is a
+        control-plane fault, not an absence, and raises retryable rather than answering False."""
+        listing = self._control(["islo", "ls", "--output", "json"])
+        if not listing.ok:
+            raise StageError(
+                "sandbox",
+                f"islo ls failed (rc={listing.exit_code}): {listing.stderr.strip()}",
+                retryable=True,
+            )
+        if not owns_sandbox(listing.stdout, self.name):
+            return False
+        probe = self.argv(f"test -d {shlex.quote(self.workdir)}")
+        return _run_subprocess(probe, cwd=None, env=None, timeout_s=_CONTROL_TIMEOUT_S).ok
+
+    def _attach(self) -> None:
+        """First use in this process: a cell this run provisioned must still exist."""
+        if self._attached:
+            return
+        if self.state is not None and self.state.has_control(ISLO_STATE_FILE) and not self.alive():
+            lost = compute_lost(
+                "islo",
+                self.name,
+                detail=(
+                    f"provisioned by this run but no longer listed with its checkout (--delete-after {self.ttl_s} s "
+                    "expired, or it was removed); work committed only in the cell is gone, so the stage stops "
+                    "instead of running on a fresh clone"
+                ),
+            )
+            raise StageError("sandbox", lost.summary(), retryable=False)
+        self._attached = True
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
         """Run ``cmd`` inside the sandbox; the command's exit code propagates through islo."""
+        self._attach()
         return _run_subprocess(self.argv(cmd, cwd=cwd), cwd=None, env=None, timeout_s=timeout_s)
 
     def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
@@ -709,6 +771,7 @@ class IsloSandbox:
 
     def read(self, path: str) -> str:
         """Copy the file out with ``islo cp`` and return its text; missing -> FileNotFoundError."""
+        self._attach()
         remote = f"{self.name}:{self._abs(path)}"
         with tempfile.TemporaryDirectory(prefix="swf-cp-") as tmp:
             local = Path(tmp) / "file"
@@ -719,6 +782,7 @@ class IsloSandbox:
 
     def write(self, path: str, content: str) -> None:
         """Copy ``content`` into the sandbox with ``islo cp``, creating parent directories."""
+        self._attach()
         abs_path = self._abs(path)
         parent = posixpath.dirname(abs_path)
         if parent and parent != self.workdir:
@@ -734,6 +798,7 @@ class IsloSandbox:
 
     def exists(self, path: str) -> bool:
         """True if ``test -e`` succeeds inside the sandbox."""
+        self._attach()
         res = self.run(f"test -e {shlex.quote(self._abs(path))}", timeout_s=_CONTROL_TIMEOUT_S)
         return res.exit_code == 0
 
@@ -997,6 +1062,17 @@ class ToolsetSandbox:
         if self._terminated:
             raise StageError("sandbox", "sandbox was terminated; start a new factory run to rebuild its work")
 
+    def alive(self) -> bool:
+        """A live handle whose ``workdir`` still answers; never created or terminated is False."""
+        self._restore_id()
+        if self.sandbox_id is None or self._terminated:
+            return False
+        try:
+            probe = self._run_backend(f"test -d {shlex.quote(self.workdir)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
+        except Exception:
+            return False
+        return probe.ok
+
     def _id(self) -> str:
         self._check_alive()
         if self.sandbox_id is None:
@@ -1163,4 +1239,5 @@ def make_sandbox(
         factory_root=_factory_root(),
         snapshot=cfg.islo_snapshot,
         owner=cfg.sandbox_owner,
+        state=RunState(run_dir) if run_dir is not None else None,
     )

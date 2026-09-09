@@ -57,7 +57,8 @@ nit_cap = 3
 kind = "islo"               # local | srt | docker | islo | toolset (SWF_SANDBOX overrides)
 gateway_profile = "swfactory"
 environment = "swfactory"
-ttl_s = 172800              # --delete-after; validator: > max(gates[].timeout_h) * 3600
+ttl_s = 345600              # --delete-after; validator: > Blueprint.worst_case_s = 48 h of gates +
+                            # 11 stage tries x 3 h = 81 h
 idle_s = 900                # --pause-after-idle
 # snapshot = "swf-golden-20260902"   # --snapshot warm start (islo only)
 

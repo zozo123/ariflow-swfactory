@@ -76,7 +76,7 @@ nit_cap = 3
 
 [sandbox]
 kind = "local"
-ttl_s = 7200
+ttl_s = 86400
 idle_s = 900
 
 [deliver]
