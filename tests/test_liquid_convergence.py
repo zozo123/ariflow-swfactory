@@ -152,7 +152,15 @@ def test_workgraph_retry_resumes_checkpoint_and_uses_new_attempt_identity(monkey
     fail_b_once = {"value": True}
 
     monkeypatch.setattr(work_stage.stages, "_assert_workspace_head", lambda _ctx, _phase: current["head"])
-    monkeypatch.setattr(work_stage.stages, "render_prompt", lambda *_args, **_kwargs: "base")
+
+    # Template-aware, not a blanket "base". `_node_prompt` renders `build_node` for the per-node
+    # instruction that used to be a Python literal (#2098), and the worker below keys on the node id
+    # that instruction carries. A stub that returned "base" for every template erased the id, the
+    # trigger never fired, and the retry this test exists to exercise never happened.
+    def _render(stage: str, **vars: object) -> str:
+        return f"Node: `{vars['node_id']}`" if stage == "build_node" else "base"
+
+    monkeypatch.setattr(work_stage.stages, "render_prompt", _render)
     monkeypatch.setattr(work_stage.stages, "_protected", lambda *_args, **_kwargs: "(none)")
 
     def agent(_ctx, _stage, iteration, prompt, _schema):

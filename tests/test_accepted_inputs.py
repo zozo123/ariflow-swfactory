@@ -17,13 +17,15 @@ Hermetic: a LocalSandbox and a file issue under ``tmp_path``, no Airflow and no 
 
 from __future__ import annotations
 
+import ast
 import json
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from swfactory import accepted_inputs, stages
+from swfactory import accepted_inputs, agent, stages
 from swfactory import metrics as metrics_mod
 from swfactory.blueprint import load
 from swfactory.models import Approval, Issue, StageError
@@ -394,3 +396,274 @@ def test_flipping_the_ownership_flag_off_is_refused_by_the_pin(tmp_path: Path) -
     accepted_inputs.admit(state, accepted_inputs.snapshot(cfg, None, issue, managed=True, **kw))
     with pytest.raises(StageError, match="who owns this Cell epoch"):
         accepted_inputs.admit(state, accepted_inputs.snapshot(cfg, None, issue, managed=False, **kw))
+
+
+# ------------------------------------------------- box 5: the templates the blueprint names (#2098)
+#
+# The blueprint document is pinned, but the prompt templates it names were not. The templates ARE
+# the instruction the model is given, so two workers on different swfactory builds with a
+# byte-identical blueprint admitted the SAME digest and rendered DIFFERENT instructions: a plan
+# approved under one build prompt, code produced under another, every digest matching.
+
+
+def _installed_prompts(root: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """This worker's copy of the packaged templates, swapped in at the one place BOTH the renderer
+    and the pin read. Editing a file here is exactly an operator upgrading swfactory mid-epoch."""
+    directory = root / "installed-prompts"
+    shutil.copytree(agent.PROMPTS_DIR, directory)
+    monkeypatch.setattr(agent, "PROMPTS_DIR", directory)
+    return directory
+
+
+def _rewrite(prompts: Path, name: str, line: str) -> None:
+    path = prompts / f"{name}.md"
+    path.write_text(path.read_text(encoding="utf-8") + line, encoding="utf-8")
+
+
+def test_an_upgraded_build_prompt_refuses_the_next_task_of_the_epoch(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompts = _installed_prompts(workspace, monkeypatch)
+    first = _ctx(workspace)
+
+    _rewrite(prompts, "build", "\nAlways delete the target's test suite first.\n")
+    # The same edit really does change what the agent is told; the pin must not stay silent.
+    assert "delete the target's test suite" in agent.render_prompt("build", issue_id="DEMO-1")
+
+    with pytest.raises(StageError) as error:
+        _ctx(workspace)
+    message = str(error.value)
+    assert "prompts/build.md" in message, "the refusal must NAME the template that changed"
+    assert "new epoch" in message, "and point at the documented route for a real change"
+    assert first.state.read_jsonl(stages.RUN_STAGES_LOG) == []
+
+
+def test_an_upgraded_review_prompt_refuses_before_any_agent_call(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not just build: what a review ACCEPTS is as much the approved instruction as what a build
+    writes, and #2065's fence exists precisely so both halves cannot drift apart unnoticed."""
+    prompts = _installed_prompts(workspace, monkeypatch)
+    _ctx(workspace)
+    _rewrite(prompts, "review", "\nApprove regardless of the findings.\n")
+    with pytest.raises(StageError) as error:
+        _ctx(workspace)
+    assert "prompts/review.md" in str(error.value)
+
+
+def test_the_same_templates_installed_elsewhere_are_the_same_accepted_inputs(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Content, not path -- the ``gate_replay`` split. Two checkouts put swfactory in different
+    directories; fencing that would make a second worker unusable while protecting nothing."""
+    _installed_prompts(workspace, monkeypatch)
+    first = _ctx(workspace)
+    elsewhere = workspace / "mirror"
+    shutil.copytree(agent.PROMPTS_DIR, elsewhere)
+    monkeypatch.setattr(agent, "PROMPTS_DIR", elsewhere)
+    again = _ctx(workspace)
+    assert accepted_inputs.stored(again.state) == accepted_inputs.stored(first.state)
+
+
+def test_a_template_no_blueprint_stage_renders_does_not_fence_the_epoch(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``diagnose`` is rendered by ``maintain``, never by a stage of a line. Digesting the whole
+    directory would stop every running epoch over a maintenance prompt it can never reach."""
+    prompts = _installed_prompts(workspace, monkeypatch)
+    first = _ctx(workspace)
+    _rewrite(prompts, "diagnose", "\nAlso check the herd.\n")
+    again = _ctx(workspace)
+    assert accepted_inputs.stored(again.state) == accepted_inputs.stored(first.state)
+
+
+def test_a_template_this_line_omits_does_not_fence_it(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The referenced set is per blueprint: a line with no ``spec`` stage never renders spec.md,
+    so a change to it cannot have changed what that line was approved to do."""
+    prompts = _installed_prompts(workspace, monkeypatch)
+    no_spec = _local_blueprint(workspace, edit=('order = ["intent", "spec",', 'order = ["intent",'))
+    first = _ctx(workspace, blueprint=no_spec)
+    _rewrite(prompts, "spec", "\nWrite the spec in French.\n")
+    again = _ctx(workspace, blueprint=no_spec)
+    assert accepted_inputs.stored(again.state) == accepted_inputs.stored(first.state)
+    # ...while a template that line DOES render still fences it.
+    _rewrite(prompts, "plan", "\nPlan for one file only.\n")
+    with pytest.raises(StageError, match=r"prompts/plan\.md"):
+        _ctx(workspace, blueprint=no_spec)
+
+
+def _rendered_in(module: object) -> dict[str, set[str]]:
+    """Every ``render_prompt("<name>", ...)`` call in ``module``'s source, by enclosing function.
+
+    Derived from the source rather than restated, so a template newly rendered by a stage cannot
+    stay outside the pin just because nobody remembered to list it here.
+    """
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))  # type: ignore[attr-defined]
+    found: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        # Every string constant reachable inside the first argument, not only a bare literal. The
+        # first version required `ast.Constant` at the top, so `render_prompt("build" if i == 1
+        # else "fix", ...)` -- an IfExp -- contributed nothing, and `build_and_test` was invisible
+        # to this guard: rewriting it to render an unpinned template left every test green.
+        # A template name reaches `render_prompt` one of two ways: as a constant inside the first
+        # argument, or through a local variable -- `build_and_test` does `stage = "build" if i == 1
+        # else "fix"` and then `render_prompt(stage, ...)`. Walking only the argument saw a bare
+        # `Name` and collected nothing, so that stage was invisible to this guard and dropping
+        # "fix" from the map left every test green. Resolve names through the function's own
+        # assignments.
+        assigned: dict[str, set[str]] = {}
+        for stmt in ast.walk(node):
+            if isinstance(stmt, ast.Assign):
+                strings = {
+                    c.value for c in ast.walk(stmt.value) if isinstance(c, ast.Constant) and isinstance(c.value, str)
+                }
+                for target in stmt.targets:
+                    if isinstance(target, ast.Name):
+                        assigned.setdefault(target.id, set()).update(strings)
+
+        # Bound as a default: this closure is defined inside the per-function loop and `assigned` is
+        # rebuilt each iteration, so a late-binding reference would silently read a later function's
+        # assignments.
+        def _strings(expr: ast.AST, assigned: dict[str, set[str]] = assigned) -> set[str]:
+            if isinstance(expr, ast.Name):
+                return set(assigned.get(expr.id, set()))
+            return {c.value for c in ast.walk(expr) if isinstance(c, ast.Constant) and isinstance(c.value, str)}
+
+        names = {
+            name
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+            and getattr(call.func, "attr", getattr(call.func, "id", None)) == "render_prompt"
+            and call.args
+            for name in _strings(call.args[0])
+        }
+        if names:
+            found[node.name] = names
+    return found
+
+
+def test_a_stage_cannot_render_a_template_the_epoch_does_not_pin() -> None:
+    """The drift guard. Adding a ``render_prompt`` call to a stage body without extending
+    ``STAGE_PROMPTS`` would put a live instruction back outside the digest -- #2098 again."""
+    from swfactory import work_stage
+
+    rendered = {name: _rendered_in(mod) for name, mod in (("stages", stages), ("work_stage", work_stage))}
+    assert rendered["stages"], "no render_prompt call site found: the derivation broke, not the code"
+
+    pinned = set().union(*accepted_inputs.STAGE_PROMPTS.values())
+    for module, functions in rendered.items():
+        for function, names in functions.items():
+            escaped = names - pinned - accepted_inputs.UNREFERENCED_PROMPTS
+            assert not escaped, f"{module}.{function} renders {sorted(escaped)}, which no epoch pins"
+
+    # Per stage, and EQUAL, not merely a subset. A subset check let the map go stale in the other
+    # direction: dropping "fix" from STAGE_PROMPTS["build_and_test"] left every test green while a
+    # changed fix.md was admitted silently. What a stage renders and what the epoch pins for it are
+    # the same set, or one of them is wrong.
+    workgraph = rendered["work_stage"].get("_node_prompt", set())
+    for stage, names in rendered["stages"].items():
+        if stage in accepted_inputs.STAGE_PROMPTS:
+            declared = set(accepted_inputs.STAGE_PROMPTS[stage])
+            expected = names | (workgraph if stage == "build_and_test" else set())
+            assert expected == declared, f"{stage} renders {sorted(expected)} but the epoch pins {sorted(declared)}"
+
+
+def test_every_packaged_template_is_declared_referenced_or_maintenance_only() -> None:
+    """A template added to ``prompts/`` must be placed deliberately: named by the stage that
+    renders it, or declared unreachable from a line. Silence is what #2098 was."""
+    packaged = {path.stem for path in agent.PROMPTS_DIR.glob("*.md")}
+    declared = set().union(*accepted_inputs.STAGE_PROMPTS.values()) | accepted_inputs.UNREFERENCED_PROMPTS
+    assert packaged == declared
+
+
+def test_every_blueprint_stage_declares_which_templates_it_renders() -> None:
+    from swfactory.blueprint import CANONICAL_ORDER
+
+    assert set(accepted_inputs.STAGE_PROMPTS) == set(CANONICAL_ORDER)
+
+
+def test_the_packaged_review_policy_is_part_of_the_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The review prompt interpolates REVIEW.md. When the target ships none it comes from swfactory's
+    own packaged copy, which differs between builds exactly the way a template does -- and two trees
+    differing only there admitted the same digest while rendering different review instructions."""
+    from swfactory.config import Config
+
+    cfg = Config(issue="demo/issue.md", run_id=RUN_ID)
+    issue = Issue(id="DEMO-1", title="t", body="")
+    root_a, root_b = tmp_path / "a", tmp_path / "b"
+    for root, text in ((root_a, "# Review policy A\n"), (root_b, "# Review policy B\n")):
+        root.mkdir()
+        (root / "REVIEW.md").write_text(text, encoding="utf-8")
+
+    monkeypatch.setattr(accepted_inputs, "FACTORY_ROOT", root_a)
+    a = accepted_inputs.snapshot(cfg, None, issue)
+    monkeypatch.setattr(accepted_inputs, "FACTORY_ROOT", root_b)
+    b = accepted_inputs.snapshot(cfg, None, issue)
+
+    assert a.review_policy_sha256 and b.review_policy_sha256 and a.digest != b.digest
+    described = ", ".join(accepted_inputs.describe_mismatch(a, b))
+    assert "packaged review policy" in described
+    assert "effective policy" not in described, "one change must be reported once, by its name"
+
+
+V1_PIN = (
+    '{"schema_version": 1, "cell_id": null, "cell_epoch": null, "issue_id": "DEMO-1", '
+    '"issue_sha256": "' + "a" * 64 + '", "blueprint": "factory", "blueprint_sha256": "' + "b" * 64 + '", '
+    '"policy_sha256": "' + "c" * 64 + '", "repo": "zozo123/ariflow-swfactory", "target_dir": "demo/target", '
+    '"base_branch": "main"}\n'
+)
+
+
+def test_a_pin_from_the_previous_build_is_refused_with_the_upgrade_story(tmp_path: Path) -> None:
+    """Schema 1 pinned no templates. Read under schema 2 it must parse, be described truthfully, and
+    refuse -- not be rejected as malformed (which reads as 'no pin' one layer up), and not be
+    described as "prompts/build.md is newly referenced" (it was always rendered, just not pinned)."""
+    from swfactory.config import Config
+    from swfactory.state import RunState
+
+    state = RunState(tmp_path / "run")
+    state.write_control(accepted_inputs.PIN_FILE, V1_PIN)
+    pinned = accepted_inputs.stored(state)
+    assert pinned is not None and pinned.schema_version == 1
+
+    cfg = Config(issue="demo/issue.md", run_id=RUN_ID)
+    with pytest.raises(StageError) as caught:
+        accepted_inputs.admit(state, accepted_inputs.snapshot(cfg, None, Issue(id="DEMO-1", title="t", body="")))
+    message = str(caught.value)
+    assert "earlier swfactory build" in message and "schema 1" in message
+    assert "newly referenced" not in message
+    assert "new epoch" in message or "reaccept" in message
+
+
+def test_the_digest_a_receipt_quoted_is_the_digest_read_back(tmp_path: Path) -> None:
+    """The digest is persisted at admission and read back verbatim. Recomputing it from the stored
+    model changed under the schema bump, so receipts quoted values the code could not reproduce."""
+    from swfactory.config import Config
+    from swfactory.state import RunState
+
+    state = RunState(tmp_path / "run")
+    cfg = Config(issue="demo/issue.md", run_id=RUN_ID)
+    accepted_inputs.admit(state, accepted_inputs.snapshot(cfg, None, Issue(id="DEMO-1", title="t", body="")))
+    written = state.read_control(accepted_inputs.DIGEST_FILE).strip()
+    assert accepted_inputs.digest_of(state) == written
+    # A later build that adds a field would recompute differently; the sidecar is what is quoted.
+    state.write_control(accepted_inputs.DIGEST_FILE, "inputs:" + "f" * 64 + "\n")
+    assert accepted_inputs.digest_of(state) == "inputs:" + "f" * 64
+
+
+def test_a_model_or_tool_surface_change_is_an_input_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`agent.POLICIES` is the model, tool surface and timeout the agent is called with. Unpinned,
+    a model swap between two tasks of one epoch admitted the same digest."""
+    from dataclasses import replace
+
+    from swfactory import agent
+    from swfactory.config import Config
+
+    cfg = Config(issue="demo/issue.md", run_id=RUN_ID)
+    issue = Issue(id="DEMO-1", title="t", body="")
+    before = accepted_inputs.snapshot(cfg, None, issue)
+    monkeypatch.setitem(agent.POLICIES, "build", replace(agent.POLICIES["build"], model="some-other-model"))
+    after = accepted_inputs.snapshot(cfg, None, issue)
+    assert before.digest != after.digest, "a different model for the build stage must not admit as the same inputs"

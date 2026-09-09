@@ -79,7 +79,8 @@ artifact root are refused.
 Airflow rebuilds a whole `Ctx` for every task: the blueprint is reloaded from the worker's disk,
 the issue is fetched again, and `Config` re-reads that worker's `SWF_*` environment. So the first
 context of a run admits an immutable snapshot of what it is executing — issue content, resolved
-blueprint, effective policy and target identity — into `state/accepted-inputs.json`, and every
+blueprint, the prompt templates that blueprint references, effective policy and target identity —
+into `state/accepted-inputs.json`, and every
 later context recomputes it and compares. Admission happens inside `runtime.ctx_for`, before the
 sandbox and agent are constructed, so a drifted task refuses before any agent or provider I/O
 rather than after the model has written code.
@@ -98,6 +99,21 @@ allowlist, image, credential *mode*, gate timeouts). Per-worker paths and owners
 (`OPERATIONAL_SETTINGS`: `fixtures_dir`, `workdir`, `record_dir`, `sandbox_owner`, and the
 `gate_replay` path) may differ between workers. `tests/test_accepted_inputs.py` asserts every
 `Config` field is classified, so a new knob cannot land outside both sets.
+
+**Prompt templates.** The blueprint names stages; `src/swfactory/prompts/<name>.md` is what those
+stages *say* to the model, so a change to one changes what gets written and what gets accepted.
+The snapshot pins `sha256` of each template the resolved blueprint actually **references**
+(`accepted_inputs.STAGE_PROMPTS`), by content and not by path: two workers whose checkouts live in
+different directories agree, while two workers on different swfactory builds do not. Only the
+referenced set is pinned — a line with no `spec` stage is not fenced by `spec.md`, and `diagnose.md`
+(rendered by `maintain`, never by a line) fences nothing. The refusal names the file:
+`prompt template prompts/build.md changed (…)`.
+
+The swfactory *version* was considered instead and deliberately rejected: it is stricter, but it
+refuses every in-flight epoch on every upgrade — including ones that cannot change what the model
+is told — which trains operators to re-accept reflexively, and a routine re-accept is no longer a
+decision. `tests/test_accepted_inputs.py` derives the rendered templates from the stage source, so
+a new `render_prompt` call site or a new file in `prompts/` fails until it is placed.
 
 **Gate replay.** `SWF_GATE_REPLAY` is split across that line: the fixture path is operational, its
 *content* is policy, because the file answers release gates. The snapshot pins `sha256(fixture)`.
@@ -118,6 +134,25 @@ which is the same fence one level up.
 
 Teardown is the one context built with `enforce_inputs=False`. Cleanup is not work, and a refusal
 that leaked the sandbox it exists to close would be a worse outcome than closing it.
+
+### Upgrading swfactory mid-run
+
+The pin's schema is versioned. When a build pins more than the one that admitted a run -- schema 2
+added the prompt templates, the packaged review policy and the agent tool policies -- the next task
+of that run refuses:
+
+    this Cell epoch was admitted by an earlier swfactory build (accepted-inputs schema 1); this
+    build (schema 2) also pins prompt templates, the packaged review policy and the agent tool
+    policies, which that admission never covered.
+
+That is deliberate. The old admission cannot vouch for inputs it never looked at, so the route is the
+same as for any changed input: `swfactory state reaccept <run-id> --actor NAME --reason TEXT` for a
+local run, or advance the Cell epoch through the backend for a managed one, and answer every gate
+again. Plan an upgrade for a moment with no runs mid-flight, or expect one re-accept per live run.
+
+The digest a receipt quotes is the one written at admission (`accepted-inputs.digest`), never a
+recomputation, so receipts published under schema 1 stay verifiable against what was recorded.
+
 
 ## Budget handling across attempts
 
