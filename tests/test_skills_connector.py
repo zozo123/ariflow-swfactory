@@ -18,7 +18,7 @@ from swfactory.skills_connector import (
 
 
 def test_canonical_skill_packages_are_explicit() -> None:
-    assert SKILLS_CLI == ("npx", "-y", f"skills@{SKILLS_CLI_VERSION}")
+    assert ("npx", "-y", f"skills@{SKILLS_CLI_VERSION}") == SKILLS_CLI
     assert "latest" not in SKILLS_CLI
     assert SWFACTORY_SKILL.source == "zozo123/ariflow-swfactory@airflow-software-factory"
     assert SWFACTORY_SKILL.catalog_url.endswith("/zozo123/ariflow-swfactory/airflow-software-factory")
