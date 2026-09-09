@@ -8,6 +8,26 @@ All notable changes to this project will be documented here. The format follows
 
 ### Added
 
+- A backup, migration and restore contract for whole-factory state, and the deployment boundary it
+  depends on. The five authoritative stores (Cells, operation journal, admission/dispatch, repair
+  leases and the evidence tree) are one unit in one state root on one host: `deployment_profile`
+  now refuses `replicas != 1`, a Postgres DSN and the `multi-host-postgres` topology as
+  unqualified, and refuses a state root on a filesystem where SQLite cannot fence a second writer.
+  Each store stamps `PRAGMA user_version`, refuses a store a newer binary wrote (the rollback
+  gate), and refuses a stamped store whose tables are missing instead of recreating them over a
+  partial restore. `swfactory backup create|verify|restore|status|resume|reconciled` takes a
+  quiesced, manifest-covered backup of all five stores with WAL contents folded in, validates a
+  restore before any byte is placed, and then withholds every external effect until an operator
+  resumes, and then every Cell observes remote state before its first attempt until an operator
+  closes the restore window with `swfactory backup close --window-reviewed` — so a restored old
+  snapshot cannot silently replay a publication the world already has, including from a Cell the
+  snapshot never contained (Cell ids are deterministic, so the factory rebuilds it under the same
+  id with no journal row to stop it). Run directories are in the manifest too: the accepted-inputs
+  pin and recorded approvals live there, and a restore replaces the whole state root. A restore
+  also names every mutation fence it rolled back, and reports a restored in-flight attempt as
+  `observe` rather than `retry`. `tests/test_restore_contract.py` and `docs/backup-restore.md`
+  carry the drill.
+
 - The capability inventory is the single public truth for every claimed feature. `test` and
   `evidence` references must now *resolve*: a cited file has to exist and a cited CI job, written
   as `ci:<name>`, has to exist in `.github/workflows`. The README claim table is generated from

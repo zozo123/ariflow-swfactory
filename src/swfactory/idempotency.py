@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from swfactory.store_schema import ensure_named_schema, guard_before_ddl
+
 OutcomeStatus = Literal["committed", "definitely_absent", "ambiguous", "divergent", "refused"]
 OperationState = Literal["intent", "in_doubt", "reconciling", "committed", "exhausted", "refused"]
 
@@ -126,6 +128,7 @@ class OperationJournal:
 
     def _migrate(self) -> None:
         with self.lock, self.db:
+            guard_before_ddl(self.db, "operations")
             self.db.execute(
                 """CREATE TABLE IF NOT EXISTS operations(
                     operation_key TEXT PRIMARY KEY,
@@ -156,6 +159,9 @@ class OperationJournal:
                 if name not in columns:
                     self.db.execute(f"ALTER TABLE operations ADD COLUMN {name} {ddl}")
             self.db.execute("CREATE INDEX IF NOT EXISTS operations_unresolved ON operations(state, updated_at)")
+            # A journal a newer binary wrote decides in-doubt outcomes this one cannot read;
+            # opening it anyway is what turns a rollback into a duplicated external effect.
+            ensure_named_schema(self.db, "operations")
 
     def begin(self, ref: OperationRef, *, intent_digest: str | None = None) -> str:
         """Create a durable intent if absent and verify immutable operation identity."""

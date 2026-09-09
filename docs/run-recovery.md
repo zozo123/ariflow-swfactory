@@ -138,3 +138,10 @@ working POSIX locks and durability semantics. Independent replica disks do not c
 this is not distributed fencing of remote sandbox processes. Platforms without POSIX locks refuse
 mutations instead of silently running without exclusion. Keep local state persistent and outside
 agent-writable work-cell mounts; `work/` and `state/` remain siblings.
+
+## Whole-factory backup and restore
+
+This page covers one run's local evidence. The factory's authoritative Cell, operation, admission
+and repair stores plus the evidence tree are backed up and restored as one unit, with mutations
+withheld until the restore is validated and reconciled: see
+[backup, restore and upgrade](backup-restore.md).

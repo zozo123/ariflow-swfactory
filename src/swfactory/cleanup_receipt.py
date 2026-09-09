@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
+from swfactory.store_schema import ensure_named_schema, guard_before_ddl
+
 CleanupStatus = Literal["converged", "already_absent", "refused", "ambiguous", "failed"]
 
 
@@ -91,6 +93,7 @@ class RepairLeaseStore:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
+        guard_before_ddl(self.db, "repairs")
         self.db.execute(
             """CREATE TABLE IF NOT EXISTS repair_leases(
                 lease_key TEXT PRIMARY KEY,
@@ -100,6 +103,10 @@ class RepairLeaseStore:
                 metadata_json TEXT NOT NULL
             )"""
         )
+        # Cleanup debt is authoritative state: a restore that silently drops it leaks provider
+        # resources nobody is left accountable for. Version it like the other three stores.
+        with self.db:
+            ensure_named_schema(self.db, "repairs")
 
     def acquire(
         self,

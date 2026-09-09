@@ -83,6 +83,15 @@ in `stages.py`. Details: README + docs/*.md.
   when its owner exits. `operations.jsonl` records attempts separately from authoritative stage
   results. `swfactory state list|inspect` reads local ownership and journal evidence without
   reconnecting to a cell. See docs/run-recovery.md for interrupted attempts and archived tails.
+- The five authoritative stores (cells / operations / admission / repairs + evidence) are ONE unit
+  in one state root on ONE host: `replicas=1`, local filesystem, no Postgres — `deployment_profile`
+  refuses the rest. Each store stamps `PRAGMA user_version` and refuses a newer one (rollback gate);
+  a stamped store missing a table refuses instead of recreating it. `swfactory backup
+  create|verify|restore|status|resume|reconciled|close`; a restore withholds every external effect
+  until `resume`, then EVERY Cell must observe the remote before its first attempt until an operator
+  runs `backup close --window-reviewed` — a Cell the snapshot never had is rebuilt under the same
+  deterministic id and would otherwise republish. Run directories are backed up with the stores. See
+  docs/backup-restore.md. Never hand-copy `*.sqlite3` — that drops WAL-resident commits.
 - `deliver` never skips: `validate_patch` (no `..`/absolute/`.git`/symlink; paths under the target
   dir + `docs/factory/`) and `scan_secrets` run before any git or network call; only the bot-owned
   `factory/*` branch is force-updated and an open PR is edited in place. A rejected gate still

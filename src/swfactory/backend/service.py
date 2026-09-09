@@ -39,6 +39,7 @@ from swfactory.cells import (
 )
 from swfactory.control import AirflowClient, ControlError, GitHubClient, IsloClient, MetricsSource
 from swfactory.control_kernel import ControlKernel
+from swfactory.deployment_profile import assert_supported_state_root
 from swfactory.durable_admission import (
     MAX_DISPATCH_ATTEMPTS,
     WORK_ORDER_SCHEMA,
@@ -53,7 +54,10 @@ from swfactory.idempotency import MutationOutcome, OperationRef, RetryBudget
 from swfactory.inspection import inspect_run, list_runs
 from swfactory.lifecycle_evidence import TraceContext
 from swfactory.product_surface import build_preview, capability_document
+from swfactory.restore_contract import GATE_PENDING as RESTORE_PENDING
+from swfactory.restore_contract import RestoreGate
 from swfactory.security_contract import MutationEnvelope, policy_digest_for_mapping
+from swfactory.store_schema import StoreSchemaError, assert_compatible
 from swfactory.trust_evidence import TrustedEvidence
 from swfactory.webhook import _NoRedirect, _safe_airflow_base
 
@@ -137,8 +141,14 @@ class Factory:
         self.root = root.resolve()
         self.state_root = state_root.resolve()
         self.state_root.mkdir(parents=True, exist_ok=True)
+        # Both refusals happen before a single store is opened for writing: a state root this
+        # binary must not own (newer schema, partial restore), and a state root whose filesystem
+        # cannot fence a second writer. Discovering either after the first mutation is too late.
+        assert_supported_state_root(self.state_root)
+        assert_compatible(self.state_root)
+        self.restore_gate = RestoreGate(self.state_root)
         self.cell_store = CellStore(self.state_root / "cells.sqlite3")
-        self.control = ControlKernel(self.state_root / "control")
+        self.control = ControlKernel(self.state_root / "control", restore_gate=self.restore_gate)
         self.evidence = TrustedEvidence(self.state_root / "evidence")
         self.opener = urllib.request.build_opener(_NoRedirect)
         self.credentials = AirflowClient(
@@ -880,11 +890,30 @@ class Factory:
 
     def capabilities(self) -> dict[str, Any]:
         draining = os.getenv("SWF_DRAIN", "").lower() in {"1", "true", "yes"}
+        # Two fields stopped being constants with #2074. A state root this binary must not own, or
+        # one restored from a backup and not yet validated, is not authoritative storage: admitting
+        # work into it would reserve capacity and activate Cells against a journal whose
+        # relationship to the outside world is still unknown. Reporting it here refuses the whole
+        # mutation surface at once rather than one route at a time.
+        detail = ""
+        schema_compatible = True
+        try:
+            assert_compatible(self.state_root)
+        except StoreSchemaError as error:
+            schema_compatible = False
+            detail = str(error)
+        storage_authoritative = self.restore_gate.state != RESTORE_PENDING
+        if not storage_authoritative and not detail:
+            detail = (
+                "restored factory state has not been validated; run `swfactory backup status` and "
+                "then `swfactory backup resume` before mutations resume"
+            )
         return capability_document(
             read_ready=True,
-            storage_authoritative=True,
-            schema_compatible=True,
+            storage_authoritative=storage_authoritative,
+            schema_compatible=schema_compatible,
             draining=draining,
+            detail=detail,
             serving_generation=os.getenv("SWF_GENERATION") or "stable",
             draining_generation=(os.getenv("SWF_GENERATION") or "stable") if draining else None,
         ).to_dict()

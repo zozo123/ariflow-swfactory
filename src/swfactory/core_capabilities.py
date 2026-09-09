@@ -210,6 +210,7 @@ class CoreCapabilityRuntime:
         *,
         reconcile: Callable[[], MutationOutcome] | None = None,
         budget: RetryBudget | None = None,
+        observe_before_first_attempt: bool = False,
     ) -> CoreMutationResult:
         """Execute one fenced external effect and converge all durable records on one identity.
 
@@ -292,6 +293,9 @@ class CoreCapabilityRuntime:
             reconcile=wrapped_reconcile,
             budget=budget,
             intent_digest=intent_digest,
+            # Set by the restore contract: a Cell recovered from a snapshot must observe the remote
+            # before its first attempt, because "no journal row" is not evidence of "no effect".
+            observe_before_first_attempt=observe_before_first_attempt,
         )
         receipt_digest = self._result_digest(result)
         cell_payload = {
