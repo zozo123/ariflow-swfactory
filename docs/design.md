@@ -172,7 +172,8 @@ This child-DAG boundary is deliberate. It preserves dynamic task mapping, native
 addresses, independent retries and run history, and prevents an outer visual composition from
 editing away a gate or changing delivery authority. A rejected line can complete operationally
 after publishing rejection evidence, so parent-DAG success means “the line finished,” not “the
-change was approved.” See [astronomer-blueprint.md](astronomer-blueprint.md).
+change was approved.” See [astronomer-blueprint.md](astronomer-blueprint.md). The same boundary
+serves [dag-factory](dag-factory.md): YAML composes, the line governs, and neither can edit the other.
 
 ## Metrics and bands
 

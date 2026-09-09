@@ -1,0 +1,34 @@
+# One dag-factory DAG that runs a governed swfactory line as a single step.
+#
+# dag-factory (astronomer/dag-factory) is the YAML -> DAG library. It owns THIS file: the outer,
+# declarative composition. The line it triggers -- `factory`, emitted by `dags/blueprints.py` from
+# `blueprints/factory.toml` -- keeps the inner state machine: issue x target mapping, human gates,
+# isolated agent cells, delivery authority. YAML chooses a line and its inputs; it cannot redefine
+# a stage, a gate or a budget, because none of those are addressable from here.
+#
+# The trigger is deferrable so the composed DAG holds no worker slot while the line runs, and it
+# waits, so "this task succeeded" means "the line finished" -- which is not "the change was
+# approved": a rejected line completes after publishing its rejection evidence.
+default:
+  default_args:
+    owner: platform
+    start_date: 2026-01-01
+    retries: 0
+
+product_change:
+  description: "Open one reviewed pull request per (issue x target) through the factory line"
+  schedule: null
+  catchup: false
+  tags: [swfactory, composed]
+  tasks:
+    - task_id: run_factory_line
+      operator: airflow.providers.standard.operators.trigger_dagrun.TriggerDagRunOperator
+      trigger_dag_id: factory
+      conf:
+        issues: ["demo/issue.md"]
+      wait_for_completion: true
+      deferrable: true
+      poke_interval: 60
+      # A line that ends "blocked" is a successful run of the line: the evidence is on the PR.
+      allowed_states: [success]
+      failed_states: [failed]
