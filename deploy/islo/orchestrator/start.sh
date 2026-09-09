@@ -45,6 +45,10 @@ AIRFLOW_PID=$!
 trap 'kill "$AIRFLOW_PID" 2>/dev/null || true' EXIT INT TERM
 
 # --- webhook receiver (foreground) -----------------------------------------------------------
+# LEGACY unmanaged intake (#2068): this sandbox runs no factory backend, so the receiver dispatches
+# straight to Airflow and those runs carry no `_factory_cells` -- no admission record, no capacity
+# accounting, no Factory Cell fencing. Run `swfactory backend` here and pass --backend-url instead
+# to get the managed boundary the Docker stack and dispatch.yml already use.
 # Credentials for the receiver's /auth/token login: AIRFLOW_TOKEN wins; else AIRFLOW_USER +
 # AIRFLOW_PASSWORD; else the generated admin password (read here, exported, never printed).
 if [ -z "${AIRFLOW_TOKEN:-}" ] && [ -z "${AIRFLOW_PASSWORD:-}" ]; then

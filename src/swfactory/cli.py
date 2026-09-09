@@ -441,21 +441,52 @@ def webhook_serve(
         int,
         typer.Option(min=1, envvar="SWF_WEBHOOK_MAX_ATTEMPTS", help="dispatch attempts per cycle"),
     ] = 12,
+    backend_url: Annotated[
+        str,
+        typer.Option(
+            envvar="SWF_BACKEND_URL",
+            help="managed work-order boundary; unset = LEGACY unmanaged direct-Airflow dispatch",
+        ),
+    ] = "",
+    backend_token_env: Annotated[
+        str, typer.Option(help="env var holding the backend bearer token")
+    ] = "SWF_BACKEND_TOKEN",
 ) -> None:
-    """Persist signed work before replying, then dispatch with retries. GET /readyz reports intake
-    capacity. Airflow creds come from AIRFLOW_TOKEN or AIRFLOW_USER + AIRFLOW_PASSWORD."""
+    """Persist signed work before replying, then submit it through the backend's work-order
+    boundary with retries. GET /readyz reports intake capacity. Without --backend-url this falls
+    back to legacy direct-Airflow dispatch, whose runs carry no Factory Cell bindings; that mode
+    needs AIRFLOW_TOKEN or AIRFLOW_USER + AIRFLOW_PASSWORD."""
     import os
     import sqlite3
 
     from swfactory import webhook as webhook_mod
 
     try:
-        provider = webhook_mod.token_provider_from_env(airflow_url)
+        # Managed mode holds no Airflow credential at all: the only mutation this process can make
+        # is a work order, so a bug here cannot become a run the backend never admitted.
+        orders = None
+        provider = None
+        if backend_url:
+            token = os.environ.get(backend_token_env, "")
+            if not token:
+                raise ValueError(f"set {backend_token_env} to submit work orders to {backend_url}")
+            orders = webhook_mod.WorkOrders(webhook_mod._safe_backend_base(backend_url), token)
+        else:
+            provider = webhook_mod.token_provider_from_env(airflow_url)
         queue = DeliveryInbox(inbox, max_pending=max_pending)
-        queue.bind(webhook_mod._safe_airflow_base(airflow_url))
+        if orders is None:
+            queue.bind(airflow_url=webhook_mod._safe_airflow_base(airflow_url))
+        else:
+            queue.bind(work_order_url=orders.url)
     except (ValueError, OSError, sqlite3.Error) as e:
         typer.echo(f"webhook: {e}", err=True)
         raise typer.Exit(2) from e
+    if orders is None:
+        typer.echo(
+            "webhook: LEGACY mode -- dispatching straight to Airflow, so these runs get no managed "
+            "admission, capacity accounting or Factory Cell bindings. Set --backend-url.",
+            err=True,
+        )
     webhook_mod.serve(
         port,
         airflow_url=airflow_url,
@@ -464,6 +495,7 @@ def webhook_serve(
         host=host,
         inbox=queue,
         max_attempts=max_attempts,
+        work_orders=orders,
     )
 
 
@@ -490,7 +522,8 @@ def webhook_deliveries(
 ) -> None:
     """Inspect dispatch receipts.
 
-    "dispatched" means Airflow accepted the work, not that its run passed.
+    "dispatched" means the far side accepted the work, not that its run passed. In managed mode the
+    admission column is the one that separates a queued order from an executing one.
     """
     import sqlite3
 
@@ -509,7 +542,8 @@ def webhook_deliveries(
         typer.echo(
             f"{delivery.delivery_id}  {delivery.state:<11}  {delivery.repository}  "
             f"{delivery.dag_id}  attempts={delivery.attempts}/{delivery.total_attempts}  "
-            f"{delivery.last_error or delivery.dag_run_id}"
+            f"admission={delivery.admission_state or '-'}  "
+            f"{delivery.last_error or delivery.work_order_id or delivery.dag_run_id}"
         )
 
 

@@ -18,13 +18,13 @@ import urllib.error
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from swfactory.webhook import Opener, TokenProvider, Trigger
+    from swfactory.webhook import Opener, TokenProvider, Trigger, WorkOrders
 
 DEFAULT_INBOX = Path(".factory/webhooks/inbox.sqlite3")
 STATES = ("pending", "dispatching", "dispatched", "dead")
@@ -57,6 +57,8 @@ class Delivery:
     lease_until: float
     lease_token: str | None
     last_error: str | None
+    work_order_id: str | None
+    admission_state: str | None
 
     def public(self) -> dict[str, Any]:
         """Operator-visible receipt; the fencing token is internal to the worker."""
@@ -87,8 +89,15 @@ class DeliveryInbox:
         with self._connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise ValueError(f"unsupported webhook inbox schema {version}")
+            # v1 receipts only ever named an Airflow run. In managed mode the durable answer is a
+            # backend work order and its admission state, and adding the columns before the version
+            # bump keeps a crash between the two from leaving a "v2" table without them.
+            present = {row[1] for row in db.execute("PRAGMA table_info(deliveries)")}
+            for column in ("work_order_id", "admission_state"):
+                if present and column not in present:
+                    db.execute(f"ALTER TABLE deliveries ADD COLUMN {column} TEXT")
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS deliveries (
@@ -108,12 +117,14 @@ class DeliveryInbox:
                     next_attempt_at REAL NOT NULL,
                     lease_until REAL NOT NULL DEFAULT 0,
                     lease_token TEXT,
-                    last_error TEXT
+                    last_error TEXT,
+                    work_order_id TEXT,
+                    admission_state TEXT
                 );
                 CREATE INDEX IF NOT EXISTS deliveries_due
                     ON deliveries (state, next_attempt_at, created_at);
                 CREATE INDEX IF NOT EXISTS deliveries_leases ON deliveries (state, lease_until);
-                PRAGMA user_version=1;
+                PRAGMA user_version=2;
             """)
 
     @contextmanager
@@ -140,16 +151,25 @@ class DeliveryInbox:
         values["conf"] = json.loads(values["conf"])
         return Delivery(**values)
 
-    def bind(self, airflow_url: str) -> None:
-        """A changed URL must never replay this database's pending work at another factory."""
+    def bind(self, airflow_url: str | None = None, work_order_url: str | None = None) -> None:
+        """A changed URL must never replay this database's pending work at another factory.
+
+        Only the endpoint actually dispatched to is fenced. Managed mode fences the backend --
+        sending these receipts to a different one would be a second admission of the same work at a
+        factory that never saw it -- and deliberately does not fence the unused Airflow URL, so
+        moving a receiver from legacy to managed is not a permanent conflict over a dead setting.
+        """
+        endpoints = {
+            key: value
+            for key, value in (("airflow_url", airflow_url), ("work_order_url", work_order_url))
+            if value is not None
+        }
         with self._connect(write=True) as db:
-            row = db.execute("SELECT value FROM metadata WHERE key='airflow_url'").fetchone()
-            if row is not None and row[0] != airflow_url:
-                raise DeliveryConflict("webhook inbox belongs to a different Airflow URL")
-            db.execute(
-                "INSERT OR IGNORE INTO metadata (key, value) VALUES ('airflow_url', ?)",
-                (airflow_url,),
-            )
+            for key, value in endpoints.items():
+                row = db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
+                if row is not None and row[0] != value:
+                    raise DeliveryConflict(f"webhook inbox belongs to a different {key}")
+                db.execute("INSERT OR IGNORE INTO metadata (key, value) VALUES (?, ?)", (key, value))
 
     def enqueue(
         self, delivery_id: str, event: str, body: bytes, repository: str, trigger: Trigger
@@ -236,13 +256,22 @@ class DeliveryInbox:
             row = db.execute("SELECT * FROM deliveries WHERE delivery_id=?", (row["delivery_id"],)).fetchone()
             return self._delivery(row)
 
-    def complete(self, delivery: Delivery) -> bool:
+    def complete(
+        self,
+        delivery: Delivery,
+        *,
+        work_order_id: str | None = None,
+        admission_state: str | None = None,
+    ) -> bool:
+        """Record the handover. ``dispatched`` means the far side accepted the work, never that it
+        ran: in managed mode ``admission_state`` is what separates a queued order -- durable, still
+        waiting for capacity -- from one already handed to Airflow."""
         with self._connect(write=True) as db:
             changed = db.execute(
                 """UPDATE deliveries SET state='dispatched', lease_token=NULL, lease_until=0,
-                   last_error=NULL, updated_at=? WHERE delivery_id=? AND state='dispatching'
-                   AND lease_token=?""",
-                (time.time(), delivery.delivery_id, delivery.lease_token),
+                   last_error=NULL, updated_at=?, work_order_id=?, admission_state=?
+                   WHERE delivery_id=? AND state='dispatching' AND lease_token=?""",
+                (time.time(), work_order_id, admission_state, delivery.delivery_id, delivery.lease_token),
             )
             return changed.rowcount == 1
 
@@ -343,17 +372,29 @@ class Dispatcher:
         inbox: DeliveryInbox,
         *,
         airflow_url: str,
-        token_provider: TokenProvider,
+        token_provider: TokenProvider | None,
         opener: Opener,
         log: Callable[[str], None],
         max_attempts: int = 12,
+        work_orders: WorkOrders | None = None,
     ) -> None:
-        from swfactory.webhook import _safe_airflow_base
+        from swfactory.webhook import _safe_airflow_base, _safe_backend_base
 
         if max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         self.airflow_url = _safe_airflow_base(airflow_url)
-        inbox.bind(self.airflow_url)
+        # Managed mode: the receiver's only outbound mutation is a work order. Legacy direct-Airflow
+        # mode stays reachable for a sandbox with no backend, and is the only mode that needs an
+        # Airflow credential at all.
+        self.work_orders = (
+            None if work_orders is None else replace(work_orders, url=_safe_backend_base(work_orders.url))
+        )
+        if self.work_orders is None and token_provider is None:
+            raise ValueError("legacy direct-Airflow dispatch needs an Airflow token provider")
+        if self.work_orders is None:
+            inbox.bind(airflow_url=self.airflow_url)
+        else:
+            inbox.bind(work_order_url=self.work_orders.url)
         self.inbox = inbox
         self.token_provider = token_provider
         self.opener = opener
@@ -372,33 +413,46 @@ class Dispatcher:
         # If an API call is still in flight, its durable lease is recoverable on restart.
         self.thread.join(timeout=5)
 
-    def dispatch_one(self) -> bool:
-        from swfactory.webhook import Trigger, trigger_airflow
+    def _submit(self, delivery: Delivery) -> dict[str, Any]:
+        """One attempt at the configured boundary. Returns the backend receipt, empty in legacy."""
+        from swfactory.webhook import Trigger, submit_work_order, trigger_airflow
 
+        trigger = Trigger(delivery.dag_id, delivery.conf, delivery.dag_run_id)
+        if self.work_orders is not None:
+            return submit_work_order(trigger, self.work_orders, opener=self.opener)
+        assert self.token_provider is not None  # enforced in __init__
+        trigger_airflow(
+            trigger,
+            airflow_url=self.airflow_url,
+            token=self.token_provider(),
+            opener=self.opener,
+        )
+        return {}
+
+    def dispatch_one(self) -> bool:
         delivery = self.inbox.claim(max_attempts=self.max_attempts)
         if delivery is None:
             return False
-        retryable, delay, error = True, 0.0, ""
+        # A refusal from the managed boundary is the answer, not a reason to reach past it: there is
+        # no branch below that falls back to Airflow, so a drain or a capacity refusal can never
+        # produce a run the backend never admitted.
+        channel = "work_order" if self.work_orders is not None else "airflow"
+        retryable, delay, error, receipt = True, 0.0, "", {}
         try:
-            trigger_airflow(
-                Trigger(delivery.dag_id, delivery.conf, delivery.dag_run_id),
-                airflow_url=self.airflow_url,
-                token=self.token_provider(),
-                opener=self.opener,
-            )
+            receipt = self._submit(delivery)
         except DeliveryConflict:
-            error, retryable = "airflow_run_identity_conflict", False
+            error, retryable = f"{channel}_identity_conflict", False
         except urllib.error.HTTPError as exc:
-            error = f"airflow_http_{exc.code}"
+            error = f"{channel}_http_{exc.code}"
             retryable = exc.code in {408, 429} or 500 <= exc.code < 600
             delay = _retry_after(exc.headers)
             exc.close()
         except (urllib.error.URLError, OSError):
-            error = "airflow_transport_error"
+            error = f"{channel}_transport_error"
         except ValueError:
             error, retryable = "dispatch_configuration_error", False
         except RuntimeError:
-            error = "airflow_invalid_response"
+            error = f"{channel}_invalid_response"
         except Exception:  # noqa: BLE001 - retain work and keep intake alive on adapter failures
             error = "dispatch_internal_error"
         if error:
@@ -410,11 +464,16 @@ class Dispatcher:
                 retry_after_s=delay,
             )
         else:
-            changed = self.inbox.complete(delivery)
+            changed = self.inbox.complete(
+                delivery,
+                work_order_id=str(receipt["submission_id"]) if receipt else None,
+                admission_state=str(receipt["state"]) if receipt.get("state") else None,
+            )
+        admission = receipt.get("state")
         self.log(
             f"dispatch delivery={delivery.delivery_id} dag={delivery.dag_id} "
             f"attempt={delivery.total_attempts} outcome={error or 'dispatched'} "
-            f"receipt={'saved' if changed else 'lease_lost'}"
+            f"admission={admission or '-'} receipt={'saved' if changed else 'lease_lost'}"
         )
         return True
 

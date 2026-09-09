@@ -113,8 +113,9 @@ metrics ; teardown` — one sandbox and one addressable approval per (issue, tar
 `max_parallel_jobs` at a time. `deliver` publishes the asset `swf.metrics.<blueprint>`, so
 `dags/maintain.py` runs after every delivery as well as nightly at 03:00 UTC.
 
-Trigger: label an issue `factory` (or `factory:<name>`) so the receiver or `dispatch.yml` POSTs
-`/api/v2/dags/<name>/dagRuns`, or `uv run airflow dags trigger factory --conf '{"issues": ["42"]}'`.
+Trigger: label an issue `factory` (or `factory:<name>`) so the receiver or `dispatch.yml` submits
+`POST /v1/work-orders` and the backend creates the managed run, or
+`uv run airflow dags trigger factory --conf '{"issues": ["42"]}'` for an unmanaged local run.
 Answer gates in the UI (Required Actions shows the head of intent.md / plan.md) or from the shell:
 
 ```sh

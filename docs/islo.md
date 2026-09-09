@@ -76,7 +76,8 @@ export SWF_ISLO_SNAPSHOT=swf-golden-$(date +%Y%m%d)
 ```
 GitHub (issues, issue_comment) --HMAC--> islo incoming webhook (verifies X-Hub-Signature-256,
   idempotent on X-GitHub-Delivery) --> swf-orchestrator:8081 (swfactory webhook serve)
-  --> POST /api/v2/dags/<blueprint>/dagRuns on the orchestrator's Airflow (:8080, islo share'd)
+  --> POST /v1/work-orders on the factory backend (:8082) --> the backend admits, binds Factory
+      Cells, and creates the run on the orchestrator's Airflow (:8080, islo share'd)
 ```
 
 `deploy.sh` clones `SWF_CONTROL_REPO` at `SWF_CONTROL_BRANCH`, creates the incoming webhook by name
@@ -88,21 +89,22 @@ returns. `SWF_REPO` and `SWF_BRANCH` remain aliases for older single-repository 
 
 | Event | Result |
 | --- | --- |
-| `issues.labeled` with `factory` | `POST /api/v2/dags/factory/dagRuns {"issues": ["<n>"]}` |
-| `issues.labeled` with `factory:<name>` | the same against DAG `<name>` |
+| `issues.labeled` with `factory` | `POST /v1/work-orders {"line": "factory", "issues": ["<n>"]}` |
+| `issues.labeled` with `factory:<name>` | the same against line `<name>` |
 | `issue_comment.created` `@factory run [<name>]` on an issue | the same |
 | `pull_request.*`, `factory:blocked` / `factory:rejected` (deliver's own PR labels), anything else | ignored |
 
-The receiver takes Airflow credentials from `AIRFLOW_TOKEN` or `AIRFLOW_USER` + `AIRFLOW_PASSWORD`
-and serves `GET /healthz` (what `deploy.sh` polls). `--secret-env SWF_WEBHOOK_SECRET` enables local
-HMAC verification for the case where the receiver is exposed without islo in front; with the var
-unset it trusts islo's upstream check. `swfactory webhook route <event> <payload.json>` is the dry
-run. `dispatch.yml` (a GitHub Action posting to the Airflow API with the `AIRFLOW_URL` /
-`AIRFLOW_TOKEN` secrets) stays as the alternative trigger when `:8080` is shared instead of `:8081`.
+The receiver takes the backend bearer token from `SWF_BACKEND_TOKEN` and serves `GET /healthz`
+(what `deploy.sh` polls). It holds no Airflow credential, so it cannot create a run the backend
+never admitted. `--secret-env SWF_WEBHOOK_SECRET` enables local HMAC verification for the case
+where the receiver is exposed without islo in front; with the var unset it trusts islo's upstream
+check. `swfactory webhook route <event> <payload.json>` is the dry run. `dispatch.yml` (a GitHub
+Action submitting work orders with the `SWF_BACKEND_URL` / `SWF_BACKEND_TOKEN` secrets) stays as
+the alternative trigger when the backend is reachable from GitHub instead of `:8081`.
 
-The receiver now commits dispatches to `$AIRFLOW_HOME/webhooks/inbox.sqlite3` before returning
-202. A background worker retries API outages, reclaims interrupted submissions, and verifies the
-same Airflow run on redelivery. Intake restricts targets to `repository.full_name`, validated
+The receiver now commits deliveries to `$AIRFLOW_HOME/webhooks/inbox.sqlite3` before returning
+202. A background worker retries backend outages, reclaims interrupted submissions, and lands on
+the same work order on redelivery. Intake restricts targets to `repository.full_name`, validated
 against the installed blueprint. Preserve the inbox with Airflow state; `/readyz` reports queue
 capacity and `swfactory webhook deliveries|inspect|retry` operates its receipts. See
 [durable webhook intake](webhooks.md) for the full recovery and persistence contract.

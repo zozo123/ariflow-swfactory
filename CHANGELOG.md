@@ -59,6 +59,28 @@ All notable changes to this project will be documented here. The format follows
 
 ### Fixed
 
+- **The webhook receiver and the GitHub-label workflow no longer write to Airflow behind the
+  factory's back** (#2068). Both posted straight to `/api/v2/dags/<dag>/dagRuns`, so their runs
+  carried no `_factory_cells`: no admission record, no capacity accounting, no Factory Cell fencing,
+  and nothing to stop a second run of work already in flight. Both now submit a work order to the
+  backend (`POST /v1/work-orders`), which admits it, reserves capacity, activates the Cells and
+  creates the run itself. Airflow is still the only lifecycle scheduler — this is admission, not
+  scheduling. Direct-Airflow dispatch survives only as explicitly-labelled legacy mode for a sandbox
+  with no backend, and the shipped Docker receiver no longer holds an Airflow credential at all, so
+  it *cannot* create a run nobody admitted. A backend refusal is the answer, never a reason to reach
+  past it: a drain (503) and a capacity refusal (429) retry with backoff, a conflict (409) or an
+  unsupported line (422) goes dead. Both channels submit under the actor `github`, so the same label
+  arriving through both hashes to one work order instead of racing two admissions at one Cell.
+- **The Airflow compatibility mount told callers a queued order had been thrown away** (#2068). It
+  answered 429 for anything that was not `submitted`, including a work order the backend had
+  durably admitted and placed in the capacity queue — so a console could not tell admitted from
+  queued, and its remedy (resend) was exactly wrong. A queued order is now `202` with its
+  `submission_id`, queue `position` and `limiting` block and deliberately no `dag_run_id`, because
+  no run exists yet. A genuine rejection is still a 429, and a drain is still a 503 on both routes.
+- Webhook receipts record the work order the backend admitted and the state it answered with
+  (inbox schema 2: `work_order_id`, `admission_state`), so `swfactory webhook inspect` distinguishes
+  a queued order from an executing one, and a redelivery after a lost response can be seen landing
+  on the same work order rather than creating a second admission.
 - `operation_recovery.plan_recovery` planned a plain `retry` for an operation the journal had
   marked `in_doubt`, and for one it had already marked `exhausted` — exactly the blind replay of a
   possibly-committed external effect that the recovery invariant exists to prevent.
