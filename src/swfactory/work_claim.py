@@ -32,6 +32,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 CLAIM_NAMESPACE = "refs/swf/claims"
+
+# Phases of one backlog under many sessions. Naming only -- see `Claim.phase`.
+FREE = "free"  # no session holds it; any may condense onto it
+CONDENSED = "condensed"  # one session holds it and is paying the lease
+SUBLIMATING = "sublimating"  # the holder stopped paying; it is returning to free
 DEFAULT_LEASE_S = 3600.0
 
 
@@ -72,6 +77,21 @@ class Claim:
 
     def held_by(self, instance: str) -> bool:
         return self.instance == instance
+
+    def phase(self, *, now: datetime | None = None) -> str:
+        """This claim's phase: ``condensed`` while a session holds it, ``sublimating`` once its
+        lease has run out.
+
+        The repo's Phase240 family is research -- "advisory and observational only ... it must not
+        appear in the product's cognitive path" (config/liquid-spec.yaml) -- so this is naming,
+        not authority. It is worth the name anyway, because these really are phase transitions of
+        one backlog under many sessions: free work condenses onto the session that claims it, stays
+        condensed while that session keeps paying the lease, and sublimates back to free when the
+        session stops paying. `phase_of` below covers the free state, which has no claim object.
+
+        Nothing branches on this. It is what an operator reads.
+        """
+        return SUBLIMATING if self.expired(now=now) else CONDENSED
 
 
 _FIELD = re.compile(r"^(?P<name>instance|at|lease_s)=(?P<value>.+)$", re.M)
@@ -120,3 +140,22 @@ def refusal(current: Claim, *, now: datetime | None = None) -> str:
         f"left. Another factory session is already working this issue; this one should take other "
         f"work rather than duplicate the spend."
     )
+
+
+def phase_of(current: Claim | None, *, now: datetime | None = None) -> str:
+    """The phase of one unit of work, including the free state a missing claim represents."""
+    return FREE if current is None else current.phase(now=now)
+
+
+def energy_report(claims: dict[str, Claim | None], *, now: datetime | None = None) -> dict[str, int]:
+    """How this backlog's work is distributed across phases, for `swf` to render.
+
+    The operator question a many-session factory raises is not "is anything running" but "is the
+    fuel going anywhere useful": a backlog that is entirely `condensed` has every session busy, one
+    that is entirely `free` has sessions idle or blind, and a rising `sublimating` count means
+    sessions are dying mid-loop and their work is being abandoned rather than finished.
+    """
+    counts = {FREE: 0, CONDENSED: 0, SUBLIMATING: 0}
+    for claim in claims.values():
+        counts[phase_of(claim, now=now)] += 1
+    return counts

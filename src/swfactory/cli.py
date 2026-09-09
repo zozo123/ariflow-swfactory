@@ -803,7 +803,7 @@ def claim_cmd(
         "claim_ref": work_claim.claim_ref(key),
         "issue_id": issue_id,
         "branch": f"factory/{issue_id}-{key}",
-        "instance": instance_id(state_root),
+        "instance": instance_id(state_root, create=True),
         "lease_s": work_claim.DEFAULT_LEASE_S,
     }
     if json_out:

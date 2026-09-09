@@ -413,7 +413,13 @@ for job in bp.jobs({"issues": sys.argv[4:]}):
     ):
         missing.append(f"job {idx}: approvals were not recorded as admin: {approvals}")
     # Verify the published code in a clean clone, independent of the worker checkout/cache.
-    branch = f"factory/{chain.name}-{cfg.run_id}"
+    # The publish ref is keyed on the WORK -- sha256(repo, target, issue) -- not on the run, so
+    # several factory sessions on one issue converge on one branch and one pull request. Derived
+    # from the same function the runtime uses rather than restated, or this harness would assert a
+    # ref shape the factory no longer produces.
+    from swfactory.publication_identity import publication_key
+
+    branch = f"factory/{chain.name}-{publication_key(cfg.repo, cfg.target_dir, chain.name)}"
     delivered = work / "delivered" / str(idx)
     try:
         refs = subprocess.run(

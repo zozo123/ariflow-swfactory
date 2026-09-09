@@ -209,6 +209,15 @@ against *what this instance last published*, not against what it just observed �
 observes another's commit, does not contain it, and force-pushes anyway holds a perfectly valid
 lease while performing exactly the overwrite the lease exists to prevent.
 
+**Phases.** One backlog under many sessions moves through three states, and `swf` names them:
+`free` (no session holds it), `condensed` (one session holds it and is paying the lease) and
+`sublimating` (the holder stopped paying; it is returning to free). This is naming, not authority —
+the repository's `Phase240` family is research, "advisory and observational only … must not appear
+in the product's cognitive path", and nothing branches on a phase. It is what an operator reads:
+an all-`condensed` backlog has every session busy, an all-`free` one has them idle or blind, and a
+rising `sublimating` count means sessions are dying mid-loop and abandoning work — which is
+invisible from any single session's own logs.
+
 **A claim authorizes nothing.** It is advice about where to spend fuel, never permission to
 publish. The Cell epoch remains the mutation authority and the publication lease remains the
 arbiter of the ref; the publishing path does not read claims at all, and a test pins that no module

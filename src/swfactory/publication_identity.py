@@ -50,7 +50,7 @@ def publication_key(repo: str, target: str, issue: str) -> str:
     return hashlib.sha256(raw).hexdigest()[:_KEY_CHARS]
 
 
-def instance_id(state_root: Path) -> str:
+def instance_id(state_root: Path, *, create: bool = False) -> str:
     """This factory instance's stable id, created once under its own state root.
 
     Not the hostname: two instances legitimately share a host, one instance legitimately moves
@@ -65,14 +65,26 @@ def instance_id(state_root: Path) -> str:
         existing = ""
     if existing:
         return existing
-    minted = os.environ.get("SWF_INSTANCE_ID", "").strip() or "swf-" + uuid.uuid4().hex[:10]
+    override = os.environ.get("SWF_INSTANCE_ID", "").strip()
+    if override:
+        return override
+    if not create:
+        # `create=False` is the PUBLISH path, and it must not write. Under srt the state root is
+        # inside the kernel's write-confined set, so minting a file here failed the whole run --
+        # and a publication has no business creating state as a side effect anyway. The identity
+        # is derived from the state root the instance owns, which is the thing that makes it a
+        # distinct instance: two roots are two instances, one root keeps its name across restarts,
+        # and no file is required for either to be true.
+        digest = hashlib.sha256(str(Path(state_root).resolve()).encode()).hexdigest()
+        return "swf-" + digest[:10]
+    minted = "swf-" + uuid.uuid4().hex[:10]
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(minted + "\n", encoding="utf-8")
     except OSError:
-        # An unwritable state root still gets a usable id for this process; it just will not be
-        # stable across restarts. Refusing to publish over it would be a worse trade.
-        pass
+        # An unwritable state root still gets a usable id for this process. Refusing to publish
+        # over it would be a worse trade.
+        return "swf-" + hashlib.sha256(str(Path(state_root).resolve()).encode()).hexdigest()[:10]
     return minted
 
 

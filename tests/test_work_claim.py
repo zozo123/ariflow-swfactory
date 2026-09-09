@@ -7,6 +7,7 @@ expensive question -- whether they both burn an agent loop at all.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from swfactory.work_claim import (
     DEFAULT_LEASE_S,
@@ -124,3 +125,51 @@ def test_the_cli_reports_the_ref_a_run_actually_publishes() -> None:
     assert reported["publication_key"] == expected_key
     assert reported["branch"] == f"factory/DEMO-1-{expected_key}"
     assert reported["claim_ref"] == claim_ref(expected_key)
+
+
+def test_publishing_never_creates_state_as_a_side_effect(tmp_path: Path) -> None:
+    """`srt-smoke` caught this: the publish path minted `instance.id` into the state root, and
+    under srt that root is inside the kernel's write-confined set, so the whole demo failed.
+
+    A publication has no business creating state anyway. The identity is derived from the state
+    root the instance owns -- which is the thing that makes it a distinct instance -- so two roots
+    are two instances and one root keeps its name across restarts, with no file required for
+    either to be true. Only an explicit CLI action mints the durable file.
+    """
+    from swfactory.publication_identity import INSTANCE_FILE, instance_id
+
+    root = tmp_path / "state"
+    root.mkdir()
+    derived = instance_id(root)
+    assert derived.startswith("swf-")
+    assert not (root / INSTANCE_FILE).exists(), "the publish path wrote to the state root"
+    assert instance_id(root) == derived, "a derived id must be stable across calls"
+    assert instance_id(tmp_path / "other") != derived, "two state roots are two instances"
+
+    minted = instance_id(root, create=True)
+    assert (root / INSTANCE_FILE).exists(), "the explicit path should mint the durable file"
+    assert instance_id(root) == minted, "once minted, the file wins"
+    assert (root / INSTANCE_FILE).read_text(encoding="utf-8").strip() == minted
+
+
+def test_the_phases_one_backlog_moves_through() -> None:
+    """Naming, not authority: `Phase240` is research in config/liquid-spec.yaml -- "advisory and
+    observational only ... must not appear in the product's cognitive path". Nothing branches on a
+    phase. It is what an operator reads to see where the fuel is going."""
+    from swfactory.work_claim import CONDENSED, FREE, SUBLIMATING, energy_report, phase_of
+
+    live = _claim("swf-a", lease_s=3600)
+    dead = _claim("swf-b", lease_s=60)
+    now = T0 + timedelta(minutes=10)
+
+    assert phase_of(None, now=now) == FREE, "unclaimed work is free for any session"
+    assert phase_of(live, now=now) == CONDENSED, "a session is paying its lease"
+    assert phase_of(dead, now=now) == SUBLIMATING, "the holder stopped paying; it returns to free"
+
+    # A rising `sublimating` count is the signal that sessions are dying mid-loop and abandoning
+    # work, which is invisible from any single session's own logs.
+    assert energy_report({"a": live, "b": dead, "c": None}, now=now) == {
+        FREE: 1,
+        CONDENSED: 1,
+        SUBLIMATING: 1,
+    }
