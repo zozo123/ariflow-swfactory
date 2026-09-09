@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from swfactory.admission import Limits, Priority
+from swfactory.store_schema import ensure_named_schema, guard_before_ddl
 
 WORK_ORDER_SCHEMA = 1
 HOLDING_STATES = ("admitted", "dispatching", "bound")
@@ -192,6 +193,7 @@ class DurableAdmission:
             self.db.execute("COMMIT")
 
     def _migrate(self) -> None:
+        guard_before_ddl(self.db, "admission")
         # executescript() commits any open transaction, so the DDL runs on its own before the
         # seeding and legacy repair that must be one atomic step.
         self.db.executescript(
@@ -267,6 +269,9 @@ class DurableAdmission:
             """
         )
         with self._txn():
+            # Inside the same transaction as the seeding: a store this binary may not write to must
+            # be refused before it is given a sequence counter and a fairness table.
+            ensure_named_schema(self.db, "admission")
             self.db.execute("INSERT OR IGNORE INTO admission_meta VALUES('sequence',0)")
             for priority in Priority:
                 self.db.execute(

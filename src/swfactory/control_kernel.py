@@ -22,6 +22,7 @@ from swfactory.cleanup_receipt import CleanupReceipt, RepairLeaseStore
 from swfactory.core_capabilities import CoreCapabilityRuntime, CoreMutationRequest, CoreMutationResult
 from swfactory.durable_admission import AdmissionDecision, DispatchIntent, DurableAdmission, MemberSpec
 from swfactory.idempotency import MutationOutcome, OperationJournal, OperationRef, RetryBudget
+from swfactory.restore_contract import RestoreGate
 from swfactory.trust_evidence import TrustedEvidence
 
 
@@ -33,6 +34,7 @@ class ControlKernel:
         limits: Limits | None = None,
         cells: CellStore | None = None,
         evidence: TrustedEvidence | None = None,
+        restore_gate: RestoreGate | None = None,
     ):
         limits = limits or Limits()
         root.mkdir(parents=True, exist_ok=True)
@@ -40,6 +42,9 @@ class ControlKernel:
         self.operations = OperationJournal(root / "operations.sqlite3")
         self.repairs = RepairLeaseStore(root / "repairs.sqlite3")
         self.admission = DurableAdmission(root / "admission.sqlite3", limits)
+        # A restored factory cannot know what happened after its snapshot, so the gate is consulted
+        # on the one seam every managed external effect passes through rather than at each caller.
+        self.restore_gate = restore_gate
         if (cells is None) != (evidence is None):
             raise ValueError("cells and evidence must be supplied together")
         self.core = (
@@ -133,6 +138,7 @@ class ControlKernel:
             reconcile=reconcile,
             budget=budget,
             intent_digest=intent_digest,
+            observe_before_first_attempt=self._must_observe(ref.cell_id),
         )
 
     def mutate_core(
@@ -145,7 +151,28 @@ class ControlKernel:
     ) -> CoreMutationResult:
         if self.core is None:
             raise RuntimeError("canonical mutation runtime is not configured")
-        return self.core.execute_external(request, fn, reconcile=reconcile, budget=budget)
+        return self.core.execute_external(
+            request,
+            fn,
+            reconcile=reconcile,
+            budget=budget,
+            observe_before_first_attempt=self._must_observe(request.airflow.cell_id),
+        )
+
+    def _must_observe(self, cell_id: str) -> bool:
+        """Gate one external effect on the restore contract.
+
+        Two different refusals live here on purpose.  Before an operator has validated a restore,
+        nothing external happens at all.  Afterwards, and until the operator closes the restore
+        window, *every* Cell must look at the remote before its first attempt -- not only the ones
+        the snapshot restored.  The journal cannot know about a row it never had, and neither can
+        the list of restored Cells: a Cell first activated in the hour the snapshot did not see is
+        rebuilt under the same deterministic id, and its publication would be the second one.
+        """
+        if self.restore_gate is None:
+            return False
+        self.restore_gate.assert_mutations_allowed()
+        return self.restore_gate.requires_observation(cell_id)
 
     def inspect_core(self, cell_id: str) -> dict[str, Any]:
         if self.core is None:

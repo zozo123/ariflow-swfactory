@@ -583,6 +583,188 @@ def webhook_route(
     typer.echo(f"POST /api/v2/dags/{trigger.dag_id}/dagRuns {json.dumps(trigger.body(), sort_keys=True)}")
 
 
+# ---------------------------------------------------------------- whole-factory backup and restore
+
+backup_app = typer.Typer(
+    help="Coordinated backup, validated restore and reconciliation for the factory state root.",
+    no_args_is_help=True,
+)
+app.add_typer(backup_app, name="backup")
+
+StateRoot = Annotated[Path, typer.Option(help="the one shared local factory state root")]
+
+
+@backup_app.command("create")
+def backup_create(
+    dest: Annotated[Path, typer.Argument(help="empty directory to write this backup into")],
+    state_root: StateRoot = Path(".factory"),
+    actor: Annotated[str, typer.Option(help="who is taking this backup")] = "operator",
+) -> None:
+    """Quiesce every authoritative store and write one manifest-covered backup."""
+    from swfactory.restore_contract import BackupRefused, create_backup
+
+    try:
+        manifest = create_backup(state_root, dest, actor=actor)
+    except (BackupRefused, OSError, ValueError) as error:
+        typer.echo(f"backup refused: {error}", err=True)
+        raise typer.Exit(1) from error
+    stores = ", ".join(f"{s['name']}@{s['schema_version']}" for s in manifest["stores"])
+    typer.echo(f"{dest}: {len(manifest['files'])} files, {stores}")
+    typer.echo(manifest["manifest_digest"])
+
+
+@backup_app.command("verify")
+def backup_verify(
+    backup_dir: Annotated[Path, typer.Argument(help="a directory written by `backup create`")],
+) -> None:
+    """Prove a backup is complete and unmodified before anything depends on it."""
+    from swfactory.restore_contract import verify_backup
+
+    result = verify_backup(backup_dir)
+    for problem in result.problems:
+        typer.echo(f"problem: {problem}", err=True)
+    if not result.ok:
+        raise typer.Exit(1)
+    typer.echo(f"{backup_dir}: verified {result.manifest['manifest_digest']}")
+
+
+@backup_app.command("restore")
+def backup_restore(
+    backup_dir: Annotated[Path, typer.Argument(help="a verified backup directory")],
+    state_root: StateRoot = Path(".factory"),
+    actor: Annotated[str, typer.Option(help="who is restoring")] = "operator",
+    reason: Annotated[str, typer.Option(help="why this restore is happening")] = "",
+    replace_existing: Annotated[
+        bool, typer.Option(help="set aside existing state (it is moved, never deleted)")
+    ] = False,
+) -> None:
+    """Validate a backup, refuse an old-binary rollback, and restore with mutations withheld."""
+    from swfactory.restore_contract import RestoreRefused, restore
+
+    if not reason.strip():
+        typer.echo("--reason is required: a restore is an operator decision that must be on the record", err=True)
+        raise typer.Exit(2)
+    try:
+        marker = restore(backup_dir, state_root, actor=actor, reason=reason, replace_existing=replace_existing)
+    except (RestoreRefused, OSError) as error:
+        typer.echo(f"restore refused: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"restored into {state_root}; external effects are WITHHELD until validated.")
+    typer.echo(f"cells needing reconciliation: {len(marker['unreconciled_cells'])}")
+    typer.echo("next: swfactory backup status, then swfactory backup resume")
+
+
+@backup_app.command("status")
+def backup_status(
+    state_root: StateRoot = Path(".factory"),
+    json_out: Annotated[bool, typer.Option("--json", help="one JSON document")] = False,
+) -> None:
+    """Report store schema versions, the restore gate and what must be reconciled first."""
+    from swfactory.restore_contract import status as restore_status
+
+    report = restore_status(state_root)
+    if json_out:
+        typer.echo(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        for store in report["stores"]:
+            typer.echo(f"{store['name']:<11} {str(store['version']):>4} / {store['expected']:<4} {store['status']}")
+        for problem in report["coherence_problems"]:
+            typer.echo(f"stores disagree: {problem}")
+        typer.echo(f"restore gate: {report['restore']['state']}")
+        if report["observation_required"]:
+            span = report["restore_window"].get("unobserved_seconds")
+            length = f"{span:.0f}s" if isinstance(span, float) else "an unknown interval"
+            typer.echo(
+                f"  every Cell must observe the remote before its first attempt: the restore window "
+                f"covers {length} this state cannot see. Close it with `swfactory backup close`."
+            )
+        for rollback in report["restore"].get("fence_rollbacks", []):
+            typer.echo(
+                f"  fence rolled back: {rollback['cell_id']} epoch {rollback['was']} -> "
+                f"{rollback['now']}; a process still holding epoch {rollback['was']} can write again"
+            )
+        for cell in report["restore"]["cells"]:
+            typer.echo(f"  awaiting observation: {cell}")
+        for row in report["reconciliation"]:
+            typer.echo(f"  {row['operation_key']} {row['kind']} -> {row['action']} ({row['reason']})")
+    if not report["schema_compatible"] or not report["stores_agree"]:
+        raise typer.Exit(2)
+    if not report["mutations_allowed"]:
+        raise typer.Exit(1)
+
+
+@backup_app.command("resume")
+def backup_resume(
+    state_root: StateRoot = Path(".factory"),
+    actor: Annotated[str, typer.Option(help="who validated this restore")] = "operator",
+    reason: Annotated[str, typer.Option(help="what was checked")] = "",
+) -> None:
+    """Allow mutations again after a restore -- each restored Cell must still observe before acting."""
+    from swfactory.restore_contract import MutationsWithheld, RestoreGate, RestoreRefused
+
+    if not reason.strip():
+        typer.echo("--reason is required: resuming mutations is an operator decision", err=True)
+        raise typer.Exit(2)
+    gate = RestoreGate(state_root)
+    try:
+        marker = gate.resume(actor=actor, reason=reason)
+    except (RestoreRefused, MutationsWithheld) as error:
+        typer.echo(f"resume refused: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"restore gate: {marker['state']}")
+    typer.echo(f"{len(marker['unreconciled_cells'])} cells must observe the remote before re-driving anything")
+
+
+@backup_app.command("reconciled")
+def backup_reconciled(
+    state_root: StateRoot = Path(".factory"),
+    cell_id: Annotated[str | None, typer.Option(help="Cell whose remote state was observed")] = None,
+    work_id: Annotated[str | None, typer.Option(help="dispatch intent whose delivery was observed")] = None,
+) -> None:
+    """Clear one Cell or dispatch intent from the gate, on recorded observations only."""
+    from swfactory.restore_contract import ReconciliationIncomplete, RestoreGate
+
+    if not cell_id and not work_id:
+        typer.echo("pass --cell-id or --work-id", err=True)
+        raise typer.Exit(2)
+    try:
+        marker = RestoreGate(state_root).mark_reconciled(cell_id=cell_id, work_id=work_id)
+    except ReconciliationIncomplete as error:
+        typer.echo(f"not reconciled: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"restore gate: {marker['state']}; {len(marker['unreconciled_cells'])} cells outstanding")
+    if not marker["unreconciled_cells"] and not marker["unreconciled_dispatch"]:
+        typer.echo("every restored item is reconciled; close the window with `swfactory backup close`")
+
+
+@backup_app.command("close")
+def backup_close(
+    state_root: StateRoot = Path(".factory"),
+    actor: Annotated[str, typer.Option(help="who is closing the restore window")] = "operator",
+    reason: Annotated[str, typer.Option(help="what was reviewed")] = "",
+    window_reviewed: Annotated[
+        bool,
+        typer.Option(help="the interval between the backup and the restore was checked against the remote"),
+    ] = False,
+) -> None:
+    """End the restore window, after which Cells stop observing the remote before they act.
+
+    The interval between the backup and the restore holds effects no local record mentions, so
+    ending it is an operator's statement rather than something the factory can conclude on its own.
+    """
+    from swfactory.restore_contract import ReconciliationIncomplete, RestoreGate
+
+    if not reason.strip():
+        typer.echo("--reason is required: closing the restore window is an operator decision", err=True)
+        raise typer.Exit(2)
+    try:
+        marker = RestoreGate(state_root).close(actor=actor, reason=reason, window_reviewed=window_reviewed)
+    except ReconciliationIncomplete as error:
+        typer.echo(f"window stays open: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"restore gate: {marker['state']}; observation before first attempt is no longer required")
+
+
 @app.command()
 def doctor(
     blueprint: Annotated[

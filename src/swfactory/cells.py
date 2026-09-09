@@ -14,7 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+from swfactory.store_schema import CELL_ROW_SCHEMA_VERSION, ensure_named_schema, guard_before_ddl
+
+# The row field and the file stamp are one number: two of them is how a store starts lying
+# about which binary may write to it.
+SCHEMA_VERSION = CELL_ROW_SCHEMA_VERSION
 TERMINAL_STATES = frozenset({"success", "failed", "cancelled", "rejected", "cleaned"})
 
 
@@ -85,6 +89,7 @@ class CellStore:
 
     def _migrate(self) -> None:
         with self.lock:
+            guard_before_ddl(self.db, "cells")
             self.db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS cells (
@@ -122,6 +127,10 @@ class CellStore:
                 );
                 """
             )
+            # After the DDL and before the first write: an unstamped legacy file is adopted only
+            # once its rows prove readable, and a file a newer binary wrote is refused outright.
+            with self.db:
+                ensure_named_schema(self.db, "cells")
 
     def ensure(self, identity: CellIdentity, **fields: Any) -> dict[str, Any]:
         cell_id = identity.stable_id()

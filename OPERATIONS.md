@@ -494,6 +494,13 @@ Run mutations share a host ownership lock, and interrupted journal appends prese
 tail before recovery. See [run recovery](docs/run-recovery.md) for operation history, local
 inspection, concurrent attempts and budget accounting.
 
+The factory's five authoritative stores live in one state root on one host. `swfactory backup
+create|verify|restore|status|resume|reconciled` takes coordinated backups and restores them with
+mutations withheld until the restore is validated and every restored Cell has observed remote
+state. See [backup, restore and upgrade](docs/backup-restore.md) for the supported deployment
+boundary, the schema/rollback rules and the operator drill. Multi-replica and Postgres operation is
+unqualified and refused.
+
 ## Install the factory skill
 
 ```bash

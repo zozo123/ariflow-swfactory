@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from swfactory.security_boundary import redact
+from swfactory.store_schema import ensure_evidence_schema
 
 
 @dataclass(frozen=True)
@@ -81,12 +82,35 @@ DEFAULT_SLOS: tuple[SLOContract, ...] = (
 )
 
 
+def verify_chain(records: Iterable[Mapping[str, Any]]) -> tuple[bool, str]:
+    """Re-derive an evidence hash chain and return ``(intact, tail_digest_or_reason)``.
+
+    Module level because a backup verifier has to check the same chain over files it must not open
+    as a writable evidence root; two implementations of this check would eventually disagree, and
+    the one that disagreed quietly would be the one deciding a restore is safe.
+    """
+    previous = ""
+    for index, record in enumerate(records):
+        body = {k: v for k, v in record.items() if k not in {"previous_digest", "digest"}}
+        canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        expected = hashlib.sha256((previous + "\0" + canonical).encode()).hexdigest()
+        if record.get("previous_digest") != (previous or None):
+            return False, f"event {index}: previous digest mismatch"
+        if record.get("digest") != expected:
+            return False, f"event {index}: digest mismatch"
+        previous = expected
+    return True, previous
+
+
 class EvidenceWriter:
     """Append-only, fsync-backed cell evidence with hash chaining and artifact manifests."""
 
     def __init__(self, root: Path):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
+        # Evidence is the fifth authoritative store. It gets a version stamp for the same reason
+        # the four databases do: a backup manifest has to be able to say which reader wrote it.
+        ensure_evidence_schema(self.root)
 
     def append(
         self,
@@ -209,17 +233,7 @@ class EvidenceWriter:
         return rows
 
     def verify(self, cell_id: str) -> tuple[bool, str]:
-        previous = ""
-        for index, record in enumerate(self.read(cell_id)):
-            body = {k: v for k, v in record.items() if k not in {"previous_digest", "digest"}}
-            canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), allow_nan=False)
-            expected = hashlib.sha256((previous + "\0" + canonical).encode()).hexdigest()
-            if record.get("previous_digest") != (previous or None):
-                return False, f"event {index}: previous digest mismatch"
-            if record.get("digest") != expected:
-                return False, f"event {index}: digest mismatch"
-            previous = expected
-        return True, previous
+        return verify_chain(self.read(cell_id))
 
     def _events_path(self, cell_id: str) -> Path:
         directory = self.root / cell_id
