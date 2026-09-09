@@ -5,6 +5,8 @@ import pytest
 from swfactory.models import StageError
 from swfactory.skills_connector import (
     SKILLS_CLI,
+    SKILLS_CLI_VERSION,
+    SWFACTORY_HARNESS_SKILL,
     SWFACTORY_SKILL,
     VERCEL_FIND_SKILLS,
     catalog,
@@ -16,9 +18,15 @@ from swfactory.skills_connector import (
 
 
 def test_canonical_skill_packages_are_explicit() -> None:
+    assert SKILLS_CLI == ("npx", "-y", f"skills@{SKILLS_CLI_VERSION}")
+    assert "latest" not in SKILLS_CLI
     assert SWFACTORY_SKILL.source == "zozo123/ariflow-swfactory@airflow-software-factory"
     assert SWFACTORY_SKILL.catalog_url.endswith("/zozo123/ariflow-swfactory/airflow-software-factory")
+    assert SWFACTORY_HARNESS_SKILL.source == "zozo123/ariflow-swfactory@swfactory"
     assert VERCEL_FIND_SKILLS.source == "vercel-labs/skills@find-skills"
+    assert catalog()["skills_cli_version"] == SKILLS_CLI_VERSION
+    assert catalog()["factory_catalog"] == SWFACTORY_SKILL.catalog_url
+    assert catalog()["harness_catalog"] == SWFACTORY_HARNESS_SKILL.catalog_url
     assert catalog()["vercel_repository"] == "https://github.com/vercel-labs/skills"
 
 
@@ -42,6 +50,15 @@ def test_install_argv_is_explicit_and_non_interactive() -> None:
         "--agent",
         "codex",
         "--copy",
+    )
+
+
+def test_harness_install_is_an_explicit_package() -> None:
+    assert install_argv(SWFACTORY_HARNESS_SKILL) == (
+        *SKILLS_CLI,
+        "add",
+        "zozo123/ariflow-swfactory@swfactory",
+        "-y",
     )
 
 
