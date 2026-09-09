@@ -40,6 +40,7 @@ from swfactory.cells import (
 from swfactory.control import AirflowClient, ControlError, GitHubClient, IsloClient, MetricsSource
 from swfactory.control_kernel import ControlKernel
 from swfactory.deployment_profile import assert_supported_state_root
+from swfactory.doctor import _check_managed_workers
 from swfactory.durable_admission import (
     MAX_DISPATCH_ATTEMPTS,
     WORK_ORDER_SCHEMA,
@@ -1133,6 +1134,30 @@ class Factory:
                     "required": True,
                 },
             ]
+            # The row the console path was missing (#2050 added it to the Python doctor only): a
+            # managed cell fails closed in its FIRST stage without SWF_BACKEND_URL/SWF_BACKEND_TOKEN,
+            # and from `swf doctor` that looked like a healthy backend. One honesty caveat, written
+            # into `detail`: this reads THIS process's environment. The workers carry their own copy
+            # (Compose passes the pair to the airflow service separately), so a green row here means
+            # the backend host is configured, not that every worker is -- the compose guard in
+            # tests/test_doctor.py is what pins the worker side.
+            workers = _check_managed_workers(os.environ)
+            # Never `required` on the backend host. The host does not call itself, so it legitimately
+            # has no SWF_BACKEND_URL of its own -- the e2e harness exports that pair into the Airflow
+            # process and nowhere else -- and a required row here failed `swf doctor` against every
+            # healthy backend, which is #1217 by another route. Informational: a red row still shows
+            # the operator that THIS host's copy is unwired, without claiming to know the workers'.
+            checks.append(
+                {
+                    "name": "managed worker callback",
+                    "ok": workers.ok,
+                    "status": "ok" if workers.ok else "warn",
+                    "detail": workers.detail
+                    + " (as seen from the backend host's environment, which is not the workers')",
+                    "fix": workers.fix,
+                    "required": False,
+                }
+            )
             try:
                 health = self._checked_airflow("GET", "/monitor/health")
                 for name in ("metadatabase", "scheduler"):

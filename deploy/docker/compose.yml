@@ -39,6 +39,13 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       AIRFLOW__API__PORT: "8080"
       AIRFLOW__API__HOST: 0.0.0.0
+      # Managed workers call the backend for Cell transitions and SCM publication. Service
+      # credentials remain in this control-plane container and never enter inner sandboxes unless
+      # an explicit sandbox credential policy allows them (the backend token is not allow-listed).
+      # Fixed, not `${SWF_BACKEND_URL:-...}`: a host shell exporting the console's localhost:8082
+      # would be interpolated into the worker and route it to a port inside its own container (#2050).
+      SWF_BACKEND_URL: http://backend:8082
+      SWF_BACKEND_TOKEN: ${SWF_BACKEND_TOKEN:-}
       # Operational factory knobs. Mapped job identity still wins over ambient SWF_* values.
       SWF_SANDBOX: docker
       SWF_AGENT: ${SWF_AGENT:-scripted}
@@ -124,6 +131,12 @@ services:
       GH_TOKEN: ${GH_TOKEN:-}
     ports:
       - "127.0.0.1:8082:8082"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8082/v1/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
     restart: unless-stopped
 
   # Build target only (`docker compose -f deploy/docker/compose.yml build sandbox-image`);

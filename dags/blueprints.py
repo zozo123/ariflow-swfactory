@@ -87,13 +87,9 @@ def _ctx(name: str, job: dict[str, Any], dag_run_id: str, *, enforce_inputs: boo
 
 
 def _stage_fn(stage: str):
-    if stage == "build_and_test":
-        from swfactory.work_stage import build_and_test
+    from swfactory.stage_registry import resolve
 
-        return build_and_test
-    from swfactory.stages import STAGES
-
-    return STAGES[stage]
+    return resolve(stage)
 
 
 def _cell_transition(job: dict[str, Any], state: str, context: dict[str, Any], suffix: str) -> None:
