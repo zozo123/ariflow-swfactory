@@ -89,10 +89,12 @@ with DAG(
         return [b.model_dump() for b in breaches]
 
     @task(task_id="sweep_sandboxes", trigger_rule="all_done")
-    def sweep_sandboxes() -> list[str]:
+    def sweep_sandboxes() -> dict:
         from swfactory import maintain
         from swfactory.config import Config
 
-        return maintain.sweep_sandboxes(Config(issue="maintain").sandbox_ttl_s)
+        # Asks the backend, which owns the Cell store and the removal journal; the worker itself
+        # never decides from sandbox age alone nor runs ``islo rm``.
+        return maintain.request_sweep(Config(issue="maintain").sandbox_ttl_s)
 
     check_bands() >> sweep_sandboxes()

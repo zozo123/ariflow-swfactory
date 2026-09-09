@@ -26,7 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from swfactory import blueprint
+from swfactory import blueprint, maintain
 from swfactory.admission import Priority
 from swfactory.cell_runtime import identity_for_job
 from swfactory.cells import (
@@ -1342,6 +1342,20 @@ class Factory:
             return IsloClient(self.owner).own_sandboxes()
         if path == "/workers/remove":
             return IsloClient(self.owner).remove(text(body, "name"))
+        if path == "/workers/sweep":
+            # The nightly orphan sweep runs HERE, next to the Cell store and the operation journal:
+            # a worker deciding from age alone is #2075. Cells say who still owns a sandbox; the
+            # journal keeps every removal intent so a lost ``islo rm`` reply is reconciled, not printed.
+            ttl_s = body.get("ttl_s")
+            if type(ttl_s) is not int or ttl_s < 1:
+                raise ValueError("ttl_s must be a positive integer")
+            return maintain.sweep_sandboxes(
+                ttl_s,
+                owner=self.owner,
+                islo=IsloClient(self.owner),
+                cells=self.cell_store.list(limit=1000),
+                control=self.control,
+            )
         if path == "/metrics/runs":
             return MetricsSource(self.root).runs()
         if path == "/metrics/summary":

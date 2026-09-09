@@ -10,14 +10,15 @@ import pytest
 
 from swfactory import maintain
 from swfactory.config import Config
+from swfactory.control_kernel import ControlKernel
 from swfactory.maintain import (
     Breach,
     detect,
     load_runs,
-    remove_orphans,
     sweep_orphans,
 )
 from swfactory.models import AgentResult, Diagnosis
+from swfactory.runtime import run_id_for
 
 BANDS = {
     "window_runs": 20,
@@ -428,33 +429,145 @@ def test_sweep_orphans_requires_owner_and_factory_name() -> None:
     assert sweep_orphans(listing, 10, naive_now, owner=ME.upper()) == ["swf-demo-1-aaaaaaaa"]
 
 
-def test_remove_orphans_refuses_foreign_names() -> None:
-    calls: list[list[str]] = []
+class FakeIslo:
+    """Own-scope ``islo ls`` over ``items``; ``rm`` deletes the entry and, when ``lose`` names it,
+    raises after the effect (the response was lost) -- ``fail`` names raise before it."""
 
-    def runner(argv):
-        calls.append(list(argv))
-        if argv[2] == "swf-demo-1-bad00000":
-            raise RuntimeError("boom")
-        return ""
+    def __init__(self, items: list[dict], *, lose: set[str] = frozenset(), fail: set[str] = frozenset()) -> None:
+        self.items = {it["name"]: {**{"status": "running", "created_by": ME}, **it} for it in items}
+        self.lose, self.fail = set(lose), set(fail)
+        self.removed: list[str] = []
+        self.listing_error: Exception | None = None
 
-    removed = remove_orphans(["swf-demo-1-aaaaaaaa", "prod-db", "swf-demo-1-bad00000"], runner)
-    assert removed == ["swf-demo-1-aaaaaaaa"]
-    assert [c[2] for c in calls] == ["swf-demo-1-aaaaaaaa", "swf-demo-1-bad00000"]  # prod-db never
+    def listing(self) -> str:
+        if self.listing_error is not None:
+            raise self.listing_error
+        return json.dumps(list(self.items.values()))
+
+    def remove(self, name: str) -> None:
+        if name in self.fail:
+            raise RuntimeError(f"islo rm {name} failed")
+        self.removed.append(name)
+        self.items[name]["status"] = "deleted"
+        if name in self.lose:
+            raise TimeoutError(f"islo rm {name}: response lost")
 
 
-def test_sweep_sandboxes_refuses_without_owner_and_never_uses_all(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[list[str]] = []
+RUN = "manual__2026-09-01T00:00:00+00:00"
+OLD = "2026-08-01T00:00:00+00:00"
 
-    def runner(argv):
-        calls.append(list(argv))
-        return _ls([{"name": "swf-old-1-aaaaaaaa"}]) if argv[1] == "ls" else ""
 
-    monkeypatch.delenv(maintain.OWNER_ENV, raising=False)
-    assert maintain.sweep_sandboxes(3600, runner=runner) == []
-    assert calls == []  # refused before listing anything
-    monkeypatch.setenv(maintain.OWNER_ENV, ME)
-    assert maintain.sweep_sandboxes(3600, runner=runner) == ["swf-old-1-aaaaaaaa"]
-    assert all("--all" not in c for c in calls)
-    assert calls[0][:2] == ["islo", "ls"] and calls[1][:2] == ["islo", "rm"]
+def _cell(cell_id: str, state: str, *, epoch: int = 1, run_id: str | None = RUN, idx: int = 0) -> dict:
+    return {"cell_id": cell_id, "epoch": epoch, "state": state, "airflow_run_id": run_id, "map_index": idx}
+
+
+def _sweep(islo: FakeIslo, cells: list[dict], control: ControlKernel, *, owner: str = ME) -> dict:
+    return maintain.sweep_sandboxes(3600, owner=owner, islo=islo, cells=cells, control=control, now=NOW)
+
+
+def test_sweep_refuses_a_live_cells_sandbox_and_removes_only_terminal_or_unowned(tmp_path: Path) -> None:
+    """The probe from #2075: an old *running* sandbox is not an orphan while the Cell whose Airflow
+    run created it is live at its current epoch. Age and naming only nominate; the Cell decides."""
+    live = f"swf-demo-1-{run_id_for(RUN, 0)}"
+    done = f"swf-demo-2-{run_id_for(RUN, 1)}"
+    cells = [_cell("cell_live", "running", idx=0), _cell("cell_done", "success", idx=1)]
+    islo = FakeIslo(
+        [
+            {"name": live, "created_at": OLD},  # old + running, but its Cell is live -> kept
+            {"name": done, "created_at": OLD},  # its Cell is terminal and never cleaned -> removed
+            {"name": "swf-nobody-1-aaaaaaaa", "created_at": OLD},  # no Cell ever claimed it -> removed
+            {"name": "swf-demo-3-bbbbbbbb", "created_at": NOW.isoformat()},  # too young
+            {"name": "swf-demo-4-cccccccc", "created_at": OLD, "created_by": "teammate@example.com"},
+        ]
+    )
+    control = ControlKernel(tmp_path / "control")
+    report = _sweep(islo, cells, control)
+    assert islo.removed == [done, "swf-nobody-1-aaaaaaaa"]
+    assert report["kept"] == [live] and report["removed"] == islo.removed and report["debt"] == []
+    # every removal is a committed journal row under the Cell that owned the sandbox, carrying a receipt
+    rows = {r["cell_id"]: r for r in control.operations.db.execute("SELECT * FROM operations")}
+    assert rows["cell_done"]["state"] == "committed" and rows["cell_done"]["kind"] == "sandbox_cleanup"
+    receipt = json.loads(rows["cell_done"]["result_json"])
+    assert receipt["status"] == "converged" and receipt["resource_id"] == done
+    assert control.operations.unresolved() == []
+    # without an owner nothing is listed, let alone removed
+    islo2 = FakeIslo([{"name": "swf-nobody-1-aaaaaaaa", "created_at": OLD}])
+    assert _sweep(islo2, [], control, owner="")["removed"] == [] and islo2.removed == []
+
+
+def test_sweep_journals_a_lost_rm_and_reconciles_it_by_provider_identity(tmp_path: Path) -> None:
+    """Three shapes of a lost ``islo rm`` response, none of which may end as a forgotten print."""
+    control = ControlKernel(tmp_path / "control")
+    gone = "swf-gone-1-aaaaaaaa"
+    stuck = "swf-stuck-1-bbbbbbbb"
+    # (a) the rm took effect but its reply was lost: the sweep observes the sandbox gone and commits
+    islo = FakeIslo([{"name": gone, "created_at": OLD}], lose={gone})
+    report = _sweep(islo, [], control)
+    assert report["removed"] == [gone] and report["debt"] == []
+    (row,) = control.operations.db.execute("SELECT state,result_json FROM operations").fetchall()
+    assert row["state"] == "committed" and json.loads(row["result_json"])["status"] == "already_absent"
+
+    # (b) the rm failed and the sandbox is still there: explicit debt, retried on the next sweep
+    islo = FakeIslo([{"name": stuck, "created_at": OLD}], fail={stuck})
+    report = _sweep(islo, [], control)
+    assert report["removed"] == [] and report["debt"] == [stuck]
+    (pending,) = [r for r in control.operations.unresolved() if r["kind"] == "sandbox_cleanup"]
+    assert pending["observation"]["evidence"]["resource"] == stuck
+    islo.fail.clear()
+    report = _sweep(islo, [], control)
+    assert report["removed"] == [stuck] and report["debt"] == [] and control.operations.unresolved() == []
+
+    # (c) the rm reply AND the follow-up listing were lost, then the sandbox vanished before the
+    # next sweep: the row is settled by the provider identity it recorded, not by the listing
+    lost = "swf-lost-1-cccccccc"
+    islo = FakeIslo([{"name": lost, "created_at": OLD}], lose={lost})
+    original_listing = islo.listing
+
+    def flaky_listing() -> str:
+        out = original_listing()
+        islo.listing_error = OSError("islo ls: connection reset")  # every re-list after the first
+        return out
+
+    islo.listing = flaky_listing  # type: ignore[method-assign]
+    report = _sweep(islo, [], control)
+    assert report["debt"] == [lost] and report["removed"] == []
+    (row,) = [r for r in control.operations.unresolved() if r["kind"] == "sandbox_cleanup"]
+    assert row["observation"]["status"] == "ambiguous" and row["observation"]["evidence"]["resource"] == lost
+    islo.listing = original_listing  # type: ignore[method-assign]
+    islo.listing_error = None
+    islo.items.pop(lost)  # the effect had happened; the listing no longer shows it
+    report = _sweep(islo, [], control)
+    assert report["reconciled"] == [lost] and control.operations.unresolved() == []
+
+
+def test_request_sweep_goes_through_the_backend_and_refuses_without_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The worker never runs ``islo rm`` itself: the Cell store and journal that authorize and
+    remember a removal live with the backend, so the DAG task asks it."""
+    from swfactory import cell_callback
+
+    monkeypatch.delenv("SWF_BACKEND_URL", raising=False)
+    report = maintain.request_sweep(3600)
+    assert report["removed"] == [] and "SWF_BACKEND_URL" in report["refused"]
+
+    sent: list[tuple[str, dict]] = []
+
+    class _Response:
+        status = 200
+
+        def __init__(self, request) -> None:
+            sent.append((request.full_url, json.loads(request.data)))
+
+        def read(self, _n: int = -1) -> bytes:
+            return json.dumps({"removed": ["swf-a-1-aaaaaaaa"], "kept": [], "debt": [], "reconciled": []}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc) -> None:
+            return None
+
+    monkeypatch.setenv("SWF_BACKEND_URL", "http://backend:8082/")
+    monkeypatch.setenv("SWF_BACKEND_TOKEN", "t" * 32)
+    monkeypatch.setattr(cell_callback.urllib.request, "urlopen", lambda request, **_k: _Response(request))
+    assert maintain.request_sweep(3600)["removed"] == ["swf-a-1-aaaaaaaa"]
+    assert sent == [("http://backend:8082/v1/workers/sweep", {"ttl_s": 3600})]
