@@ -97,14 +97,20 @@ def _node_prompt(ctx: stages.Ctx, plan_text: str, spec_text: str, node: PlanTask
         failures="",
         protected=stages._protected(ctx, "build"),
     )
+    # A template, not a Python literal. As a literal this instruction was outside the accepted-
+    # inputs pin (#2098): two swfactory builds differing only in these lines admitted the same
+    # digest and told the model different things. `prompts/build_node.md` is digested with the rest.
     return (
         base
-        + "\n\n## Bound Plan.work node\n"
-        + f"Node: `{node.id}` — {node.title}\n"
-        + f"Dependencies already committed: {', '.join(node.depends_on) or '(none)'}\n"
-        + f"Declared node files: {', '.join(node.files) or '(none)'}\n"
-        + f"Node tests/acceptance: {'; '.join(node.tests) or '(none)'}\n"
-        + "Implement only this node. Do not broaden scope. The factory commits and fans in in stable node-id order.\n"
+        + "\n"
+        + stages.render_prompt(
+            "build_node",
+            node_id=node.id,
+            node_title=node.title,
+            node_depends=", ".join(node.depends_on),
+            node_files=", ".join(node.files),
+            node_tests="; ".join(node.tests),
+        )
     )
 
 

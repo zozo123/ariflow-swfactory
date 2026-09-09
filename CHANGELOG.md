@@ -8,6 +8,24 @@ All notable changes to this project will be documented here. The format follows
 
 ### Added
 
+- The prompt templates a blueprint references are part of the inputs one Cell epoch accepts
+  (#2098). The blueprint document was pinned, but `src/swfactory/prompts/*.md` — the actual
+  instruction handed to the model — was not, so two workers on different swfactory builds holding a
+  byte-identical `blueprints/factory.toml` admitted the same digest and rendered different
+  instructions: a plan approved under one build prompt, code produced under another. `AcceptedInputs`
+  now pins `sha256` of each template the resolved blueprint references, by content rather than path,
+  and the refusal names the file and the new-epoch route. Only the referenced set is pinned, so an
+  unrelated template does not fence unrelated work; the swfactory version was considered instead and
+  rejected in favour of the narrower fence (see `accepted_inputs.STAGE_PROMPTS`).
+- The agent tool policies (`agent.POLICIES`: allowed tools, model, timeout per stage) and the packaged
+  review policy the review prompt interpolates are part of the same pin. A model swap between two tasks
+  of one epoch was not a mismatch before; it is now.
+- Accepted-inputs schema 2. The digest is written at admission and read back verbatim; recomputing it
+  from the stored pin changed under the schema bump, so receipts quoted values the code could no
+  longer reproduce. A run admitted by the previous build is refused with the reason ("admitted by an
+  earlier swfactory build (schema 1) ... open a new epoch"), not rejected as malformed and not
+  described field by field as if the templates were newly referenced.
+
 - A backup, migration and restore contract for whole-factory state, and the deployment boundary it
   depends on. The five authoritative stores (Cells, operation journal, admission/dispatch, repair
   leases and the evidence tree) are one unit in one state root on one host: `deployment_profile`
