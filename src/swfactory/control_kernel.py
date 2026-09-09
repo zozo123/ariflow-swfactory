@@ -12,8 +12,7 @@ writes after binding must use ``mutate_core``.
 
 from __future__ import annotations
 
-import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +20,7 @@ from swfactory.admission import Limits, Priority
 from swfactory.cells import CellStore
 from swfactory.cleanup_receipt import CleanupReceipt, RepairLeaseStore
 from swfactory.core_capabilities import CoreCapabilityRuntime, CoreMutationRequest, CoreMutationResult
-from swfactory.durable_admission import AdmissionDecision, DurableAdmission
+from swfactory.durable_admission import AdmissionDecision, DispatchIntent, DurableAdmission, MemberSpec
 from swfactory.idempotency import MutationOutcome, OperationJournal, OperationRef, RetryBudget
 from swfactory.trust_evidence import TrustedEvidence
 
@@ -58,33 +57,30 @@ class ControlKernel:
         self,
         *,
         work_id: str,
-        repo: str,
         actor: str,
         blueprint: str,
+        order: dict[str, Any],
+        members: Sequence[MemberSpec],
         priority: Priority = Priority.NORMAL,
     ) -> AdmissionDecision:
         return self.admission.submit(
             work_id=work_id,
-            repo=repo,
             actor=actor,
             blueprint=blueprint,
+            order=order,
+            members=members,
             priority=priority,
         )
 
-    def bind_cell(self, work_id: str, cell_id: str, epoch: int) -> None:
-        self.admission.bind_cell(work_id, cell_id, epoch)
+    def claim_dispatch(self, work_id: str) -> DispatchIntent | None:
+        return self.admission.claim_dispatch(work_id)
 
-    def cancel_reservation(self, work_id: str, *, reason: str) -> list[str]:
-        """Release an unbound admission reservation after pre-dispatch setup fails."""
-        now = time.time()
-        with self.admission.db:
-            cur = self.admission.db.execute(
-                """UPDATE admission_work
-                   SET state='cancelled',reason=?,terminal_at=?,updated_at=?
-                   WHERE work_id=? AND state IN ('active','queued') AND cell_id IS NULL""",
-                (reason[:512], now, now, work_id),
-            )
-        return self.admission.drain() if cur.rowcount == 1 else []
+    def pending_dispatch(self, *, limit: int = 32) -> list[str]:
+        return self.admission.pending_dispatch(limit=limit)
+
+    def cancel_reservation(self, work_id: str, *, reason: str, state: str = "cancelled") -> list[str]:
+        """Close a reservation whose work order will never be delivered, and release its units."""
+        return self.admission.cancel(work_id, reason=reason, state=state)
 
     def release_for_terminal_cell(
         self,
@@ -97,17 +93,17 @@ class ControlKernel:
         return self.admission.complete(work_id, cell_id=cell_id, epoch=epoch, state=state)
 
     def release_cell(self, cell_id: str, *, epoch: int, state: str) -> list[str]:
-        """Release every admission record authoritatively bound to this exact cell epoch."""
-        rows = self.admission.db.execute(
-            """SELECT work_id FROM admission_work
-               WHERE state='active' AND cell_id=? AND cell_epoch=? ORDER BY sequence""",
-            (cell_id, epoch),
-        ).fetchall()
+        """Release every membership held against this exact cell epoch.
+
+        One terminal Cell releases one unit.  A submission that fanned out to several Cells keeps
+        its reservation until its last member is terminal, because releasing on the first one is
+        what used to strand the siblings still running.
+        """
         admitted: list[str] = []
-        for row in rows:
+        for work_id in self.admission.members_for_cell(cell_id, epoch):
             admitted.extend(
                 self.admission.complete(
-                    str(row["work_id"]),
+                    work_id,
                     cell_id=cell_id,
                     epoch=epoch,
                     state=state,

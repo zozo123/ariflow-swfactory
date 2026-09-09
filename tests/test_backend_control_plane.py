@@ -6,6 +6,7 @@ import pytest
 
 from swfactory.backend.service import Factory, Refused
 from swfactory.cell_runtime import identity_for_job
+from swfactory.durable_admission import WORK_ORDER_SCHEMA, MemberSpec
 
 TOKEN = "t" * 40
 
@@ -62,14 +63,31 @@ def _bound_cell(factory: Factory) -> dict:
         airflow_run_id="run-1",
         map_index=0,
     )
+    # #2058 replaced the single `repo=` argument with a declared member per Factory Cell, so a
+    # multi-job order can no longer hide behind one synthetic key and release its siblings early.
+    # This test's subject is cancellation, not admission, so it declares the one member it binds.
     decision = factory.control.submit(
         work_id="work-1",
-        repo="acme/widgets",
         actor="operator",
         blueprint="factory",
+        order={
+            "schema_version": WORK_ORDER_SCHEMA,
+            "blueprint": "factory",
+            "actor": "operator",
+            "conf": {"issues": ["42"]},
+            "jobs": [{"job_idx": 0, "repo": "acme/widgets"}],
+            "desired_epochs": {cell["cell_id"]: int(cell["epoch"])},
+        },
+        members=[MemberSpec(0, "acme/widgets", cell["cell_id"])],
     )
-    assert decision.state == "active"
-    factory.control.bind_cell("work-1", cell["cell_id"], int(cell["epoch"]))
+    assert decision.state in {"active", "admitted"}, decision.state
+    # Binding now goes through the durable dispatch intent rather than a bare `bind_cell`: the
+    # lease token is what proves a superseded attempt cannot record a binding over a live one.
+    # A fresh admission hands its delivery straight to the submitter, inside the transaction that
+    # created it, so the intent arrives on the decision and is not separately claimable.
+    intent = decision.intent
+    assert intent is not None, "a fresh admission must carry its own dispatch intent"
+    factory.control.admission.record_member_epoch("work-1", 0, int(cell["epoch"]), token=intent.lease_token)
     return cell
 
 

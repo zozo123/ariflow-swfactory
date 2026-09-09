@@ -22,16 +22,34 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from swfactory import blueprint
 from swfactory.admission import Priority
 from swfactory.cell_runtime import identity_for_job
-from swfactory.cells import SCHEMA_VERSION, TERMINAL_STATES, CellBusy, CellStore, DuplicateOperation
+from swfactory.cells import (
+    SCHEMA_VERSION,
+    TERMINAL_STATES,
+    CellBusy,
+    CellStore,
+    DuplicateOperation,
+    StaleEpoch,
+)
 from swfactory.control import AirflowClient, ControlError, GitHubClient, IsloClient, MetricsSource
 from swfactory.control_kernel import ControlKernel
-from swfactory.idempotency import MutationOutcome, OperationRef
+from swfactory.durable_admission import (
+    MAX_DISPATCH_ATTEMPTS,
+    WORK_ORDER_SCHEMA,
+    DispatchIntent,
+    DispatchLeaseLost,
+    Member,
+    MemberSpec,
+    WorkOrderConflict,
+    request_digest,
+)
+from swfactory.idempotency import MutationOutcome, OperationRef, RetryBudget
 from swfactory.inspection import inspect_run, list_runs
 from swfactory.lifecycle_evidence import TraceContext
 from swfactory.product_surface import build_preview, capability_document
@@ -40,6 +58,9 @@ from swfactory.trust_evidence import TrustedEvidence
 from swfactory.webhook import _NoRedirect, _safe_airflow_base
 
 MAX_RESPONSE = 16 * 1024 * 1024
+# A Factory Cell that is live at its recorded epoch: the states an earlier dispatch attempt can
+# legitimately have left behind and this one may adopt.
+LIVE_CELL_STATES = frozenset({"dispatching", "queued", "running"})
 LINE_NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\Z")
 SEG = r"[^/?#]+"
 READ_ROUTES = re.compile(
@@ -63,6 +84,26 @@ def text(body: dict[str, Any], key: str, *, max_len: int = 512) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > max_len:
         raise ValueError(f"{key} must be a nonempty string of at most {max_len} characters")
     return value.strip()
+
+
+def _cell_actor(actor: str, work_id: str) -> str:
+    """The activation actor names the work order, so a Cell's history proves whose activation it is."""
+    return f"backend:{actor}:{work_id}"
+
+
+def _work_id(request: str, desired_epochs: dict[str, int]) -> str:
+    """Work identity = request identity x epoch identity.
+
+    Keeping the desired Cell epochs in the *work* id and out of ``request_digest`` is what lets an
+    operator re-run the same request after a Cell reached a terminal state: that is a new work order,
+    not a duplicate of the finished one.
+    """
+    payload = json.dumps(
+        {"request": request, "epochs": desired_epochs},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "submit_" + hashlib.sha256(payload.encode()).hexdigest()[:32]
 
 
 def _priority(value: Any) -> Priority:
@@ -181,75 +222,6 @@ class Factory:
         epoch = int(cell["epoch"])
         return epoch + 1 if cell["state"] in TERMINAL_STATES else epoch
 
-    def _submission_id(self, line_name: str, jobs: list[dict[str, Any]], actor: str) -> str:
-        payload = {
-            "line": line_name,
-            "actor": actor,
-            "jobs": [
-                {
-                    "job_idx": int(job["job_idx"]),
-                    "repo": str(job["repo"]),
-                    "issue": str(job["issue"]),
-                    "dir": str(job.get("dir", "")),
-                    "base_branch": str(job.get("base_branch", "main")),
-                    "desired_epoch": self._desired_epoch(job),
-                    "policy_digest": self._policy_digest(line_name, job),
-                }
-                for job in jobs
-            ],
-        }
-        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        return "submit_" + digest[:32]
-
-    def _activate_bindings(
-        self,
-        line_name: str,
-        jobs: list[dict[str, Any]],
-        submission_id: str,
-        actor: str,
-        *,
-        recover_existing: bool,
-    ) -> list[dict[str, Any]]:
-        bindings: list[dict[str, Any]] = []
-        generation = os.getenv("SWF_GENERATION") or "stable"
-        for job in jobs:
-            identity = identity_for_job(job)
-            policy_digest = self._policy_digest(line_name, job)
-            if recover_existing:
-                try:
-                    cell = self.cell_store.get(identity.stable_id())
-                except KeyError as error:
-                    raise Refused(409, "active admission has no corresponding Factory Cell") from error
-                if cell["state"] in TERMINAL_STATES:
-                    raise Refused(409, "active admission points at a terminal Factory Cell")
-            else:
-                try:
-                    cell = self.cell_store.activate(identity, actor=f"backend:{actor}")
-                except CellBusy as error:
-                    raise Refused(409, str(error)) from error
-            try:
-                cell = self.cell_store.patch(
-                    cell["cell_id"],
-                    int(cell["epoch"]),
-                    f"policy:{submission_id}:{job['job_idx']}",
-                    policy_digest=policy_digest,
-                    factory_generation=generation,
-                )
-            except DuplicateOperation:
-                cell = self.cell_store.get(cell["cell_id"])
-            if cell.get("policy_digest") != policy_digest:
-                raise Refused(409, "active Factory Cell policy differs from retried submission")
-            bindings.append(
-                {
-                    "job_idx": int(job["job_idx"]),
-                    "cell_id": cell["cell_id"],
-                    "epoch": int(cell["epoch"]),
-                    "policy_digest": policy_digest,
-                    "factory_generation": cell.get("factory_generation") or generation,
-                }
-            )
-        return bindings
-
     def _journal_airflow_unpause(self, authority: dict[str, Any], line_name: str, path: str) -> None:
         ref = OperationRef.build(authority["cell_id"], authority["epoch"], "airflow_unpause", line_name)
 
@@ -266,6 +238,64 @@ class Factory:
             return MutationOutcome("ambiguous", None, {"dag": line_name, "status": status}, "DAG state unavailable")
 
         self.control.mutate(ref, apply, replay_safe=True, reconcile=reconcile)
+
+    def _work_order(
+        self,
+        line: blueprint.Blueprint,
+        jobs: list[dict[str, Any]],
+        conf: dict[str, Any],
+        actor: str,
+        priority: Priority,
+    ) -> dict[str, Any]:
+        """Build the versioned, immutable payload one admitted command is re-delivered from.
+
+        It carries everything a restarted backend needs to finish the work without re-reading the
+        blueprint from disk: source identity, the selected jobs, the resolved policy and blueprint
+        identity, and the deterministic Airflow run id. ``request_digest`` covers the request alone,
+        so one request stays recognisable across attempts; the desired Cell epochs are retry/epoch
+        identity and are deliberately kept out of it.
+        """
+        request = {
+            "schema_version": WORK_ORDER_SCHEMA,
+            "line": line.name,
+            "actor": actor,
+            "priority": priority.name.lower(),
+            "issues": list(conf["issues"]),
+            "targets": list(conf.get("targets", [])),
+            "blueprint": {
+                "name": line.name,
+                "version": int(line.version),
+                "identity": policy_digest_for_mapping(
+                    {
+                        "name": line.name,
+                        "version": int(line.version),
+                        "stages": list(line.order),
+                        "targets": [{"repo": t.repo, "dir": t.dir, "base_branch": t.base_branch} for t in line.targets],
+                    }
+                ),
+            },
+            "jobs": [
+                {
+                    "job_idx": int(job["job_idx"]),
+                    "repo": str(job["repo"]),
+                    "issue": str(job["issue"]),
+                    "dir": str(job.get("dir", "")),
+                    "base_branch": str(job.get("base_branch", "main")),
+                    "policy_digest": self._policy_digest(line.name, job),
+                }
+                for job in jobs
+            ],
+        }
+        digest = request_digest(request)
+        desired = {str(int(job["job_idx"])): self._desired_epoch(job) for job in jobs}
+        return {
+            **request,
+            "request_digest": digest,
+            "desired_epochs": desired,
+            "conf": conf,
+            "generation": os.getenv("SWF_GENERATION") or "stable",
+            "dag_run_id": "swf__" + _work_id(digest, desired).removeprefix("submit_"),
+        }
 
     def submit(self, body: dict[str, Any]) -> dict[str, Any]:
         # Admission readiness belongs to the shared use case, not one HTTP route. Every caller --
@@ -291,19 +321,33 @@ class Factory:
 
         conf: dict[str, Any] = {"issues": issues, **({"targets": targets} if targets else {})}
         jobs = list(line.jobs(conf))
-        submission_id = self._submission_id(line.name, jobs, actor)
-        repos = sorted({str(job["repo"]) for job in jobs})
-        repo_key = (
-            repos[0] if len(repos) == 1 else "multi:" + hashlib.sha256("\0".join(repos).encode()).hexdigest()[:16]
-        )
-        decision = self.control.submit(
-            work_id=submission_id,
-            repo=repo_key,
-            actor=actor,
-            blueprint=line.name,
-            priority=_priority(body.get("priority")),
-        )
-        if decision.state != "active":
+        priority = _priority(body.get("priority"))
+        order = self._work_order(line, jobs, conf, actor, priority)
+        submission_id = _work_id(order["request_digest"], order["desired_epochs"])
+        # One capacity unit per Factory Cell the order will activate, declared before anything is
+        # activated, so every affected repository is counted and no sibling can be released early.
+        members = [MemberSpec(int(job["job_idx"]), str(job["repo"]), identity_for_job(job).stable_id()) for job in jobs]
+        try:
+            decision = self.control.submit(
+                work_id=submission_id,
+                actor=actor,
+                blueprint=line.name,
+                order=order,
+                members=members,
+                priority=priority,
+            )
+        except WorkOrderConflict as error:
+            raise Refused(409, str(error)) from error
+        if decision.reason == "duplicate_terminal":
+            # The Cells are not terminal (their epochs are part of the work id), so this order was
+            # closed by a cancellation or a compensated activation. Saying so beats silently
+            # answering with a run that will never exist.
+            raise Refused(409, f"work order already finished as {decision.state}")
+        if decision.state in {"queued", "rejected"}:
+            # A queued order is durable down to its payload and its place in the queue, so a restart
+            # before capacity frees up loses nothing. Pump the outbox on the way out: a backend that
+            # just came back may be holding commands nobody has asked about since.
+            self.resume_dispatch()
             return {
                 "state": decision.state,
                 "submission_id": submission_id,
@@ -314,31 +358,121 @@ class Factory:
                 "jobs": len(jobs),
                 "blueprint": {"name": line.name, "resolved": True},
             }
+        if decision.intent is not None:
+            # This submission's own delivery, claimed inside the admission transaction, so no
+            # concurrent request can be halfway through it while this one reports the result.
+            self._dispatch_intent(decision.intent)
+        else:
+            self._deliver(submission_id)
+        self.resume_dispatch()
+        return self._work_document(submission_id)
 
-        recover_existing = decision.reason == "duplicate_active"
+    def resume_dispatch(self, *, limit: int = 32, rounds: int = 8) -> list[dict[str, Any]]:
+        """Re-deliver admitted commands whose Airflow run does not exist yet.
+
+        This is redelivery of one already-admitted command, never a second scheduler: it decides
+        nothing about when a stage runs, it only finishes handing Airflow the run it was already
+        promised. It is pumped by the request paths that create or release capacity, so a restart in
+        the middle of a dispatch is repaired by the next submission, lifecycle transition or an
+        explicit operator resume. A failure is recorded on the dispatch intent rather than raised:
+        the caller is usually a lifecycle transition that must not fail because a *different* work
+        order's Airflow call did.
+        """
+        self._reconcile_held_units()
+        resumed: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for _ in range(max(1, rounds)):
+            batch = [work_id for work_id in self.control.pending_dispatch(limit=limit) if work_id not in seen]
+            if not batch:
+                break
+            for work_id in batch:
+                seen.add(work_id)
+                intent = self.control.claim_dispatch(work_id)
+                if intent is None:
+                    continue
+                try:
+                    run_id = self._dispatch_intent(intent)
+                except Exception as error:  # noqa: BLE001 - recorded on the durable dispatch intent
+                    resumed.append({"work_id": work_id, "dispatched": False, "detail": str(error)[:512]})
+                else:
+                    resumed.append({"work_id": work_id, "dispatched": True, "run_id": run_id})
+        return resumed
+
+    def _reconcile_held_units(self, *, limit: int = 200) -> list[str]:
+        """Release units held against Factory Cells that are already finished.
+
+        A unit is normally released by the Cell's own terminal transition.  That report can be
+        missing for good reasons -- a compensation ended the Cell directly, a process died between
+        cancelling a Cell and closing its reservation, an operator cleaned it up outside the
+        backend -- and when it is, the reservation holds a unit that nothing will ever ask for
+        back, which blocks the queue behind it forever.
+
+        This is reconciliation, not scheduling: it reads durable admission state, compares it with
+        Cell truth, and decides nothing about when any stage runs.  It never raises, because its
+        caller is usually a lifecycle transition that must not fail over somebody else's bookkeeping.
+        """
+        repaired: list[str] = []
         try:
-            bindings = self._activate_bindings(
-                line.name,
-                jobs,
-                submission_id,
-                actor,
-                recover_existing=recover_existing,
-            )
-        except Exception:
-            if not recover_existing:
-                self.control.cancel_reservation(submission_id, reason="activation_failed")
+            memberships = self.control.admission.held_memberships(limit=limit)
+        except Exception:  # noqa: BLE001 - reconciliation must never break its caller
+            return repaired
+        for work_id, cell_id, epoch in memberships:
+            try:
+                cell = self.cell_store.get(cell_id)
+            except KeyError:
+                # The Cell is gone; the activation it stood for certainly is not running.
+                outcome = "cancelled"
+            else:
+                if int(cell["epoch"]) > epoch:
+                    # A later epoch exists, so this one ended -- Cells only re-arm from a terminal
+                    # state -- even though how it ended was never reported here.
+                    outcome = "cancelled"
+                elif int(cell["epoch"]) == epoch and str(cell["state"]) in TERMINAL_STATES:
+                    outcome = str(cell["state"])
+                else:
+                    continue
+            try:
+                self.control.release_for_terminal_cell(work_id, cell_id=cell_id, epoch=epoch, state=outcome)
+            except Exception:  # noqa: BLE001 - one unrepairable row must not stop the rest
+                continue
+            repaired.append(work_id)
+        return repaired
+
+    def _deliver(self, work_id: str) -> str | None:
+        """Deliver this one admitted command now, letting its failure reach the submitter."""
+        intent = self.control.claim_dispatch(work_id)
+        if intent is None:
+            return None
+        return self._dispatch_intent(intent)
+
+    def _dispatch_intent(self, intent: DispatchIntent) -> str:
+        """Hand one admitted command to Airflow and bind its Cells, resuming from durable state.
+
+        Every step is replay-safe: an activation is adopted only when the Cell's own history proves
+        this work order made it, the Airflow POST goes through the operation journal (which observes
+        an ambiguous outcome before repeating it), and the reservation is marked delivered only once
+        the run exists and every member Cell is bound to it. A crash at any boundary therefore
+        resumes into the same deterministic dispatch instead of starting a different one.
+        """
+        order = intent.order.payload
+        line_name = str(order["line"])
+        actor = str(order["actor"])
+        jobs = {int(job["job_idx"]): job for job in order["jobs"]}
+        try:
+            bindings = self._bind_members(intent, jobs, line_name, actor)
+        except Exception as error:
+            # Nothing has been sent yet, so a proven-local failure is allowed to undo its own
+            # activations instead of leaving Cells no work order owns.
+            self._recover_dispatch(intent, error, compensate=True)
             raise
-
         authority = min(bindings, key=lambda row: row["cell_id"])
-        self.control.bind_cell(submission_id, authority["cell_id"], authority["epoch"])
+        conf = dict(order["conf"])
         conf["_factory_cells"] = bindings
-        conf["_factory_submission_id"] = submission_id
+        conf["_factory_submission_id"] = intent.work_id
         conf["_factory_actor"] = actor
-
-        path = "/dags/" + urllib.parse.quote(line.name, safe="")
-        self._journal_airflow_unpause(authority, line.name, path)
-        dag_run_id = "swf__" + submission_id.removeprefix("submit_")
-        dispatch_ref = OperationRef.build(authority["cell_id"], authority["epoch"], "airflow_dispatch", submission_id)
+        path = "/dags/" + urllib.parse.quote(line_name, safe="")
+        dag_run_id = str(order["dag_run_id"])
+        dispatch_ref = OperationRef.build(authority["cell_id"], authority["epoch"], "airflow_dispatch", intent.work_id)
 
         def dispatch() -> dict[str, Any]:
             result = self._checked_airflow(
@@ -373,13 +507,118 @@ class Factory:
                 "Airflow outcome cannot yet be proven",
             )
 
-        result = self.control.mutate(
-            dispatch_ref,
-            dispatch,
-            replay_safe=True,
-            reconcile=reconcile,
+        try:
+            self._journal_airflow_unpause(authority, line_name, path)
+            result = self.control.mutate(
+                dispatch_ref,
+                dispatch,
+                replay_safe=True,
+                reconcile=reconcile,
+                # The journal keeps its own attempt budget for this operation kind. Left at its
+                # default it is smaller than the outbox's, so the last outbox attempts would be
+                # refused before they ever reached Airflow and "attempts exhausted" would mean two
+                # different numbers. One budget, one meaning.
+                budget=RetryBudget(MAX_DISPATCH_ATTEMPTS, 1.0, 30.0),
+            )
+        except Exception as error:
+            # The remote outcome may be unknown here, so nothing is compensated on a guess: the
+            # observation below is what decides, and only once the delivery budget is spent.
+            self._recover_dispatch(intent, error, compensate=False, observe=reconcile)
+            raise
+        run_id = str(result.get("dag_run_id") or result.get("run_id") or dag_run_id)
+        self._bind_run(bindings, line_name, run_id, actor)
+        self.control.admission.record_dispatch(intent.work_id, token=intent.lease_token, dag_run_id=run_id)
+        return run_id
+
+    def _bind_members(
+        self,
+        intent: DispatchIntent,
+        jobs: dict[int, dict[str, Any]],
+        line_name: str,
+        actor: str,
+    ) -> list[dict[str, Any]]:
+        bindings: list[dict[str, Any]] = []
+        generation = str(intent.order.payload.get("generation") or "stable")
+        for member in intent.members:
+            job = jobs.get(member.job_idx)
+            if job is None:
+                raise Refused(500, "work order member has no job in its immutable payload")
+            policy_digest = str(job["policy_digest"])
+            cell = self._member_cell(intent, member, job, actor)
+            try:
+                cell = self.cell_store.patch(
+                    cell["cell_id"],
+                    int(cell["epoch"]),
+                    f"policy:{intent.work_id}:{member.job_idx}",
+                    policy_digest=policy_digest,
+                    factory_generation=generation,
+                )
+            except DuplicateOperation:
+                cell = self.cell_store.get(cell["cell_id"])
+            if cell.get("policy_digest") != policy_digest:
+                raise Refused(409, "active Factory Cell policy differs from retried submission")
+            bindings.append(
+                {
+                    "job_idx": member.job_idx,
+                    "cell_id": cell["cell_id"],
+                    "epoch": int(cell["epoch"]),
+                    "policy_digest": policy_digest,
+                    "factory_generation": cell.get("factory_generation") or generation,
+                }
+            )
+        return bindings
+
+    def _member_cell(
+        self,
+        intent: DispatchIntent,
+        member: Member,
+        job: dict[str, Any],
+        actor: str,
+    ) -> dict[str, Any]:
+        """Resolve this member's Cell, adopting only an activation this work order can prove is its own."""
+        owner = _cell_actor(actor, intent.work_id)
+        try:
+            cell = self.cell_store.get(member.cell_id)
+        except KeyError:
+            cell = None
+        if member.cell_epoch is not None and cell is not None:
+            if int(cell["epoch"]) == member.cell_epoch and cell["state"] in LIVE_CELL_STATES:
+                return cell
+            if int(cell["epoch"]) > member.cell_epoch or cell["state"] in TERMINAL_STATES:
+                raise Refused(409, "Factory Cell moved past the epoch this work order was admitted for")
+        # An attempt of this same order may have activated the Cell and died before recording the
+        # epoch. Adopt it only when the Cell's own history names this work order as the actor that
+        # activated that epoch: a hopeful pre-write would let a failed activation claim a Cell some
+        # other harness legitimately owns.
+        unrecorded = member.cell_epoch is None and cell is not None and cell["state"] in LIVE_CELL_STATES
+        if unrecorded and self._activated_by(cell, owner):
+            self.control.admission.record_member_epoch(
+                intent.work_id, member.job_idx, int(cell["epoch"]), token=intent.lease_token
+            )
+            return cell
+        try:
+            cell = self.cell_store.activate(identity_for_job(job), actor=owner)
+        except CellBusy as error:
+            raise Refused(409, str(error)) from error
+        self.control.admission.record_member_epoch(
+            intent.work_id, member.job_idx, int(cell["epoch"]), token=intent.lease_token
         )
-        run_id = result.get("dag_run_id") or result.get("run_id") or dag_run_id
+        return cell
+
+    def _activated_by(self, cell: dict[str, Any], owner: str) -> bool:
+        epoch = int(cell["epoch"])
+        for event in reversed(self.cell_store.history(cell["cell_id"])):
+            if event["kind"] == "activated" and int(event["epoch"]) == epoch:
+                return bool((event.get("payload") or {}).get("actor") == owner)
+        return False
+
+    def _bind_run(
+        self,
+        bindings: list[dict[str, Any]],
+        line_name: str,
+        run_id: str,
+        actor: str,
+    ) -> None:
         for binding in bindings:
             current = self.cell_store.get(binding["cell_id"])
             bound_now = False
@@ -390,7 +629,7 @@ class Factory:
                         binding["epoch"],
                         f"airflow-bind:{run_id}:{binding['job_idx']}",
                         state="queued",
-                        airflow_dag_id=line.name,
+                        airflow_dag_id=line_name,
                         airflow_run_id=run_id,
                         map_index=binding["job_idx"],
                     )
@@ -413,21 +652,139 @@ class Factory:
                     envelope,
                     kind="airflow_dispatch",
                     payload={
-                        "dag_id": line.name,
+                        "dag_id": line_name,
                         "run_id": run_id,
                         "map_index": binding["job_idx"],
                     },
                 )
 
+    def _recover_dispatch(
+        self,
+        intent: DispatchIntent,
+        error: BaseException,
+        *,
+        compensate: bool,
+        observe: Callable[[], MutationOutcome] | None = None,
+    ) -> None:
+        detail = str(error)[:2000]
+        admission = self.control.admission
+        observation = None if compensate else {"remote": "unknown", "detail": detail[:512]}
+        try:
+            if admission.attempts_exhausted(intent.work_id):
+                # Retiring an order cancels Factory Cells, so only the attempt that still owns the
+                # intent may do it. A superseded attempt that compensated here would cancel work a
+                # newer attempt is in the middle of dispatching.
+                admission.assert_lease(intent.work_id, intent.lease_token)
+                self._retire_dispatch(intent, detail, compensate=compensate, observe=observe)
+                return
+            admission.release_dispatch(intent.work_id, token=intent.lease_token, error=detail, observation=observation)
+        except DispatchLeaseLost:
+            # The order was cancelled while this attempt was in flight. Keep the unproven remote
+            # outcome on the record instead of pretending the withdrawal was clean.
+            admission.note_outcome(intent.work_id, error=detail, observation=observation)
+
+    def _retire_dispatch(
+        self,
+        intent: DispatchIntent,
+        detail: str,
+        *,
+        compensate: bool,
+        observe: Callable[[], MutationOutcome] | None,
+    ) -> None:
+        """Close a reservation whose delivery budget is spent, on evidence rather than on a timer.
+
+        Attempts are bounded, so this path is reached eventually by anything that keeps failing.
+        What it must never do is leave the order ``admitted``: an admitted reservation that nothing
+        can claim any more holds a unit forever, keeps the queue behind it blocked and reports
+        nothing -- exactly the strand #2058 is about, one layer up.
+        """
+        if compensate:
+            # Nothing was ever sent, so the failure is proven local.
+            self._compensate(intent, detail)
+            return
+        outcome = self._observe_dispatch(observe)
+        if outcome.status == "definitely_absent":
+            # Proven: no Airflow run exists for this deterministic id, so the order never ran.
+            # Undo its own activations and fail it, which releases the unit and lets the queue move.
+            self._compensate(intent, f"undeliverable after {intent.attempt} attempts: {detail}")
+            return
+        # The run may exist. Capacity stays held rather than released on a guess, but the
+        # reservation stops advertising itself as deliverable and is counted as stuck.
+        self.control.admission.mark_undeliverable(
+            intent.work_id,
+            error=f"undeliverable after {intent.attempt} attempts: {detail}",
+            observation={
+                "remote": "unknown" if outcome.status == "ambiguous" else outcome.status,
+                "detail": (outcome.detail or detail)[:512],
+                "evidence": outcome.evidence,
+            },
+        )
+
+    def _observe_dispatch(self, observe: Callable[[], MutationOutcome] | None) -> MutationOutcome:
+        """One last look at the remote before retiring an intent; an unusable answer is ambiguous."""
+        if observe is None:
+            return MutationOutcome("ambiguous", None, None, "no reconciler for this dispatch")
+        try:
+            return observe()
+        except Exception as error:  # noqa: BLE001 - an observation that fails proves nothing
+            return MutationOutcome("ambiguous", None, None, str(error)[:512])
+
+    def _cancel_activations(self, work_id: str, tag: str) -> list[str]:
+        """Close the Factory Cells this work order activated, at exactly the epochs it recorded.
+
+        Only Cells this work order recorded an epoch for are touched, and only at that exact epoch,
+        so this can never cancel a sibling submission's live work.
+        """
+        closed: list[str] = []
+        for member in self.control.admission.members(work_id):
+            if member.cell_epoch is None:
+                continue
+            try:
+                cell = self.cell_store.get(member.cell_id)
+            except KeyError:
+                continue
+            if int(cell["epoch"]) != member.cell_epoch or cell["state"] not in LIVE_CELL_STATES:
+                continue
+            if cell.get("airflow_run_id"):
+                # An Airflow run is already bound to this Cell, so the compute is real and the Cell
+                # lifecycle owns its ending. Cancelling it from the dispatch side would contradict a
+                # run that is still executing -- the one divergence worse than a stuck reservation.
+                continue
+            try:
+                self.cell_store.patch(
+                    member.cell_id,
+                    member.cell_epoch,
+                    f"{tag}:{member.job_idx}",
+                    state="cancelled",
+                )
+            except (DuplicateOperation, StaleEpoch):
+                continue
+            closed.append(member.cell_id)
+        return closed
+
+    def _compensate(self, intent: DispatchIntent, detail: str) -> None:
+        """Undo this order's own activations so a failed batch leaves no invisible Cell."""
+        self._cancel_activations(intent.work_id, f"compensate:{intent.work_id}:{intent.attempt}")
+        self.control.cancel_reservation(intent.work_id, reason=f"activation_failed: {detail}", state="failed")
+
+    def _work_document(self, work_id: str) -> dict[str, Any]:
+        """The submission answer, rebuilt from durable state rather than from in-flight locals."""
+        order = self.control.admission.work_order(work_id).payload
+        members = self.control.admission.members(work_id)
+        dispatch = self.control.admission.dispatch_row(work_id) or {}
+        state = self.control.admission.state_of(work_id)
+        run_id = str(dispatch.get("dag_run_id") or order["dag_run_id"])
+        line_name = str(order["line"])
+        path = "/dags/" + urllib.parse.quote(line_name, safe="")
         return {
-            "state": "submitted",
-            "submission_id": submission_id,
-            "dag_id": line.name,
+            "state": "submitted" if state == "bound" else str(state),
+            "submission_id": work_id,
+            "dag_id": line_name,
             "run_id": run_id,
-            "issues": issues,
-            "jobs": len(jobs),
-            "cells": [b["cell_id"] for b in bindings],
-            "blueprint": {"name": line.name, "resolved": True},
+            "issues": list(order["issues"]),
+            "jobs": len(order["jobs"]),
+            "cells": [member.cell_id for member in members],
+            "blueprint": {"name": line_name, "resolved": True},
             "url": self.airflow_url + path + "/runs/" + urllib.parse.quote(run_id, safe=""),
         }
 
@@ -693,6 +1050,10 @@ class Factory:
             )
             next_state = requested
 
+        # Draining only moves an admission's state; the work it released is still owed a command.
+        # Resuming here is what turns "B is admitted" into "B actually runs" -- and it happens on
+        # the backend, so Airflow workers never gain a second scheduler of their own.
+        resumed = self.resume_dispatch() if released else []
         self.evidence.append(
             cell_id=cell_id,
             epoch=epoch,
@@ -702,11 +1063,12 @@ class Factory:
                 "requested": requested,
                 "to": next_state,
                 "released_work": released,
+                "resumed_dispatch": resumed,
             },
             policy_digest=updated.get("policy_digest"),
             trace=TraceContext.for_cell(cell_id, epoch, "lifecycle", operation_key),
         )
-        return {"cell": updated, "released_work": released}
+        return {"cell": updated, "released_work": released, "resumed_dispatch": resumed}
 
     def operation(self, path: str, body: dict[str, Any]) -> Any:
         if path == "/doctor":
@@ -790,6 +1152,36 @@ class Factory:
             return self.fleet()
         if path == "/queue":
             return self.control.admission.snapshot(limit=self._limit(body))
+        if path == "/queue/resume":
+            # The explicit operator handle on the same redelivery the request paths pump, for the
+            # case where a backend restarted and nothing has submitted or transitioned since.
+            return {"resumed": self.resume_dispatch(limit=self._limit(body))}
+        if path == "/queue/cancel":
+            work_id = text(body, "work_id")
+            state = self.control.admission.state_of(work_id)
+            if state is None:
+                raise Refused(404, f"no admission work {work_id}")
+            if state == "bound":
+                # The Airflow run already exists; cancelling it here would release capacity while
+                # the compute keeps going. Its Factory Cells own that decision.
+                raise Refused(409, "a dispatched work order is cancelled through its Factory Cells")
+            # An order can already have activated its Cells and still be cancellable: a delivery
+            # that failed after activation leaves it admitted with live Cells behind it. Closing
+            # the reservation without closing those Cells leaves a live Cell no work order owns --
+            # and because the Cell's epoch is part of the deterministic work id, the identity then
+            # answers 409 to every resubmission forever. That is #2058 with the arrows reversed.
+            reason = text(body, "reason", max_len=512)
+            cancelled_cells = self._cancel_activations(work_id, f"queue-cancel:{work_id}")
+            released = self.control.cancel_reservation(work_id, reason=reason)
+            return {
+                "work_id": work_id,
+                "was": state,
+                "state": self.control.admission.state_of(work_id),
+                "cancelled_cells": cancelled_cells,
+                "released_work": released,
+                "resumed_dispatch": self.resume_dispatch(),
+                "dispatch": self.control.admission.dispatch_row(work_id),
+            }
         if path == "/queue/inspect":
             work_id = text(body, "work_id")
             snapshot = self.control.admission.snapshot(limit=1000)

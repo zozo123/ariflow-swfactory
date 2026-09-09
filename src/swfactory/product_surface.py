@@ -27,6 +27,9 @@ DEFAULT_FEATURES = (
     "factory_cells",
     "cell_history",
     "durable_admission",
+    # Admitted commands are redelivered from a durable intent after a restart, so a console can
+    # tell a backend that finishes queued work from one that only remembers admitting it.
+    "dispatch_outbox",
     "operation_debt",
     "provider_capabilities",
     "blueprint_preview",
