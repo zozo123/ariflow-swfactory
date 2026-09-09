@@ -68,7 +68,7 @@ from swfactory.models import (
     StageResult,
     TestResult,
 )
-from swfactory.publication_identity import publication_key
+from swfactory.publication_identity import instance_id, publication_key
 from swfactory.sandbox import SRT_RUNTIME_PROTECTED, LocalSandbox, Sandbox, SrtSandbox
 from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
 from swfactory.state import JournalCorruption, RunBusyError, RunState
@@ -525,6 +525,10 @@ def commit(ctx: Ctx, *, stage: str, msg: str, paths: Sequence[str] | None = None
         f"commit -q -m {q(msg)} "
         f"--trailer {q(f'Factory-Run={ctx.cfg.run_id}')} "
         f"--trailer {q(f'Factory-Stage={stage}')} "
+        # Which factory instance produced this commit. It travels with the commit, so the REMOTE
+        # can answer "is this mine" when several instances share one branch -- no bookkeeping on
+        # either side, and the answer survives a restart because it was never in memory.
+        f"--trailer {q(f'Factory-Instance={instance_id(Path(ctx.cfg.workdir).parent)}')} "
         f"--trailer {q(f'Agent={ctx.agent.kind}')} "
         f"--trailer {q('Co-Authored-By: Claude <noreply@anthropic.com>')}"
     )

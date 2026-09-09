@@ -28,11 +28,17 @@ def _git(*args: str, cwd: Path) -> str:
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
 
 
-def _patch(subject: str, body: str) -> bytes:
+def _patch(subject: str, body: str, instance: str = "swf-instance-a") -> bytes:
+    """A delivery patch shaped like the ones `stages.commit` produces.
+
+    The `Factory-Instance` trailer is what lets the REMOTE answer "is this branch mine" -- `git am`
+    preserves trailers, so the answer rides along with the work instead of living in either
+    instance's memory. A fixture without it would be testing a commit the factory never makes.
+    """
     return (
         f"From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n"
         f"From: swfactory-bot <bot@example.com>\nDate: Mon, 1 Jan 2026 00:00:00 +0000\n"
-        f"Subject: [PATCH] {subject}\n\n"
+        f"Subject: [PATCH] {subject}\n\nFactory-Instance: {instance}\n"
         f"---\n demo/target/f.txt | 1 +\n 1 file changed, 1 insertion(+)\n\n"
         f"diff --git a/demo/target/f.txt b/demo/target/f.txt\nnew file mode 100644\n"
         f"index 0000000..0000001\n--- /dev/null\n+++ b/demo/target/f.txt\n"
@@ -87,13 +93,27 @@ def test_the_second_instance_is_refused_by_the_lease_rather_than_overwriting(rem
     id_a = PublicationIdentity(key=key, instance="swf-instance-a")
     id_b = PublicationIdentity(key=key, instance="swf-instance-b")
 
-    a.publish(branch=branch, patch=_patch("from A", "A"), title="A", body="A", labels=["factory"], identity=id_a)
+    a.publish(
+        branch=branch,
+        patch=_patch("from A", "A", instance="swf-instance-a"),
+        title="A",
+        body="A",
+        labels=["factory"],
+        identity=id_a,
+    )
     landed = _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip()
 
     # B observed nothing (it never fetched this ref) and now pushes over a ref that exists.
     with pytest.raises(StageError) as caught:
-        b.publish(branch=branch, patch=_patch("from B", "B"), title="B", body="B", labels=["factory"], identity=id_b)
-    assert "did not publish" in str(caught.value) or "another factory instance" in str(caught.value)
+        b.publish(
+            branch=branch,
+            patch=_patch("from B", "B", instance="swf-instance-b"),
+            title="B",
+            body="B",
+            labels=["factory"],
+            identity=id_b,
+        )
+    assert "not by this one" in str(caught.value) and "swf-instance-a" in str(caught.value)
     assert _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip() == landed, "A's commit was overwritten"
 
 
@@ -143,7 +163,100 @@ def test_the_same_instance_may_still_republish_its_own_branch(remote: Path, tmp_
     scm = LocalGitScm(remote, tmp_path / "run-a")
     ident = PublicationIdentity(key=publication_key("o/r", "demo/target", ISSUE), instance="swf-instance-a")
 
-    scm.publish(branch=branch, patch=_patch("first", "1"), title="T", body="B", labels=["factory"], identity=ident)
+    scm.publish(
+        branch=branch,
+        patch=_patch("first", "1", instance="swf-instance-a"),
+        title="T",
+        body="B",
+        labels=["factory"],
+        identity=ident,
+    )
     first = _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip()
-    scm.publish(branch=branch, patch=_patch("second", "2"), title="T", body="B", labels=["factory"], identity=ident)
+    scm.publish(
+        branch=branch,
+        patch=_patch("second", "2", instance="swf-instance-a"),
+        title="T",
+        body="B",
+        labels=["factory"],
+        identity=ident,
+    )
     assert _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip() != first, "a retry must re-publish"
+
+
+def test_the_remote_answers_whose_branch_it_is_across_a_restart(remote: Path, tmp_path: Path) -> None:
+    """The reason this lives in a commit trailer and not in memory.
+
+    The first version kept a process-global dict of what this process had pushed. That was three
+    wrong things at once: module-level mutable state, a second record of something the commit
+    already says, and -- the one that mattered -- an answer that vanished on restart, so a fresh
+    process could not tell its own branch from another instance's and refused its own retry.
+
+    Two `LocalGitScm` objects with no shared memory stand in for a restart: the second one has never
+    pushed anything, and must still recognise the branch as its own.
+    """
+    key = publication_key("o/r", "demo/target", ISSUE)
+    branch = f"factory/{ISSUE}-{key}"
+    ident = PublicationIdentity(key=key, instance="swf-instance-a")
+
+    before = LocalGitScm(remote, tmp_path / "run-before")
+    before.publish(
+        branch=branch,
+        patch=_patch("first", "1", instance="swf-instance-a"),
+        title="T",
+        body="B",
+        labels=["factory"],
+        identity=ident,
+    )
+    first = _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip()
+
+    # A different object, a different run directory: nothing carried over but the remote.
+    after = LocalGitScm(remote, tmp_path / "run-after")
+    after.publish(
+        branch=branch,
+        patch=_patch("second", "2", instance="swf-instance-a"),
+        title="T",
+        body="B",
+        labels=["factory"],
+        identity=ident,
+    )
+    assert _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip() != first, (
+        "an instance must still recognise its own branch after a restart"
+    )
+
+
+def test_a_branch_nobody_claimed_is_not_ours_to_replace(remote: Path, tmp_path: Path) -> None:
+    """A commit with no `Factory-Instance` trailer was published by an older build or by a person.
+
+    We cannot name its owner, so it is not ours to overwrite. This costs nothing real: the branch
+    name itself changed with the publication key, so a pre-upgrade ref has a different name and
+    never collides with this one -- the only commits that can appear on THIS ref come from code
+    that stamps the trailer. What the rule actually protects is a human who pushed here by hand.
+    """
+    key = publication_key("o/r", "demo/target", ISSUE)
+    branch = f"factory/{ISSUE}-{key}"
+
+    # A patch with no trailer: `_patch` always adds one, so build the unclaimed case explicitly.
+    unclaimed = _patch("by hand", "H", instance="x").replace(b"Factory-Instance: x\n", b"")
+    assert b"Factory-Instance" not in unclaimed
+
+    LocalGitScm(remote, tmp_path / "run-hand").publish(
+        branch=branch,
+        patch=unclaimed,
+        title="H",
+        body="H",
+        labels=["factory"],
+        identity=PublicationIdentity(key=key, instance="swf-instance-a"),
+    )
+    landed = _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip()
+
+    with pytest.raises(StageError) as caught:
+        LocalGitScm(remote, tmp_path / "run-b").publish(
+            branch=branch,
+            patch=_patch("mine", "M", instance="swf-instance-b"),
+            title="M",
+            body="M",
+            labels=["factory"],
+            identity=PublicationIdentity(key=key, instance="swf-instance-b"),
+        )
+    assert "left no Factory-Instance trailer" in str(caught.value)
+    assert _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip() == landed
