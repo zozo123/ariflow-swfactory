@@ -61,7 +61,11 @@ def test_doctor_reports_managed_worker_callback_contract(tmp_path: Path, monkeyp
         rows = backend.operation("/doctor", {})
         callback = next(row for row in rows if row["name"] == "managed worker callback")
         assert callback["ok"] is False
-        assert callback["required"] is True
+        # Informational, not required. This test first asserted `required is True`, and the row it
+        # demanded failed `swf doctor` against a healthy backend in the live e2e harness: the backend
+        # host never sets its own SWF_BACKEND_URL (it does not call itself), so a required row here
+        # can only ever be red on a correct deployment. That is #1217, re-created by a test.
+        assert callback["required"] is False and callback["status"] == "warn"
         assert "SWF_BACKEND_URL" in callback["fix"]
         assert "SWF_BACKEND_TOKEN" in callback["fix"]
 

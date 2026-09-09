@@ -1142,14 +1142,20 @@ class Factory:
             # the backend host is configured, not that every worker is -- the compose guard in
             # tests/test_doctor.py is what pins the worker side.
             workers = _check_managed_workers(os.environ)
+            # Never `required` on the backend host. The host does not call itself, so it legitimately
+            # has no SWF_BACKEND_URL of its own -- the e2e harness exports that pair into the Airflow
+            # process and nowhere else -- and a required row here failed `swf doctor` against every
+            # healthy backend, which is #1217 by another route. Informational: a red row still shows
+            # the operator that THIS host's copy is unwired, without claiming to know the workers'.
             checks.append(
                 {
                     "name": "managed worker callback",
                     "ok": workers.ok,
-                    "status": workers.status,
-                    "detail": workers.detail + " (as seen from the backend host's environment)",
+                    "status": "ok" if workers.ok else "warn",
+                    "detail": workers.detail
+                    + " (as seen from the backend host's environment, which is not the workers')",
                     "fix": workers.fix,
-                    "required": workers.required,
+                    "required": False,
                 }
             )
             try:
