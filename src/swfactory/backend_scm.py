@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from swfactory.models import Issue, StageError
+from swfactory.publication_identity import PublicationIdentity
 from swfactory.scm import parse_issue_file
 
 
@@ -68,7 +69,12 @@ class BackendScm:
         body: str,
         labels: Sequence[str],
         allowed_prefixes: Sequence[str] | None = None,
+        identity: PublicationIdentity | None = None,
     ) -> str:
+        # `identity` is not sent: the commits in `patch` already carry the `Factory-Instance`
+        # trailer, and the boundary authenticates the Cell it acts for. Nothing a worker claims
+        # about its own identity crosses the wire.
+        del identity
         patch_digest = hashlib.sha256(patch).hexdigest()
         operation_key = f"github_publish:{branch}:{patch_digest[:24]}"
         value = self._post(

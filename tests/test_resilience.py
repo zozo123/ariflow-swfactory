@@ -189,6 +189,7 @@ class RecordingScm:
         body: str,
         labels: Any,
         allowed_prefixes: Any = None,
+        identity: Any = None,
     ) -> str:
         self.published.append(
             {

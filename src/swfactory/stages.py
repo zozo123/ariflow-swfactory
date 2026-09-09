@@ -68,7 +68,7 @@ from swfactory.models import (
     StageResult,
     TestResult,
 )
-from swfactory.publication_identity import publication_key
+from swfactory.publication_identity import PublicationIdentity, publication_key, this_instance
 from swfactory.sandbox import SRT_RUNTIME_PROTECTED, LocalSandbox, Sandbox, SrtSandbox
 from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
 from swfactory.state import JournalCorruption, RunBusyError, RunState
@@ -137,6 +137,11 @@ class Ctx:
     def art(self) -> str:
         """Committed artifact dir, relative to the target dir: ``docs/factory/<issue_id>``."""
         return Config.artifacts_dir(self.issue.id)
+
+    @property
+    def instance(self) -> str:
+        """This factory instance, as stamped on every commit and pull request it publishes."""
+        return this_instance()
 
     @property
     def branch(self) -> str:
@@ -525,6 +530,10 @@ def commit(ctx: Ctx, *, stage: str, msg: str, paths: Sequence[str] | None = None
         f"commit -q -m {q(msg)} "
         f"--trailer {q(f'Factory-Run={ctx.cfg.run_id}')} "
         f"--trailer {q(f'Factory-Stage={stage}')} "
+        # Which factory instance produced this commit. It travels with the commit, so the REMOTE
+        # can answer "is this mine" when several instances share one branch -- no bookkeeping on
+        # either side, and the answer survives a restart because it was never in memory.
+        f"--trailer {q(f'Factory-Instance={ctx.instance}')} "
         f"--trailer {q(f'Agent={ctx.agent.kind}')} "
         f"--trailer {q('Co-Authored-By: Claude <noreply@anthropic.com>')}"
     )
@@ -1356,10 +1365,18 @@ def deliver(ctx: Ctx) -> StageResult:
         labels.append("factory:blocked")
     title = f"{ctx.issue.id}: {ctx.issue.title}"
     banner = "[REJECTED] " if rejected else "[BLOCKED] " if blocked else ""
+    cell_id, epoch, _managed = cell_evidence(ctx)
     url = ctx.scm.publish(
         branch=ctx.branch,
         patch=patch.encode("utf-8"),
         title=banner + title,
+        # The same instance id the commits carry in their trailer: the remote compares the two.
+        identity=PublicationIdentity(
+            key=publication_key(ctx.cfg.repo, ctx.cfg.target_dir, ctx.issue.id),
+            instance=ctx.instance,
+            cell_id=cell_id,
+            epoch=epoch,
+        ),
         body=pr_body(
             ctx,
             findings=rv.findings,

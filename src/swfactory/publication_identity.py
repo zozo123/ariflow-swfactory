@@ -36,6 +36,9 @@ from pathlib import Path
 MARKER_START = "<!-- swf-publication"
 MARKER_END = "-->"
 INSTANCE_FILE = "instance.id"
+# The one shared local factory state root (the CLI's `--state-root` default and the deployment
+# profile's `state_root`). An instance IS the state it owns, so this is where its id lives.
+DEFAULT_STATE_ROOT = Path(".factory")
 _KEY_CHARS = 12
 
 
@@ -86,6 +89,15 @@ def instance_id(state_root: Path, *, create: bool = False) -> str:
         # over it would be a worse trade.
         return "swf-" + hashlib.sha256(str(Path(state_root).resolve()).encode()).hexdigest()[:10]
     return minted
+
+
+def this_instance() -> str:
+    """The id every publication of this process carries -- in the commit trailer AND the PR marker.
+
+    One derivation, one root. The trailer and the marker used to derive the id from different
+    directories, so an instance failed to recognise its own commit on the remote.
+    """
+    return instance_id(DEFAULT_STATE_ROOT)
 
 
 def marker_block(*, key: str, instance: str, cell_id: str | None, epoch: int | None) -> str:
@@ -159,9 +171,7 @@ class PublicationIdentity:
         """
         tail = branch.rsplit("-", 1)[-1] if "-" in branch else ""
         key = tail if len(tail) == _KEY_CHARS and all(c in "0123456789abcdef" for c in tail) else ""
-        return cls(
-            key=key or hashlib.sha256(branch.encode()).hexdigest()[:_KEY_CHARS], instance=instance_id(Path(".factory"))
-        )
+        return cls(key=key or hashlib.sha256(branch.encode()).hexdigest()[:_KEY_CHARS], instance=this_instance())
 
     def marker(self) -> str:
         return marker_block(key=self.key, instance=self.instance, cell_id=self.cell_id, epoch=self.epoch)
