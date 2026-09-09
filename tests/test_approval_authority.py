@@ -330,6 +330,11 @@ def test_dag_parse_time_and_runtime_resolve_the_same_gate_mode(spec: dict, expec
     this resolution; the two must never disagree about who owns a gate."""
     import importlib.util
 
+    # The `test` job runs without Airflow on purpose -- that is `airflow-main`'s job -- and loading
+    # the DAG module imports it. Skipping keeps this honest: the assertion below still runs in every
+    # environment that can actually construct a DAG.
+    pytest.importorskip("airflow")
+
     module_spec = importlib.util.spec_from_file_location("swf_dags_blueprints_mode", DAGS / "blueprints.py")
     assert module_spec is not None and module_spec.loader is not None
     module = importlib.util.module_from_spec(module_spec)
