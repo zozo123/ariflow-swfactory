@@ -95,6 +95,33 @@ Keep authoritative gate, baseline, review, and cost state outside the agent-writ
 delivery. Commit through the factory identity with run, stage, and agent provenance. The delivery
 credential stays in the orchestrator, never in the coding cell.
 
+## Fence concurrency at the scale it actually happens
+
+The factory is concurrent at two scales and they need different mechanisms. Inside one instance
+there is shared durable state, so the fences are database writes: durable admission and capacity,
+Cell epochs checked atomically with the event append, one owner per external operation, a versioned
+snapshot of the inputs an epoch accepted, human gates declared in the blueprint rather than inferred
+from an environment variable, and an agent-spend reservation journalled before the provider is paid.
+
+Across instances there is no shared state at all. Several sessions can work one repository, each in
+its own harness with its own Airflow, backend and state root, and the only fence is the repository
+both are obliged to obey. Do not add a coordination service for this — one was proposed and refused
+because it handed a lower-trust credential an unbounded write path while its safety rested on
+nobody consuming its signals. Use git: ref creation is a compare-and-swap the server enforces, and
+the publish branch keyed on the work rather than the run makes every session converge on one ref
+and one pull request.
+
+Two rules are easy to get backwards. A durable fact must be committed *before* the refusal that
+reports it, or the write rolls back with the exception and the next process cannot see it. And a
+fence against new effects belongs *after* the replay check, or idempotent retry breaks and a
+redelivered task publishes twice.
+
+Read [references/concurrency-and-durability.md](references/concurrency-and-durability.md) before
+changing anything that admits work, publishes, transitions a Cell, spends a budget or restores
+state. It carries the fence table, the two traps that have actually bitten (leasing against what you
+observed rather than what you published; a publication that writes state as a side effect), what a
+restore cannot undo, and why the phase names carry no authority.
+
 ## Operate through one operations layer
 
 Every operator face — a script, a terminal UI, a chat responder, a monitoring probe — belongs over
