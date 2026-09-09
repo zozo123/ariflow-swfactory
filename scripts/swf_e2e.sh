@@ -26,6 +26,9 @@
 #
 # Env: SWF_E2E_KEEP=1        keep the work dir (standalone home, run dirs, logs, config) after exit
 #      SWF_E2E_LEGS=...      which legs to run, space separated (default "direct backend")
+#                            the two-session leg always runs after them: it is the only leg that
+#                            fails the way a real deployment does, with several harness sessions on
+#                            one repository at once
 #      SWF_AIRFLOW_NO_SYNC=1 use an installed Airflow main overlay instead of the pinned release
 #      SWF_BIN=<path>        an already-built `swf` (default: cargo build --release in rust/)
 #      SWF_GATE_SETTLE_SECS  how long a gate must have existed before `swf` will answer it
@@ -528,8 +531,95 @@ leg() {
 answered through swf, $EXPECTED_JOBS deliveries independently verified"
 }
 
+# ---------------------------------------------------------------- many sessions, one repository
+#
+# Every leg above is ONE factory instance. This one is two, and it is the only leg that can fail the
+# way a real deployment fails: several harness sessions -- each in its own Claude Code / Codex / pi
+# loop, each with its own state root -- working one repository at the same time.
+#
+# What it must prove is not that both sessions succeed. It is that the SECOND one does not quietly
+# undo the first: one branch, one pull request, and no commit replaced behind a reviewer's back.
+two_sessions() {
+  say "############ leg: two sessions, one repository"
+  local arena="$WORK/two-sessions" remote="$WORK/two-sessions/origin.git"
+  local key branch a_head b_rc
+  rm -rf "$arena"; mkdir -p "$arena"
+
+  git init -q --bare -b main "$remote"
+  git clone -q "$remote" "$arena/seed"
+  printf 'seed\n' >"$arena/seed/README.md"
+  git -C "$arena/seed" add -A
+  git -C "$arena/seed" -c user.name=e2e -c user.email=e2e@example.com commit -qm seed
+  git -C "$arena/seed" push -q origin main
+
+  # Both sessions resolve the SAME publication key from (repo, target, issue) without talking to
+  # each other -- that is the whole mechanism, so read it from the runtime rather than restating it.
+  key="$("$PY" -c 'from swfactory.publication_identity import publication_key
+print(publication_key("o/r", "demo/target", "DEMO-1"))')"
+  branch="factory/DEMO-1-$key"
+
+  "$PY" - "$remote" "$arena" "$branch" <<'PYEOF' >"$arena/session-a.log" 2>&1
+import sys
+from pathlib import Path
+from swfactory.publication_identity import PublicationIdentity, publication_key
+from swfactory.scm import LocalGitScm
+
+remote, arena, branch = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+patch = (
+    "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n"
+    "From: swfactory-bot <bot@example.com>\nDate: Mon, 1 Jan 2026 00:00:00 +0000\n"
+    "Subject: [PATCH] session A\n\n---\n demo/target/a.txt | 1 +\n 1 file changed, 1 insertion(+)\n\n"
+    "diff --git a/demo/target/a.txt b/demo/target/a.txt\nnew file mode 100644\n"
+    "index 0000000..0000001\n--- /dev/null\n+++ b/demo/target/a.txt\n@@ -0,0 +1 @@\n+A\n-- \n2.39.0\n"
+).encode()
+LocalGitScm(remote, arena / "run-a").publish(
+    branch=branch, patch=patch, title="A", body="A", labels=["factory"],
+    identity=PublicationIdentity(key=publication_key("o/r", "demo/target", "DEMO-1"), instance="session-a"),
+)
+PYEOF
+  a_head="$(git -C "$remote" rev-parse "refs/heads/$branch")"
+  printf 'session A published %s at %s\n' "$branch" "${a_head:0:12}"
+
+  # Session B: a different instance, same work, no knowledge of A. It must be refused rather than
+  # replace A's commit -- and `|| true` because the refusal IS the pass condition here.
+  b_rc=0
+  "$PY" - "$remote" "$arena" "$branch" <<'PYEOF' >"$arena/session-b.log" 2>&1 || b_rc=$?
+import sys
+from pathlib import Path
+from swfactory.publication_identity import PublicationIdentity, publication_key
+from swfactory.scm import LocalGitScm
+
+remote, arena, branch = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+patch = (
+    "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n"
+    "From: swfactory-bot <bot@example.com>\nDate: Mon, 1 Jan 2026 00:00:00 +0000\n"
+    "Subject: [PATCH] session B\n\n---\n demo/target/b.txt | 1 +\n 1 file changed, 1 insertion(+)\n\n"
+    "diff --git a/demo/target/b.txt b/demo/target/b.txt\nnew file mode 100644\n"
+    "index 0000000..0000001\n--- /dev/null\n+++ b/demo/target/b.txt\n@@ -0,0 +1 @@\n+B\n-- \n2.39.0\n"
+).encode()
+LocalGitScm(remote, arena / "run-b").publish(
+    branch=branch, patch=patch, title="B", body="B", labels=["factory"],
+    identity=PublicationIdentity(key=publication_key("o/r", "demo/target", "DEMO-1"), instance="session-b"),
+)
+PYEOF
+  [ "$b_rc" -ne 0 ] || fail "[two-sessions] session B published over session A instead of being refused"
+  grep -q "did not publish" "$arena/session-b.log" \
+    || fail "[two-sessions] session B failed, but not with the refusal that names the other writer"
+
+  # The three things a reviewer actually cares about.
+  [ "$(git -C "$remote" rev-parse "refs/heads/$branch")" = "$a_head" ] \
+    || fail "[two-sessions] session A's commit was replaced"
+  [ "$(git -C "$remote" for-each-ref --format='%(refname)' 'refs/heads/factory/*' | wc -l | tr -d ' ')" = 1 ] \
+    || fail "[two-sessions] two sessions produced two factory branches"
+  git -C "$remote" cat-file -e "$a_head:demo/target/a.txt" \
+    || fail "[two-sessions] session A's file is gone from the published tree"
+
+  say "[two-sessions] OK: one branch, A's commit intact at ${a_head:0:12}, B refused naming the holder"
+}
+
 boot_airflow
 mint_admin
 start_backend
 for mode in $LEGS; do leg "$mode"; done
-say "OK: the same factory, proved through ${LEGS// /, }"
+case " $LEGS " in *" two-sessions "*) : ;; *) two_sessions ;; esac
+say "OK: the same factory, proved through ${LEGS// /, }, and two sessions on one repository"
