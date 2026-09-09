@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from swfactory.paths import validate_identifier, validate_run_id
 
 Severity = Literal["blocker", "major", "minor", "nit"]
+IssueState = Literal["open", "closed"]
 AgentKind = Literal["claude", "scripted"]
 AgentRole = Literal[
     "issue_maker",
@@ -34,11 +35,19 @@ class Issue(BoundaryModel):
     body: str  # verbatim originator text
     labels: list[str] = Field(default_factory=list)
     url: str | None = None
+    # Carried so intake can refuse closed work instead of starting it. A front-matter file that
+    # declares no state is open work; GitHub says OPEN/CLOSED and is folded to lower case below.
+    state: IssueState = "open"
 
     @field_validator("id")
     @classmethod
     def _safe_id(cls, value: str) -> str:
         return validate_identifier(value, field="issue.id")
+
+    @field_validator("state", mode="before")
+    @classmethod
+    def _lower_state(cls, value: object) -> object:
+        return value.lower() if isinstance(value, str) else value
 
 
 class RunResult(NamedTuple):

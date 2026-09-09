@@ -34,9 +34,17 @@ description = "Continuous liquid convergence: the factory drains its own backlog
 [trigger]
 kind = "cron"
 cron = "17 6 * * *"          # daily at 06:17 -- off the hour, like the gcc-full schedulers
-# The backlog this line drains. Issue numbers, resolved through the SCM at run time, so closing an
-# issue removes it from the line without a blueprint edit.
-issues = ["2034", "2035"]
+
+# The backlog this line drains: every OPEN issue carrying `label`, read through the SCM when the
+# run fans out (task execution, never DAG import) and filtered by `intake_governance.drain_line`.
+# Labelling an issue enrols it; closing it, an open `factory/<issue>-*` PR, or an unmet
+# `Dependencies: #n` line keeps it out, and each skip lands with its reason in
+# `.factory/backlog/liquid.jsonl`. A fixed pair of numbers stood here before -- one of them had
+# already closed. Not `factory:liquid`: that label is the webhook's immediate-intake route, and a
+# label that both submits now and enrols for the next tick would start the same issue twice.
+[trigger.backlog]
+label = "liquid"
+batch = 1                    # one issue per run, matching limits.max_parallel_jobs below
 
 [[targets]]
 repo = "zozo123/ariflow-swfactory"

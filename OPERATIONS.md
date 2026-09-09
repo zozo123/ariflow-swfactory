@@ -446,7 +446,7 @@ into `factory.toml`, a blueprint, a test, or a reusable skill.
 |---|---|
 | Normal feature or repair | manual route with intent and plan approvals |
 | Urgent repair | shorter `hotfix` route with tighter limits |
-| Recurring maintenance | `[trigger] kind = "cron"`, `cron = "…"`, and `issues = ["path/to/work-order.md"]` |
+| Recurring maintenance | `[trigger] kind = "cron"`, `cron = "…"`, and `issues = ["path/to/work-order.md"]` — or `[trigger.backlog] label = "…"` to drain the open issues carrying a label, one `batch` per run, with every skip and its reason in `.factory/backlog/<line>.jsonl` |
 | Several repositories | multiple `[[targets]]`; each run maps issues × targets |
 | Monorepo | set each target's `dir` and keep a `factory.toml` there |
 | Larger outer workflow | use the optional [Astronomer Blueprint step](docs/astronomer-blueprint.md) |

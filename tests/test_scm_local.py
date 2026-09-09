@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -176,10 +177,20 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
         if argv[:3] == ["gh", "issue", "create"]:
             return "\nhttps://github.com/o/r/issues/9\n"
         if argv[:3] == ["gh", "issue", "view"]:
+            state = "CLOSED" if argv[3] == "2034" else "OPEN"
             return (
-                '{"number": 42, "title": "T", "body": "B", '
+                '{"number": 42, "title": "T", "body": "B", "state": "' + state + '", '
                 '"labels": [{"name": "factory"}], "url": "https://github.com/o/r/issues/42"}'
             )
+        if argv[:3] == ["gh", "issue", "list"]:
+            limit = int(argv[argv.index("--limit") + 1])
+            rows = [
+                {"number": n, "title": f"[P1] {n}", "body": "", "state": "OPEN", "labels": [], "url": f"u/{n}"}
+                for n in range(1, limit + 1)  # always fills the window: the caller must notice
+            ]
+            return json.dumps(rows)
+        if argv[:3] == ["gh", "pr", "list"] and "--head" not in argv:
+            return json.dumps([{"headRefName": "factory/7-abc"}, {"headRefName": "fix/other"}])
         return ""
 
     monkeypatch.setattr(scm_mod, "_run", fake_run)
@@ -239,10 +250,40 @@ def test_github_publish_requires_token(calls, monkeypatch: pytest.MonkeyPatch) -
 def test_github_fetch_issue(calls: list[list[str]]) -> None:
     issue = GitHubScm("o/r", "main").fetch_issue("42")
     assert issue == Issue(id="42", title="T", body="B", labels=["factory"], url="https://github.com/o/r/issues/42")
+    assert issue.state == "open"
     view = calls[0]
     assert view[:5] == ["gh", "issue", "view", "42", "--repo"] and view[5] == "o/r"
-    assert view[view.index("--json") + 1] == "number,title,body,labels,url"
+    assert view[view.index("--json") + 1] == "number,title,body,labels,url,state"
     assert GitHubScm("o/r", "main").fetch_issue(str(ROOT / "demo" / "issue.md")).id == "DEMO-1"
+    # the state travels with the issue, so intake can refuse closed work instead of starting it
+    assert GitHubScm("o/r", "main").fetch_issue("2034").state == "closed"
+
+
+def test_github_lists_the_open_backlog_and_refuses_a_truncated_scan(calls: list[list[str]]) -> None:
+    scm = GitHubScm("o/r", "main")
+    with pytest.raises(StageError, match="more than 3 open issues carry label 'liquid'"):
+        scm.list_open_issues("liquid", limit=3)
+    listing = calls[0]
+    assert listing[:4] == ["gh", "issue", "list", "--repo"] and listing[4] == "o/r"
+    assert listing[listing.index("--label") + 1] == "liquid"
+    assert listing[listing.index("--state") + 1] == "open"
+    # one more than the window, so a full window is distinguishable from a truncated one
+    assert listing[listing.index("--limit") + 1] == "4"
+    assert listing[listing.index("--json") + 1] == "number,title,body,labels,url,state"
+    assert scm.list_open_pr_heads(limit=10) == ["factory/7-abc", "fix/other"]
+    heads = calls[-1]
+    assert heads[:3] == ["gh", "pr", "list"] and heads[heads.index("--state") + 1] == "open"
+    assert heads[heads.index("--json") + 1] == "headRefName"
+
+
+def test_issue_file_carries_its_state(tmp_path: Path) -> None:
+    path = tmp_path / "issue.md"
+    path.write_text("---\nid: X-1\ntitle: t\nstate: CLOSED\n---\nbody\n", encoding="utf-8")
+    assert parse_issue_file(path).state == "closed"
+    assert parse_issue_file(ROOT / "demo" / "issue.md").state == "open", "an undeclared state is open work"
+    path.write_text("---\nid: X-1\ntitle: t\nstate: merged\n---\nbody\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        parse_issue_file(path)
 
 
 def test_github_open_issue_argv(calls: list[list[str]]) -> None:

@@ -10,7 +10,7 @@ description = "Default SDLC line: intent -> spec -> plan -> build+test -> review
 [trigger]
 kind = "manual"             # manual | cron
 # cron = "0 6 * * 1"        # kind=cron -> DAG(schedule=cron)
-# issues = ["demo/issue.md"] # required for cron; runtime conf overrides it
+# issues = ["demo/issue.md"] # cron needs this or [trigger.backlog] (label-selected); runtime conf overrides
 
 [[targets]]                 # >= 1; jobs per DAG run = len(conf.issues) x len(targets)
 repo = "zozo123/ariflow-swfactory"
