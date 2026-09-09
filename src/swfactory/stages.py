@@ -68,6 +68,7 @@ from swfactory.models import (
     StageResult,
     TestResult,
 )
+from swfactory.publication_identity import publication_key
 from swfactory.sandbox import SRT_RUNTIME_PROTECTED, LocalSandbox, Sandbox, SrtSandbox
 from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
 from swfactory.state import JournalCorruption, RunBusyError, RunState
@@ -139,8 +140,19 @@ class Ctx:
 
     @property
     def branch(self) -> str:
-        """Branch the sandbox works on and the PR is opened from."""
-        return f"factory/{self.issue.id}-{self.cfg.run_id}"
+        """Branch the sandbox works on and the PR is opened from.
+
+        Keyed on the WORK, not the run: `sha256(repo, target, issue)` -- the same inputs
+        `CellIdentity.stable_id` uses -- rather than `run_id`. Two independently operated factory
+        instances working one issue x target used to push `factory/<issue>-<run_a>` and
+        `factory/<issue>-<run_b>`, which meant two branches, two pull requests and no way for
+        either to notice the other. One ref makes git's own compare-and-swap the arbiter.
+
+        A retry of the same run lands on the same branch as before, so the existing force-push
+        behaviour is unchanged for the single-instance case.
+        """
+        key = publication_key(self.cfg.repo, self.cfg.target_dir, self.issue.id)
+        return f"factory/{self.issue.id}-{key}"
 
     @property
     def state(self) -> RunState:

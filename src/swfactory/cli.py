@@ -765,6 +765,55 @@ def backup_close(
     typer.echo(f"restore gate: {marker['state']}; observation before first attempt is no longer required")
 
 
+@app.command("claim")
+def claim_cmd(
+    issue: Annotated[str, typer.Argument(help="issue id or path, as passed to `run`")],
+    repo: Annotated[str | None, typer.Option(help="owner/name of the target repo")] = None,
+    target_dir: Annotated[str | None, typer.Option(help="subdir in the target repo")] = None,
+    state_root: StateRoot = Path(".factory"),
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable")] = False,
+) -> None:
+    """Print this session's identity and the claim ref for one issue x target.
+
+    Many harness sessions loop over one backlog. `publication_identity` already stops two of them
+    publishing twice, but by then both have burned a full agent loop -- two sandboxes, two model
+    budgets, two sets of provider calls. The claim is where a session decides whether to spend that
+    energy at all: `refs/swf/claims/<key>` is created by exactly one pusher, because git's ref
+    creation is a compare-and-swap the server enforces.
+
+    This prints the coordinates rather than taking the claim: the claim is taken by the push, and a
+    command that both reports and mutates would hide which of the two happened.
+    """
+    from swfactory import work_claim
+    from swfactory.publication_identity import instance_id, publication_key
+    from swfactory.runtime import locate
+    from swfactory.scm import parse_issue_file
+
+    cfg = Config(issue=issue, **{k: v for k, v in (("repo", repo), ("target_dir", target_dir)) if v})
+    # The issue's declared id, not its filename. `demo/issue.md` carries `id: DEMO-1` in its front
+    # matter, and the branch a run publishes is keyed on that -- printing the stem would send an
+    # operator to a ref that does not exist.
+    issue_id = issue if issue.strip().isdigit() else parse_issue_file(Path(locate(issue))).id
+    key = publication_key(cfg.repo, cfg.target_dir, issue_id)
+    document = {
+        "issue": issue,
+        "repo": cfg.repo,
+        "target_dir": cfg.target_dir,
+        "publication_key": key,
+        "claim_ref": work_claim.claim_ref(key),
+        "issue_id": issue_id,
+        "branch": f"factory/{issue_id}-{key}",
+        "instance": instance_id(state_root),
+        "lease_s": work_claim.DEFAULT_LEASE_S,
+    }
+    if json_out:
+        typer.echo(json.dumps(document, indent=2))
+        return
+    width = max(len(k) for k in document)
+    for name, value in document.items():
+        typer.echo(f"{name.replace('_', ' '):<{width}}  {value}")
+
+
 @app.command()
 def doctor(
     blueprint: Annotated[

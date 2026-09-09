@@ -134,7 +134,14 @@ def test_rejected_gate_publishes_rejected_pr_with_durable_approval(tmp_path: Pat
     assert pr.startswith("# [REJECTED] DEMO-1:")
     assert "labels: factory, agent-authored, factory:rejected" in pr
     assert "| intent | reject | alice |" in pr
-    remote, branch = tmp / "run" / "remote.git", "factory/DEMO-1-b10ck3r1"
+    from swfactory.config import Config
+    from swfactory.publication_identity import publication_key
+
+    # Derived, not hardcoded to the run id: the publish ref is keyed on the work so two factory
+    # instances converge on one branch and one pull request.
+    defaults = Config(issue="demo/issue.md")
+    remote = tmp / "run" / "remote.git"
+    branch = f"factory/DEMO-1-{publication_key(defaults.repo, defaults.target_dir, 'DEMO-1')}"
     files = subprocess.run(
         ["git", "ls-tree", "-r", "--name-only", branch],
         cwd=remote,

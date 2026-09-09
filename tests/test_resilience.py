@@ -38,6 +38,7 @@ from swfactory.models import (
     StageError,
     StageResult,
 )
+from swfactory.publication_identity import publication_key
 from swfactory.sandbox import owns_sandbox
 from swfactory.scm import LocalGitScm
 from swfactory.stages import (
@@ -700,7 +701,10 @@ def test_a_forged_review_json_cannot_hide_blockers_the_orchestrator_recorded(
     (published,) = scm.published
     assert published["title"].startswith("[BLOCKED] X-1:")
     assert published["labels"] == ["factory", "agent-authored", "factory:blocked"]
-    assert published["branch"] == "factory/X-1-r3s0urc3"
+    # The publish ref is keyed on the WORK -- sha256(repo, target, issue) -- not on the run, so
+    # two factory instances working one issue converge on one branch and one pull request.
+    defaults = Config(issue="x")
+    assert published["branch"] == f"factory/X-1-{publication_key(defaults.repo, defaults.target_dir, 'X-1')}"
     assert published["allowed_prefixes"] == [""]
     assert "Unsafe result" in published["body"]
 
@@ -814,7 +818,9 @@ def test_a_retry_of_a_rejected_run_republishes_the_same_branch_and_keeps_the_ref
     assert pr.startswith("# [REJECTED] DEMO-1:")
     assert "labels: factory, agent-authored, factory:rejected" in pr
     heads = git("show-ref", "--heads", cwd=tmp_path / "run" / "remote.git")
-    assert "refs/heads/factory/DEMO-1-r3j3ct01" in heads
+    # The publish ref is keyed on the WORK -- sha256(repo, target, issue) -- not on the run, so
+    # two factory instances working one issue converge on one branch and one pull request.
+    assert f"refs/heads/factory/DEMO-1-{publication_key(cfg.repo, cfg.target_dir, 'DEMO-1')}" in heads
 
 
 HOSTILE_PATCHES: list[tuple[str, bytes, str, str]] = [

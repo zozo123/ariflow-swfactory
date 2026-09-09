@@ -180,3 +180,38 @@ This page covers one run's local evidence. The factory's authoritative Cell, ope
 and repair stores plus the evidence tree are backed up and restored as one unit, with mutations
 withheld until the restore is validated and reconciled: see
 [backup, restore and upgrade](backup-restore.md).
+
+## Many factory sessions on one repository
+
+Several harness sessions can run this factory at once — each inside its own AI harness, each
+looping over the same backlog, each with its own Airflow, backend and state root. They share
+nothing but the GitHub repository, and that is deliberate: a coordination service was proposed
+(#2093) and refused, because it handed a new lower-trust credential an unbounded write path and
+its safety rested on nobody consuming its signals.
+
+Two mechanisms keep them from colliding, and they answer different questions.
+
+**Where to spend energy** — `refs/swf/claims/<key>`, one ref per issue × target. Git's ref creation
+is a compare-and-swap the server enforces: pushing a ref that does not exist succeeds for exactly
+one session, and every other session is rejected non-fast-forward. The claim carries the holder's
+instance id and a lease, because a harness session dies in ways that leave no trace here — a
+context limit, a killed container, a spend limit reached mid-loop — and a lock with no expiry would
+strand its issue forever. Taking over an expired claim is itself a compare-and-swap, so two
+sessions recovering the same dead claim cannot both win.
+
+    swf claim demo/issue.md          # this session's identity, the key, the ref, the branch
+
+**What lands on the remote** — the publish branch is keyed on the work rather than the run:
+`factory/<issue>-<sha256(repo, target, issue)[:12]>`, the same inputs `CellIdentity.stable_id`
+uses. Every session working one issue × target converges on one ref and one pull request, adopted
+through a marker in the PR body rather than duplicated. Pushing that ref is a compare-and-swap
+against *what this instance last published*, not against what it just observed — a session that
+observes another's commit, does not contain it, and force-pushes anyway holds a perfectly valid
+lease while performing exactly the overwrite the lease exists to prevent.
+
+**A claim authorizes nothing.** It is advice about where to spend fuel, never permission to
+publish. The Cell epoch remains the mutation authority and the publication lease remains the
+arbiter of the ref; the publishing path does not read claims at all, and a test pins that no module
+on the mutation path imports them. A stolen, expired or forged claim therefore cannot cause a
+double publication — it can only waste one session's time, which is the failure it exists to
+reduce rather than one it can create.
