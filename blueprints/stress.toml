@@ -3,7 +3,7 @@
 # dir, a bare remote, an approvals file or a sandbox name.
 #
 # Not a shipping line, and deliberately not a second recording:
-#   * both gates are `auto = true`, so an unattended run finishes on its own (the ApprovalOperator
+#   * both gates are `mode = "auto"`, so an unattended run finishes on its own (the ApprovalOperator
 #     falls back to Approve once `timeout_h` elapses — 1 h, the schema minimum). The fast path is
 #     still a real answer: scripts/stress_airflow.sh answers both gates of every job through the
 #     HITL API, so `approvals.json` records a human actor instead of "auto".
@@ -49,14 +49,14 @@ after = "intent"
 artifact = "intent.md"
 timeout_h = 1               # schema minimum; the backstop, not the fast path
 assigned = []
-auto = true
+mode = "auto"
 
 [[gates]]
 after = "plan"
 artifact = "plan.md"
 timeout_h = 1
 assigned = []
-auto = true
+mode = "auto"
 
 [limits]
 max_build_iterations = 3

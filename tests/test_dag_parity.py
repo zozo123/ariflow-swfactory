@@ -44,7 +44,7 @@ order = ["intent", "plan", "build_and_test", "review", "deliver"]
 after = "plan"
 artifact = "plan.md"
 timeout_h = 2
-auto = true
+mode = "auto"
 assigned = ["alice", "bob"]
 [limits]
 stage_timeout_h = 5
@@ -79,6 +79,12 @@ def _shape(path: Path) -> dict:
         "limits": data.get("limits", {}),
         "trigger": data.get("trigger", {}),
     }
+
+
+def _gate_is_auto(gate: dict) -> bool:
+    """The generator's own resolution of ``gates[].mode``: the parity test must not keep a second
+    opinion about who owns a gate (``tests/test_approval_authority.py`` pins it to swfactory's)."""
+    return _load_module(DAGS / "blueprints.py").gate_mode(gate) == "auto"
 
 
 def _job_task_ids(shape: dict) -> list[str]:
@@ -121,7 +127,7 @@ def _airflow_env(tmp_path_factory: pytest.TempPathFactory):
     os.environ["AIRFLOW_HOME"] = str(tmp_path_factory.mktemp("airflow_home"))
     os.environ["AIRFLOW__CORE__LOAD_EXAMPLES"] = "False"
     os.environ["AIRFLOW__CORE__UNIT_TEST_MODE"] = "True"
-    os.environ.pop("SWF_APPROVE", None)  # parse-time knob: the shipped blueprints decide
+    os.environ.pop("SWF_APPROVE", None)  # not a gate knob any more; kept out for a clean parse
 
 
 @pytest.fixture(scope="module")
@@ -226,7 +232,7 @@ def test_gates_are_approval_operators(dagbag, path: Path) -> None:
         op = dag.get_task(f"job.approve_{stage}")
         assert isinstance(op, ApprovalOperator), type(op)
         assert op.response_timeout == timedelta(hours=gate.get("timeout_h", 24))
-        assert op.defaults == (["Approve"] if gate.get("auto") else None)
+        assert op.defaults == (["Approve"] if _gate_is_auto(gate) else None)
         # Reject must reach record_<stage>: the gate never skips on its own (see GateOperator)
         assert type(op).__name__ == "GateOperator"
         assert op.fail_on_reject is False and op.ignore_downstream_trigger_rules is False
@@ -344,11 +350,13 @@ def test_record_task_persists_rejection_then_skips_the_line(
     from airflow.sdk.exceptions import AirflowSkipException
 
     pytest.importorskip("swfactory")
+    from swfactory.models import StageError
+
     ctx = _ctx_on(tmp_path)
     gate_artifact = f"{ctx.art}/{stage}.md"
     ctx.write_artifact(gate_artifact, f"# {stage}\n")
     monkeypatch.setattr(blueprints_mod, "_ctx", lambda name, job, run_id: ctx)
-    record = blueprints_mod._record_task("factory", stage).function
+    record = blueprints_mod._record_task("factory", stage, "human").function
     dag_run = SimpleNamespace(run_id="manual__2026-09-02T03:00:00+00:00")
     rejected = {
         "chosen_options": ["Reject"],
@@ -363,14 +371,17 @@ def test_record_task_persists_rejection_then_skips_the_line(
     assert approvals[0]["artifact_sha256"] == hashlib.sha256(f"# {stage}\n".encode()).hexdigest()
 
     # A later decision replaces the same gate entry, so task retries cannot duplicate approvals.
-    out = record({"job_idx": 0}, ti=_Ti({**rejected, "chosen_options": ["Approve"]}), dag_run=dag_run)
-    assert (out["decision"], out["actor"]) == ("approve", "alice")
-    ti = _Ti(None)
+    ti = _Ti({**rejected, "chosen_options": ["Approve"]})
     out = record({"job_idx": 0}, ti=ti, dag_run=dag_run)
-    assert (out["decision"], out["actor"]) == ("approve", "auto")
+    assert (out["decision"], out["actor"], out["mode"]) == ("approve", "alice", "human")
     assert ti.pulled == [(f"job.approve_{stage}", 0)]
     saved = json.loads((art / "approvals.json").read_text())
-    assert [(a["decision"], a["actor"]) for a in saved] == [("approve", "auto")]
+    assert [(a["decision"], a["actor"]) for a in saved] == [("approve", "alice")]
+    # ... and a gate with no response at all is refused rather than recorded as actor "auto";
+    # tests/test_approval_authority.py owns that boundary in full.
+    with pytest.raises(StageError, match="no recorded response"):
+        record({"job_idx": 0}, ti=_Ti(None), dag_run=dag_run)
+    assert [a["actor"] for a in json.loads((art / "approvals.json").read_text())] == ["alice"]
 
 
 def test_run_ids_are_hex8_and_stable(blueprints_mod) -> None:

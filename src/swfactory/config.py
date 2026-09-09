@@ -88,6 +88,10 @@ class Config(BaseSettings):
 
     # -- gates and scheduling: read by the DAG factory
     gate_timeout_h: int = Field(default=24, ge=0)  # ApprovalOperator response_timeout
+    # SWF_GATE_REPLAY: path to a JSON gate-decision fixture. The ONLY thing allowed to stand in for
+    # a missing gate response, refused for backend-managed cells, and recorded as actor
+    # "replay:<id>" so it can never be mistaken for a person. See swfactory.approval_policy.
+    gate_replay: str | None = None
     stage_timeout_h: int = Field(default=3, ge=1)  # execution_timeout of every stage task
     max_parallel_jobs: int = Field(default=4, ge=1)  # concurrent jobs == concurrent sandboxes
 

@@ -159,8 +159,35 @@ pub struct GateSpec {
     #[serde(default)]
     pub assigned: Vec<String>,
     /// True for an unattended line: the gate answers itself, recorded as actor `auto`.
+    ///
+    /// Superseded by [`GateSpec::mode`], kept so a blueprint written before the rename still
+    /// parses. Read [`GateSpec::requires_human`] rather than either field directly.
     #[serde(default)]
     pub auto: bool,
+    /// Who is allowed to answer: `"human"` or `"auto"`.
+    ///
+    /// The Python side made this explicit because a gate's authority used to be inferred by OR-ing
+    /// `auto` with a global environment variable, so `SWF_APPROVE=auto` could turn a gate a
+    /// blueprint declared as human into an automatic one. The console has to read the same
+    /// declaration the runtime enforces, or it will tell an operator a gate is waiting for them
+    /// when nothing is, or the reverse.
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+impl GateSpec {
+    /// Whether this gate requires a person, from whichever spelling the blueprint uses.
+    ///
+    /// `mode` wins when present; `auto` is the legacy spelling. A blueprint that sets both to
+    /// contradictory values is rejected at load time on the Python side, so agreeing with `mode`
+    /// here cannot disagree with what the runtime does.
+    pub fn requires_human(&self) -> bool {
+        match self.mode.as_deref() {
+            Some("auto") => false,
+            Some(_) => true,
+            None => !self.auto,
+        }
+    }
 }
 
 fn default_timeout_h() -> u32 {
@@ -1276,6 +1303,35 @@ order = ["intent", "deliver"]
     }
 
     #[test]
+    fn gate_authority_reads_the_same_on_both_sides_of_the_contract() {
+        // The console tells an operator which gates are waiting for a person. If it disagrees with
+        // the runtime, it either invents work for them or hides it -- and the runtime is the side
+        // that actually refuses to publish. `mode` wins over the legacy `auto` spelling, exactly as
+        // `swfactory.approval_policy.declared_mode` resolves it.
+        let human: GateSpec =
+            toml::from_str("after = \"intent\"\nartifact = \"intent.md\"\nmode = \"human\"\n")
+                .expect("mode = human must parse");
+        assert!(human.requires_human());
+
+        let auto: GateSpec =
+            toml::from_str("after = \"intent\"\nartifact = \"intent.md\"\nmode = \"auto\"\n")
+                .expect("mode = auto must parse");
+        assert!(!auto.requires_human());
+
+        // A blueprint written before the rename still parses and still means what it meant.
+        let legacy: GateSpec =
+            toml::from_str("after = \"intent\"\nartifact = \"intent.md\"\nauto = true\n")
+                .expect("the legacy spelling must keep parsing");
+        assert!(!legacy.requires_human());
+
+        // Neither spelling: a gate that declares nothing needs a person. Defaulting the other way
+        // would make an omission silently self-approving, which is the failure #2066 exists for.
+        let bare: GateSpec = toml::from_str("after = \"intent\"\nartifact = \"intent.md\"\n")
+            .expect("a gate need not declare a mode");
+        assert!(bare.requires_human());
+    }
+
+    #[test]
     fn every_shipped_blueprint_parses_and_says_what_the_spec_says() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../blueprints")
@@ -1342,7 +1398,12 @@ order = ["intent", "deliver"]
             hotfix.order,
             vec!["intent", "plan", "build_and_test", "review", "deliver"]
         );
-        assert_eq!(hotfix.gate_after("intent").map(|g| g.auto), Some(true));
+        // Asks `requires_human()` rather than the raw field: the blueprints now declare `mode`, and
+        // a test reading `auto` directly would pass on a file that says nothing at all.
+        assert_eq!(
+            hotfix.gate_after("intent").map(|g| g.requires_human()),
+            Some(false)
+        );
         assert_eq!(hotfix.gate_after("plan").map(|g| g.timeout_h), Some(4));
         assert_eq!(hotfix.gate_timeout_h(), 4);
 
@@ -1352,7 +1413,7 @@ order = ["intent", "deliver"]
         assert_eq!(stress.targets.len(), 2);
         assert_eq!(stress.sandbox.kind, SandboxKind::Local);
         assert_eq!(stress.limits.max_parallel_jobs, 2);
-        assert!(stress.gates.iter().all(|g| g.auto));
+        assert!(stress.gates.iter().all(|g| !g.requires_human()));
         assert_eq!(stress.job_count(2), 4);
 
         let Some(toolset) = by_stem("toolset") else {
@@ -1375,7 +1436,7 @@ order = ["intent", "deliver"]
         assert_eq!(liquid.trigger.cron.as_deref(), Some("17 6 * * *"));
         assert_eq!(liquid.targets.len(), 1);
         assert_eq!(liquid.targets[0].dir, "");
-        assert!(liquid.gates.iter().all(|g| !g.auto));
+        assert!(liquid.gates.iter().all(|g| g.requires_human()));
         assert_eq!(liquid.limits.max_parallel_jobs, 1);
         // Gates must expire inside the schedule period or scheduled runs stack: the DAG sets
         // catchup=false but no max_active_runs.
@@ -1393,7 +1454,7 @@ order = ["intent", "deliver"]
         assert_eq!(selfhost.targets[0].dir, "");
         assert_eq!(selfhost.targets[0].repo, "zozo123/ariflow-swfactory");
         assert_eq!(selfhost.order, CANONICAL_ORDER.to_vec());
-        assert!(selfhost.gates.iter().all(|g| !g.auto));
+        assert!(selfhost.gates.iter().all(|g| g.requires_human()));
         assert_eq!(selfhost.gate_timeout_h(), 48);
         assert_eq!(selfhost.sandbox.kind, SandboxKind::Islo);
         assert!(selfhost.sandbox.ttl_s > u64::from(selfhost.gate_timeout_h()) * 3600);

@@ -28,6 +28,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from swfactory import blueprint as blueprint_mod
+from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
 from swfactory.blueprint import Blueprint
 from swfactory.config import FACTORY_ROOT, Config, TargetContract
 from swfactory.models import RunReport, StageError
@@ -367,8 +368,8 @@ def run_one(
     """Walk the whole pipeline for one eval on a private copy of the target, then ``check`` it.
 
     Same code path as ``swfactory run`` (``ctx_for`` -> ``setup`` -> ``run_pipeline``), with the
-    eval's directory as the fixtures dir and both gates auto-approved. ``scm`` is always local:
-    an eval must never open a pull request. A ``StageError`` is the eval's failure, not the
+    eval's directory as the fixtures dir and both gates answered by the declared replay fixture.
+    ``scm`` is always local: an eval must never open a pull request. A ``StageError`` is the eval's failure, not the
     suite's crash — a blown build loop or a missing fixture is exactly what we are measuring.
     """
     run_dir, workdir = run_root / "run", run_root / "work"
@@ -383,7 +384,10 @@ def run_one(
         agent=agent,
         sandbox=sandbox,
         scm="local",
-        approve="auto",
+        # An eval is a replay, not an approver: it answers the human gates through the declared
+        # replay fixture, which is refused for backend-managed work, rather than through
+        # ``approve="auto"`` -- a knob that must never satisfy a gate a blueprint declares human.
+        gate_replay=str(SCRIPTED_REPLAY_FIXTURE),
         fixtures_dir=str(ev.fixtures_dir),
         workdir=str(workdir),
     )

@@ -37,14 +37,14 @@ after = "intent"
 artifact = "intent.md"
 timeout_h = 1               # schema minimum; auto, so it is the backstop and not a wait
 assigned = []
-auto = true                 # an unattended run of an experimental line must finish on its own
+mode = "auto"               # an unattended run of an experimental line must finish on its own
 
 [[gates]]
 after = "plan"
 artifact = "plan.md"
 timeout_h = 2               # a real human gate, kept short: nobody babysits an experiment
 assigned = []
-auto = false
+mode = "human"
 
 [limits]                    # modest: this line is a proving ground, not a delivery line
 max_build_iterations = 2

@@ -27,12 +27,13 @@ after = "intent"            # must be in stages.order
 artifact = "intent.md"      # shown in the ApprovalOperator body (StageResult.preview, <= 4000 chars)
 timeout_h = 24              # ApprovalOperator response_timeout
 assigned = []               # -> assigned_users; empty = anyone
-auto = false                # true -> defaults="Approve" (recorded actor "auto"); unattended lines
+mode = "human"              # "human" = an identified person must answer; "auto" = unattended line
 
 [[gates]]
 after = "plan"
 artifact = "plan.md"
 timeout_h = 24
+mode = "human"
 
 [limits]
 max_build_iterations = 3

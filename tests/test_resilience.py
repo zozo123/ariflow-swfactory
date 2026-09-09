@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 from swfactory.agent import POLICIES, ClaudeAgent, ScriptedAgent
+from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
 from swfactory.blueprint import load
 from swfactory.cli import execute
 from swfactory.config import Config
@@ -539,7 +540,7 @@ def test_the_build_loop_stops_at_max_build_iterations_with_a_policy_error(tmp_pa
     cfg = bp.config(
         job,
         run_id="r3s1l13n",
-        approve="auto",
+        gate_replay=str(SCRIPTED_REPLAY_FIXTURE),
         agent="scripted",
         sandbox="local",
         scm="local",

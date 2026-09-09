@@ -113,9 +113,13 @@ jobs:
       - name: Real factory run on demo/issue.md (claude agent under srt, local git remote)
         if: steps.gate.outputs.enabled == 'true'
         env:
-          SWF_APPROVE: auto
+          # The demo blueprint declares both gates `mode = "human"`. #2066 stopped SWF_APPROVE=auto
+          # from converting a declared human gate into an automatic one, so an unattended run has
+          # to answer them explicitly. The fixture is permitted here because `--scm local` publishes
+          # to a temporary local remote: nothing leaves the runner and no credential is used.
+          SWF_GATE_REPLAY: demo/gate-replay.json
         run: |
-          uv run swfactory run --issue demo/issue.md --agent claude --sandbox srt --scm local --approve auto
+          uv run swfactory run --issue demo/issue.md --agent claude --sandbox srt --scm local
       - name: Assert tests passed and deliver succeeded
         if: steps.gate.outputs.enabled == 'true'
         run: |
@@ -181,9 +185,13 @@ jobs:
       - name: Real factory run on demo/issue.md (claude agent in an islo MicroVM, local git remote)
         if: steps.gate.outputs.enabled == 'true'
         env:
-          SWF_APPROVE: auto
+          # The demo blueprint declares both gates `mode = "human"`. #2066 stopped SWF_APPROVE=auto
+          # from converting a declared human gate into an automatic one, so an unattended run has
+          # to answer them explicitly. The fixture is permitted here because `--scm local` publishes
+          # to a temporary local remote: nothing leaves the runner and no credential is used.
+          SWF_GATE_REPLAY: demo/gate-replay.json
         run: |
-          uv run swfactory run --issue demo/issue.md --agent claude --sandbox islo --scm local --approve auto
+          uv run swfactory run --issue demo/issue.md --agent claude --sandbox islo --scm local
       - name: Assert tests passed and deliver succeeded
         if: steps.gate.outputs.enabled == 'true'
         run: |

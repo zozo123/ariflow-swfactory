@@ -43,6 +43,7 @@ from pydantic import BaseModel, ValidationError
 
 from swfactory import metrics as metrics_mod
 from swfactory.agent import POLICIES, Agent, Policy, render_prompt
+from swfactory.approval_policy import GateMode, check_recorded, replay_approval
 from swfactory.config import (
     FACTORY_ROOT,
     Config,
@@ -154,12 +155,17 @@ class Ctx:
 
 
 class Gate(NamedTuple):
-    """A human approval point; ``artifact`` is shown to the approver. ``auto`` (blueprint
-    ``gates[].auto``) approves without asking, in the CLI and the DAG alike (actor "auto")."""
+    """An approval point; ``artifact`` is shown to the approver. ``mode`` is the blueprint's
+    declaration (``gates[].mode``): ``"human"`` needs an identified answer, ``"auto"`` is a
+    deliberately unattended line. The CLI walk and the DAG read the same declaration."""
 
     name: Literal["intent", "plan"]
     artifact: str
-    auto: bool = False
+    mode: GateMode = "human"
+
+    @property
+    def auto(self) -> bool:
+        return self.mode == "auto"
 
 
 Stage = Callable[[Ctx], StageResult]
@@ -983,17 +989,63 @@ def _gate_artifact(ctx: Ctx, gate_name: str) -> str:
     return f"{ctx.art}/{gate.artifact}"
 
 
+def cell_evidence(ctx: Ctx) -> tuple[str | None, int | None, bool]:
+    """``(cell_id, epoch, managed)`` from host-owned control state; all-``None`` when unbound.
+
+    ``runtime.build_ctx`` writes ``cell.json`` outside the sandbox, so this is the run's own view of
+    which Cell epoch it is executing as -- not something a mapped job dict or an agent can restate.
+    """
+    if not ctx.state.has_control("cell.json"):
+        return None, None, False
+    try:
+        data = json.loads(ctx.state.read_control("cell.json"))
+    except ValueError as error:
+        raise StageError("policy", f"stored Factory Cell binding is invalid: {error}") from error
+    if not isinstance(data, dict):
+        raise StageError("policy", "stored Factory Cell binding is invalid")
+    cell_id, epoch = data.get("cell_id"), data.get("epoch")
+    return (
+        str(cell_id) if isinstance(cell_id, str) else None,
+        int(epoch) if isinstance(epoch, int) else None,
+        bool(data.get("managed")),
+    )
+
+
 @_owned
 def record_approval(ctx: Ctx, approval: Approval) -> None:
     """Record the latest decision for one gate in ``approvals.json`` (committed by deliver).
 
     Airflow may retry a record task, so one gate owns one entry rather than accumulating duplicate
     decisions from task attempts.
+
+    Recording is where the answer is fenced: the host stamps the artifact digest the approver was
+    shown and the Cell epoch the run is executing as. An answer that already claims a different
+    Cell/epoch is refused instead of being restamped, so a response cannot be carried across epochs
+    and re-recorded as current.
     """
     path = f"{ctx.art}/approvals.json"
     artifact = _gate_artifact(ctx, approval.gate)
     digest = hashlib.sha256(ctx.read_artifact(artifact).encode("utf-8")).hexdigest()
-    approval = approval.model_copy(update={"artifact_sha256": digest})
+    cell_id, cell_epoch, _managed = cell_evidence(ctx)
+    if (approval.cell_id is not None and approval.cell_id != cell_id) or (
+        approval.cell_epoch is not None and approval.cell_epoch != cell_epoch
+    ):
+        raise StageError(
+            "policy",
+            f"decision for gate {approval.gate!r} is bound to Cell "
+            f"{approval.cell_id}/{approval.cell_epoch}, not {cell_id}/{cell_epoch}",
+        )
+    # Symmetric with the Cell check above: an answer that already carries a digest is CHECKED
+    # against the artifact, never restamped. Overwriting it let a decision be re-recorded over a
+    # changed artifact -- an approver's yes to one plan silently becoming a yes to another -- and
+    # left the digest defended only at continuation, one enforcement point instead of two.
+    if approval.artifact_sha256 is not None and approval.artifact_sha256 != digest:
+        raise StageError(
+            "policy",
+            f"decision for gate {approval.gate!r} was given for artifact "
+            f"{approval.artifact_sha256[:12]}, but {artifact} now digests to {digest[:12]}",
+        )
+    approval = approval.model_copy(update={"artifact_sha256": digest, "cell_id": cell_id, "cell_epoch": cell_epoch})
     data = _read_json(ctx, path, [])
     if not isinstance(data, list):
         raise StageError("policy", "approvals.json must contain a JSON array")
@@ -1100,6 +1152,7 @@ def _validate_approvals(ctx: Ctx, approvals: list[Approval]) -> tuple[bool, str 
     if unknown := sorted(set(by_name) - known):
         raise StageError("policy", f"approvals name unknown gates: {unknown}")
 
+    cell_id, cell_epoch, managed = cell_evidence(ctx)
     processed: set[str] = set()
     rejected_gate: str | None = None
     for gate in gates:
@@ -1115,6 +1168,18 @@ def _validate_approvals(ctx: Ctx, approvals: list[Approval]) -> tuple[bool, str 
         expected = hashlib.sha256(content.encode("utf-8")).hexdigest()
         if approval.artifact_sha256 != expected:
             raise StageError("policy", f"approval for {gate.name} does not match its artifact")
+        # Continuation is the third enforcement point: the recorded chain is re-checked against the
+        # authority the blueprint declared and the Cell epoch this run is actually executing as, so
+        # a decision recorded elsewhere (older epoch, automatic default, replay fixture) cannot
+        # publish here.
+        check_recorded(
+            gate=gate.name,
+            gate_mode=gate.mode,
+            approval=approval,
+            managed=managed,
+            cell_id=cell_id,
+            cell_epoch=cell_epoch,
+        )
         if approval.decision == "reject":
             rejected_gate = gate.name
             break
@@ -1300,15 +1365,37 @@ def build_report(ctx: Ctx, approvals: list[Approval]) -> RunReport:
 
 
 def cli_approver(gate: Gate, ctx: Ctx) -> Approval:
-    """``approve=auto`` or a blueprint gate with ``auto = true`` records actor "auto"; otherwise
-    show the artifact and ask."""
-    if gate.auto or ctx.cfg.approve == "auto":
-        return Approval(gate=gate.name, decision="approve", actor="auto", at=datetime.now(UTC))
+    """Local replay's approver, holding the same policy the DAG's ``record_<stage>`` holds.
+
+    A gate declared ``mode = "auto"`` answers itself. Otherwise the only thing allowed to answer
+    without a person is the explicitly declared replay fixture (``SWF_GATE_REPLAY``). ``--approve
+    auto`` / ``SWF_APPROVE=auto`` is refused on a human gate: an environment variable that can
+    switch a declared human gate off is not a gate, and this is the surface where that used to work.
+    """
+    if gate.mode == "auto":
+        return Approval(gate=gate.name, decision="approve", actor="auto", mode="auto", at=datetime.now(UTC))
+    _cell_id, _epoch, managed = cell_evidence(ctx)
+    replay = replay_approval(
+        gate.name,
+        fixture_path=ctx.cfg.gate_replay,
+        managed=managed,
+        scm=ctx.cfg.scm,
+        agent=ctx.cfg.agent,
+    )
+    if replay is not None:
+        return replay
+    if ctx.cfg.approve == "auto":
+        raise StageError(
+            "policy",
+            f"gate {gate.name!r} is declared human and cannot be approved by configuration; "
+            'answer it, declare the gate mode = "auto", or point SWF_GATE_REPLAY at a replay fixture',
+        )
     print(f"\n===== {gate.artifact} =====\n{ctx.read_artifact(f'{ctx.art}/{gate.artifact}')}\n")
     ok = typer.confirm(f"Approve gate '{gate.name}'?", default=False)
     return Approval(
         gate=gate.name,
         decision="approve" if ok else "reject",
         actor=getpass.getuser(),
+        mode="human",
         at=datetime.now(UTC),
     )

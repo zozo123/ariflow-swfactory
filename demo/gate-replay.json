@@ -1,0 +1,4 @@
+{
+  "intent": {"decision": "approve", "actor": "scripted-replay"},
+  "plan": {"decision": "approve", "actor": "scripted-replay"}
+}

@@ -13,8 +13,10 @@ in `stages.py`. Details: README + docs/*.md.
 - `uv run swfactory demo [--sandbox srt|docker] [--real]` — scripted replay, no keys, ~10 s;
   `--real` runs claude in an islo sandbox and opens a real PR.
 - `uv run swfactory run --issue <n|path> --agent claude --sandbox srt --scm local|github`
-  — direct CLI path without Airflow. `--blueprint hotfix --issue demo/issue.md --approve auto` =
-  second line.
+  — direct CLI path without Airflow. `--blueprint hotfix --issue demo/issue.md` = second line.
+  A gate declared `mode = "human"` must be answered; `SWF_GATE_REPLAY=demo/gate-replay.json` is the
+  only unattended substitute, and it is refused for any run that can reach outside itself — a
+  backend-managed Cell, or `--scm github`. `SWF_APPROVE=auto` can no longer satisfy a human gate.
 - `uv run swfactory approve <dag_run_id> intent|plan [--reject] [--map-index <j>]`; `doctor
   [--json]` (exit 1 per red row, with a `fix:`); `metrics|maintain --root .`; `herd`; `webhook`.
 - `cargo test --manifest-path rust/Cargo.toml --workspace`, `cargo fmt`/`clippy -- -D warnings` —
