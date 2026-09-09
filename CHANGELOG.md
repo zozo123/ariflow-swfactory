@@ -30,6 +30,19 @@ All notable changes to this project will be documented here. The format follows
 
 ### Changed
 
+- **A required human gate can no longer be switched off by configuration or by silence** (#2066).
+  `[[gates]]` now declares `mode = "human" | "auto"` (the old `auto = true|false` is folded into it;
+  declaring both and disagreeing is an error), and that declaration is enforced in all three places
+  a gate is reachable: DAG construction gives an operator default only to `mode = "auto"`;
+  `record_<stage>` and `cli_approver` refuse a missing, empty, malformed or anonymous response
+  instead of recording actor `auto`; and `deliver` re-checks the recorded chain before publishing.
+  `SWF_APPROVE=auto` no longer influences any gate. An approval now carries `mode`, the Cell
+  id/epoch and the approved artifact's sha256, so a reply cannot be replayed against a different
+  epoch or a rewritten artifact. The general missing-response fallback is replaced by an explicit
+  replay fixture (`SWF_GATE_REPLAY`, shipped as `demo/gate-replay.json`) that records actor
+  `replay:<id>` and is refused outright for backend-managed cells — so a smoke test cannot
+  authorize managed production work by marking a gate successful. Rejection and timeout keep their
+  declared terminal behaviour.
 - `workgraph.serial` names the entrypoint that actually executes `Plan.work`
   (`swfactory.work_stage.build_and_test`, the Airflow build task) rather than
   `swfactory.stages.build_and_test`, which runs the legacy loop.

@@ -15,8 +15,10 @@ cwd with ``stages.seed_local_workdir``, the same call a job uses to seed its own
 is written inside the checkout.
 
 ``airflow dags test`` never resolves HITL tasks, so the gates are marked success with
-``mark_success_pattern=r"job\\.approve_.*"`` and ``record_<stage>`` records actor "auto"; the live
-script answers them through the HITL API instead. Everything runs in a subprocess with a
+``mark_success_pattern=r"job\\.approve_.*"``. That is not an approval (issue #2066): the run is
+driven by the declared replay fixture ``demo/gate-replay.json`` via ``SWF_GATE_REPLAY``, which
+records actor ``replay:scripted-replay`` and is refused outright for backend-managed cells. The
+live script answers the gates through the HITL API instead. Everything runs in a subprocess with a
 throwaway ``AIRFLOW_HOME`` and cwd (Airflow reads its config at import time), scripted agent,
 local sandbox, local git remote: no keys, no network, ~40 s.
 
@@ -147,6 +149,9 @@ def _env(home: Path) -> dict[str, str]:
         SWF_AGENT="scripted",
         SWF_SANDBOX="local",
         SWF_SCM="local",
+        # Marking the HITL tasks successful leaves no response; only this declared fixture may
+        # stand in for one, and never for backend-managed work.
+        SWF_GATE_REPLAY=str(REPO / "demo" / "gate-replay.json"),
     )
     return env
 
@@ -291,12 +296,13 @@ def test_each_job_records_both_gates_and_its_own_metrics(stress: dict) -> None:
         approvals = json.loads((chain / "approvals.json").read_text(encoding="utf-8"))
         assert [a["gate"] for a in approvals] == ["intent", "plan"]
         assert [a["decision"] for a in approvals] == ["approve", "approve"]
-        assert [a["actor"] for a in approvals] == ["auto", "auto"]  # dag.test marks HITL success
+        assert [a["actor"] for a in approvals] == ["replay:scripted-replay"] * 2
+        assert [a["mode"] for a in approvals] == ["replay", "replay"]  # never a person, never "auto"
         metrics = json.loads((chain / "metrics.json").read_text(encoding="utf-8"))
         assert metrics["blueprint"] == DAG_ID
         assert (metrics["issue_id"], metrics["run_id"]) == (issue_id, workdir.parent.name)
         assert metrics["agent"] == "scripted" and metrics["tests_passed"] is True
-        assert metrics["approvers"] == ["auto", "auto"]
+        assert metrics["approvers"] == ["replay:scripted-replay"] * 2
 
 
 # ---------------------------------------------------------------- the DAG's shape
@@ -314,7 +320,7 @@ def test_dag_structure_mirrors_the_stress_blueprint(stress: dict) -> None:
         op = tasks[f"job.approve_{stage}"]
         assert op["is_approval"] and op["cls"] == "GateOperator", stage
         assert op["response_timeout_h"] == gate["timeout_h"], stage
-        assert op["defaults"] == ["Approve"], stage  # gates[].auto: unattended runs still finish
+        assert op["defaults"] == ["Approve"], stage  # gates[].mode = "auto": unattended runs finish
     teardown = tasks["job.teardown"]
     # `all_done` as written in the DAG; Airflow narrows it for a teardown wired to a setup task
     # (`as_teardown(setups=setup)`). Either way the sandbox is closed after a rejected or failed

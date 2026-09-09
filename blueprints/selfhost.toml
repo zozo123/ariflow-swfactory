@@ -5,7 +5,7 @@
 # edits `src/swfactory/` and the docs that describe it. Two consequences drive every number below.
 #
 #   1. THE BLAST RADIUS IS THE FACTORY. A bad edit to the factory's own source breaks every other
-#      line, including the line that would fix it. So both gates are `auto = false`: an unattended
+#      line, including the line that would fix it. So both gates are `mode = "human"`: an unattended
 #      self-edit is the one failure mode this repo cannot recover from on its own. The plan gate is
 #      the only checkpoint BEFORE the agent writes to the factory's own source, and it is not
 #      optional here. The human merge remains the release gate, as `docs/liquid-methodology.md`
@@ -51,14 +51,14 @@ after = "intent"
 artifact = "intent.md"
 timeout_h = 24
 assigned = []               # empty = anyone with HITL access may answer
-auto = false                # restating the default: no gate on this line self-approves
+mode = "human"              # restating the default: no gate on this line self-approves
 
 [[gates]]
 after = "plan"
 artifact = "plan.md"
 timeout_h = 48              # two business days: the plan names the factory files it will edit
 assigned = []
-auto = false                # MANDATORY here; see (1) in the header
+mode = "human"              # MANDATORY here; see (1) in the header
 
 [limits]
 max_build_iterations = 4    # the first failure is usually ruff (line length 100), not logic

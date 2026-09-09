@@ -56,8 +56,9 @@ The fixtures are **authored**, not recorded: an eval's job is to encode the outc
 produce. Re-record them against the real agent when the target changes:
 
 ```sh
+SWF_GATE_REPLAY=demo/gate-replay.json \
 uv run swfactory run --issue demo/evals/01-average/issue.md --agent claude --sandbox srt \
-  --scm local --approve auto --record demo/evals/01-average
+  --scm local --record demo/evals/01-average
 ```
 
 ## The `expect:` schema

@@ -63,9 +63,9 @@ def test_hotfix_pipeline_has_no_spec_and_gates_after_intent_and_plan() -> None:
     assert "spec" not in items
     assert items == [
         "intent",
-        Gate("intent", "intent.md", auto=True),  # gates[].auto reaches the CLI walk too
+        Gate("intent", "intent.md", "auto"),  # gates[].mode reaches the CLI walk too
         "plan",
-        Gate("plan", "plan.md", auto=False),
+        Gate("plan", "plan.md", "human"),
         "build_and_test",
         "review",
         "deliver",
@@ -109,17 +109,23 @@ def test_toolset_line_runs_the_default_order_on_airflows_own_sandbox(
     assert sb.workdir == f"{cfg.toolset_workdir}/demo/target"
 
 
-def test_cli_approver_honours_gate_auto_without_prompting(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`auto = true` on a gate approves under `--approve prompt` (actor "auto"), as the DAG does."""
+def test_cli_approver_honours_gate_mode_auto_without_prompting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`mode = "auto"` on a gate approves under `--approve prompt` (actor "auto"), as the DAG does.
+
+    The other half -- that ``--approve auto`` does NOT satisfy a gate declared human -- lives in
+    ``tests/test_approval_authority.py``; the two together are the whole of the gate's authority.
+    """
     from swfactory.config import Config
+    from swfactory.models import StageError
 
     monkeypatch.setattr(stages.typer, "confirm", lambda *a, **k: pytest.fail("prompted"))
     ctx = _ctx(None)
     ctx.cfg = Config(issue="x", approve="prompt")
-    approval = stages.cli_approver(Gate("intent", "intent.md", auto=True), ctx)
+    approval = stages.cli_approver(Gate("intent", "intent.md", "auto"), ctx)
     assert (approval.gate, approval.decision, approval.actor) == ("intent", "approve", "auto")
     ctx.cfg = Config(issue="x", approve="auto")
-    assert stages.cli_approver(Gate("plan", "plan.md"), ctx).actor == "auto"
+    with pytest.raises(StageError, match="declared human"):
+        stages.cli_approver(Gate("plan", "plan.md"), ctx)
 
 
 def test_stages_registry_matches_canonical_order() -> None:

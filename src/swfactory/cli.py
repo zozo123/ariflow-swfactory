@@ -20,6 +20,7 @@ import typer
 from swfactory import blueprint as blueprint_mod
 from swfactory import metrics as metrics_mod
 from swfactory.agent import Agent
+from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
 from swfactory.blueprint import Blueprint
 from swfactory.config import FACTORY_ROOT, Config
 from swfactory.dispatch import DEFAULT_INBOX, DeliveryConflict, DeliveryInbox
@@ -192,7 +193,15 @@ def demo(
     preset = (
         {"agent": "claude", "sandbox": "islo", "scm": "github", "approve": "prompt"}
         if real
-        else {"agent": "scripted", "sandbox": "local", "scm": "local", "approve": "auto"}
+        # The scripted demo is a replay, so it answers the human gates through the declared replay
+        # fixture. ``approve="auto"`` cannot do this any more (#2066): configuration is not an
+        # approver, and the fixture is refused for backend-managed work.
+        else {
+            "agent": "scripted",
+            "sandbox": "local",
+            "scm": "local",
+            "gate_replay": str(SCRIPTED_REPLAY_FIXTURE),
+        }
     )
     _run_jobs(
         _load_blueprint(blueprint_mod.DEFAULT_BLUEPRINT),

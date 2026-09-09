@@ -11,7 +11,7 @@
 #   human -> deliver opens a PR on a bot-owned branch the agent had no credential to push -> a
 #   PERSON merges.
 #
-# Nothing here can promote itself. Both gates are `auto = false`, `deliver` force-updates only the
+# Nothing here can promote itself. Both gates are `mode = "human"`, `deliver` force-updates only the
 # `factory/*` branch, and the agent holds no GitHub credential. The schedule changes when work
 # STARTS, never who decides it ships.
 #
@@ -51,14 +51,14 @@ after = "intent"
 artifact = "intent.md"
 timeout_h = 8                # < the 24 h period on purpose; see the header
 assigned = []
-auto = false                 # a scheduled line must never self-approve
+mode = "human"               # a scheduled line must never self-approve
 
 [[gates]]
 after = "plan"
 artifact = "plan.md"
 timeout_h = 8
 assigned = []
-auto = false                 # the checkpoint before an agent writes to the factory's own source
+mode = "human"               # the checkpoint before an agent writes to the factory's own source
 
 [limits]
 max_build_iterations = 4

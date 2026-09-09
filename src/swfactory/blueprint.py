@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from swfactory.agent import POLICIES
+from swfactory.approval_policy import GateMode, declared_mode
 from swfactory.config import FACTORY_ROOT, Config
 from swfactory.paths import (
     normalize_absolute_posix_path,
@@ -68,7 +69,13 @@ class Target(BaseModel):
 
 
 class GateSpec(BaseModel):
-    """A human approval point after ``after``; ``artifact`` is shown to the approver."""
+    """An approval point after ``after``; ``artifact`` is shown to the approver.
+
+    ``mode`` is the whole contract: ``"human"`` (the default) means an identified person must
+    answer this gate, and nothing outside the blueprint may downgrade that — no environment
+    variable, no missing response. ``"auto"`` is a deliberately unattended demo/stress line, where
+    the ApprovalOperator's own default answers and the decision is recorded as automatic.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -76,12 +83,27 @@ class GateSpec(BaseModel):
     artifact: str
     timeout_h: int = Field(default=24, ge=1)
     assigned: list[str] = Field(default_factory=list)
-    auto: bool = False  # True -> ApprovalOperator defaults="Approve" (actor "auto")
+    mode: GateMode = "human"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _mode(cls, data: Any) -> Any:
+        """Fold the legacy ``auto = true|false`` spelling into ``mode``, so a gate states its
+        authority once. Two spellings that disagree are rejected rather than silently ranked."""
+        if not isinstance(data, dict) or "auto" not in data:
+            return data
+        rest = {k: v for k, v in data.items() if k != "auto"}
+        return {**rest, "mode": declared_mode(data)}
 
     @field_validator("artifact")
     @classmethod
     def _artifact(cls, value: str) -> str:
         return normalize_relative_path(value, field="gates.artifact")
+
+    @property
+    def auto(self) -> bool:
+        """Read-only compatibility view of ``mode``; the declaration itself lives in ``mode``."""
+        return self.mode == "auto"
 
 
 class Limits(BaseModel):
@@ -286,7 +308,7 @@ class Blueprint(BaseModel):
             items.append(STAGES[name])
             gate = self.gate_after(name)
             if gate is not None:
-                items.append(Gate(gate.after, gate.artifact, gate.auto))  # type: ignore[arg-type]
+                items.append(Gate(gate.after, gate.artifact, gate.mode))  # type: ignore[arg-type]
         return tuple(items)
 
     def jobs(self, conf: dict[str, Any] | None) -> list[dict[str, Any]]:

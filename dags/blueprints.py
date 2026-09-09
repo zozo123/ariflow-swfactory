@@ -17,7 +17,6 @@ Loops and bounded ``Plan.work`` execution live inside stage functions, never in 
 
 from __future__ import annotations
 
-import os
 import tomllib
 from datetime import timedelta
 from pathlib import Path
@@ -33,7 +32,26 @@ FACTORY_ROOT = Path(__file__).resolve().parent.parent
 BLUEPRINTS_DIR = FACTORY_ROOT / "blueprints"
 GROUP_ID = "job"
 STAGE_RETRIES = {"deliver": 2}
-APPROVE_ENV_AUTO = os.environ.get("SWF_APPROVE") == "auto"
+
+
+def gate_mode(gate: dict[str, Any]) -> str:
+    """The gate's declared authority: ``"human"`` unless the blueprint says ``mode = "auto"``.
+
+    Duplicated from ``swfactory.approval_policy.declared_mode`` because DAG parsing must not import
+    swfactory; ``tests/test_dag_parity.py`` pins the two to the same answer. No environment variable
+    is read here on purpose -- ``SWF_APPROVE=auto`` used to be OR'd in, which turned every gate a
+    blueprint declared human into a self-approving one.
+    """
+    mode, auto = gate.get("mode"), gate.get("auto")
+    if auto is not None and not isinstance(auto, bool):
+        raise ValueError(f"gate auto must be a boolean, not {auto!r}")
+    if mode is None:
+        return "auto" if auto else "human"
+    if mode not in ("human", "auto"):
+        raise ValueError(f"gate mode must be one of ['human', 'auto'], not {mode!r}")
+    if auto is not None and auto is not (mode == "auto"):
+        raise ValueError(f"gate declares mode {mode!r} and auto {auto!r}, which contradict each other")
+    return mode
 
 
 def read_shape(path: Path) -> dict[str, Any]:
@@ -62,12 +80,6 @@ def _ctx(name: str, job: dict[str, Any], dag_run_id: str):
     from swfactory.runtime import build_ctx
 
     return build_ctx(load(name), job, run_id=run_id_for(dag_run_id, int(job["job_idx"])))
-
-
-def _actor(responded_by_user: Any) -> str:
-    if isinstance(responded_by_user, dict):
-        return str(responded_by_user.get("name") or responded_by_user.get("id") or "auto")
-    return str(responded_by_user) if responded_by_user else "auto"
 
 
 def _stage_fn(stage: str):
@@ -135,8 +147,7 @@ class GateOperator(ApprovalOperator):
         return ret
 
 
-def _approve_task(name: str, stage: str, gate: dict[str, Any]) -> ApprovalOperator:
-    auto = bool(gate.get("auto", False)) or APPROVE_ENV_AUTO
+def _approve_task(name: str, stage: str, gate: dict[str, Any], mode: str) -> ApprovalOperator:
     issue = "{{ ti.xcom_pull(task_ids='fan_out')[ti.map_index]['issue'] }}"
     preview = (
         f"{{{{ (ti.xcom_pull(task_ids='{GROUP_ID}.{stage}', map_indexes=ti.map_index) or {{}}).get('preview', '') }}}}"
@@ -146,32 +157,35 @@ def _approve_task(name: str, stage: str, gate: dict[str, Any]) -> ApprovalOperat
         task_id=f"approve_{stage}",
         subject=f"[{name}] approve {gate['artifact']} for {issue}",
         body=f"Run {{{{ dag_run.run_id }}}} · job {{{{ ti.map_index }}}} · `{gate['artifact']}`\n\n" + preview,
-        defaults=ApprovalOperator.APPROVE if auto else None,
+        defaults=ApprovalOperator.APPROVE if mode == "auto" else None,
         response_timeout=timedelta(hours=int(gate.get("timeout_h", 24))),
         assigned_users=[{"id": u, "name": u} for u in assigned] or None,
     )
 
 
-def _record_task(name: str, stage: str):
+def _record_task(name: str, stage: str, mode: str):
     @task(task_id=f"record_{stage}", on_failure_callback=_failure_callback)
     def _run(job: dict, **context: Any) -> dict:
-        from datetime import UTC, datetime
-
         from airflow.sdk.exceptions import AirflowSkipException
 
-        from swfactory.models import Approval
+        from swfactory.approval_policy import approval_from_response
         from swfactory.stages import record_approval
 
         ti = context["ti"]
-        response = ti.xcom_pull(task_ids=f"{GROUP_ID}.approve_{stage}", map_indexes=ti.map_index) or {}
-        chosen = (response.get("chosen_options") or [ApprovalOperator.APPROVE])[0]
-        approval = Approval(
+        response = ti.xcom_pull(task_ids=f"{GROUP_ID}.approve_{stage}", map_indexes=ti.map_index)
+        ctx = _ctx(name, job, context["dag_run"].run_id)
+        # A missing/empty/malformed response raises here rather than defaulting to Approve: the
+        # gate task can be marked successful without anyone answering, and that is not an approval.
+        approval = approval_from_response(
             gate=stage,
-            decision="approve" if chosen == ApprovalOperator.APPROVE else "reject",
-            actor=_actor(response.get("responded_by_user")),
-            at=datetime.now(UTC),
+            gate_mode=mode,
+            response=response,
+            fixture_path=ctx.cfg.gate_replay,
+            managed=bool(job.get("cell_managed")),
+            scm=ctx.cfg.scm,
+            agent=ctx.cfg.agent,
         )
-        record_approval(_ctx(name, job, context["dag_run"].run_id), approval)
+        record_approval(ctx, approval)
         if approval.decision == "reject":
             _cell_transition(job, "rejected", context, f"rejected_{stage}")
             raise AirflowSkipException(f"{stage} rejected by {approval.actor}")
@@ -261,8 +275,9 @@ def build_dag(shape: dict[str, Any]) -> DAG:
                 prev = current
                 gate = shape["gates"].get(stage)
                 if gate is not None:
-                    approve = _approve_task(name, stage, gate)
-                    record = _record_task(name, stage)(job)
+                    mode = gate_mode(gate)
+                    approve = _approve_task(name, stage, gate, mode)
+                    record = _record_task(name, stage, mode)(job)
                     prev >> approve >> record
                     prev = record
             metrics = _metrics_task(name)(job)

@@ -44,8 +44,9 @@ docker build -t swfactory-sandbox:local -f deploy/docker/sandbox.Dockerfile .
 
 SWF_DOCKER_IMAGE=swfactory-sandbox:local \
 SWF_FIXTURES_DIR=demo/selfhost-scripted \
+SWF_GATE_REPLAY=demo/gate-replay.json \
 uv run swfactory run --blueprint selfhost --issue demo/selfhost-issue.md \
-  --agent scripted --sandbox docker --scm local --approve auto
+  --agent scripted --sandbox docker --scm local
 ```
 
 `SWF_DOCKER_IMAGE` is required: the built-in default is a `ghcr.io` image that is not published,
@@ -111,9 +112,11 @@ branch, and promotion is a person.
 
 Two more limits worth naming:
 
-- **The blueprint's `auto = false` binds the managed path, not the direct CLI.** `--approve auto`
-  self-approves both gates on `swfactory run`, as the proof run below did. Treat unattended
-  self-hosting as a deliberate operator choice, not something the blueprint prevents.
+- **The blueprint's `mode = "human"` binds the direct CLI too, now.** `--approve auto` no longer
+  satisfies a gate declared human on `swfactory run`; an unattended local run must point
+  `SWF_GATE_REPLAY` at a replay fixture, which is refused for backend-managed cells and recorded as
+  actor `replay:*` so the chain never claims a person answered. Treat unattended self-hosting as a
+  deliberate, visible operator choice.
 - **`sandbox.docker` cleanup is unresolved.** Teardown is `--rm` only, `close()` is a no-op, and
   argv sets no `--name`/`--label`, so an interrupted run can leave one unidentifiable container.
   That is why the claim stays experimental.

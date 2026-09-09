@@ -255,11 +255,24 @@ class AgentResult(BoundaryModel):
 
 
 class Approval(BoundaryModel):
+    """One gate decision and the evidence that binds it.
+
+    ``mode`` says which authority produced the decision, so a reader never has to infer it from the
+    actor string: "human" (an identified answer), "auto" (a gate the blueprint declares automatic,
+    answered by the operator's own default) or "replay" (an explicitly declared replay fixture,
+    which ``approval_policy.check_recorded`` refuses for managed work). ``cell_id``/``cell_epoch``
+    and ``artifact_sha256`` fence the answer to one Cell epoch and one artifact, so it cannot be
+    replayed against a different epoch or a changed artifact.
+    """
+
     gate: Literal["intent", "plan"]
     decision: Literal["approve", "reject"]
-    actor: str = Field(min_length=1)  # os user, Airflow responded_by_user, or "auto"
+    actor: str = Field(min_length=1)  # os user, Airflow responded_by_user, "auto" or "replay:<id>"
     at: datetime
     artifact_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    mode: Literal["human", "auto", "replay"] = "human"
+    cell_id: str | None = None
+    cell_epoch: int | None = Field(default=None, ge=1)
 
 
 class StageResult(BoundaryModel):

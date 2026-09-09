@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
 from swfactory.blueprint import load
 from swfactory.cli import execute
 from swfactory.models import RunReport
@@ -51,7 +52,7 @@ def run(tmp_path_factory: pytest.TempPathFactory) -> tuple[RunReport, Path, dict
     cfg = bp.config(
         job,
         run_id=RUN_ID,
-        approve="auto",
+        gate_replay=str(SCRIPTED_REPLAY_FIXTURE),
         agent="scripted",
         sandbox="local",
         scm="local",
@@ -144,7 +145,7 @@ def test_rerun_with_same_run_dir_skips_every_stage_but_deliver(run, tmp_path: Pa
     cfg = bp.config(
         job,
         run_id=RUN_ID,
-        approve="auto",
+        gate_replay=str(SCRIPTED_REPLAY_FIXTURE),
         agent="scripted",
         sandbox="local",
         scm="local",
@@ -182,7 +183,11 @@ def test_report_numbers(run) -> None:
     assert report.tests_passed is True
     assert report.agent == "scripted" and report.scm == "local"
     assert report.total_cost_usd == 0.0
-    assert [(a.gate, a.actor) for a in report.approvals] == [("intent", "auto"), ("plan", "auto")]
+    replay = "replay:scripted-replay"  # the declared gate replay fixture, never a person
+    assert [(a.gate, a.actor, a.mode) for a in report.approvals] == [
+        ("intent", replay, "replay"),
+        ("plan", replay, "replay"),
+    ]
     assert report.pr_url == f"file://{(_pr_path(run)).resolve()}"
 
 
@@ -214,7 +219,7 @@ def test_pr_markdown(run) -> None:
     assert "labels: factory, agent-authored" in pr and "factory:blocked" not in pr
     assert "No test for a negative baseline" in pr  # the major
     assert "1 more dropped by the cap of 3" in pr
-    assert "| intent | approve | auto |" in pr
+    assert "| intent | approve | replay:scripted-replay |" in pr
     assert "| build_and_test | ok |" in pr
 
 
@@ -225,7 +230,7 @@ def test_metrics_and_approvals(run) -> None:
     assert metrics["agent"] == "scripted" and metrics["run_id"] == RUN_ID
     assert metrics["iterations"] == 2 and metrics["first_pass_ci"] is False
     assert metrics["findings_by_severity"] == {"blocker": 0, "major": 1, "minor": 0, "nit": 3}
-    assert metrics["approvers"] == ["auto", "auto"]
+    assert metrics["approvers"] == ["replay:scripted-replay"] * 2  # never a person, never "auto"
     assert metrics["blueprint"] == "factory"
     assert set(metrics["stage_durations_s"]) == {
         "intent",

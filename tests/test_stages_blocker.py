@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from swfactory.agent import ScriptedAgent
+from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
 from swfactory.blueprint import load
 from swfactory.cli import execute
 from swfactory.models import Approval, RunReport
@@ -35,7 +36,7 @@ def _run(tmp_path: Path, fixtures: list[Path] = FIXTURES, approver=None, **overr
     bp = load("factory")
     (job,) = bp.jobs({"issues": ["demo/issue.md"]})
     defaults: dict[str, object] = {
-        "approve": "auto",
+        "gate_replay": str(SCRIPTED_REPLAY_FIXTURE),
         "agent": "scripted",
         "sandbox": "local",
         "scm": "local",

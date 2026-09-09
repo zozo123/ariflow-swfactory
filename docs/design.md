@@ -80,7 +80,7 @@ and an extra `hotfix` PR label. A blueprint is validated by `swfactory.blueprint
 | `[trigger]` | manual or cron admission | cron requires `cron`; a scheduled execution needs non-empty `issues`; runtime run configuration overrides those defaults |
 | `[[targets]]` | `repo`, `dir`, `base_branch` — jobs per run = issues x targets | >= 1 |
 | `[stages] order` | which stage functions run | subsequence of `intent spec plan build_and_test review deliver`, first `intent`, last `deliver`; omitted inputs render `(none)` |
-| `[[gates]]` | `after`, `artifact`, `timeout_h`, `assigned`, `auto` | `after` in `{intent, plan}` and in `order`; `auto=true` -> the gate defaults to Approve (actor `auto`) |
+| `[[gates]]` | `after`, `artifact`, `timeout_h`, `assigned`, `mode` | `after` in `{intent, plan}` and in `order`; `mode="human"` (default) -> no operator default, an unanswered gate times out; `mode="auto"` -> defaults to Approve (actor `auto`). Legacy `auto=true/false` is folded into `mode`; declaring both and disagreeing is an error |
 | `[limits]` | build/review iterations, turns, USD per stage / per **job**, `stage_timeout_h`, `max_parallel_jobs` | `budget_usd_per_stage <= budget_usd` |
 | `[policy.<stage>]` | `extra_allowed_tools`, `model` | additive path-scoped file/search tools only; no shell, web, task, or MCP tools; no writes in read-only stages |
 | `[review]` / `[deliver]` | `nit_cap`; PR `labels` | |
@@ -130,8 +130,16 @@ never resolves HITL tasks, so mark the gates:
 uv run airflow dags test factory --conf '{"issues":["demo/issue.md"]}' --mark-success-pattern 'job\.approve_.*'
 ```
 
-`SWF_APPROVE=auto` (or a gate's `auto = true`) only makes a real run's gate default to Approve once
-its `timeout_h` elapses; a gate's `assigned` users become the HITL `assigned_users`. Gates are a
+A gate declares its own authority with `gates[].mode`. `mode = "auto"` makes the gate default to
+Approve once its `timeout_h` elapses; `mode = "human"` (the default) never gets a default, so an
+unanswered gate times out and fails. **No environment variable widens this** — `SWF_APPROVE=auto` is
+not an approver, and a missing or empty response is refused rather than recorded as actor `auto`
+(#2066). The only thing that may stand in for a missing response is the explicitly declared replay
+fixture `SWF_GATE_REPLAY` (see `demo/gate-replay.json`), which `swfactory.approval_policy` refuses
+outright for backend-managed cells, so a smoke run cannot authorize managed work by marking a gate
+successful. A recorded decision carries actor, `mode`, the Cell id/epoch and the approved artifact's
+sha256, and `deliver` re-checks all four before publishing. A gate's `assigned` users become the
+HITL `assigned_users`. Gates are a
 `GateOperator` (an `ApprovalOperator` that never skips on its own): the response — Approve or
 Reject, with `responded_by_user` — lands in XCom, `record_<stage>` writes it to `approvals.json`,
 and on Reject raises `AirflowSkipException`; the work stages skip while `deliver`/`metrics` run with
@@ -426,7 +434,7 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md#release) for the exact commands.
 ## Stress test
 
 `blueprints/stress.toml` is a third line whose purpose is to exercise the spine under fan-out:
-the default stage order, both gates `auto = true` (the unattended backstop), `max_parallel_jobs =
+the default stage order, both gates `mode = "auto"` (the unattended backstop), `max_parallel_jobs =
 2`, and **two** targets — `demo/target` plus `demo/target-b`, a copy the harness materialises into
 the run's cwd rather than a byte-identical second copy committed to the repo (the recorded patches
 carry blob hashes, so a second target has to *be* that copy). With `demo/issue2.md` (DEMO-2, whose
@@ -448,7 +456,9 @@ workdir holds another job's `docs/factory/<issue>/`, that `fan_out` returned exa
 `AIRFLOW_HOME` on a free port, unpauses the DAG (new DAGs start paused), triggers it over REST,
 answers all 8 gates with `swfactory approve <run> <gate> --map-index <i>`, prints a per-job table
 and exits non-zero on any failed task — the half `dag.test()` cannot show, since it only marks a
-HITL task success: the committed actor is `auto` under `dag.test()` and `admin` under the script.
+HITL task success: the committed actor is `replay:scripted-replay` under `dag.test()` (marking the
+gate successful leaves no response, so the declared `SWF_GATE_REPLAY` fixture answers it) and
+`admin` under the script.
 One live-only caveat the script encodes: a gate is only answered once its task instance has been
 `awaiting_input` since the previous poll. Answering in the sub-second window between the operator
 creating the HITL detail and the task parking makes the scheduler see a stale executor event
