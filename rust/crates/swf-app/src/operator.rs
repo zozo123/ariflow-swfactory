@@ -1,5 +1,6 @@
 //! Read-only fleet/control-plane operations shared by CLI and TUI.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use swf_adapters::factory::FactoryApi;
@@ -8,27 +9,23 @@ use swf_domain::operator::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::backend_context::BackendContext;
 use crate::context::Context;
+use crate::control_attention::ControlAttention;
 use crate::ops::{OpsError, Result};
 
 pub struct OperatorOps {
-    api: FactoryApi,
+    api: Arc<FactoryApi>,
 }
 
 impl OperatorOps {
     pub fn connect(context: &Context, timeout: Duration) -> Result<Self> {
-        let backend_url =
-            std::env::var("SWF_BACKEND_URL").unwrap_or_else(|_| context.backend_url.clone());
-        if backend_url.is_empty() {
-            return Err(OpsError::operational(
-                "fleet operations require the Python backend; this context is in direct mode",
-            )
-            .with_hint("configure --backend-url and SWF_BACKEND_TOKEN"));
-        }
-        let token = std::env::var("SWF_BACKEND_TOKEN").unwrap_or_default();
-        Ok(Self {
-            api: FactoryApi::new(&backend_url, token, timeout)?,
-        })
+        let backend = BackendContext::connect(context, timeout, "fleet operations")?;
+        Ok(Self::from_backend(&backend))
+    }
+
+    pub fn from_backend(backend: &BackendContext) -> Self {
+        Self { api: backend.api() }
     }
 
     pub async fn queue(&self, limit: usize, cancel: &CancellationToken) -> Result<QueueSnapshot> {
@@ -65,6 +62,22 @@ impl OperatorOps {
 
     pub async fn fleet(&self, cancel: &CancellationToken) -> Result<FleetSummary> {
         Ok(self.api.fleet(cancel).await?)
+    }
+
+    /// One actionable view over queued work, unresolved mutation debt and fleet cleanup debt.
+    ///
+    /// The backend remains the persistence authority; this method performs only bounded reads and
+    /// then feeds one pure projection shared by CLI/TUI callers.
+    pub async fn attention(
+        &self,
+        limit: usize,
+        cancel: &CancellationToken,
+    ) -> Result<ControlAttention> {
+        validate_limit(limit)?;
+        let queue = self.queue(limit, cancel).await?;
+        let operations = self.operations(limit, cancel).await?;
+        let fleet = self.fleet(cancel).await?;
+        Ok(ControlAttention::from_parts(&queue, &operations, &fleet))
     }
 
     pub async fn capabilities(&self, cancel: &CancellationToken) -> Result<BackendCapabilities> {

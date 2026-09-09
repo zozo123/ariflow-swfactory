@@ -273,7 +273,13 @@ def test_public_probes_answer_without_a_token(client: Client) -> None:
     assert status == 200
     assert ready["read_ready"] is True and ready["mutation_ready"] is True
 
-    status, health = client.call("GET", "/v1/health", token=None)
+    # `/health` is NOT public. It returns the full capability document -- drain state, serving
+    # generation, every readiness flag -- and #2088 moved it behind the token for that reason.
+    # `/readiness` above is the minimal unauthenticated subset an orchestrator needs. An earlier
+    # version of this test asserted 200 here, which pinned the leak as the contract.
+    status, payload = client.call("GET", "/v1/health", token=None)
+    assert status == 401, payload
+    status, health = client.call("GET", "/v1/health")
     assert status == 200
     assert health["service"] == "swfactory" and isinstance(health["api_version"], int)
     assert health["mutation_ready"] is True

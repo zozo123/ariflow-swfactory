@@ -450,6 +450,13 @@ def test_the_local_stack_gives_its_workers_what_the_check_asks_for() -> None:
     airflow = compose["services"]["airflow"]["environment"]
     for var in doctor.MANAGED_WORKER_VARS:
         assert var in airflow, f"the airflow service must carry {var}: managed jobs read it in-process"
+    # The URL must be the fixed in-network address, not `${SWF_BACKEND_URL:-...}`. A host shell that
+    # exports the console's localhost:8082 would be interpolated into the worker and route it to a
+    # port inside its own container. This regressed once already, through a clean auto-merge that
+    # kept the key and swapped the value -- the presence check above passed it.
+    assert airflow["SWF_BACKEND_URL"] == "http://backend:8082", (
+        f"SWF_BACKEND_URL is {airflow['SWF_BACKEND_URL']!r}; it must be the fixed service address"
+    )
     # The console's backend is not opt-in: the built-in context and every managed cell address it.
     assert "profiles" not in compose["services"]["backend"]
 

@@ -40,6 +40,7 @@ from swfactory.cells import (
 from swfactory.control import AirflowClient, ControlError, GitHubClient, IsloClient, MetricsSource
 from swfactory.control_kernel import ControlKernel
 from swfactory.deployment_profile import assert_supported_state_root
+from swfactory.doctor import _check_managed_workers
 from swfactory.durable_admission import (
     MAX_DISPATCH_ATTEMPTS,
     WORK_ORDER_SCHEMA,
@@ -1133,6 +1134,24 @@ class Factory:
                     "required": True,
                 },
             ]
+            # The row the console path was missing (#2050 added it to the Python doctor only): a
+            # managed cell fails closed in its FIRST stage without SWF_BACKEND_URL/SWF_BACKEND_TOKEN,
+            # and from `swf doctor` that looked like a healthy backend. One honesty caveat, written
+            # into `detail`: this reads THIS process's environment. The workers carry their own copy
+            # (Compose passes the pair to the airflow service separately), so a green row here means
+            # the backend host is configured, not that every worker is -- the compose guard in
+            # tests/test_doctor.py is what pins the worker side.
+            workers = _check_managed_workers(os.environ)
+            checks.append(
+                {
+                    "name": "managed worker callback",
+                    "ok": workers.ok,
+                    "status": workers.status,
+                    "detail": workers.detail + " (as seen from the backend host's environment)",
+                    "fix": workers.fix,
+                    "required": workers.required,
+                }
+            )
             try:
                 health = self._checked_airflow("GET", "/monitor/health")
                 for name in ("metadatabase", "scheduler"):
