@@ -5,7 +5,9 @@ around Vercel's ``skills`` CLI: discover packages, install an explicitly selecte
 canonical package identities for the factory and Vercel's ``find-skills`` skill.
 
 Networked acquisition stays outside coding workers so installing a skill cannot bypass Airflow,
-Factory Cell fencing, sandbox policy, evidence gates, or publication authority.
+Factory Cell fencing, sandbox policy, evidence gates, or publication authority. The CLI version is
+pinned because this code executes it on the trusted operator host; upgrades are deliberate source
+changes rather than an implicit ``latest`` dependency.
 """
 
 from __future__ import annotations
@@ -20,7 +22,8 @@ from dataclasses import dataclass
 from swfactory.models import StageError
 
 _TOKEN = re.compile(r"^[A-Za-z0-9_.-]+$")
-SKILLS_CLI: tuple[str, ...] = ("npx", "-y", "skills@latest")
+SKILLS_CLI_VERSION = "1.5.25"
+SKILLS_CLI: tuple[str, ...] = ("npx", "-y", f"skills@{SKILLS_CLI_VERSION}")
 SKILLS_SH_URL = "https://skills.sh"
 VERCEL_SKILLS_REPO = "https://github.com/vercel-labs/skills"
 
@@ -124,11 +127,15 @@ def run(argv: Sequence[str], *, timeout_s: int = 120) -> str:
 
 
 def catalog() -> dict[str, str]:
-    """Return canonical package identities used by the factory."""
+    """Return canonical package identities and the executable distribution pin."""
 
     return {
         "factory": SWFACTORY_SKILL.source,
+        "factory_catalog": SWFACTORY_SKILL.catalog_url,
         "harness": SWFACTORY_HARNESS_SKILL.source,
+        "harness_catalog": SWFACTORY_HARNESS_SKILL.catalog_url,
+        "skills_cli": f"skills@{SKILLS_CLI_VERSION}",
+        "skills_cli_version": SKILLS_CLI_VERSION,
         "vercel_find_skills": VERCEL_FIND_SKILLS.source,
         "vercel_repository": VERCEL_SKILLS_REPO,
         "skills_sh": SKILLS_SH_URL,
@@ -157,6 +164,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     install_self.add_argument("--agent")
     install_self.add_argument("--copy", action="store_true")
 
+    install_harness = commands.add_parser("install-harness", help="install the outer-harness skill")
+    install_harness.add_argument("--global", dest="global_scope", action="store_true")
+    install_harness.add_argument("--agent")
+    install_harness.add_argument("--copy", action="store_true")
+
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command == "catalog":
         print(json.dumps(catalog(), indent=2, sort_keys=True))
@@ -168,7 +180,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(run(find_argv(args.query, owner=args.owner)), end="")
         return 0
 
-    package = VERCEL_FIND_SKILLS if args.command == "bootstrap" else SWFACTORY_SKILL
+    if args.command == "bootstrap":
+        package = VERCEL_FIND_SKILLS
+    elif args.command == "install-harness":
+        package = SWFACTORY_HARNESS_SKILL
+    else:
+        package = SWFACTORY_SKILL
     print(
         run(
             install_argv(
