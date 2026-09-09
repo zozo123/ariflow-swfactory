@@ -568,7 +568,8 @@ remote, arena, branch = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 patch = (
     "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n"
     "From: swfactory-bot <bot@example.com>\nDate: Mon, 1 Jan 2026 00:00:00 +0000\n"
-    "Subject: [PATCH] session A\n\n---\n demo/target/a.txt | 1 +\n 1 file changed, 1 insertion(+)\n\n"
+    "Subject: [PATCH] session A\n\nFactory-Instance: session-a\n---\n"
+    " demo/target/a.txt | 1 +\n 1 file changed, 1 insertion(+)\n\n"
     "diff --git a/demo/target/a.txt b/demo/target/a.txt\nnew file mode 100644\n"
     "index 0000000..0000001\n--- /dev/null\n+++ b/demo/target/a.txt\n@@ -0,0 +1 @@\n+A\n-- \n2.39.0\n"
 ).encode()
@@ -593,7 +594,8 @@ remote, arena, branch = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 patch = (
     "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n"
     "From: swfactory-bot <bot@example.com>\nDate: Mon, 1 Jan 2026 00:00:00 +0000\n"
-    "Subject: [PATCH] session B\n\n---\n demo/target/b.txt | 1 +\n 1 file changed, 1 insertion(+)\n\n"
+    "Subject: [PATCH] session B\n\nFactory-Instance: session-b\n---\n"
+    " demo/target/b.txt | 1 +\n 1 file changed, 1 insertion(+)\n\n"
     "diff --git a/demo/target/b.txt b/demo/target/b.txt\nnew file mode 100644\n"
     "index 0000000..0000001\n--- /dev/null\n+++ b/demo/target/b.txt\n@@ -0,0 +1 @@\n+B\n-- \n2.39.0\n"
 ).encode()
@@ -603,7 +605,7 @@ LocalGitScm(remote, arena / "run-b").publish(
 )
 PYEOF
   [ "$b_rc" -ne 0 ] || fail "[two-sessions] session B published over session A instead of being refused"
-  grep -q "did not publish" "$arena/session-b.log" \
+  grep -q "published by session-a, not by this one (session-b)" "$arena/session-b.log" \
     || fail "[two-sessions] session B failed, but not with the refusal that names the other writer"
 
   # The three things a reviewer actually cares about.

@@ -49,7 +49,7 @@ def make_source_repo(root: Path) -> tuple[Path, bytes]:
     git(
         "-c", "user.name=swfactory-bot", "-c", "user.email=swfactory-bot@users.noreply.github.com",
         "commit", "-q", "-a", "-m", "build: add sub",
-        "--trailer", "Factory-Run=abc12345", "--trailer", "Agent=scripted",
+        "--trailer", "Factory-Run=abc12345", "--trailer", "Factory-Instance=swf-test", "--trailer", "Agent=scripted",
         cwd=repo,
     )  # fmt: skip
     patch = subprocess.run(
@@ -267,7 +267,7 @@ def _extra_commit_patch(repo: Path, msg: str = "build: add mul") -> bytes:
     """One more bot commit on the source repo's current branch; returns main..HEAD as a patch."""
     (repo / "mul.py").write_text("def mul(a, b):\n    return a * b\n")
     git("add", "mul.py", cwd=repo)
-    git("commit", "-q", "-m", msg, cwd=repo)
+    git("commit", "-q", "-m", msg, "--trailer", "Factory-Instance=swf-test", cwd=repo)
     return subprocess.run(
         ["git", "format-patch", "--stdout", "main..HEAD"], cwd=repo, capture_output=True, check=True
     ).stdout

@@ -57,6 +57,7 @@ class Scm(Protocol):
         body: str,
         labels: Sequence[str],
         allowed_prefixes: Sequence[str] | None = None,
+        identity: PublicationIdentity | None = None,
     ) -> str:
         """Apply ``patch`` (format-patch bytes) on a fresh clone, push ``branch``, open a PR.
 
@@ -131,7 +132,7 @@ def _pr_markdown(title: str, labels: Sequence[str], body: str) -> str:
     return f"# {title}\n\nlabels: {', '.join(labels) or '(none)'}\n\n{body.rstrip()}\n"
 
 
-def _apply_and_push(clone: Path, *, branch: str, patch: bytes, instance: str = "") -> None:
+def _apply_and_push(clone: Path, *, branch: str, patch: bytes) -> None:
     """checkout -b, `git am --3way` the patch (keeps bot author + trailers), push -u.
 
     ``factory/*`` is the bot-owned namespace: a retry of ``deliver`` rebuilds the same branch
@@ -157,14 +158,18 @@ def _apply_and_push(clone: Path, *, branch: str, patch: bytes, instance: str = "
     if not remote_head:
         _run(["git", "push", "-u", "origin", branch], clone)
         return
+    # Both sides of the comparison come from commits: the patch just applied says who made it, the
+    # remote head says who made that. No caller has to know its own name, so the managed boundary
+    # (which publishes on behalf of a worker in another process) cannot get it wrong either.
+    mine = _instance_of(clone, "HEAD")
     holder = _instance_of(clone, remote_head)
-    if holder != instance:
+    if not mine or holder != mine:
         raise StageError(
             "scm",
             f"{branch} on the remote is at {remote_head[:12]}, published by "
             f"{holder or 'an instance that left no Factory-Instance trailer'}, not by this one "
-            f"({instance}). Another factory session is working this issue. Refusing to overwrite "
-            "it; adopt its pull request instead.",
+            f"({mine or 'a patch with no Factory-Instance trailer'}). Another factory session is "
+            "working this issue. Refusing to overwrite it; adopt its pull request instead.",
             retryable=False,
         )
     try:
@@ -192,7 +197,10 @@ def _instance_of(clone: Path, sha: str) -> str:
     A commit with no trailer belongs to nobody this code can name -- an older build, or a person --
     and is therefore not ours to replace.
     """
-    _run(["git", "fetch", "--quiet", "--depth", "1", "origin", sha], clone)
+    try:
+        _run(["git", "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], clone)
+    except StageError:  # not in the clone yet: the ref moved after we cloned
+        _run(["git", "fetch", "--quiet", "--depth", "1", "origin", sha], clone)
     message = _run(["git", "log", "-1", "--format=%(trailers:key=Factory-Instance,valueonly)", sha], clone)
     return message.strip().splitlines()[0].strip() if message.strip() else ""
 
@@ -397,7 +405,7 @@ class LocalGitScm:
         with tempfile.TemporaryDirectory(prefix="swf-clone-") as tmp:
             clone = Path(tmp) / "clone"
             _run(["git", "clone", "--quiet", str(self.remote_dir), str(clone)], None)
-            _apply_and_push(clone, branch=branch, patch=patch, instance=identity.instance)
+            _apply_and_push(clone, branch=branch, patch=patch)
         self.run_dir.mkdir(parents=True, exist_ok=True)
         pr = self.run_dir / "pr.md"
         text = _pr_markdown(title, labels, body)
@@ -531,7 +539,7 @@ class GitHubScm:
             # Persist the helper in the clone so `git push` uses it (empty value resets globals).
             _run(["git", "config", "--add", "credential.helper", ""], clone)
             _run(["git", "config", "--add", "credential.helper", self._helper], clone)
-            _apply_and_push(clone, branch=branch, patch=patch, instance=identity.instance)
+            _apply_and_push(clone, branch=branch, patch=patch)
             self._ensure_labels(labels)
             body_file = Path(tmp) / "pr-body.md"
             # The marker travels in the body because the body is the one PR field every instance

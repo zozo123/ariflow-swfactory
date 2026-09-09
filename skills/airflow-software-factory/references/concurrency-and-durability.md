@@ -46,6 +46,14 @@ expiry strands its issue forever.
 uses. Every session working one issue × target converges on one ref and one pull request, adopted
 through a marker in the PR body rather than duplicated.
 
+**Who owns the ref is written on the commit.** Every commit the factory makes carries a
+`Factory-Instance: <id>` trailer, and `git am` preserves trailers, so the remote head itself says
+which instance published it. A publish compares the trailer on the patch it just applied with the
+trailer on the remote head: equal means a retry of one's own work (force-push, leased against that
+head); different — or absent on either side — means somebody else's branch, and the publish refuses
+and names the holder. Nothing is remembered in the process, so the answer survives a restart and is
+the same from every instance, including the managed boundary publishing on a worker's behalf.
+
 **A claim authorizes nothing.** It is advice about where to spend fuel, never permission to publish.
 The Cell epoch remains the mutation authority; the publication lease remains the arbiter of the ref.
 A test pins that no module on the mutation path imports the claim module, so a stolen, expired or
