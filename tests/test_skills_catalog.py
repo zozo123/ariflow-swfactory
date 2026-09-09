@@ -29,11 +29,7 @@ def test_skills_sh_manifest_matches_every_public_skill() -> None:
     assert config["$schema"] == "https://skills.sh/schemas/skills.sh.schema.json"
 
     published = {path.parent.name for path in SKILLS.glob("*/SKILL.md")}
-    grouped = {
-        slug
-        for grouping in config["groupings"]
-        for slug in grouping.get("skills", [])
-    }
+    grouped = {slug for grouping in config["groupings"] for slug in grouping.get("skills", [])}
     assert published == {"airflow-software-factory", "swfactory"}
     assert grouped == published
 
