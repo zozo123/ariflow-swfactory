@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from swfactory import work_stage
+from swfactory.call_accounting import CallLedger
 from swfactory.config import Config
 from swfactory.models import AgentResult, Issue, Plan, PlanTask, RunResult, StageError, StageResult
 from swfactory.stages import Ctx
@@ -116,9 +117,10 @@ class NodeAgent:
 
     kind = "scripted"
 
-    def __init__(self, sandbox: GitSandbox, edits: dict[str, list[str]]) -> None:
+    def __init__(self, sandbox: GitSandbox, edits: dict[str, list[str]], *, cost: float = 0.0) -> None:
         self.sandbox = sandbox
         self.edits = edits
+        self.cost = cost
         self.calls: list[tuple[str, int, str]] = []
 
     def run(self, sb: Any, *, stage: str, iteration: int, prompt: str = "", **kwargs: Any) -> AgentResult:
@@ -127,7 +129,7 @@ class NodeAgent:
         self.calls.append((stage, iteration, node))
         for path in self.edits.get(node, []):
             self.sandbox.write(path, f"# written by {node}\n")
-        return AgentResult(agent="scripted", data={"summary": f"{node} done"}, cost_usd=0.0)
+        return AgentResult(agent="scripted", data={"summary": f"{node} done"}, cost_usd=self.cost)
 
 
 class NoScm:
@@ -228,6 +230,28 @@ def test_a_failing_suite_after_fan_in_is_repaired_within_the_build_budget(tmp_pa
     assert result.numbers["repair_iterations"] == 1
     assert result.numbers["first_pass_ci"] == 0
     assert result.numbers["tests_passed"] == 1
+
+
+def test_every_node_and_repair_attempt_is_journalled_as_its_own_paid_call(tmp_path: Path) -> None:
+    """A work graph spends per node and again per repair. Accounting only the stage total would
+    leave those calls invisible to the ceiling the next task rebuilds, and would lose whichever of
+    them was in flight when the cell died -- the graph is where most of a run's money goes."""
+    plan = _plan(
+        PlanTask(id="b", title="B", depends_on=["a"], files=["src/b.py"]),
+        PlanTask(id="a", title="A", files=["src/a.py"]),
+    )
+    sandbox = GitSandbox(junit=[RED, GREEN])
+    agent = NodeAgent(sandbox, {"a": ["src/a.py"], "b": ["src/b.py"], "fix": ["src/a.py"]}, cost=0.5)
+    ctx = _ctx(tmp_path, sandbox, agent, plan)
+
+    work_stage.build_and_test(ctx)
+
+    ledger = CallLedger(ctx.state)
+    records = ledger.records()
+    assert [(row.stage, row.iteration) for row in records] == [("build", 1), ("build", 2), ("fix", 3)]
+    assert [row.state for row in records] == ["committed"] * 3
+    assert [row.settled_usd for row in records] == [0.5, 0.5, 0.5]
+    assert ledger.charged_usd() == 1.5 and ledger.unreconciled() == []
 
 
 def test_a_suite_that_never_goes_green_stops_the_stage_within_its_bound(tmp_path: Path) -> None:

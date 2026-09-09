@@ -5,7 +5,9 @@ Every stage is a function ``Ctx -> StageResult`` that is idempotent: when the or
 log (``<run_dir>/state/stages.jsonl``, written by ``_timed`` on the orchestrator filesystem)
 already holds a completed record for it, it returns ``status="skipped"``. Skip decisions never
 read the sandbox: generated code and the target's test command execute there, so a compromised
-checkout must not be able to skip a stage. The run-level budget is seeded from the same host log.
+checkout must not be able to skip a stage. The run-level budget is rebuilt from the per-call ledger
+(``swfactory.call_accounting``, written around every provider call) with that host log as a floor:
+a stage record only exists once a stage returns, and money is spent long before that.
 Loops (build/fix, review/fix) live *inside* stage functions and are bounded by ``Config``. The
 agent never commits: stages commit with the bot identity and provenance trailers, and
 ``deliver`` hands the commits to the Scm as a patch stream. A blueprint (``Ctx.blueprint``) only
@@ -45,6 +47,7 @@ from swfactory import accepted_inputs
 from swfactory import metrics as metrics_mod
 from swfactory.agent import POLICIES, Agent, Policy, render_prompt
 from swfactory.approval_policy import GateMode, check_recorded, replay_approval
+from swfactory.call_accounting import CallLedger
 from swfactory.config import (
     FACTORY_ROOT,
     Config,
@@ -125,7 +128,7 @@ class Ctx:
     blueprint: Blueprint | None = None  # None => v1 defaults (PIPELINE, NIT_CAP, DEFAULT_LABELS)
     contract: TargetContract | None = None  # loaded by setup(); lazily on demand otherwise
     stages: list[StageResult] = field(default_factory=list)  # accumulated by run_pipeline
-    spent_usd: float = 0.0  # run guard; seeded from <run_dir>/state/stages.jsonl by _agent
+    spent_usd: float = 0.0  # run guard; seeded from the durable call ledger + stage log by _agent
     budget_seeded: bool = False  # spent_usd includes earlier tasks/processes of this run
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -343,41 +346,99 @@ def seed_budget(ctx: Ctx, *, refresh: bool = False) -> float:
     alone would let that CLI reuse an obsolete budget. Retain any in-process, unjournaled charge.
     """
     if not ctx.budget_seeded:
-        ctx.spent_usd += sum(r.cost_usd for r in _persisted(ctx))
+        ctx.spent_usd += _persisted_spend(ctx)
         ctx.budget_seeded = True
     elif refresh:
-        ctx.spent_usd = max(ctx.spent_usd, sum(r.cost_usd for r in _persisted(ctx)))
+        ctx.spent_usd = max(ctx.spent_usd, _persisted_spend(ctx))
     return ctx.spent_usd
+
+
+def _persisted_spend(ctx: Ctx) -> float:
+    """The most this run can be shown to have committed, from the two durable records of it.
+
+    The call ledger is the authority: it holds every call, including the ones no stage record will
+    ever describe because their stage died mid-call. It is therefore never below the stage log for
+    a run that this code accounted for. The stage log stays a floor because a run that began before
+    per-call accounting existed has cost only there, and dropping that would hand a resumed run
+    money it already spent.
+    """
+    ledger = CallLedger(ctx.state)
+    floor = ledger.floor_usd()
+    if floor is None:
+        # First contact between this ledger and the run. Everything the stage log holds right now
+        # was spent by calls the ledger never saw, so it is adopted once as the floor. If the ledger
+        # already has call rows (a run that predates the floor row itself), the ledger governs and
+        # the floor is zero: summing the stage log on top would double-count those very calls.
+        floor = ledger.adopt_floor(0.0 if ledger.records() else sum(r.cost_usd for r in _persisted(ctx)))
+    return round(floor + ledger.charged_usd(), 6)
+
+
+def unreconciled_spend(ctx: Ctx) -> float:
+    """Money this run has committed to calls whose usage nobody has observed yet."""
+    return CallLedger(ctx.state).unreconciled_usd()
 
 
 def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseModel] | None) -> AgentResult:
     """Run the agent for one stage call, enforcing the run-level budget and surfacing errors.
     Under srt the kernel ``denyWrite`` set follows the stage (``protected_for``): ``fix`` calls
     lose write access to the tests dir that ``build`` needed, matching the ``Edit(...)`` rules."""
-    seed_budget(ctx)
+    # Refresh, not seed: a call that died in THIS process left its reservation in the ledger and
+    # nothing in `ctx.spent_usd`, so the cached counter would under-count until a restart.
+    seed_budget(ctx, refresh=True)
     remaining = ctx.cfg.max_budget_usd - ctx.spent_usd
     if remaining <= 0:
-        raise StageError("policy", f"run budget exhausted before {stage}.{iteration}")
-    call_cfg = ctx.cfg.model_copy(
-        update={
-            "max_budget_usd_per_stage": min(ctx.cfg.max_budget_usd_per_stage, remaining),
-        }
-    )
+        # Name the in-doubt money in the refusal: an operator who only sees "exhausted" has no way
+        # to know the ceiling is held by calls nobody has observed, or that reconciling frees it.
+        unknown = unreconciled_spend(ctx)
+        detail = f" ({unknown:.2f} USD of it unreconciled)" if unknown else ""
+        raise StageError("policy", f"run budget exhausted before {stage}.{iteration}{detail}")
+    granted = min(ctx.cfg.max_budget_usd_per_stage, remaining)
+    call_cfg = ctx.cfg.model_copy(update={"max_budget_usd_per_stage": granted})
     protected = protected_for(_contract(ctx), stage)
     if hasattr(ctx.sb, "set_protected"):
         ctx.sb.set_protected(protected)
-    res = ctx.agent.run(
-        ctx.sb,
-        stage=stage,
-        iteration=iteration,
-        prompt=prompt,
-        policy=_policy(ctx, stage),
-        schema=schema,
-        cfg=call_cfg,
-        issue_id=ctx.issue.id,
-        protected=protected,
+    # Reserve BEFORE the provider can be paid. Everything after this line may be lost to a kill;
+    # this row is what makes the next process account for a call it never saw answer.
+    ledger = CallLedger(ctx.state)
+    attempt = ledger.reserve(stage=stage, iteration=iteration, reserved_usd=granted)
+    try:
+        res = ctx.agent.run(
+            ctx.sb,
+            stage=stage,
+            iteration=iteration,
+            prompt=prompt,
+            policy=_policy(ctx, stage),
+            schema=schema,
+            cfg=call_cfg,
+            issue_id=ctx.issue.id,
+            protected=protected,
+        )
+    except BaseException as error:
+        # A timeout or a dead cell says nothing about the provider's ledger. The request left, so
+        # the reservation stands as unknown spend until an observation resolves it; releasing it
+        # here would let the run buy the same money twice.
+        ledger.mark_unknown(attempt, error)
+        # Deliberately NOT `ctx.spent_usd += granted`. The ledger already carries the reservation as
+        # unknown spend at full value, and `seed_budget(refresh=True)` at the top of the next call
+        # reads it back. Adding it here as well pushed the phantom amount into the stage log via the
+        # `_timed` wrapper's `spent_usd - spent0`, and that record has no reconciliation: after an
+        # observation proved the provider never saw the request, the ledger charge fell to zero while
+        # the stage log kept the run pinned at the reservation -- forever. Money that reconciliation
+        # cannot return is not a reservation, it is a fine.
+        raise
+    # Settle before any further sandbox I/O: a failed envelope download must not erase spend.
+    ledger.settle(
+        attempt,
+        cost_usd=res.cost_usd,
+        receipt={
+            "session_id": res.session_id,
+            "num_turns": res.num_turns,
+            "duration_ms": res.duration_ms,
+            "subtype": res.subtype,
+            "is_error": res.is_error,
+            "agent": res.agent,
+        },
     )
-    # Charge before any further sandbox I/O: a failed envelope download must not erase spend.
     ctx.spent_usd += res.cost_usd
     if ctx.spent_usd > ctx.cfg.max_budget_usd:
         raise StageError(
