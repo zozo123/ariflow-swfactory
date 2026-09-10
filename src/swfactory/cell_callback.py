@@ -17,6 +17,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -24,35 +25,21 @@ class CellCallbackError(RuntimeError):
     pass
 
 
-def transition(job: dict[str, Any], state: str, *, operation_key: str) -> dict[str, Any] | None:
-    """Report one authoritative lifecycle transition for a backend-managed mapped job.
+def post(path: str, body: dict[str, Any], *, env: Mapping[str, str] | None = None, timeout: float = 10.0) -> Any:
+    """One authenticated ``POST`` to the backend's ``/v1`` surface; the decoded JSON answer.
 
-    A managed job fails closed when the callback endpoint/credential is missing or unavailable:
-    continuing would let compute advance while the durable control plane believes the old state and
-    would leak admission capacity. Unmanaged/direct runs intentionally return ``None``.
+    Fails closed when ``SWF_BACKEND_URL``/``SWF_BACKEND_TOKEN`` are missing or the backend is
+    unreachable or refuses: a worker that guessed the control plane's answer would advance while
+    the durable state stayed put.
     """
-    if not bool(job.get("cell_managed")):
-        return None
-    cell_id = job.get("cell_id")
-    epoch = job.get("cell_epoch")
-    if not isinstance(cell_id, str) or type(epoch) is not int or epoch < 1:
-        raise CellCallbackError("managed job has invalid Factory Cell binding")
-    base = (os.getenv("SWF_BACKEND_URL") or "").rstrip("/")
-    token = os.getenv("SWF_BACKEND_TOKEN") or ""
+    env = os.environ if env is None else env
+    base = (env.get("SWF_BACKEND_URL") or "").rstrip("/")
+    token = env.get("SWF_BACKEND_TOKEN") or ""
     if not base or len(token) < 32:
         raise CellCallbackError("managed Airflow workers require SWF_BACKEND_URL and SWF_BACKEND_TOKEN")
-    payload = json.dumps(
-        {
-            "cell_id": cell_id,
-            "epoch": epoch,
-            "state": state,
-            "operation_key": operation_key,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
+    payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
     request = urllib.request.Request(
-        base + "/v1/cells/transition",
+        base + "/v1" + path,
         data=payload,
         method="POST",
         headers={
@@ -62,7 +49,7 @@ def transition(job: dict[str, Any], state: str, *, operation_key: str) -> dict[s
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read(1024 * 1024 + 1)
             status = response.status
     except urllib.error.HTTPError as error:
@@ -79,9 +66,26 @@ def transition(job: dict[str, Any], state: str, *, operation_key: str) -> dict[s
             detail = f"HTTP {status}"
         raise CellCallbackError(f"Factory Cell callback refused: {detail}")
     try:
-        result = json.loads(raw) if raw else {}
+        return json.loads(raw) if raw else {}
     except ValueError as error:
         raise CellCallbackError("Factory Cell callback returned invalid JSON") from error
+
+
+def transition(job: dict[str, Any], state: str, *, operation_key: str) -> dict[str, Any] | None:
+    """Report one authoritative lifecycle transition for a backend-managed mapped job.
+
+    A managed job fails closed when the callback endpoint/credential is missing or unavailable:
+    continuing would let compute advance while the durable control plane believes the old state and
+    would leak admission capacity. Unmanaged/direct runs intentionally return ``None``.
+    """
+    if not bool(job.get("cell_managed")):
+        return None
+    cell_id = job.get("cell_id")
+    epoch = job.get("cell_epoch")
+    if not isinstance(cell_id, str) or type(epoch) is not int or epoch < 1:
+        raise CellCallbackError("managed job has invalid Factory Cell binding")
+    payload = {"cell_id": cell_id, "epoch": epoch, "state": state, "operation_key": operation_key}
+    result = post("/cells/transition", payload)
     if not isinstance(result, dict):
         raise CellCallbackError("Factory Cell callback returned invalid document")
     cell = result.get("cell")

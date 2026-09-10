@@ -14,19 +14,32 @@ import os
 import re
 import statistics
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 import yaml
 from pydantic import BaseModel
 
+from swfactory import cell_callback
 from swfactory.agent import POLICIES, Agent, render_prompt
+from swfactory.cells import TERMINAL_STATES, CellIdentity
+from swfactory.cleanup_receipt import CleanupReceipt, CleanupStatus
 from swfactory.config import Config
+from swfactory.idempotency import MutationOutcome, OperationError, OperationJournal, OperationRef
 from swfactory.metrics import CREATED_KEYS, first_timestamp, load_all
 from swfactory.models import Diagnosis
+from swfactory.runtime import run_id_for
 from swfactory.sandbox import Sandbox
+from swfactory.sandbox_governance import (
+    CleanupDebt,
+    CleanupDecision,
+    ResourceObservation,
+    SandboxIdentity,
+    authorize_cleanup,
+)
 from swfactory.scm import Scm
 
 Action = Literal["log", "diagnose", "propose"]
@@ -300,11 +313,33 @@ def _log_line(breach: Breach) -> str:
 
 # ---------------------------------------------------------------- sandbox sweep
 
-Runner = Callable[[Sequence[str]], Any]
-
-
 SANDBOX_NAME_RE = re.compile(r"^swf-[a-z0-9][a-z0-9_-]*-[0-9a-f]{8}$")  # what THIS factory names
 OWNER_ENV = "SWF_SANDBOX_OWNER"
+CLEANUP_KIND = "sandbox_cleanup"  # the journal kind whose retry budget idempotency.py already declares
+SWEEP_LIMIT = 50  # removals per sweep: one nightly pass must stay bounded and observable
+
+
+class SandboxProvider(Protocol):
+    """What the sweep needs from ``islo`` (``control.IsloClient`` in production)."""
+
+    def listing(self) -> str: ...
+
+    def remove(self, name: str) -> Any: ...
+
+
+class CleanupControl(Protocol):
+    """The backend's ``ControlKernel``: the durable journal every removal intent is written to."""
+
+    operations: OperationJournal
+
+    def mutate(
+        self,
+        ref: OperationRef,
+        fn: Callable[[], Any],
+        *,
+        replay_safe: bool = False,
+        reconcile: Callable[[], MutationOutcome] | None = None,
+    ) -> Any: ...
 
 
 def owned_sandboxes(list_json: str, owner: str) -> list[dict]:
@@ -339,6 +374,7 @@ def sweep_orphans(list_json: str, ttl_s: int, now: datetime, *, owner: str) -> l
 
     Two independent filters, both required: the entry's ``created_by`` equals ``owner`` and the
     name matches the factory's own naming pattern. Without an owner nothing is ever returned.
+    Age and naming only *nominate*: whether a nominee is an orphan is the Cell's call (below).
     """
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
@@ -353,42 +389,180 @@ def sweep_orphans(list_json: str, ttl_s: int, now: datetime, *, owner: str) -> l
     return names
 
 
-def remove_orphans(names: Sequence[str], runner: Runner) -> list[str]:
-    """Best-effort ``islo rm`` for each factory-named sandbox via ``runner``; returns removed."""
-    removed: list[str] = []
-    for name in names:
-        if not SANDBOX_NAME_RE.match(name):  # defense in depth: never rm a foreign name
-            print(f"maintain: refusing to remove non-factory sandbox {name!r}")
-            continue
-        try:
-            runner(["islo", "rm", name, "--output", "plain"])
-        except Exception as e:  # noqa: BLE001 - one failed rm must not abort the sweep
-            print(f"maintain: failed to remove {name}: {e}")
-            continue
-        print(f"maintain: removed orphan sandbox {name}")
-        removed.append(name)
-    return removed
+def cell_for_sandbox(name: str, cells: Iterable[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+    """The Cell whose bound Airflow run named this sandbox, else ``None``.
 
-
-def sweep_sandboxes(ttl_s: int, *, owner: str | None = None, runner: Runner | None = None) -> list[str]:
-    """Remove this owner's orphaned factory sandboxes older than ``ttl_s``.
-
-    ``owner`` (or ``$SWF_SANDBOX_OWNER``) is REQUIRED: the sweep refuses to run when it cannot
-    prove whose sandboxes it is looking at. Lists with plain ``islo ls`` (own scope, never
-    ``--all``) and still filters by ``created_by``.
+    The link is the one ``dags/blueprints.py`` builds the name from: ``swf-<slug>-<run8>`` with
+    ``run8 = run_id_for(airflow_run_id, map_index)``. A re-activated Cell clears its run binding,
+    so a sandbox from an earlier epoch is unowned here -- that lifecycle is over, which is the only
+    reason the Cell could re-arm at all.
     """
-    owner = owner or os.environ.get(OWNER_ENV, "")
+    run8 = name.rsplit("-", 1)[-1]
+    for cell in cells:
+        run_id = cell.get("airflow_run_id")
+        if run_id and run_id_for(str(run_id), int(cell.get("map_index") or 0)) == run8:
+            return cell
+    return None
+
+
+def sandbox_identity(item: Mapping[str, Any], cell: Mapping[str, Any] | None, *, owner: str) -> SandboxIdentity:
+    """Durable identity a removal is journaled under.
+
+    Owned: the Cell and epoch that bound the run. Unowned: the deterministic identity of the
+    resource itself, so a lost ``rm`` on a Cell-less sandbox is still remembered. ``attempt_id`` is
+    the provider's creation stamp: a later sandbox reusing the name is a different resource and
+    must not inherit this one's receipt.
+    """
+    name = str(item.get("name") or "")
+    created = first_timestamp(item, CREATED_KEYS)
+    attempt = created.isoformat() if created is not None else name.rsplit("-", 1)[-1]
+    if cell is None:
+        return SandboxIdentity("islo", CellIdentity(owner, "islo", name).stable_id(), 1, attempt)
+    return SandboxIdentity("islo", str(cell["cell_id"]), int(cell["epoch"]), attempt)
+
+
+def authorize_removal(
+    identity: SandboxIdentity, item: Mapping[str, Any], cell: Mapping[str, Any] | None
+) -> CleanupDecision:
+    """``sandbox_governance.authorize_cleanup`` over durable state: islo carries no labels, so the
+    Cell row (or the resource's own identity) is the label authority. A live Cell at its current
+    epoch keeps its sandbox however old it is."""
+    observation = ResourceObservation(str(item.get("name") or ""), identity.labels, item.get("status") == "running")
+    if cell is None:
+        return authorize_cleanup(identity, observation, current_epoch=1, active=False)
+    return authorize_cleanup(
+        identity, observation, current_epoch=int(cell["epoch"]), active=cell.get("state") not in TERMINAL_STATES
+    )
+
+
+def sweep_sandboxes(
+    ttl_s: int,
+    *,
+    owner: str,
+    islo: SandboxProvider,
+    cells: Iterable[Mapping[str, Any]],
+    control: CleanupControl,
+    now: datetime | None = None,
+    limit: int = SWEEP_LIMIT,
+) -> dict[str, list[str]]:
+    """Remove this owner's orphaned factory sandboxes older than ``ttl_s``; the backend's sweep.
+
+    ``owner`` is REQUIRED: the sweep refuses to run when it cannot prove whose sandboxes it is
+    looking at. Lists with plain ``islo ls`` (own scope, never ``--all``), filters by
+    ``created_by`` and factory naming, then asks the Cell store before every ``rm``: a sandbox a
+    live Cell owns at its current epoch is kept. Each removal is a ``sandbox_cleanup`` operation in
+    the journal, so a lost ``rm`` reply is observed, retried or settled -- never a print.
+    ``debt`` names the removals still unresolved after this pass; ``reconciled`` the earlier
+    in-doubt removals this pass could settle.
+    """
+    report: dict[str, list[str]] = {"removed": [], "kept": [], "debt": [], "reconciled": []}
     if not owner:
         print(f"maintain: {OWNER_ENV} not set; refusing to sweep sandboxes")
-        return []
-    runner = runner or _islo
-    listing = runner(["islo", "ls", "--output", "json"])
-    names = sweep_orphans(str(listing or ""), ttl_s, datetime.now(UTC), owner=owner)
-    return remove_orphans(names, runner)
+        return report
+    now = now or datetime.now(UTC)
+    listing = islo.listing()
+    items = {str(it.get("name") or ""): it for it in owned_sandboxes(listing, owner)}
+    debt = CleanupDebt()
+    for name in sweep_orphans(listing, ttl_s, now, owner=owner)[: max(limit, 0)]:
+        item, cell = items[name], cell_for_sandbox(name, cells)
+        identity = sandbox_identity(item, cell, owner=owner)
+        decision = authorize_removal(identity, item, cell)
+        if decision != CleanupDecision.REMOVE:
+            print(f"maintain: keeping {name}: {decision} (owned by {identity.cell_id}@{identity.epoch})")
+            report["kept"].append(name)
+            continue
+        debt.record(name, identity)
+        ref = OperationRef.build(identity.cell_id, identity.epoch, CLEANUP_KIND, name, identity.attempt_id)
+        if _remove(ref, name, islo=islo, control=control, owner=owner) is not None:
+            debt.settle(name, identity)
+            print(f"maintain: removed orphan sandbox {name}")
+            report["removed"].append(name)
+    report["debt"] = sorted(debt.outstanding)
+    report["reconciled"] = _settle_absent(control.operations, present=set(items))
+    return report
 
 
-def _islo(argv: Sequence[str]) -> str:
-    proc = subprocess.run(list(argv), capture_output=True, text=True, timeout=300, check=False)
-    if proc.returncode != 0:
-        raise RuntimeError(f"{' '.join(argv)} failed rc={proc.returncode}: {proc.stderr.strip()}")
-    return proc.stdout
+def _receipt(ref: OperationRef, name: str, status: CleanupStatus, *, requested_at: float) -> dict[str, Any]:
+    return CleanupReceipt.build(
+        cell_id=ref.cell_id,
+        epoch=ref.epoch,
+        operation_key=ref.key,
+        provider="islo",
+        resource_id=name,
+        status=status,
+        requested_at=requested_at,
+    ).to_dict()
+
+
+def _remove(ref: OperationRef, name: str, *, islo: SandboxProvider, control: CleanupControl, owner: str) -> Any:
+    """One journaled ``islo rm``; the committed receipt, or ``None`` while the outcome is unresolved.
+
+    The journal fails closed on a row it already holds, so a retry first *observes*: still listed
+    means the effect is absent and ``rm`` may run again; unlisted means it converged and only the
+    reply was lost. When ``rm`` itself raises, the same observation runs at once, so the common
+    lost-reply case settles in the sweep that caused it.
+    """
+    requested_at = time.time()
+
+    def observe() -> MutationOutcome:
+        evidence = {"resource": name}
+        try:
+            present = any(it.get("name") == name for it in owned_sandboxes(islo.listing(), owner))
+        except Exception as e:  # noqa: BLE001 - an unreadable provider is an unknown outcome, not a verdict
+            return MutationOutcome("ambiguous", evidence=evidence, detail=str(e)[:500])
+        if present:
+            return MutationOutcome("definitely_absent", evidence=evidence, detail="sandbox still listed")
+        return MutationOutcome("committed", _receipt(ref, name, "already_absent", requested_at=requested_at), evidence)
+
+    def rm() -> dict[str, Any]:
+        islo.remove(name)
+        return _receipt(ref, name, "converged", requested_at=requested_at)
+
+    try:
+        return control.mutate(ref, rm, replay_safe=True, reconcile=observe)
+    except Exception as e:  # noqa: BLE001 - one unresolved rm must not abort the sweep; the journal holds it
+        print(f"maintain: islo rm {name} unresolved ({e}); observing")
+    try:
+        outcome = control.operations.observe(ref, observe)
+    except (KeyError, OperationError) as e:  # refused before an intent existed, or the row moved under us
+        print(f"maintain: {name} left as cleanup debt: {e}")
+        return None
+    return outcome.result if outcome.status == "committed" else None
+
+
+def _settle_absent(journal: OperationJournal, *, present: set[str]) -> list[str]:
+    """Settle earlier in-doubt removals whose sandbox no longer appears in the own-scope listing.
+
+    A lost ``rm`` whose follow-up listing also failed leaves a row that names its resource in the
+    observation; once that resource is gone the effect converged, and the row must say so or the
+    fleet carries phantom cleanup debt forever.
+    """
+    settled: list[str] = []
+    for row in journal.unresolved(limit=1000):
+        if row.get("kind") != CLEANUP_KIND:
+            continue
+        name = str(((row.get("observation") or {}).get("evidence") or {}).get("resource") or "")
+        if not name or name in present:
+            continue
+        ref = OperationRef(str(row["cell_id"]), int(row["epoch"]), CLEANUP_KIND, str(row["operation_key"]))
+        receipt = _receipt(ref, name, "already_absent", requested_at=float(row.get("updated_at") or time.time()))
+        absent = MutationOutcome("committed", receipt, {"resource": name})
+        if journal.observe(ref, lambda outcome=absent: outcome).status == "committed":
+            print(f"maintain: reconciled lost removal of {name}")
+            settled.append(name)
+    return settled
+
+
+def request_sweep(ttl_s: int, *, env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """The DAG/CLI side: ask the backend to run ``sweep_sandboxes``.
+
+    A worker never runs ``islo rm`` itself. The Cell store that says who owns a sandbox and the
+    journal that remembers a removal live with the backend; a sweep that guessed from age alone is
+    the failure this exists to prevent, so without a backend it refuses rather than falls back.
+    """
+    env = os.environ if env is None else env
+    if not env.get("SWF_BACKEND_URL"):
+        print("maintain: SWF_BACKEND_URL not set; refusing to sweep sandboxes without the Cell store")
+        return {"removed": [], "kept": [], "debt": [], "reconciled": [], "refused": "SWF_BACKEND_URL not set"}
+    # Removals are serial and each one is a provider round trip; a bounded sweep still needs minutes.
+    return cell_callback.post("/workers/sweep", {"ttl_s": int(ttl_s)}, env=env, timeout=600)

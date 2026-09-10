@@ -199,7 +199,7 @@ factory checkout's own copy (`$SWF_BANDS` overrides).
 
 ```sh
 uv run swfactory metrics --root .       # first-pass rate, mean iterations, p50 cycle, findings, cost
-uv run swfactory maintain --root . --sweep-ttl-s 172800   # omit the flag for the configured TTL
+uv run swfactory maintain --root . --sweep-ttl-s 172800   # sweep runs on the backend (SWF_BACKEND_URL)
 ```
 
 ## crabbox

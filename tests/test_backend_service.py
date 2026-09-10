@@ -127,10 +127,17 @@ class FakeIsloClient:
     def __init__(self, owner: str, *_a: Any, **_kw: Any) -> None:
         self.owner = owner
 
+    listed: list[dict[str, Any]] = [{"name": "swf-1", "status": "running", "created_by": "operator"}]
+    removed: list[str] = []
+
     def own_sandboxes(self) -> list[dict[str, Any]]:
-        return [{"name": "swf-1", "status": "running", "created_by": self.owner}]
+        return [row for row in self.listed if row["created_by"] == self.owner]
+
+    def listing(self) -> str:
+        return json.dumps(self.listed)
 
     def remove(self, name: str) -> dict[str, Any]:
+        self.removed.append(name)
         return {"removed": name}
 
 
@@ -462,6 +469,43 @@ def test_delivery_and_worker_reads_go_through_backend_credentials(client: Client
     status, removed = client.call("POST", "/v1/workers/remove", {"name": "swf-1"})
     assert status == 200 and removed == {"removed": "swf-1"}
     assert all("--repo" in call for call in gh)  # every gh call is pinned to the backend's repo
+
+
+def test_sweep_route_consults_the_cell_store_and_journals_each_removal(
+    client: Client, factory: Factory, gh: list[list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2075's probe through the wire: the backend's sweep keeps the old sandbox a live Cell owns,
+    removes the one whose Cell finished, and leaves a committed ``sandbox_cleanup`` row behind."""
+    from swfactory.cells import CellIdentity
+    from swfactory.runtime import run_id_for
+
+    run_id = "manual__2026-09-01T00:00:00+00:00"
+    live = factory.cell_store.activate(CellIdentity(REPO, "", "1"), "test")["cell_id"]
+    done = factory.cell_store.activate(CellIdentity(REPO, "", "2"), "test")["cell_id"]
+    for cell_id, idx in ((live, 0), (done, 1)):
+        factory.cell_store.patch(cell_id, 1, f"bind:{idx}", state="running", airflow_run_id=run_id, map_index=idx)
+    factory.cell_store.patch(done, 1, "finish", state="success")
+    old = {"status": "running", "created_by": "operator", "created_at": "2026-01-01T00:00:00+00:00"}
+    monkeypatch.setattr(
+        FakeIsloClient,
+        "listed",
+        [
+            {"name": f"swf-1-{run_id_for(run_id, 0)}", **old},
+            {"name": f"swf-2-{run_id_for(run_id, 1)}", **old},
+            {"name": "swf-3-aaaaaaaa", **old, "created_by": "teammate"},
+        ],
+    )
+    monkeypatch.setattr(FakeIsloClient, "removed", [])
+
+    status, report = client.call("POST", "/v1/workers/sweep", {"ttl_s": 3600})
+    assert status == 200, report
+    assert report["kept"] == [f"swf-1-{run_id_for(run_id, 0)}"]
+    assert report["removed"] == [f"swf-2-{run_id_for(run_id, 1)}"] == FakeIsloClient.removed
+    assert report["debt"] == [] and report["reconciled"] == []
+    status, unresolved = client.call("POST", "/v1/operations", {})
+    assert status == 200 and unresolved == []
+    key = next(iter(factory.control.operations.db.execute("SELECT operation_key,cell_id FROM operations")))
+    assert key["cell_id"] == done and key["operation_key"].startswith("sandbox_cleanup:")
 
 
 def test_deliveries_are_empty_when_no_repo_is_configured(tmp_path: Path, env: None) -> None:
@@ -1064,6 +1108,7 @@ def test_an_absent_body_is_treated_as_an_empty_object(client: Client) -> None:
         ("/v1/deliveries/url", {"number": -1}, "number must be a positive integer"),
         ("/v1/deliveries/head", {}, "branch must be a nonempty string"),
         ("/v1/workers/remove", {}, "name must be a nonempty string"),
+        ("/v1/workers/sweep", {"ttl_s": "3600"}, "ttl_s must be a positive integer"),
         ("/v1/state/inspect", {}, "run_id must be a nonempty string"),
         ("/v1/blueprints/preview", {}, "line must be a nonempty string"),
     ],
