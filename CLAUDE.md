@@ -115,6 +115,9 @@ in `stages.py`. Details: README + docs/*.md.
   read-only). Never `claude --bare`/`--dangerously-skip-permissions`. Typed where machines consume
   it (`Plan`, `Review`, `Diagnosis`), prose where humans do (intent.md, spec.md).
 
+- Experimental `WorkExecutor` checks cancellation after node execution and between merge callbacks.
+  A callback already in flight is not interrupted or rolled back.
+
 ## Common mistakes
 - Editing `tests/`, `factory.toml`, `REVIEW.md`, `.claude/`, `.github/` in a build/fix stage: the
   native `Edit(...)` deny rules refuse it and `swf_guard.py` logs it. Fix the code, not the gate.

@@ -326,6 +326,9 @@ every claimed feature. The table below is generated from it, each `Verified by` 
 a file or a CI job that exists, and a test refuses any sentence in this README or on the site that
 describes a capability more strongly than its claim.
 
+The experimental work executor observes cancellation before and between merge callbacks.
+A merge callback already in flight is not interrupted or rolled back.
+
 <!-- capability-inventory:start -->
 <!-- Generated from config/capability-inventory.json; run `uv run python -m swfactory.capability_inventory --write`. -->
 

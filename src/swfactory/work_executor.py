@@ -166,12 +166,16 @@ class WorkExecutor:
             )
             for result in wave_results:
                 results[result.node_id] = result
-            if any(result.state != "ok" for result in wave_results):
+            if cancellation.cancelled or any(result.state != "ok" for result in wave_results):
                 cancellation.cancel()
                 break
 
             # Completion timing is irrelevant: fan-in is always node-id stable.
             for node_id in deterministic_merge_order(r.node_id for r in wave_results):
+                # A completed node is not permission to merge after cancellation. Check again
+                # between callbacks: a previous merge may have triggered operator shutdown.
+                if cancellation.cancelled:
+                    break
                 result = results[node_id]
                 if result.output_head is None:
                     cancellation.cancel()
