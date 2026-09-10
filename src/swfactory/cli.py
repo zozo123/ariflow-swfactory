@@ -90,8 +90,27 @@ def _load_blueprint(name_or_path: str) -> Blueprint:
 def _run_jobs(bp: Blueprint, issues: list[str], overrides: dict[str, Any], *, targets: list[str] | None = None) -> None:
     """Run every (issue x target) job of ``bp`` in sequence. ``overrides`` are the CLI flags the
     user passed (``None`` = not passed). Each job's report is printed as a table and written to
-    ``.factory/<run_id>/report.json``. Exit 1 if any job blocks, fails its tests or errors."""
+    ``.factory/<run_id>/report.json``. Exit 1 if any job blocks, fails its tests or errors.
+
+    No ``issues`` means the line's ``trigger.backlog`` decides -- the same selection the scheduled
+    fan-out makes, so an operator can run by hand exactly what the cron would have started, with
+    every skipped issue and its reason on the terminal (and in ``.factory/backlog/<line>.jsonl``).
+    """
     run_id = overrides.pop("run_id", None) or uuid.uuid4().hex[:8]
+    if not issues and bp.trigger.backlog is not None:
+        from swfactory.intake_governance import drain_line
+
+        try:
+            selection = drain_line(bp)
+        except StageError as e:
+            typer.echo(f"backlog unavailable: {e}", err=True)
+            raise typer.Exit(1) from e
+        for number, reason in sorted(selection.skipped.items()):
+            typer.echo(f"skipped {number}: {reason}")
+        issues = [str(candidate.issue) for candidate in selection.selected]
+        if not issues:
+            typer.echo(f"backlog {bp.trigger.backlog.label!r}: nothing eligible")
+            return
     try:
         jobs = bp.jobs({"issues": issues, **({"targets": targets} if targets else {})})
     except ValueError as e:
@@ -133,9 +152,9 @@ def _run_jobs(bp: Blueprint, issues: list[str], overrides: dict[str, Any], *, ta
 @app.command()
 def run(
     issue: Annotated[
-        list[str],
-        typer.Option(help="GitHub issue number or path to a front-matter .md (repeatable)"),
-    ],
+        list[str] | None,
+        typer.Option(help="GitHub issue number or path to a front-matter .md (repeatable); omit to drain the backlog"),
+    ] = None,
     blueprint: Annotated[str, typer.Option(help="blueprints/<name>.toml or a path")] = blueprint_mod.DEFAULT_BLUEPRINT,
     target: Annotated[
         list[str] | None, typer.Option(help="only these blueprint targets (owner/name, repeatable)")
@@ -153,10 +172,11 @@ def run(
     allow_local_agent: Annotated[bool, typer.Option(help="DEV: real agent outside islo")] = False,
     run_id: Annotated[str | None, typer.Option()] = None,
 ) -> None:
-    """Run a blueprint's line on one or more issues (one PR per issue x target)."""
+    """Run a blueprint's line on one or more issues (one PR per issue x target), or without
+    --issue on whatever the line's `trigger.backlog` selects."""
     _run_jobs(
         _load_blueprint(blueprint),
-        issue,
+        issue or [],
         {
             "repo": repo,
             "target_dir": target_dir,

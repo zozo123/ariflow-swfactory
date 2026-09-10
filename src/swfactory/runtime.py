@@ -212,6 +212,11 @@ def _prepare_ctx(
         protected = protected_globs(base_repo)
     scm = scm_override or make_scm(cfg, run_dir, base_repo=base_repo, base_ref=cfg.base_branch)
     issue = scm.fetch_issue(cfg.issue if cfg.issue.strip().isdigit() else locate(cfg.issue))
+    if enforce_inputs and issue.state != "open":
+        # Selection (or an operator) saw this issue open; it closed before this task admitted it.
+        # Refuse here, before a sandbox exists, and not for teardown: a cell whose issue closed
+        # mid-run still has to be shut, or the refusal leaks the very thing cleanup exists for.
+        raise StageError("scm", f"issue {issue.id} is {issue.state}; only open work is admitted", retryable=False)
     state = RunState(run_dir)
     # Admission BEFORE make_sandbox/make_agent: a refused task must not have started a MicroVM or
     # constructed an agent, let alone reached a stage body. Reading the issue above is the only I/O

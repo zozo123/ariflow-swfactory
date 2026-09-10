@@ -327,9 +327,11 @@ def test_the_liquid_gates_expire_inside_the_schedule_period() -> None:
     assert bp.sandbox.ttl_s > bp.worst_case_s > longest_gate_s, "the cell must outlive the whole line"
 
 
-def test_a_scheduled_liquid_run_draws_its_work_from_the_trigger() -> None:
-    """A scheduled run has no conf, so the line falls back to its declared backlog."""
+def test_a_scheduled_liquid_run_draws_its_work_from_the_backlog() -> None:
+    """A scheduled run has no conf, so the line drains its declared backlog -- read through the
+    SCM when the run fans out, never a list of numbers in the file."""
     bp = load(ROOT / "blueprints" / "liquid.toml")
-    jobs = bp.jobs(None)
-    assert [job["issue"] for job in jobs] == bp.trigger.issues
+    assert bp.trigger.issues == [] and bp.trigger.backlog is not None
+    jobs = bp.jobs(None, backlog=lambda line: ["2035"])
+    assert [job["issue"] for job in jobs] == ["2035"]
     assert all(job["dir"] == "" for job in jobs), "every job targets the repo root"

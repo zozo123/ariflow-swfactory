@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -182,12 +183,28 @@ class SandboxSpec(BaseModel):
         return normalize_absolute_posix_path(value, field="sandbox.workdir")
 
 
+class Backlog(BaseModel):
+    """A label-selected backlog: the open issues carrying ``label``, read through the SCM when a
+    scheduled run fans out (task execution, never DAG import) and filtered by
+    :func:`swfactory.intake_governance.drain_line`. Replaces a fixed ``trigger.issues`` list,
+    which goes stale the day one of its numbers closes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=128)
+    batch: int = Field(default=1, ge=1)  # issues started per scheduled run
+    # Candidates read per selection. A backlog larger than this is refused as truncated rather
+    # than silently trimmed: the issues past the window would never be selected.
+    scan: int = Field(default=100, ge=1, le=1000)
+
+
 class Trigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["manual", "cron"] = "manual"
     cron: str | None = None
     issues: list[str] = Field(default_factory=list)
+    backlog: Backlog | None = None
 
     @field_validator("issues")
     @classmethod
@@ -204,6 +221,8 @@ class Trigger(BaseModel):
     def _cron_present(self) -> Trigger:
         if self.kind == "cron" and not (self.cron or "").strip():
             raise ValueError("trigger.kind='cron' requires trigger.cron")
+        if self.issues and self.backlog is not None:
+            raise ValueError("trigger.issues and trigger.backlog are two answers to one question; declare one")
         return self
 
 
@@ -239,6 +258,8 @@ class Blueprint(BaseModel):
                 f"{sum(g.timeout_h for g in self.gates)} h of gates plus {self._stage_tries()} stage tries x "
                 f"{self.limits.stage_timeout_h} h; a cell deleted mid-line loses every uncommitted change"
             )
+        if self.trigger.backlog is not None and len({t.repo for t in self.targets}) != 1:
+            raise ValueError("trigger.backlog reads one repository's issues; every target must share that repository")
         unknown = sorted(set(self.policy) - set(POLICIES))
         if unknown:
             raise ValueError(f"policy overrides for unknown stages {unknown}; known: {list(POLICIES)}")
@@ -333,11 +354,23 @@ class Blueprint(BaseModel):
                 items.append(Gate(gate.after, gate.artifact, gate.mode))  # type: ignore[arg-type]
         return tuple(items)
 
-    def jobs(self, conf: dict[str, Any] | None) -> list[dict[str, Any]]:
-        """Fan-out of one DAG run: runtime issues, else ``trigger.issues``, x targets.
+    def jobs(
+        self,
+        conf: dict[str, Any] | None,
+        *,
+        backlog: Callable[[Blueprint], Sequence[str]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fan-out of one DAG run: runtime issues, else ``trigger.issues``, else the selected
+        ``trigger.backlog``, x targets.
 
         ``conf["targets"]`` (list of ``owner/name``) restricts the blueprint's targets.
         Result items: ``{"issue", "repo", "dir", "base_branch", "job_idx"}``.
+
+        Runtime issues are the manual override: named work is started without consulting the
+        backlog (a closed issue is still refused at intake). A scheduled run has no conf, so it
+        reaches ``backlog`` -- by default :func:`swfactory.intake_governance.drain_line`, which
+        reads the SCM here, at task execution, and records why each non-selected issue was left
+        out. An empty selection is an empty fan-out, not an error: the record says why.
         """
         conf = conf or {}
         # The UI/params form sends every param, so ``issues`` arrives as its default ``[]`` next
@@ -345,8 +378,12 @@ class Blueprint(BaseModel):
         raw = conf.get("issues") or None
         if raw is None and conf.get("issue") not in (None, ""):
             raw = [conf["issue"]]
+        drained = False
         if raw is None:
             raw = self.trigger.issues
+            if not raw and self.trigger.backlog is not None:
+                raw = list((backlog or _drain)(self))
+                drained = True
         if raw is not None and not isinstance(raw, list | tuple):
             raw = [raw]
         issues: list[str] = []
@@ -357,7 +394,9 @@ class Blueprint(BaseModel):
             issues.append(value if value.isdigit() else normalize_relative_path(value, field="conf.issues"))
         issues = list(dict.fromkeys(issues))
         if not issues:
-            raise ValueError('run needs conf {"issues": [...]} (or {"issue": N}), or trigger.issues')
+            if drained:
+                return []
+            raise ValueError('run needs conf {"issues": [...]} (or {"issue": N}), trigger.issues or trigger.backlog')
         targets = self.targets
         if conf.get("targets"):
             selected = conf["targets"]
@@ -421,6 +460,13 @@ def loads(text: str) -> Blueprint:
     if unknown:
         raise ValueError(f"unknown blueprint sections {unknown}; known: {sorted(_SECTIONS)}")
     return Blueprint.model_validate(_flatten(data))
+
+
+def _drain(bp: Blueprint) -> list[str]:
+    """The scheduled fan-out's backlog: selected issue numbers, with every skip recorded."""
+    from swfactory.intake_governance import drain_line
+
+    return [str(candidate.issue) for candidate in drain_line(bp).selected]
 
 
 def _flatten(data: dict[str, Any]) -> dict[str, Any]:

@@ -2,10 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping, Sequence
+import logging
+import re
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
+
+from swfactory.models import Issue
+from swfactory.scm import FACTORY_BRANCH_PREFIX
+
+if TYPE_CHECKING:
+    from swfactory.blueprint import Blueprint
+
+log = logging.getLogger(__name__)
 
 
 class WorkOrderState(StrEnum):
@@ -216,6 +228,121 @@ def select_backlog(
         else:
             selected.append(item)
     return Selection(tuple(selected), skipped)
+
+
+# ---------------------------------------------------------------- the scheduled line's backlog
+
+# `[bug] [P1] Select only eligible ...`: the priority every issue of the plan carries in its title.
+_PRIORITY = re.compile(r"\[P(\d)\]")
+UNPRIORITISED = 9  # sorts after every declared priority, never ahead of one
+# `Dependencies: #1219, #2058.` -- the prerequisites line of the plan's issues.
+_PREREQUISITES = re.compile(r"^\s*(?:Dependencies|Depends on|Blocked by):\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+_REF = re.compile(r"#(\d+)")
+
+
+def priority_of(title: str) -> int:
+    m = _PRIORITY.search(title)
+    return int(m.group(1)) if m else UNPRIORITISED
+
+
+def prerequisites_of(body: str) -> tuple[int, ...]:
+    m = _PREREQUISITES.search(body)
+    return tuple(int(ref) for ref in _REF.findall(m.group(1))) if m else ()
+
+
+def issue_revision(issue: Issue) -> str:
+    """The digest ``accepted_inputs`` pins as ``issue_sha256``: the selection records the same
+    revision admission later checks, so the two are comparable when the issue changed between."""
+    from swfactory.accepted_inputs import issue_document
+
+    return digest(issue_document(issue))
+
+
+class BacklogSource(Protocol):
+    """What the selection reads: ``GitHubScm`` in production, a fake in tests."""
+
+    def list_open_issues(self, label: str, *, limit: int) -> Sequence[Issue]: ...
+    def list_open_pr_heads(self, *, limit: int) -> Sequence[str]: ...
+    def fetch_issue(self, ref: str) -> Issue: ...
+
+
+def drain_line(
+    bp: Blueprint,
+    *,
+    source: BacklogSource | None = None,
+    root: Path | None = None,
+    active: Collection[int] = frozenset(),
+) -> Selection:
+    """Select the next batch of ``bp.trigger.backlog`` and append the decision to the line's record.
+
+    This is the one selection path: ``Blueprint.jobs`` reaches it for a scheduled run with no conf
+    (the ``fan_out`` task) and ``swfactory run`` reaches it when no ``--issue`` is named. Reads are
+    bounded and their order is fixed -- one listing, one PR scan, one fetch per prerequisite that
+    was not listed -- so the same repository state selects the same issue. An SCM failure raises:
+    an outage must look like an outage, never like an empty backlog.
+
+    ``active`` is the set of issues an admission authority knows to have a live Cell. The direct
+    scheduled path has no such authority and passes none; a backend admitting cron work supplies
+    its Cell store here.
+
+    Race policy: selection sees the issue open; if it is closed before the task admits it,
+    ``runtime.ctx_for`` refuses the issue (non-retryable, before any sandbox exists). The record
+    keeps the revision selected so that refusal can be read against what was chosen.
+    """
+    spec = bp.trigger.backlog
+    if spec is None:
+        raise ValueError(f"line {bp.name!r} declares no trigger.backlog")
+    if source is None:
+        from swfactory.scm import GitHubScm
+
+        (repo,) = {t.repo for t in bp.targets}
+        source = GitHubScm(repo, bp.targets[0].base_branch)
+    listed = list(source.list_open_issues(spec.label, limit=spec.scan))
+    heads = set(source.list_open_pr_heads(limit=spec.scan))
+    candidates = [
+        BacklogCandidate(
+            issue=int(item.id),
+            revision=issue_revision(item),
+            state=item.state,
+            priority=priority_of(item.title),
+            prerequisites=prerequisites_of(item.body),
+            active=int(item.id) in active,
+            implementation_pr_open=any(head.startswith(f"{FACTORY_BRANCH_PREFIX}{item.id}-") for head in heads),
+        )
+        for item in listed
+    ]
+    # Every listed issue is open, so a prerequisite is completed only when it is closed; the ones
+    # not listed are read one by one, in issue order, so the read sequence is reproducible.
+    known = {int(item.id) for item in listed}
+    completed = {
+        dep
+        for dep in sorted({dep for c in candidates for dep in c.prerequisites} - known)
+        if source.fetch_issue(str(dep)).state == "closed"
+    }
+    selection = select_backlog(candidates, completed=completed, limit=spec.batch)
+    _record(bp, selection, root)
+    return selection
+
+
+def _record(bp: Blueprint, selection: Selection, root: Path | None) -> Path:
+    """Append one line to ``.factory/backlog/<line>.jsonl``: the line's selection history, next to
+    the runs it produced (``runtime.job_run_dir`` uses the same root), readable with ``tail``."""
+    spec = bp.trigger.backlog
+    assert spec is not None
+    row = {
+        "at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "line": bp.name,
+        "label": spec.label,
+        "batch": spec.batch,
+        "selected": [{"issue": c.issue, "priority": c.priority, "revision": c.revision} for c in selection.selected],
+        "skipped": {str(issue): reason for issue, reason in sorted(selection.skipped.items())},
+    }
+    path = (Path(root) if root is not None else Path()) / ".factory" / "backlog" / f"{bp.name}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+    log.info("backlog %s: selected %s, skipped %s", bp.name, [c.issue for c in selection.selected], row["skipped"])
+    return path
 
 
 @dataclass(frozen=True)

@@ -36,6 +36,8 @@ _GIT_IDENT = ["-c", f"user.name={BOT_NAME}", "-c", f"user.email={BOT_EMAIL}"]
 # the directory it writes to is also a process we cannot account for on the way out of a sandbox.
 _GIT_NO_AUTO_GC = ["-c", "gc.auto=0", "-c", "maintenance.auto=false"]
 _FRONT_MATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?(.*)\Z", re.DOTALL)
+# `state` is part of the issue: without it the adapter hands intake a closed issue as work.
+_ISSUE_FIELDS = "number,title,body,labels,url,state"
 
 
 @runtime_checkable
@@ -121,7 +123,36 @@ def parse_issue_file(path: Path) -> Issue:
         body=m.group(2),
         labels=[str(label) for label in labels],
         url=path.resolve().as_uri(),
+        state=str(meta.get("state") or "open"),
     )
+
+
+def _issue_from_gh(data: dict) -> Issue:
+    return Issue(
+        id=str(data["number"]),
+        title=data["title"],
+        body=data.get("body") or "",
+        labels=[label["name"] for label in data.get("labels") or []],
+        url=data.get("url"),
+        state=str(data.get("state") or "open"),
+    )
+
+
+def _gh_json(argv: Sequence[str]) -> object:
+    out = _run(argv, None)
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError as e:
+        raise StageError("scm", f"{' '.join(argv[:3])} returned non-JSON: {out[:200]}") from e
+
+
+def _window(rows: list, *, limit: int, what: str) -> list:
+    """``rows`` was asked for with ``limit + 1``: a full window means the listing is truncated,
+    and a truncated backlog scan must fail loudly, or the issues past the window are silently
+    never selected and their order is whatever ``gh`` returned."""
+    if len(rows) > limit:
+        raise StageError("scm", f"more than {limit} {what}; the scan is truncated -- raise the window or narrow it")
+    return rows
 
 
 def _slug(s: str) -> str:
@@ -488,24 +519,34 @@ class GitHubScm:
         """Numeric -> ``gh issue view``; anything else -> front-matter file."""
         if not ref.strip().isdigit():
             return parse_issue_file(Path(ref))
-        out = _run(
+        data = _gh_json(["gh", "issue", "view", ref.strip(), "--repo", self.repo, "--json", _ISSUE_FIELDS])
+        return _issue_from_gh(data)  # type: ignore[arg-type]
+
+    def list_open_issues(self, label: str, *, limit: int) -> list[Issue]:
+        """The open issues carrying ``label``: a scheduled line's backlog (``intake_governance``).
+
+        Open only: closed issues keep their label forever, and a scan window that fills with
+        history is a scan that truncates the live work.
+        """
+        rows = _gh_json(
             [
-                "gh", "issue", "view", ref.strip(), "--repo", self.repo,
-                "--json", "number,title,body,labels,url",
-            ],
-            None,
+                "gh", "issue", "list", "--repo", self.repo, "--label", label, "--state", "open",
+                "--limit", str(limit + 1), "--json", _ISSUE_FIELDS,
+            ]
         )  # fmt: skip
-        try:
-            data = json.loads(out)
-        except json.JSONDecodeError as e:
-            raise StageError("scm", f"gh issue view returned non-JSON: {out[:200]}") from e
-        return Issue(
-            id=str(data["number"]),
-            title=data["title"],
-            body=data.get("body") or "",
-            labels=[label["name"] for label in data.get("labels") or []],
-            url=data.get("url"),
-        )
+        rows = _window(list(rows), limit=limit, what=f"open issues carry label {label!r}")  # type: ignore[arg-type]
+        return [_issue_from_gh(row) for row in rows]
+
+    def list_open_pr_heads(self, *, limit: int) -> list[str]:
+        """Head branches of every open PR; ``factory/<issue>-*`` among them is work in progress."""
+        rows = _gh_json(
+            [
+                "gh", "pr", "list", "--repo", self.repo, "--state", "open",
+                "--limit", str(limit + 1), "--json", "headRefName",
+            ]
+        )  # fmt: skip
+        rows = _window(list(rows), limit=limit, what="open pull requests")  # type: ignore[arg-type]
+        return [str(row.get("headRefName") or "") for row in rows]
 
     def publish(
         self,

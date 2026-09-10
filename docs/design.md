@@ -77,7 +77,7 @@ and an extra `hotfix` PR label. A blueprint is validated by `swfactory.blueprint
 | Section | What it fixes | Rules |
 | --- | --- | --- |
 | `[blueprint]` | `name` = DAG id = CLI name | `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`, must equal the CLI name |
-| `[trigger]` | manual or cron admission | cron requires `cron`; a scheduled execution needs non-empty `issues`; runtime run configuration overrides those defaults |
+| `[trigger]` | manual or cron admission | cron requires `cron`; a scheduled execution needs `issues` or a `[trigger.backlog]` (`label`, `batch`, `scan`: the open issues carrying the label, selected at fan-out by `intake_governance.drain_line`, skips recorded in `.factory/backlog/<line>.jsonl`), never both; runtime run configuration overrides those defaults |
 | `[[targets]]` | `repo`, `dir`, `base_branch` — jobs per run = issues x targets | >= 1 |
 | `[stages] order` | which stage functions run | subsequence of `intent spec plan build_and_test review deliver`, first `intent`, last `deliver`; omitted inputs render `(none)` |
 | `[[gates]]` | `after`, `artifact`, `timeout_h`, `assigned`, `mode` | `after` in `{intent, plan}` and in `order`; `mode="human"` (default) -> no operator default, an unanswered gate times out; `mode="auto"` -> defaults to Approve (actor `auto`). Legacy `auto=true/false` is folded into `mode`; declaring both and disagreeing is an error |
