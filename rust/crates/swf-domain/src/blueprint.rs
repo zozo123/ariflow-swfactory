@@ -123,7 +123,28 @@ pub struct Trigger {
     /// The cron expression, required when `kind = "cron"`.
     pub cron: Option<String>,
     /// Issues a scheduled run works on when the run conf names none. Runtime conf always wins.
+    #[serde(default)]
     pub issues: Vec<String>,
+    /// `[trigger.backlog]`: the open issues carrying `label`, selected when the run fans out.
+    /// A cron line drains either this or a fixed `issues` list; the Python side owns the selection
+    /// and the per-skip record, this side only has to read the blueprint without refusing it.
+    #[serde(default)]
+    pub backlog: Option<Backlog>,
+}
+
+/// `[trigger.backlog]` — a label-selected backlog for a scheduled line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Backlog {
+    /// The GitHub label that enrols an open issue.
+    pub label: String,
+    /// Issues started per scheduled run.
+    #[serde(default = "default_batch")]
+    pub batch: u32,
+}
+
+fn default_batch() -> u32 {
+    1
 }
 
 /// `[[targets]]` — one repository (and directory inside it) the line works on.
@@ -448,6 +469,19 @@ impl Blueprint {
             return Err(BlueprintError::invalid(
                 "trigger.kind='cron' requires trigger.cron",
             ));
+        }
+        if let Some(backlog) = &self.trigger.backlog {
+            let label = backlog.label.trim();
+            if label.is_empty() || label.len() > 128 {
+                return Err(BlueprintError::invalid(
+                    "trigger.backlog.label must be 1..=128 characters",
+                ));
+            }
+            if backlog.batch < 1 {
+                return Err(BlueprintError::invalid(
+                    "trigger.backlog.batch must be >= 1",
+                ));
+            }
         }
         let mut seen: Vec<String> = Vec::new();
         for raw in &self.trigger.issues {
@@ -1434,6 +1468,15 @@ order = ["intent", "deliver"]
         assert_eq!(liquid.name, "liquid");
         assert_eq!(liquid.trigger.kind, TriggerKind::Cron);
         assert_eq!(liquid.trigger.cron.as_deref(), Some("17 6 * * *"));
+        // It drains a label-selected backlog, not a fixed pair of issue numbers -- one of which
+        // had already closed when the pair stood here.
+        let backlog = liquid
+            .trigger
+            .backlog
+            .as_ref()
+            .expect("liquid has [trigger.backlog]");
+        assert_eq!((backlog.label.as_str(), backlog.batch), ("liquid", 1));
+        assert!(liquid.trigger.issues.is_empty());
         assert_eq!(liquid.targets.len(), 1);
         assert_eq!(liquid.targets[0].dir, "");
         assert!(liquid.gates.iter().all(|g| g.requires_human()));
