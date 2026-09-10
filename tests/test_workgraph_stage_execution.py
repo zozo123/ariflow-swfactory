@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -41,13 +42,27 @@ GREEN = '<testsuite tests="3" failures="0" errors="0" skipped="0"/>'
 RED = '<testsuite tests="3" failures="1" errors="0" skipped="0"/>'
 
 
+class ProcessDeath(BaseException):
+    """The orchestrator process was killed: not an ``Exception``, so no handler in the stage sees it."""
+
+
 class GitSandbox:
-    """An in-memory workspace whose HEAD advances on commit, so node receipts mean something."""
+    """An in-memory workspace whose HEAD advances on commit, so node receipts mean something.
+
+    ``kill_when`` names the command at which the orchestrator dies. From that command on the
+    sandbox answers nothing -- a dead process issues no cleanup -- until the test revives it, which
+    is what an Airflow retry in a fresh process looks like from the sandbox's side.
+    """
 
     name = "fake:workgraph"
     workdir = "/work"
 
-    def __init__(self, *, junit: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        junit: list[str] | None = None,
+        kill_when: Callable[[GitSandbox, str], bool] | None = None,
+    ) -> None:
         self.files: dict[str, str] = {"factory.toml": FACTORY_TOML, JUNIT: GREEN}
         self.head = "head0000"
         self.staged: list[str] = []
@@ -55,6 +70,11 @@ class GitSandbox:
         self.commits: list[str] = []
         self.junit = list(junit or [])
         self.test_runs = 0
+        self.kill_when = kill_when
+        self.dead = False
+
+    def revive(self) -> None:
+        self.dead, self.kill_when = False, None
 
     # -- sandbox protocol ------------------------------------------------
     def ensure(self) -> None:
@@ -81,6 +101,9 @@ class GitSandbox:
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
         del cwd, timeout_s
+        if self.dead or (self.kill_when is not None and self.kill_when(self, cmd)):
+            self.dead = True
+            raise ProcessDeath(cmd)
         if cmd.startswith("git rev-parse HEAD"):
             return RunResult(0, self.head + "\n", "", 0.0)
         if "git reset -q --" in cmd:
@@ -159,6 +182,10 @@ def _ctx(tmp_path: Path, sandbox: GitSandbox, agent: NodeAgent, plan: Plan) -> C
 
 def _report(ctx: Ctx) -> dict[str, Any]:
     return json.loads(ctx.state.read_artifact(f"{ART}/workgraph-execution.json"))
+
+
+def _progress(ctx: Ctx) -> dict[str, Any]:
+    return json.loads(ctx.state.read_control("workgraph-progress.json"))
 
 
 def test_a_two_node_graph_runs_in_dependency_order_with_one_commit_per_node(tmp_path: Path) -> None:
@@ -307,3 +334,116 @@ def test_the_stage_result_is_journalled_for_the_next_airflow_task(tmp_path: Path
     records = [StageResult.model_validate(row) for row in ctx.state.read_jsonl("stages.jsonl")]
     assert [record.stage for record in records] == ["build_and_test"]
     assert records[0].artifacts == [f"{ART}/workgraph-execution.json"]
+
+
+# ---------------------------------------------------------------- #2045: repairs are journalled
+
+
+def test_a_retry_after_a_repair_commit_resumes_the_repaired_candidate(tmp_path: Path) -> None:
+    """A repair advances HEAD. If the process dies before the suite finishes, the retry must find
+    the repair in the journal -- not refuse its own commit as drift, not replay the nodes, and
+    not hand the repair loop a fresh budget."""
+    plan = _plan(PlanTask(id="a", title="A", files=["src/a.py"]))
+    sandbox = GitSandbox(
+        junit=[RED, GREEN],
+        kill_when=lambda sb, cmd: cmd.startswith("pytest") and sb.test_runs == 1,
+    )
+    agent = NodeAgent(sandbox, {"a": ["src/a.py"], "fix": ["src/a.py"]})
+    ctx = _ctx(tmp_path, sandbox, agent, plan)
+    with pytest.raises(ProcessDeath):
+        work_stage.build_and_test(ctx)
+    assert sandbox.head == "head0000-1-2", "the repair was committed before the kill"
+
+    sandbox.revive()
+    result = work_stage.build_and_test(ctx)
+
+    assert [(stage, iteration) for stage, iteration, _ in agent.calls] == [("build", 1), ("fix", 2)]
+    assert result.numbers["repair_iterations"] == 1
+    assert _progress(ctx)["agent_calls"] == 2
+    assert _report(ctx)["final_head"] == sandbox.head == "head0000-1-2"
+
+
+def test_a_death_between_a_node_commit_and_its_receipt_is_settled_on_retry(tmp_path: Path) -> None:
+    """The commit is the factory's own: ``commit()`` recorded its HEAD in host state and the attempt
+    that produced it is journalled. The retry verifies that commit against the node's declared
+    files and adopts it, instead of refusing or paying for the node twice."""
+    plan = _plan(PlanTask(id="a", title="A", files=["src/a.py"]))
+    sandbox = GitSandbox(kill_when=lambda _sb, cmd: cmd.startswith("git diff --name-only"))
+    agent = NodeAgent(sandbox, {"a": ["src/a.py"]})
+    ctx = _ctx(tmp_path, sandbox, agent, plan)
+    with pytest.raises(ProcessDeath):
+        work_stage.build_and_test(ctx)
+    assert sandbox.head == "head0000-1" and _progress(ctx)["nodes"] == []
+
+    sandbox.revive()
+    result = work_stage.build_and_test(ctx)
+
+    assert len(agent.calls) == 1, "the committed node is not paid for again"
+    assert result.numbers["work_nodes"] == 1
+    receipt = _report(ctx)["nodes"][0]
+    assert (receipt["input_head"], receipt["output_head"], receipt["changed_files"]) == (
+        "head0000",
+        "head0000-1",
+        ["src/a.py"],
+    )
+    assert _report(ctx)["final_head"] == sandbox.head == "head0000-1"
+
+
+def test_a_repaired_build_reports_the_head_it_tested_and_delivers(tmp_path: Path) -> None:
+    plan = _plan(PlanTask(id="a", title="A", files=["src/a.py"]))
+    sandbox = GitSandbox(junit=[RED, GREEN])
+    ctx = _ctx(tmp_path, sandbox, NodeAgent(sandbox, {"a": ["src/a.py"], "fix": ["src/a.py"]}), plan)
+
+    work_stage.build_and_test(ctx)
+    report = _report(ctx)
+
+    assert report["final_head"] == sandbox.head == "head0000-1-2"
+    assert [(row["input_head"], row["output_head"]) for row in report["repairs"]] == [("head0000-1", "head0000-1-2")]
+    assert report["verified"]["head"] == sandbox.head and report["verified"]["ok"] is True
+
+
+def test_every_repair_advances_the_durable_attempt_counter(tmp_path: Path) -> None:
+    """A repair-agent failure must not let the retry reuse the dead attempt's identity: the counter
+    the next identity is minted from has to be durable before the provider is called."""
+    plan = _plan(PlanTask(id="a", title="A", files=["src/a.py"]))
+    sandbox = GitSandbox(junit=[RED, RED, GREEN])
+    agent = NodeAgent(sandbox, {"a": ["src/a.py"], "fix": ["src/a.py"]})
+    ctx = _ctx(tmp_path, sandbox, agent, plan)
+    lost = {"pending": True}
+    real_run = agent.run
+
+    def run(sb: Any, *, stage: str, iteration: int, **kwargs: Any) -> AgentResult:
+        if stage == "fix" and lost.pop("pending", False):
+            agent.calls.append((stage, iteration, "lost"))
+            raise RuntimeError("worker disappeared")
+        return real_run(sb, stage=stage, iteration=iteration, **kwargs)
+
+    agent.run = run  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="worker disappeared"):
+        work_stage.build_and_test(ctx)
+    assert _progress(ctx)["agent_calls"] == 2, "the lost repair's identity is spent"
+
+    result = work_stage.build_and_test(ctx)
+
+    assert [(stage, iteration) for stage, iteration, _ in agent.calls] == [("build", 1), ("fix", 2), ("fix", 3)]
+    assert result.numbers["repair_iterations"] == 1, "a lost attempt is not a repair"
+    assert _progress(ctx)["agent_calls"] == _report(ctx)["agent_calls"] == 3
+    assert [row.state for row in CallLedger(ctx.state).records()] == ["committed", "in_doubt", "committed"]
+
+
+def test_an_external_head_change_is_still_refused_after_the_journal_learned_about_repairs(tmp_path: Path) -> None:
+    """Only the factory's own journalled commit may explain a HEAD past the checkpoint."""
+    plan = _plan(PlanTask(id="a", title="A", files=["src/a.py"]))
+    sandbox = GitSandbox(kill_when=lambda sb, cmd: cmd.startswith("pytest"))
+    ctx = _ctx(tmp_path, sandbox, NodeAgent(sandbox, {"a": ["src/a.py"]}), plan)
+    with pytest.raises(ProcessDeath):
+        work_stage.build_and_test(ctx)
+    sandbox.revive()
+
+    sandbox.head = "feedface"
+    with pytest.raises(StageError, match="drifted from recorded HEAD"):
+        work_stage.build_and_test(ctx)
+
+    ctx.state.write_control("workspace-head", "feedface\n")
+    with pytest.raises(StageError, match="checkpoint expects HEAD head0000-1 but workspace is feedface"):
+        work_stage.build_and_test(ctx)

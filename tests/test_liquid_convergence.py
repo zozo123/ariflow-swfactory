@@ -196,22 +196,23 @@ def test_workgraph_retry_resumes_checkpoint_and_uses_new_attempt_identity(monkey
     monkeypatch.setattr(work_stage, "_restore", restore)
 
     with pytest.raises(RuntimeError, match="worker disappeared"):
-        work_stage._execute_nodes(ctx, plan, "spec", "plan")
+        work_stage._execute_nodes(ctx, plan, "spec", "plan", work_stage._open_progress(ctx, plan))
 
     checkpoint = json.loads(ctx.state.read_control("workgraph-progress.json"))
     assert [row["node_id"] for row in checkpoint["nodes"]] == ["a"]
     assert checkpoint["agent_calls"] == 2
+    assert checkpoint["attempt"] is None, "the lost attempt is struck, not left to be mistaken for a commit"
     assert current["head"] == "h0-a"
 
     calls_before_retry = list(calls)
-    agent_calls, report = work_stage._execute_nodes(ctx, plan, "spec", "plan")
+    progress = work_stage._open_progress(ctx, plan)
+    work_stage._execute_nodes(ctx, plan, "spec", "plan", progress)
 
     assert calls_before_retry[0][0] == 1
     assert calls_before_retry[1][0] == 2
     assert calls[-1][0] == 3
     assert sum("Node: `a`" in prompt for _, prompt in calls) == 1
     assert sum("Node: `b`" in prompt for _, prompt in calls) == 2
-    assert agent_calls == 3
-    assert report["final_head"] == "h0-a-b"
-    assert [row["node_id"] for row in report["nodes"]] == ["a", "b"]
-    assert report["parallel"] is False
+    assert progress["agent_calls"] == 3
+    assert progress["head"] == "h0-a-b"
+    assert [row["node_id"] for row in progress["nodes"]] == ["a", "b"]
