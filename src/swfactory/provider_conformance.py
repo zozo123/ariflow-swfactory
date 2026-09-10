@@ -30,6 +30,10 @@ CORE_CHECKS = (
     "output_bounds",
     "termination_reporting",
     "exact_teardown",
+    # Lost compute is core, not optional: a provider that cannot say "this cell is gone" lets a
+    # stage run against an empty VM after ``--delete-after`` fires (``Sandbox.alive``).
+    "expiration",
+    "missing_workspace",
 )
 OPTIONAL_CHECKS = ("attach", "snapshot", "fork", "pause_resume", "network_policy", "ttl")
 

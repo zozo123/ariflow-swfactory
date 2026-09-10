@@ -63,7 +63,7 @@ nit_cap = 3
 kind = "toolset"            # -> ToolsetSandbox(load_toolset_backend(cfg.toolset_backend))
 backend = "sbx"             # Airflow SandboxBackend name, or package.module:Class
 workdir = "/workspace/repo" # repository root exposed by that backend
-ttl_s = 10800               # 3 h; validator: > max(gates[].timeout_h) * 3600 = 7200
+ttl_s = 129600              # 36 h; validator: > 3 h of gates + 11 stage tries x 2 h = 25 h
 idle_s = 600
 
 [deliver]

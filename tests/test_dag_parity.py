@@ -50,7 +50,7 @@ assigned = ["alice", "bob"]
 stage_timeout_h = 5
 max_parallel_jobs = 2
 [sandbox]
-ttl_s = 86400
+ttl_s = 259200
 """
 
 
@@ -193,8 +193,14 @@ def test_dag_shape(dagbag, path: Path) -> None:
     group = dag.task_group.get_child_by_label("job")
     assert type(group).__name__ == "MappedTaskGroup"
     assert isinstance(dag.get_task("fan_out"), MappedOperator) is False
-    assert dag.get_task("job.setup").retries == 2
-    assert dag.get_task("job.deliver").retries == 2
+    # `Blueprint.worst_case_s` sizes the sandbox TTL from these retry counts; the DAG must not
+    # retry more often than the blueprint schema believes it does.
+    from swfactory.blueprint import TASK_RETRIES
+
+    assert dag.get_task("job.setup").retries == TASK_RETRIES["setup"] == 2
+    assert dag.get_task("job.deliver").retries == TASK_RETRIES["deliver"] == 2
+    expected = {k: v for k, v in TASK_RETRIES.items() if k != "setup"}
+    assert expected == _load_module(DAGS / "blueprints.py").STAGE_RETRIES
     timeout = timedelta(hours=shape["limits"].get("stage_timeout_h", 3))
     parallel = shape["limits"].get("max_parallel_jobs", 4)
     for stage in shape["order"]:

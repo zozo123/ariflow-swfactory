@@ -1149,3 +1149,128 @@ def test_toolset_termination_survives_task_restart_and_still_allows_cleanup(tmp_
     restored.close()
     assert backend.destroyed == ["sbx-1"]
     assert not state.has_control(sandbox_mod.TOOLSET_STATE_FILE)
+
+
+# ---------------------------------------------------------------- lifetime: expired or missing cells
+
+
+def _islo_listing(*names: str, status: str = "running") -> str:
+    return json.dumps([{"name": n, "status": status, "created_by": "me@x"} for n in names])
+
+
+def _islo_with_state(tmp_path: Path, **overrides) -> tuple[IsloSandbox, sandbox_mod.RunState]:
+    state = sandbox_mod.RunState(tmp_path / "run")
+    return _islo(state=state, **overrides), state
+
+
+def test_islo_alive_is_the_listing_plus_the_checkout_and_never_creates(monkeypatch, tmp_path) -> None:
+    calls: list[list[str]] = []
+    present = {"listed": True, "workdir": True}
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[:2] == ["islo", "ls"]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=_islo_listing("swf-demo-1-abcd1234" if present["listed"] else "other"), stderr=""
+            )
+        return subprocess.CompletedProcess(argv, 0 if present["workdir"] else 1, stdout="", stderr="")
+
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", fake_run)
+    sb = _islo()
+    assert sb.alive() is True
+    present["workdir"] = False
+    assert sb.alive() is False  # the VM exists but /workspace/<repo>/<target> is gone
+    present["listed"] = False
+    assert sb.alive() is False  # --delete-after fired or someone ran `islo rm`
+    assert all("--source" not in argv for argv in calls)  # a probe must not create-if-needed
+
+
+def test_islo_alive_treats_a_failing_listing_as_a_fault_not_an_absence(monkeypatch) -> None:
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="gateway unreachable")
+
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", fake_run)
+    with pytest.raises(StageError) as ei:
+        _islo().alive()
+    assert ei.value.kind == "sandbox" and ei.value.retryable is True
+
+
+def test_islo_ensure_records_the_provisioned_cell_in_run_state(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        sandbox_mod.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+    )
+    sb, state = _islo_with_state(tmp_path, factory_root=tmp_path)
+    assert not state.has_control(sandbox_mod.ISLO_STATE_FILE)
+    sb.ensure()
+    record = json.loads(state.read_control(sandbox_mod.ISLO_STATE_FILE))
+    assert record == {"name": "swf-demo-1-abcd1234", "ttl_s": 172_800}
+
+
+@pytest.mark.parametrize("use", ["run", "read", "write", "exists"])
+def test_islo_later_task_fails_closed_when_the_provisioned_cell_expired(monkeypatch, tmp_path, use) -> None:
+    """A stage task after a long gate: run state says setup provisioned this cell, ``islo ls`` no
+    longer lists it. ``islo use`` would create an empty VM and the stage would run against a
+    missing checkout as if the agent had written nothing. Every entry point refuses by name."""
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[:2] == ["islo", "ls"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=_islo_listing("someone-elses-cell"), stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", fake_run)
+    sb, state = _islo_with_state(tmp_path)
+    state.write_control(sandbox_mod.ISLO_STATE_FILE, json.dumps({"name": sb.name, "ttl_s": 172_800}))
+    action = {
+        "run": lambda: sb.run("true"),
+        "read": lambda: sb.read("x.md"),
+        "write": lambda: sb.write("x.md", "y"),
+        "exists": lambda: sb.exists("x.md"),
+    }[use]
+    with pytest.raises(StageError) as ei:
+        action()
+    assert ei.value.kind == "sandbox" and ei.value.retryable is False
+    assert "infrastructure_lost" in str(ei.value) and sb.name in str(ei.value)
+    assert [c[:2] for c in calls] == [["islo", "ls"]]  # nothing was created or run
+
+
+def test_islo_probes_once_per_process_and_skips_cells_this_run_never_provisioned(monkeypatch, tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[:2] == ["islo", "ls"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=_islo_listing("swf-demo-1-abcd1234"), stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", fake_run)
+    sb, state = _islo_with_state(tmp_path)
+    sb.run("true")
+    assert not any(c[:2] == ["islo", "ls"] for c in calls)  # no record: nothing could have been lost
+    state.write_control(sandbox_mod.ISLO_STATE_FILE, json.dumps({"name": sb.name, "ttl_s": 172_800}))
+    sb2, _ = _islo_with_state(tmp_path)
+    sb2.run("true")
+    sb2.run("true")
+    assert sum(c[:2] == ["islo", "ls"] for c in calls) == 1
+    assert _islo().alive.__doc__  # the probe is part of the contract, not an islo detail
+
+
+def test_local_alive_is_the_workspace_directory(tmp_path) -> None:
+    sb = LocalSandbox(tmp_path / "work")
+    assert sb.alive() is False
+    sb.ensure()
+    assert sb.alive() is True
+    import shutil
+
+    shutil.rmtree(tmp_path / "work")
+    assert sb.alive() is False
+
+
+def test_toolset_alive_needs_a_live_handle_and_the_workdir() -> None:
+    be, sb = _toolset()
+    assert sb.alive() is False  # never created
+    sb.ensure()
+    assert sb.alive() is True
+    be.rc = 1  # `test -d /workspace/target` fails: the checkout is gone
+    assert sb.alive() is False
