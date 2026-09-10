@@ -73,7 +73,7 @@ nit_cap = 3
 
 [sandbox]
 kind = "local"              # harness only: no real agent, hence no MicroVM
-ttl_s = 86400               # validator: > 2 h of gates + 11 stage tries x 1 h = 13 h
+ttl_s = 7200                # validator: > max(gates[].timeout_h) * 3600 = 3600
 idle_s = 900
 
 [deliver]

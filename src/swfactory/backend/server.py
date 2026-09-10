@@ -199,6 +199,13 @@ def serve(host: str = "127.0.0.1", port: int = 8082) -> None:
         state_root=Path(os.getenv("SWF_STATE_ROOT", ".factory")),
     )
     try:
+        # A restart is exactly when a lost lifecycle report is most likely (#2071): the backend was
+        # down while a worker tried to report. Nothing else pumps redelivery until the next request,
+        # and a factory with nothing queued behind it may never send one.
+        try:
+            factory.resume_dispatch()
+        except Exception as error:  # noqa: BLE001 - boot must not fail over Airflow's availability
+            print(f"swfactory backend: reconcile on start deferred: {error}", file=sys.stderr)
         with make_server(factory, host, port) as server:
             server.serve_forever()
     finally:

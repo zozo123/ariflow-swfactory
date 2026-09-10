@@ -120,14 +120,9 @@ class FakeSandbox:
         self.files: dict[str, str] = dict(files or {})
         self.results: dict[str, RunResult] = dict(results or {})
         self.commands: list[str] = []
-        self.present = True  # False: the provider expired or removed the cell between tasks
-        self.ensured = 0
-
-    def alive(self) -> bool:
-        return self.present
 
     def ensure(self) -> None:
-        self.ensured += 1
+        return None
 
     def close(self) -> None:
         return None
@@ -295,55 +290,6 @@ def setup_sandbox(**results: RunResult) -> FakeSandbox:
         {"factory.toml": FACTORY_TOML, "pyproject.toml": "[project]\nname = 't'\n"},
         results={**base, **results},
     )
-
-
-def test_setup_fails_the_cell_by_name_when_an_expired_sandbox_held_committed_work(tmp_path: Path) -> None:
-    """The recorded HEAD is past the base and the provider no longer lists the cell: the work
-    existed only there. ``ensure()`` would clone a fresh checkout and setup would carry on; the run
-    must instead stop with the provider-neutral reason, before creating anything."""
-    sb = setup_sandbox(**{"git rev-parse HEAD": out("feed0001\n")})
-    sb.files[".factory/base"] = "cafe1234\n"
-    sb.present = False
-
-    with pytest.raises(StageError) as ei:
-        setup(ctx_on(tmp_path, sb))
-
-    assert ei.value.kind == "sandbox" and ei.value.retryable is False
-    assert "infrastructure_lost" in str(ei.value) and "fake:work" in str(ei.value)
-    assert sb.ensured == 0 and sb.commands == []  # nothing was re-created or touched
-    assert stage_log(tmp_path) == []
-
-
-def test_setup_refuses_a_lost_sandbox_once_a_code_stage_has_been_recorded(tmp_path: Path) -> None:
-    """HEAD equal to base is not proof of no work: a persisted ``build_and_test`` record is."""
-    sb = setup_sandbox()
-    sb.files[".factory/base"] = "cafe1234\n"
-    sb.results["git rev-parse HEAD"] = out("cafe1234\n")
-    write_stage_log(tmp_path, {"stage": "build_and_test", "status": "ok"})
-    sb.present = False
-
-    with pytest.raises(StageError, match="infrastructure_lost"):
-        setup(ctx_on(tmp_path, sb))
-    assert sb.ensured == 0
-
-
-def test_setup_reprovisions_an_expired_sandbox_only_when_durable_state_holds_everything(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Expired during the intent gate: HEAD is the recorded base and no code stage ran, so a fresh
-    cell from durable state loses nothing. The decision is explicit and logged, not implicit in
-    ``ensure()`` happening to create-if-missing."""
-    sb = setup_sandbox()
-    sb.files[".factory/base"] = "cafe1234\n"
-    sb.present = False
-    ctx = ctx_on(tmp_path, sb)
-    ctx.state.write_control("started", "2026-09-10T06:17:00+00:00\n")  # written with `base` by the first setup
-
-    setup(ctx)
-
-    assert sb.ensured == 1
-    assert "re-provisioning" in capsys.readouterr().out
-    assert any("git checkout -q -b" in c for c in sb.commands)  # the work branch is rebuilt from base
 
 
 def test_setup_refuses_the_run_with_a_retryable_sandbox_error_when_uv_sync_fails(

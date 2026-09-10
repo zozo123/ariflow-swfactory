@@ -81,10 +81,6 @@ class ProviderResult:
     def ok(self) -> bool:
         return self.reason == "completed" and self.exit_code == 0
 
-    def summary(self) -> str:
-        """``<reason>: <detail>`` -- the line a stage error carries, so a Cell fails on the reason."""
-        return f"{self.reason}: {self.detail}" if self.detail else self.reason
-
 
 def local_document() -> ProviderDocument:
     return ProviderDocument(
@@ -227,13 +223,6 @@ def validate_lineage(
         raise ValueError(f"stale compute epoch {lineage.epoch}; current epoch is {epoch}")
     if policy_digest is not None and lineage.policy_digest != policy_digest:
         raise ValueError("compute policy digest does not match the current Factory Cell")
-
-
-def compute_lost(provider: str, name: str, *, detail: str) -> ProviderResult:
-    """The provider no longer holds ``name`` -- its TTL expired, it was removed, or its workspace
-    is gone -- after this run provisioned it. One termination reason for every adapter, so the
-    stage runtime fails a Cell on ``infrastructure_lost`` and not on a provider's error text."""
-    return normalize_result(exit_code=None, infrastructure_lost=True, detail=f"{provider} sandbox {name!r}: {detail}")
 
 
 def normalize_result(

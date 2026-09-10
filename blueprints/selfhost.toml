@@ -81,8 +81,8 @@ nit_cap = 3
 kind = "islo"               # production work cell; --sandbox docker / SWF_SANDBOX overrides
 gateway_profile = "swfactory"
 environment = "swfactory"
-ttl_s = 604800              # 7 d > 24 h + 48 h of gates plus 11 stage tries x 6 h = 138 h. The
-                            # validator floor is Blueprint.worst_case_s, exclusive.
+ttl_s = 302400              # 84 h: 24 h + 48 h of gates plus stage work. The validator floor is
+                            # max(gates[].timeout_h) * 3600 = 172800, exclusive.
 idle_s = 900                # --pause-after-idle; a paused cell keeps its warm .venv
 # snapshot: deliberately unset. The golden snapshot bakes a clone of this very repo, so pinning it
 # would hand the agent a stale copy of the tree it is patching.

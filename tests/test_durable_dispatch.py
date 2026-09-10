@@ -76,7 +76,7 @@ nit_cap = 3
 
 [sandbox]
 kind = "local"
-ttl_s = 86400
+ttl_s = 7200
 idle_s = 900
 
 [deliver]
@@ -156,6 +156,9 @@ class Backend:
         # A crashed process cannot hand its dispatch lease back, so redelivery waits for the lease
         # to expire. These tests restart instantly, so the lease has to expire instantly too.
         factory.control.admission.dispatch_lease_s = 0.0
+        # Likewise a lost report is only looked for once the Cell's last write is older than the
+        # read floor; these tests lose it and restart within the same second.
+        factory.reconcile_interval_s = 0.0
         factory.airflow = self.airflow  # type: ignore[method-assign]
         return factory
 
