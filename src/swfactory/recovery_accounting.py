@@ -96,6 +96,7 @@ class PublicationReceipt:
     branch: str
     pr_number: int | None
     pr_state: str
+    url: str | None = None
 
     def verify(self, expected: RemoteIdentity) -> bool:
         if self.repository != expected.repository:

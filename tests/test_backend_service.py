@@ -33,6 +33,9 @@ from swfactory.backend import Factory, make_server
 from swfactory.backend import scm_service as scm_mod
 from swfactory.backend import service as service_mod
 from swfactory.control import AirflowClient
+from swfactory.models import StageError
+from swfactory.recovery_accounting import PublicationReceipt
+from swfactory.scm import patch_content_digest
 
 TOKEN = "t" * 40  # Factory demands >= 32 non-whitespace characters
 REPO = "zozo123/ariflow-swfactory"  # the repo blueprints/default.toml targets
@@ -832,14 +835,24 @@ def test_unknown_routes_are_404_on_every_namespace(client: Client) -> None:
 
 
 class FakeScm:
-    """Stands in for ``GitHubScm``; records what the backend decided to do with its credential."""
+    """Stands in for ``GitHubScm``; records what the backend decided to do with its credential.
+
+    ``remote`` is what the fake GitHub holds for the deterministic branch and is class-level on
+    purpose: the backend builds one ``GitHubScm`` per request, so state that must survive from a
+    lost first attempt to its retry cannot live on an instance. ``lose_next_response`` makes the
+    next ``publish`` push the branch and then raise -- the provider effect happened, the answer
+    did not come back -- which is the in-doubt shape every reconcile test starts from.
+    """
 
     instances: list[FakeScm] = []
+    remote: PublicationReceipt | None = None
+    lose_next_response: bool = False
 
     def __init__(self, repo: str, base: str) -> None:
         self.repo, self.base = repo, base
         self.fetched: list[str] = []
         self.published: list[dict[str, Any]] = []
+        self.observed: list[str] = []
         self.issues: list[dict[str, Any]] = []
         FakeScm.instances.append(self)
 
@@ -851,16 +864,42 @@ class FakeScm:
 
     def publish(self, **kwargs: Any) -> str:
         self.published.append(kwargs)
+        if FakeScm.lose_next_response:
+            FakeScm.lose_next_response = False
+            FakeScm.remote = self.receipt(kwargs["patch"], pr_state="branch_only", pr_number=None, url=None)
+            raise StageError("scm", "timed out: gh pr create", retryable=True)
+        FakeScm.remote = self.receipt(kwargs["patch"])
         return "https://x/pr/1"
+
+    def observe_publication(self, branch: str) -> PublicationReceipt | None:
+        self.observed.append(branch)
+        return FakeScm.remote
 
     def open_issue(self, **kwargs: Any) -> str:
         self.issues.append(kwargs)
         return "https://x/issue/1"
 
+    def receipt(self, patch: bytes, **changes: Any) -> PublicationReceipt:
+        """What GitHub would report for a branch that carries exactly ``patch``."""
+        fields: dict[str, Any] = {
+            "repository": self.repo,
+            "base_revision": self.base,
+            "head_revision": "abc",
+            "content_digest": patch_content_digest(patch),
+            "branch": "swf/101",
+            "pr_number": 1,
+            "pr_state": "open",
+            "url": "https://x/pr/1",
+        }
+        fields.update(changes)
+        return PublicationReceipt(**fields)
+
 
 @pytest.fixture
 def scm(monkeypatch: pytest.MonkeyPatch) -> type[FakeScm]:
     FakeScm.instances = []
+    FakeScm.remote = None
+    FakeScm.lose_next_response = False
     monkeypatch.setattr(scm_mod, "GitHubScm", FakeScm)
     return FakeScm
 
@@ -1000,8 +1039,13 @@ def test_scm_publish_and_open_issue_reach_the_credential_once_identity_holds(
     assert payload["url"] == "https://x/pr/1" and payload["branch"] == "swf/101"
     published = scm.instances[-1].published[-1]
     assert published["branch"] == "swf/101" and published["patch"] == b"diff"
-    # The digest marker is what a replay reconciles against; it must be in the published body.
+    # The digest marker is a lookup hint for people reading the PR; the proof a replay reconciles
+    # against is the immutable git content below, never the editable body.
     assert "swfactory-patch-sha256:" + payload["patch_sha256"] in published["body"]
+    # The receipt binds the observed repository, base, head and content, and names the PR state.
+    assert payload["repository"] == REPO and payload["base_revision"] == "main"
+    assert payload["head_revision"] == "abc" and payload["pr_state"] == "open"
+    assert payload["content_digest"] == patch_content_digest(b"diff")
 
     status, payload = client.call(
         "POST",
@@ -1018,6 +1062,92 @@ def test_scm_publish_and_open_issue_reach_the_credential_once_identity_holds(
     )
     assert status == 200 and payload["url"] == "https://x/issue/1"
     assert "swfactory-operation:issue:1" in scm.instances[-1].issues[-1]["body"]
+
+
+def _lose_first_publish(client: Client, factory: Factory, scm: type[FakeScm]) -> dict[str, Any]:
+    """Drive one publish whose provider effect happens but whose answer never comes back.
+
+    The branch is pushed, ``gh pr create`` times out, the journal holds the operation in doubt.
+    Every recovery case below starts here, because this is the only shape in which the backend
+    has to decide from the REMOTE what happened rather than from its own receipt.
+    """
+    cell = factory.cell_store.get(submit(client)["cells"][0])
+    scm.lose_next_response = True
+    status, _payload = client.call("POST", "/v1/scm/publish", _publish_body(cell))
+    assert status == 500
+    assert len(scm.instances[-1].published) == 1
+    return cell
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        pytest.param({"content_digest": "0" * 64, "head_revision": "def"}, id="open-pr-marker-kept-branch-rewritten"),
+        pytest.param({"pr_state": "branch_only", "pr_number": None, "content_digest": "0" * 64}, id="foreign-branch"),
+        pytest.param({"base_revision": "release"}, id="pr-targets-another-base"),
+        pytest.param({"repository": "someone/else"}, id="pr-in-another-repository"),
+    ],
+)
+def test_scm_publish_retry_refuses_a_remote_that_does_not_carry_the_intended_content(
+    client: Client, factory: Factory, scm: type[FakeScm], changes: dict[str, Any]
+) -> None:
+    """Box 1 and box 4 of #2044: the PR body still carries the digest marker in every case here,
+    yet the immutable git state does not prove the intended change -- the branch was rewritten
+    after the marker was written, the branch is someone else's, or the PR binds to a different
+    base or repository. None of these is 'committed' and none may trigger a second publish."""
+    cell = _lose_first_publish(client, factory, scm)
+    scm.remote = scm.instances[-1].receipt(b"diff", **changes)
+
+    status, payload = client.call("POST", "/v1/scm/publish", _publish_body(cell))
+    assert status == 409, payload
+    assert "divergent" in payload["detail"]
+    assert scm.instances[-1].published == [], "a divergent remote must never be overwritten by a replay"
+    assert scm.instances[-1].observed == ["swf/101"]
+
+
+@pytest.mark.parametrize("pr_state", ["open", "closed", "merged"])
+def test_scm_publish_retry_adopts_a_pr_in_any_lifecycle_state_when_git_content_matches(
+    client: Client, factory: Factory, scm: type[FakeScm], pr_state: str
+) -> None:
+    """Box 2 of #2044: a closed or merged PR for the branch IS the publication. Under the old
+    ``--state open`` lookup it read as absent, and the replay opened a second PR for one
+    operation. The receipt now names the state so the caller can act on it."""
+    cell = _lose_first_publish(client, factory, scm)
+    scm.remote = scm.instances[-1].receipt(b"diff", pr_state=pr_state, head_revision="deadbeef")
+
+    status, payload = client.call("POST", "/v1/scm/publish", _publish_body(cell))
+    assert status == 200, payload
+    assert payload["pr_state"] == pr_state and payload["url"] == "https://x/pr/1"
+    assert payload["head_revision"] == "deadbeef" and payload["content_digest"] == patch_content_digest(b"diff")
+    assert scm.instances[-1].published == [], "an adopted publication is never re-published"
+
+    # The adopted receipt is now the immutable journal answer: a further replay reads it back
+    # without touching GitHub at all.
+    status, again = client.call("POST", "/v1/scm/publish", _publish_body(cell))
+    assert (status, again) == (200, payload)
+    assert scm.instances[-1].observed == [] and scm.instances[-1].published == []
+
+
+@pytest.mark.parametrize("remote", ["branch_only", "absent"])
+def test_scm_publish_retry_resumes_when_the_branch_holds_the_content_but_no_pr_exists(
+    client: Client, factory: Factory, scm: type[FakeScm], remote: str
+) -> None:
+    """Box 3 of #2044: lost response after the branch push but before the PR. The branch on the
+    remote carries exactly the intended commits (or nothing was pushed at all), so the ONE correct
+    move is to finish the publication on that same ref -- exactly once."""
+    cell = _lose_first_publish(client, factory, scm)
+    if remote == "absent":
+        scm.remote = None
+    else:
+        assert scm.remote is not None and scm.remote.pr_state == "branch_only"
+
+    status, payload = client.call("POST", "/v1/scm/publish", _publish_body(cell))
+    assert status == 200, payload
+    assert payload["pr_state"] == "open" and payload["url"] == "https://x/pr/1"
+    assert len(scm.instances[-1].published) == 1
+    # Observed before the retry (the remote decides), and observed again after it: the receipt
+    # the journal keeps is what GitHub holds, not what the provider call claimed.
+    assert scm.instances[-1].observed == ["swf/101", "swf/101"]
 
 
 # ---------------------------------------------------------------- transport bounds

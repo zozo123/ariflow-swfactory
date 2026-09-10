@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -294,6 +295,139 @@ def test_github_open_issue_argv(calls: list[list[str]]) -> None:
     assert create[create.index("--title") + 1] == "T"
     assert "--body-file" in create and create[create.index("--label") + 1] == "factory"
     assert not any("merge" in " ".join(c) for c in calls)
+
+
+# ---------------------------------------------------------------- GitHubScm observation (#2044)
+
+_PR_ROWS = {
+    "open": {
+        "number": 7,
+        "url": "https://github.com/o/r/pull/7",
+        "state": "OPEN",
+        "headRefOid": "aaa",
+        "baseRefName": "main",
+    },
+    "closed": {
+        "number": 5,
+        "url": "https://github.com/o/r/pull/5",
+        "state": "CLOSED",
+        "headRefOid": "bbb",
+        "baseRefName": "main",
+    },
+    "merged": {
+        "number": 3,
+        "url": "https://github.com/o/r/pull/3",
+        "state": "MERGED",
+        "headRefOid": "ccc",
+        "baseRefName": "dev",
+    },
+}
+
+
+def _patch_of(repo: Path, rng: str) -> bytes:
+    return subprocess.run(["git", "format-patch", "--stdout", rng], cwd=repo, capture_output=True, check=True).stdout
+
+
+@pytest.fixture
+def history(tmp_path: Path) -> Path:
+    """Two commits on top of ``main``; ``redo`` re-applies them with new SHAs (as ``git am`` does)."""
+    repo = tmp_path / "hist"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(["git", *IDENT, "commit", "-q", "--allow-empty", "-m", "base"], cwd=repo, check=True)
+    for name in ("one", "two"):
+        (repo / name).write_text(name + "\n")
+        subprocess.run(["git", "add", name], cwd=repo, check=True)
+        subprocess.run(["git", *IDENT, "commit", "-q", "-m", name], cwd=repo, check=True)
+    return repo
+
+
+def test_patch_content_digest_is_the_content_not_the_shas(history: Path) -> None:
+    """``git am`` restamps committer dates, so a re-published identical patch has new SHAs. The
+    content digest must survive that (same hunks -> same digest) and still tell one hunk from
+    another, or it could neither adopt a retried branch nor refuse a rewritten one."""
+    patch = _patch_of(history, "main~2..main")
+    subprocess.run(["git", "checkout", "-q", "-b", "redo", "main~2"], cwd=history, check=True)
+    # A different committer date is what a real retry gets; within one second git would mint the
+    # very same shas and the assertion below would be vacuous.
+    later = {**os.environ, "GIT_COMMITTER_DATE": "2030-01-01T00:00:00 +0000"}
+    subprocess.run(["git", *IDENT, "am", "-q"], cwd=history, input=patch, check=True, env=later)
+    redo = _patch_of(history, "main~2..redo")
+    assert redo != patch  # different SHAs and dates on the wire ...
+    assert scm_mod.patch_content_digest(redo) == scm_mod.patch_content_digest(patch)  # ... same content
+    assert scm_mod.patch_content_digest(_patch_of(history, "main~1..main")) != scm_mod.patch_content_digest(patch)
+    assert scm_mod.patch_content_digest(b"") != scm_mod.patch_content_digest(patch)
+
+
+def _observer(monkeypatch: pytest.MonkeyPatch, *, prs: list[dict], branch_head: str, remote_patch: bytes):
+    """Fake the network half of ``observe_publication``; ``git patch-id`` still runs for real."""
+    real_run = scm_mod._run
+    recorded: list[list[str]] = []
+
+    def fake_run(argv, cwd, input=None):
+        recorded.append(list(argv))
+        if argv[:3] == ["gh", "pr", "list"]:
+            return json.dumps(prs)
+        if argv[:3] == ["gh", "pr", "diff"] or argv[:2] == ["gh", "api"]:
+            return remote_patch.decode()
+        if argv[0] == "git" and "ls-remote" in argv:
+            return f"{branch_head}\trefs/heads/factory/42\n" if branch_head else ""
+        if argv[:3] == ["git", "patch-id", "--stable"]:
+            return real_run(argv, cwd, input)
+        raise AssertionError(f"unexpected call {argv}")
+
+    monkeypatch.setattr(scm_mod, "_run", fake_run)
+    return recorded
+
+
+def test_observe_publication_reports_nothing_when_neither_pr_nor_branch_exists(monkeypatch) -> None:
+    calls = _observer(monkeypatch, prs=[], branch_head="", remote_patch=b"")
+    assert GitHubScm("o/r", "main").observe_publication("factory/42") is None
+    pr_list = next(c for c in calls if c[:3] == ["gh", "pr", "list"])
+    # Every lifecycle state, or a closed/merged PR reads as "absent" and a replay opens a second one.
+    assert pr_list[pr_list.index("--state") + 1] == "all"
+    assert pr_list[pr_list.index("--head") + 1] == "factory/42" and pr_list[pr_list.index("--repo") + 1] == "o/r"
+    assert not any(c[:3] == ["gh", "pr", "diff"] or c[:2] == ["gh", "api"] for c in calls)
+
+
+def test_observe_publication_binds_a_branch_without_a_pr_to_its_content(monkeypatch, history: Path) -> None:
+    patch = _patch_of(history, "main~2..main")
+    calls = _observer(monkeypatch, prs=[], branch_head="a" * 40, remote_patch=patch)
+    receipt = GitHubScm("o/r", "main").observe_publication("factory/42")
+    assert receipt is not None
+    assert (receipt.pr_state, receipt.pr_number, receipt.url) == ("branch_only", None, None)
+    assert receipt.repository == "o/r" and receipt.branch == "factory/42"
+    assert receipt.head_revision == "a" * 40 and receipt.base_revision == "main"
+    assert receipt.content_digest == scm_mod.patch_content_digest(patch)
+    compare = next(c for c in calls if c[:2] == ["gh", "api"])
+    assert compare[-1] == "repos/o/r/compare/main..." + "a" * 40
+    assert "application/vnd.github.patch" in " ".join(compare)
+    assert not any("dummy" in " ".join(c) for c in calls)
+
+
+@pytest.mark.parametrize(
+    ("rows", "picked"),
+    [
+        pytest.param(["closed", "open"], "open", id="open-wins-over-closed"),
+        pytest.param(["closed", "merged"], "merged", id="merged-wins-over-closed"),
+        pytest.param(["closed"], "closed", id="closed-alone"),
+    ],
+)
+def test_observe_publication_reads_the_pr_lifecycle_and_its_own_diff(monkeypatch, history: Path, rows, picked) -> None:
+    """The PR's diff is the content evidence (it outlives a merge and a deleted branch); the body
+    marker is not consulted at all. One PR per branch is chosen by lifecycle, so a reopened or
+    re-filed PR does not read as a second publication."""
+    patch = _patch_of(history, "main~2..main")
+    calls = _observer(monkeypatch, prs=[_PR_ROWS[r] for r in rows], branch_head="zzz", remote_patch=patch)
+    receipt = GitHubScm("o/r", "main").observe_publication("factory/42")
+    row = _PR_ROWS[picked]
+    assert receipt is not None
+    assert receipt.pr_state == picked and receipt.pr_number == row["number"] and receipt.url == row["url"]
+    assert receipt.head_revision == row["headRefOid"] and receipt.base_revision == row["baseRefName"]
+    assert receipt.content_digest == scm_mod.patch_content_digest(patch)
+    diff = next(c for c in calls if c[:3] == ["gh", "pr", "diff"])
+    assert diff[3] == str(row["number"]) and "--patch" in diff and diff[diff.index("--repo") + 1] == "o/r"
+    assert not any(c[:2] == ["gh", "api"] for c in calls)
 
 
 def test_scm_protocol_has_no_merge() -> None:

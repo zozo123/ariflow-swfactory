@@ -8,6 +8,7 @@ plus branch protection/CODEOWNERS is the release gate.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -22,6 +23,7 @@ import yaml
 from swfactory.config import Config
 from swfactory.models import Issue, StageError
 from swfactory.publication_identity import PublicationIdentity, adopts
+from swfactory.recovery_accounting import PublicationReceipt
 
 BOT_NAME = "swfactory-bot"
 BOT_EMAIL = "swfactory-bot@users.noreply.github.com"
@@ -241,6 +243,20 @@ def _remote_head(clone: Path, branch: str) -> str:
     out = _run(["git", "ls-remote", "origin", f"refs/heads/{branch}"], clone)
     first = out.split(maxsplit=1)
     return first[0] if first else ""
+
+
+def patch_content_digest(patch: bytes) -> str:
+    """The content identity of a format-patch stream: sha256 over its ``git patch-id --stable`` ids.
+
+    ``git am`` restamps committer dates, so a re-published identical patch has new commit shas and
+    a receipt keyed on shas could never recognise its own retry. patch-id hashes the hunks and
+    nothing else, so it is the same for the bytes handed to ``publish`` and for the commits GitHub
+    later shows on the branch -- the one comparison that proves "the remote holds THIS change"
+    without trusting a PR body anyone with write access can edit.
+    """
+    out = _run(["git", "patch-id", "--stable"], None, input=patch)
+    ids = [line.split()[0] for line in out.splitlines() if line.strip()]
+    return hashlib.sha256("\n".join(ids).encode()).hexdigest()
 
 
 def _is_lease_refusal(message: str) -> bool:
@@ -619,6 +635,69 @@ class GitHubScm:
                 None,
             )  # fmt: skip
         return _last_line(out)
+
+    def observe_publication(self, branch: str) -> PublicationReceipt | None:
+        """What the remote holds for ``branch``, bound to immutable git content; None if nothing.
+
+        Every PR lifecycle state is read, because a closed or merged PR for the branch IS the
+        publication: under an open-only lookup it read as absent and the replay opened a second
+        one. When several PRs share the head, the live one describes the work (open, then merged,
+        then closed). With no PR at all, a branch that exists is ``branch_only``, so a publication
+        that died between the push and ``gh pr create`` resumes on that ref instead of being judged
+        absent. The content digest comes from the PR's own diff (it outlives the merge and a deleted
+        branch) or, for a bare branch, from the compare against the base -- never from the body.
+        """
+        out = _run(
+            [
+                "gh", "pr", "list", "--repo", self.repo, "--head", branch, "--state", "all",
+                "--limit", "20", "--json", "number,url,state,headRefOid,baseRefName",
+            ],
+            None,
+        )  # fmt: skip
+        try:
+            rows = json.loads(out or "[]")
+        except ValueError as e:
+            raise StageError("scm", f"gh pr list returned non-JSON: {out[:200]}", retryable=True) from e
+        for state, pr_state in (("OPEN", "open"), ("MERGED", "merged"), ("CLOSED", "closed")):
+            row = next((r for r in rows if isinstance(r, dict) and r.get("state") == state), None)
+            if row is None:
+                continue
+            number = int(row["number"])
+            diff = _run(["gh", "pr", "diff", str(number), "--repo", self.repo, "--patch"], None)
+            return PublicationReceipt(
+                repository=self.repo,
+                base_revision=str(row.get("baseRefName") or ""),
+                head_revision=str(row.get("headRefOid") or ""),
+                content_digest=patch_content_digest(diff.encode()),
+                branch=branch,
+                pr_number=number,
+                pr_state=pr_state,
+                url=str(row.get("url") or "") or None,
+            )
+        out = _run(
+            ["git", *self._cred, "ls-remote", f"https://github.com/{self.repo}.git", f"refs/heads/{branch}"],
+            None,
+        )
+        first = out.split(maxsplit=1)
+        if not first:
+            return None
+        head = first[0]
+        diff = _run(
+            [
+                "gh", "api", "-H", "Accept: application/vnd.github.patch",
+                f"repos/{self.repo}/compare/{self.base_branch}...{head}",
+            ],
+            None,
+        )  # fmt: skip
+        return PublicationReceipt(
+            repository=self.repo,
+            base_revision=self.base_branch,
+            head_revision=head,
+            content_digest=patch_content_digest(diff.encode()),
+            branch=branch,
+            pr_number=None,
+            pr_state="branch_only",
+        )
 
     # -- internals
 
