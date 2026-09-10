@@ -27,6 +27,7 @@ name = "drain"
 [trigger]
 kind = "cron"
 cron = "0 6 * * *"
+start = 2026-01-01T00:00:00+00:00
 
 [trigger.backlog]
 label = "liquid"

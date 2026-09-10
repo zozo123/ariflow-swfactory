@@ -10,7 +10,10 @@ description = "Default SDLC line: intent -> spec -> plan -> build+test -> review
 [trigger]
 kind = "manual"             # manual | cron
 # cron = "0 6 * * 1"        # kind=cron -> DAG(schedule=cron)
+# start = 2026-01-05T00:00:00+00:00  # required for cron: DAG(start_date), timezone-aware
+# max_active_runs = 1       # DAG(max_active_runs); default 1 for cron, 16 for manual
 # issues = ["demo/issue.md"] # cron needs this or [trigger.backlog] (label-selected); runtime conf overrides
+# dagrun_timeout is sandbox.ttl_s: a run never outlives the cell it runs in
 
 [[targets]]                 # >= 1; jobs per DAG run = len(conf.issues) x len(targets)
 repo = "zozo123/ariflow-swfactory"

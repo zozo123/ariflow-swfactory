@@ -347,41 +347,27 @@ def _record(bp: Blueprint, selection: Selection, root: Path | None) -> Path:
 
 @dataclass(frozen=True)
 class ScheduleLimits:
-    origin: datetime
-    period: timedelta
+    """The Airflow bounds one line declares: ``Blueprint.schedule_limits`` builds it and
+    ``dags/blueprints.py`` hands the same numbers to ``DAG(...)`` (pinned by the dag-parity test).
+
+    It says *from when* (``origin``), *how many at once* (runs, cells) and *for how long* one run
+    may live. It deliberately does not say *when the next run is* or *whether a run is admitted*:
+    Airflow's timetable is the only scheduler and the backend's durable admission the only
+    admission authority; a second opinion on either here would be a second scheduler.
+    """
+
+    origin: datetime | None
     max_active_runs: int
     max_cells: int
     run_timeout: timedelta
 
     def __post_init__(self) -> None:
-        if self.origin.tzinfo is None:
+        if self.origin is not None and self.origin.tzinfo is None:
             raise ValueError("schedule origin must be timezone-aware")
-        if self.period <= timedelta(0):
-            raise ValueError("schedule period must be positive")
         if self.max_active_runs <= 0 or self.max_cells <= 0:
             raise ValueError("schedule limits must be positive")
         if self.run_timeout <= timedelta(0):
             raise ValueError("run timeout must be positive")
-
-    def next_tick(self, now: datetime) -> datetime:
-        if now.tzinfo is None:
-            raise ValueError("now must be timezone-aware")
-        origin = self.origin.astimezone(UTC)
-        current = now.astimezone(UTC)
-        if current < origin:
-            return self.origin
-        elapsed = current - origin
-        periods = elapsed // self.period + 1
-        return (origin + periods * self.period).astimezone(self.origin.tzinfo)
-
-    def admit_run(self, *, active_runs: int, active_cells: int, requested_cells: int) -> tuple[bool, str]:
-        if active_runs >= self.max_active_runs:
-            return False, "active-run-limit"
-        if requested_cells <= 0:
-            return False, "empty-work"
-        if active_cells + requested_cells > self.max_cells:
-            return False, "cell-capacity"
-        return True, "admitted"
 
 
 def cross_channel_key(line: str, snapshot_digest: str, actor_scope: str = "factory") -> str:

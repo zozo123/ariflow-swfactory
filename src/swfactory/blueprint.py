@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import tomllib
 from collections.abc import Callable, Sequence
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -19,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from swfactory.agent import POLICIES
 from swfactory.approval_policy import GateMode, declared_mode
 from swfactory.config import FACTORY_ROOT, Config
+from swfactory.intake_governance import ScheduleLimits
 from swfactory.paths import (
     normalize_absolute_posix_path,
     normalize_relative_path,
@@ -199,6 +201,12 @@ class Trigger(BaseModel):
 
     kind: Literal["manual", "cron"] = "manual"
     cron: str | None = None
+    # The timetable's origin (TOML offset datetime). Required for cron: a scheduled DAG without one
+    # has no first run Airflow can be asked about, and a naive one is silently re-read as UTC.
+    start: datetime | None = None
+    # Whole runs in flight at once. Unset means 1 for cron (a slow or unanswered run must not turn
+    # into a daily backlog) and Airflow's own 16 for manual lines, now declared rather than inherited.
+    max_active_runs: int | None = Field(default=None, ge=1)
     issues: list[str] = Field(default_factory=list)
     backlog: Backlog | None = None
 
@@ -219,7 +227,13 @@ class Trigger(BaseModel):
             raise ValueError("trigger.kind='cron' requires trigger.cron")
         if self.issues and self.backlog is not None:
             raise ValueError("trigger.issues and trigger.backlog are two answers to one question; declare one")
+        if self.kind == "cron" and self.start is None:
+            raise ValueError("trigger.kind='cron' requires a timezone-aware trigger.start")
         return self
+
+    @property
+    def active_runs(self) -> int:
+        return self.max_active_runs or (1 if self.kind == "cron" else 16)
 
 
 class Blueprint(BaseModel):
@@ -246,6 +260,7 @@ class Blueprint(BaseModel):
     def _shape(self) -> Blueprint:
         self._check_order()
         self._check_gates()
+        self.schedule_limits()  # a naive origin or a non-positive bound refuses to load, not to run
         if self.limits.budget_usd_per_stage > self.limits.budget_usd:
             raise ValueError("limits.budget_usd_per_stage must not exceed limits.budget_usd")
         if self.sandbox.ttl_s <= self.gate_timeout_h * 3600:
@@ -315,6 +330,18 @@ class Blueprint(BaseModel):
     def gate_timeout_h(self) -> int:
         """Longest gate timeout (0 when the line has no gates); ``Config.gate_timeout_h``."""
         return max((g.timeout_h for g in self.gates), default=0)
+
+    def schedule_limits(self) -> ScheduleLimits:
+        """The Airflow run bounds this line declares (#2070). ``dags/blueprints.py`` derives the
+        same numbers from the TOML with stdlib only, because DAG parsing must not import swfactory;
+        ``tests/test_dag_parity.py`` pins the two to this answer. A run may live no longer than the
+        sandbox it runs in: past ``sandbox.ttl_s`` the cell is gone, so the run is finished either way."""
+        return ScheduleLimits(
+            origin=self.trigger.start,
+            max_active_runs=self.trigger.active_runs,
+            max_cells=self.limits.max_parallel_jobs,
+            run_timeout=timedelta(seconds=self.sandbox.ttl_s),
+        )
 
     def gate_after(self, stage: str) -> GateSpec | None:
         """The gate following ``stage``, if any."""

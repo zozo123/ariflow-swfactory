@@ -319,12 +319,16 @@ def test_the_liquid_line_is_scheduled_but_cannot_self_approve() -> None:
 
 
 def test_the_liquid_gates_expire_inside_the_schedule_period() -> None:
-    """`dags/blueprints.py` sets catchup=False but no max_active_runs, so gates that outlive the
-    period stack runs faster than a human answers them. Shorter gates fail visibly instead."""
+    """One run at a time and a run no older than its cell (#2070), so an unanswered run is failed
+    and replaced rather than stacked; gates shorter than the period fail it visibly sooner."""
     bp = load(ROOT / "blueprints" / "liquid.toml")
     longest_gate_s = max(gate.timeout_h for gate in bp.gates) * 3600
     assert longest_gate_s < 24 * 3600, "a daily line needs sub-daily gates"
     assert bp.sandbox.ttl_s > longest_gate_s, "the cell must outlive its longest gate"
+    limits = bp.schedule_limits()
+    assert limits.max_active_runs == 1, "a slow run must not become a daily backlog"
+    assert limits.run_timeout.total_seconds() == bp.sandbox.ttl_s, "a run dies with its cell"
+    assert limits.origin is not None and limits.origin.tzinfo is not None, "the timetable needs an explicit origin"
 
 
 def test_a_scheduled_liquid_run_draws_its_work_from_the_backlog() -> None:

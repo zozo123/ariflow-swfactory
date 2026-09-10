@@ -138,7 +138,7 @@ filesystem paths or command strings. No route accepts a caller-provided executab
 | `GET /v1/health` | none | service name and API version |
 | `POST /v1/doctor` | `{}` | readiness checks from the backend host |
 | `POST /v1/lines` | `{}` | installed line names, routes, gates and targets |
-| `POST /v1/work-orders` | `line`, `issues`, optional `targets` | run identity, validated blueprint and mapped job count |
+| `POST /v1/work-orders` | `line`, `issues`, optional `targets`; `airflow_run_id` from actor `airflow-schedule` binds a run Airflow's scheduler already created instead of dispatching one | run identity, validated blueprint, mapped job count and, once bound, the complete Cell `bindings` |
 | `POST /v1/workers` | `{}` | configured owner's active worker references |
 | `POST /v1/workers/remove` | `name` | argv executed after fresh server-side ownership checks |
 | `POST /v1/deliveries/prs` / `issues` | optional `label`, `limit` | normalized repository records |

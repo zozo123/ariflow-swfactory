@@ -15,11 +15,17 @@
 # `factory/*` branch, and the agent holds no GitHub credential. The schedule changes when work
 # STARTS, never who decides it ships.
 #
-# WHY THE GATES ARE SHORTER THAN THE PERIOD. `dags/blueprints.py` sets `catchup=False` but no
-# `max_active_runs`, so a daily line whose gates wait 24 h would stack runs faster than a human
-# answers them. 8 h gates inside a 24 h period mean an unanswered run FAILS VISIBLY instead of
-# piling up -- backpressure by construction rather than an unbounded queue. If you want a run to
-# survive a weekend, trigger `selfhost` by hand; that is what it is for.
+# WHY THE GATES ARE SHORTER THAN THE PERIOD. `max_active_runs = 1` below means a slow run holds
+# the next tick back rather than stacking a second one beside it, and the run itself lives no longer
+# than its cell (`dags/blueprints.py` sets `dagrun_timeout` to `sandbox.ttl_s`). 8 h gates inside a
+# 24 h period mean an unanswered run FAILS VISIBLY instead of piling up -- backpressure by
+# construction rather than an unbounded queue. If you want a run to survive a weekend, trigger
+# `selfhost` by hand; that is what it is for.
+#
+# WHO ADMITS A TICK. Nobody submitted this run, so `fan_out` submits it: `POST /v1/work-orders` with
+# the run's own id, actor `airflow-schedule`. The backend reserves the repository's capacity,
+# activates the Factory Cells and binds them to this run; without that answer the run stops before
+# any sandbox exists. Airflow still decides when; the backend still decides whether.
 #
 # PRECONDITION: the target's test command must pass inside the cell. On `local`/`srt` that needs
 # the `SWF_*` settings scrub (#2036) -- without it the factory's own tests read the orchestrator's
@@ -34,6 +40,8 @@ description = "Continuous liquid convergence: the factory drains its own backlog
 [trigger]
 kind = "cron"
 cron = "17 6 * * *"          # daily at 06:17 -- off the hour, like the gcc-full schedulers
+start = 2026-09-01T00:00:00+00:00   # the timetable's origin; first tick 2026-09-01T06:17Z
+max_active_runs = 1          # one run in flight: a slow or unanswered run is no daily backlog
 
 # The backlog this line drains: every OPEN issue carrying `label`, read through the SCM when the
 # run fans out (task execution, never DAG import) and filtered by `intake_governance.drain_line`.
