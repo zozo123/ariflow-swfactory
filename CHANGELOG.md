@@ -63,6 +63,20 @@ All notable changes to this project will be documented here. The format follows
 
 ### Fixed
 
+- Docker work containers carry the Cell identity and are reclaimed by it (#2052, the #2035 orphan).
+  `DockerSandbox.argv` emitted `docker run --rm --init` with no `--label`/`--name`, `close()` was the
+  inherited no-op, and the `SandboxIdentity`/`authorize_cleanup`/`CleanupDebt` contract from #2100 had
+  no caller in the sandbox path, so a container whose docker client was killed mid-command stayed up
+  attributable to nobody. Every container is now labelled `swfactory.owned/cell/epoch/attempt` (no
+  credential; the identity comes from the host-owned `cell.json`, or the Cell the issue would be at
+  epoch 1 for a direct run) and named from that identity. `close()` asks the daemon by those labels,
+  lets `authorize_cleanup` refuse everything that is not exactly this Cell/epoch/run, and records a
+  receipt per container (`converged`, `failed`, or `ambiguous` when the daemon is unreachable) in the
+  run's control state. The backend's one sweep (`maintain.sweep_sandboxes`) also sweeps containers when
+  the factory runs on docker (`SWF_SANDBOX=docker`): labels select, the Cell store decides (a live Cell
+  at its epoch keeps its container; a Cell the store never held is only observed; incomplete labels are
+  refused), and each removal is the same journaled `sandbox_cleanup` operation an `islo rm` is, with
+  the provider in the evidence so a docker pass never settles an islo row or the reverse.
 - **The webhook receiver and the GitHub-label workflow no longer write to Airflow behind the
   factory's back** (#2068). Both posted straight to `/api/v2/dags/<dag>/dagRuns`, so their runs
   carried no `_factory_cells`: no admission record, no capacity accounting, no Factory Cell fencing,

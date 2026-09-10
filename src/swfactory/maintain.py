@@ -3,7 +3,7 @@
 Detection is deterministic (``statistics.mean``/``statistics.stdev`` over a window of the committed
 run metrics, read through the single reader ``metrics.load_all``); the model is involved only at
 the ``diagnose``/``propose`` tiers, read-only, through the normal ``Agent`` seam. Also owns the
-nightly sweep of orphaned ``swf-*`` sandboxes.
+nightly sweep of orphaned ``swf-*`` sandboxes and labelled Docker work containers.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from swfactory.idempotency import MutationOutcome, OperationError, OperationJour
 from swfactory.metrics import CREATED_KEYS, first_timestamp, load_all
 from swfactory.models import Diagnosis
 from swfactory.runtime import run_id_for
-from swfactory.sandbox import Sandbox
+from swfactory.sandbox import DockerContainers, Sandbox
 from swfactory.sandbox_governance import (
     CleanupDebt,
     CleanupDecision,
@@ -327,6 +327,15 @@ class SandboxProvider(Protocol):
     def remove(self, name: str) -> Any: ...
 
 
+class ContainerProvider(Protocol):
+    """What the sweep needs from the docker daemon (``sandbox.DockerContainers`` in production):
+    the labelled containers as ``{id, name, labels, running}`` rows, and ``docker rm -f``."""
+
+    def containers(self) -> list[dict[str, Any]]: ...
+
+    def remove(self, container_id: str) -> Any: ...
+
+
 class CleanupControl(Protocol):
     """The backend's ``ControlKernel``: the durable journal every removal intent is written to."""
 
@@ -444,21 +453,50 @@ def sweep_sandboxes(
     control: CleanupControl,
     now: datetime | None = None,
     limit: int = SWEEP_LIMIT,
+    docker: ContainerProvider | None = None,
 ) -> dict[str, list[str]]:
     """Remove this owner's orphaned factory sandboxes older than ``ttl_s``; the backend's sweep.
 
-    ``owner`` is REQUIRED: the sweep refuses to run when it cannot prove whose sandboxes it is
-    looking at. Lists with plain ``islo ls`` (own scope, never ``--all``), filters by
-    ``created_by`` and factory naming, then asks the Cell store before every ``rm``: a sandbox a
-    live Cell owns at its current epoch is kept. Each removal is a ``sandbox_cleanup`` operation in
-    the journal, so a lost ``rm`` reply is observed, retried or settled -- never a print.
-    ``debt`` names the removals still unresolved after this pass; ``reconciled`` the earlier
-    in-doubt removals this pass could settle.
+    ``owner`` is REQUIRED for islo: the sweep refuses to touch a MicroVM when it cannot prove whose
+    it is. Lists with plain ``islo ls`` (own scope, never ``--all``), filters by ``created_by`` and
+    factory naming, then asks the Cell store before every ``rm``: a sandbox a live Cell owns at its
+    current epoch is kept. Each removal is a ``sandbox_cleanup`` operation in the journal, so a lost
+    ``rm`` reply is observed, retried or settled -- never a print. ``debt`` names the removals still
+    unresolved after this pass; ``reconciled`` the earlier in-doubt removals this pass could settle.
+
+    A factory running on Docker also sweeps its work containers -- selected by label, judged by
+    the Cell store (``sweep_containers``) -- and the report merges the two. ``docker`` is the
+    caller's choice (the backend passes ``select_containers(os.environ)``); left ``None`` no
+    ``docker`` command runs, whatever the host has installed.
     """
     report: dict[str, list[str]] = {"removed": [], "kept": [], "debt": [], "reconciled": []}
-    if not owner:
-        print(f"maintain: {OWNER_ENV} not set; refusing to sweep sandboxes")
-        return report
+    cells = list(cells)
+    if owner:
+        _sweep_islo(report, ttl_s, owner=owner, islo=islo, cells=cells, control=control, now=now, limit=limit)
+    else:
+        print(f"maintain: {OWNER_ENV} not set; refusing to sweep islo sandboxes")
+    if docker is not None:
+        try:
+            containers = sweep_containers(docker=docker, cells=cells, control=control, limit=limit)
+        except Exception as e:  # noqa: BLE001 - a daemon the backend cannot reach must not hide the islo result
+            print(f"maintain: docker sweep skipped: {e}")
+        else:
+            for key, value in containers.items():
+                report[key] += value
+    return report
+
+
+def _sweep_islo(
+    report: dict[str, list[str]],
+    ttl_s: int,
+    *,
+    owner: str,
+    islo: SandboxProvider,
+    cells: list[Mapping[str, Any]],
+    control: CleanupControl,
+    now: datetime | None,
+    limit: int,
+) -> None:
     now = now or datetime.now(UTC)
     listing = islo.listing()
     items = {str(it.get("name") or ""): it for it in owned_sandboxes(listing, owner)}
@@ -473,80 +511,171 @@ def sweep_sandboxes(
             continue
         debt.record(name, identity)
         ref = OperationRef.build(identity.cell_id, identity.epoch, CLEANUP_KIND, name, identity.attempt_id)
-        if _remove(ref, name, islo=islo, control=control, owner=owner) is not None:
+
+        def present(name: str = name) -> bool:
+            return any(it.get("name") == name for it in owned_sandboxes(islo.listing(), owner))
+
+        if _remove(ref, name, provider="islo", present=present, rm=lambda n=name: islo.remove(n), control=control):
             debt.settle(name, identity)
             print(f"maintain: removed orphan sandbox {name}")
             report["removed"].append(name)
+    report["debt"] += sorted(debt.outstanding)
+    report["reconciled"] += _settle_absent(control.operations, provider="islo", present=set(items))
+
+
+def select_containers(env: Mapping[str, str]) -> ContainerProvider | None:
+    """The docker daemon, only for a factory whose sandbox provider IS docker. Anything else --
+    including a host that merely has a docker CLI -- must never make the backend run ``docker``."""
+    return DockerContainers() if env.get("SWF_SANDBOX") == "docker" else None
+
+
+def authorize_container(
+    identity: SandboxIdentity | None, row: Mapping[str, Any], cell: Mapping[str, Any] | None
+) -> CleanupDecision:
+    """``sandbox_governance.authorize_cleanup`` over the labels a container carries and the Cell row
+    they name. Incomplete labels are refused; a Cell this store never held is only observed (another
+    factory's container on the same daemon, or a direct run still in flight); a live Cell at its
+    epoch keeps its container however long it has run."""
+    if identity is None:
+        return CleanupDecision.REFUSE
+    observation = ResourceObservation(str(row["id"]), row["labels"], bool(row.get("running")))
+    if cell is None:
+        return authorize_cleanup(identity, observation, current_epoch=None, active=False)
+    return authorize_cleanup(
+        identity, observation, current_epoch=int(cell["epoch"]), active=cell.get("state") not in TERMINAL_STATES
+    )
+
+
+def sweep_containers(
+    *,
+    docker: ContainerProvider,
+    cells: Iterable[Mapping[str, Any]],
+    control: CleanupControl,
+    limit: int = SWEEP_LIMIT,
+) -> dict[str, list[str]]:
+    """Remove the Docker work containers whose Cell is over; the backend's sweep for a docker factory.
+
+    ``docker run --rm`` never reclaims a container whose docker client was killed mid-command
+    (#2035), so the daemon is asked for everything labelled ``swfactory.owned`` and the labels
+    ``DockerSandbox.argv`` stamped are read back as a *claim* (``SandboxIdentity.from_labels``).
+    The Cell store decides (``authorize_container``). No age nominates here: docker has no TTL of
+    its own and the Cell, not the clock, says whether the work is over. Every removal is the same
+    journaled ``sandbox_cleanup`` operation an ``islo rm`` is, keyed by container id.
+    """
+    report: dict[str, list[str]] = {"removed": [], "kept": [], "debt": [], "reconciled": []}
+    rows = docker.containers()
+    by_id = {str(cell.get("cell_id")): cell for cell in cells}
+    debt = CleanupDebt()
+    for row in rows[: max(limit, 0)]:
+        container_id = str(row["id"])
+        identity = SandboxIdentity.from_labels("docker", row["labels"])
+        decision = authorize_container(identity, row, by_id.get(identity.cell_id) if identity else None)
+        if identity is None or decision != CleanupDecision.REMOVE:
+            print(f"maintain: keeping container {container_id}: {decision} (labels {row['labels']})")
+            report["kept"].append(container_id)
+            continue
+        debt.record(container_id, identity)
+        ref = OperationRef.build(identity.cell_id, identity.epoch, CLEANUP_KIND, container_id, identity.attempt_id)
+
+        def present(cid: str = container_id) -> bool:
+            return any(str(it["id"]) == cid for it in docker.containers())
+
+        if _remove(
+            ref,
+            container_id,
+            provider="docker",
+            present=present,
+            rm=lambda c=container_id: docker.remove(c),
+            control=control,
+        ):
+            debt.settle(container_id, identity)
+            print(f"maintain: removed orphan container {container_id} of {identity.cell_id}@{identity.epoch}")
+            report["removed"].append(container_id)
     report["debt"] = sorted(debt.outstanding)
-    report["reconciled"] = _settle_absent(control.operations, present=set(items))
+    report["reconciled"] = _settle_absent(control.operations, provider="docker", present={str(r["id"]) for r in rows})
     return report
 
 
-def _receipt(ref: OperationRef, name: str, status: CleanupStatus, *, requested_at: float) -> dict[str, Any]:
+def _receipt(
+    ref: OperationRef, resource: str, status: CleanupStatus, *, provider: str, requested_at: float
+) -> dict[str, Any]:
     return CleanupReceipt.build(
         cell_id=ref.cell_id,
         epoch=ref.epoch,
         operation_key=ref.key,
-        provider="islo",
-        resource_id=name,
+        provider=provider,
+        resource_id=resource,
         status=status,
         requested_at=requested_at,
     ).to_dict()
 
 
-def _remove(ref: OperationRef, name: str, *, islo: SandboxProvider, control: CleanupControl, owner: str) -> Any:
-    """One journaled ``islo rm``; the committed receipt, or ``None`` while the outcome is unresolved.
+def _remove(
+    ref: OperationRef,
+    resource: str,
+    *,
+    provider: str,
+    present: Callable[[], bool],
+    rm: Callable[[], Any],
+    control: CleanupControl,
+) -> Any:
+    """One journaled provider ``rm``; the committed receipt, or ``None`` while the outcome is unresolved.
 
-    The journal fails closed on a row it already holds, so a retry first *observes*: still listed
-    means the effect is absent and ``rm`` may run again; unlisted means it converged and only the
-    reply was lost. When ``rm`` itself raises, the same observation runs at once, so the common
-    lost-reply case settles in the sweep that caused it.
+    The journal fails closed on a row it already holds, so a retry first *observes*: still
+    ``present`` means the effect is absent and ``rm`` may run again; gone means it converged and
+    only the reply was lost. When ``rm`` itself raises, the same observation runs at once, so the
+    common lost-reply case settles in the sweep that caused it. The evidence names the provider so
+    ``_settle_absent`` never settles an islo row from a docker listing, or the reverse.
     """
     requested_at = time.time()
+    evidence = {"resource": resource, "provider": provider}
 
     def observe() -> MutationOutcome:
-        evidence = {"resource": name}
         try:
-            present = any(it.get("name") == name for it in owned_sandboxes(islo.listing(), owner))
+            still_there = present()
         except Exception as e:  # noqa: BLE001 - an unreadable provider is an unknown outcome, not a verdict
             return MutationOutcome("ambiguous", evidence=evidence, detail=str(e)[:500])
-        if present:
-            return MutationOutcome("definitely_absent", evidence=evidence, detail="sandbox still listed")
-        return MutationOutcome("committed", _receipt(ref, name, "already_absent", requested_at=requested_at), evidence)
+        if still_there:
+            return MutationOutcome("definitely_absent", evidence=evidence, detail=f"{provider} resource still listed")
+        receipt = _receipt(ref, resource, "already_absent", provider=provider, requested_at=requested_at)
+        return MutationOutcome("committed", receipt, evidence)
 
-    def rm() -> dict[str, Any]:
-        islo.remove(name)
-        return _receipt(ref, name, "converged", requested_at=requested_at)
+    def remove() -> dict[str, Any]:
+        rm()
+        return _receipt(ref, resource, "converged", provider=provider, requested_at=requested_at)
 
     try:
-        return control.mutate(ref, rm, replay_safe=True, reconcile=observe)
+        return control.mutate(ref, remove, replay_safe=True, reconcile=observe)
     except Exception as e:  # noqa: BLE001 - one unresolved rm must not abort the sweep; the journal holds it
-        print(f"maintain: islo rm {name} unresolved ({e}); observing")
+        print(f"maintain: {provider} rm {resource} unresolved ({e}); observing")
     try:
         outcome = control.operations.observe(ref, observe)
     except (KeyError, OperationError) as e:  # refused before an intent existed, or the row moved under us
-        print(f"maintain: {name} left as cleanup debt: {e}")
+        print(f"maintain: {resource} left as cleanup debt: {e}")
         return None
     return outcome.result if outcome.status == "committed" else None
 
 
-def _settle_absent(journal: OperationJournal, *, present: set[str]) -> list[str]:
-    """Settle earlier in-doubt removals whose sandbox no longer appears in the own-scope listing.
+def _settle_absent(journal: OperationJournal, *, provider: str, present: set[str]) -> list[str]:
+    """Settle earlier in-doubt removals whose resource no longer appears in ``provider``'s listing.
 
     A lost ``rm`` whose follow-up listing also failed leaves a row that names its resource in the
     observation; once that resource is gone the effect converged, and the row must say so or the
-    fleet carries phantom cleanup debt forever.
+    fleet carries phantom cleanup debt forever. Rows from before the evidence named a provider are
+    islo's: it was the only provider that was ever journaled.
     """
     settled: list[str] = []
     for row in journal.unresolved(limit=1000):
         if row.get("kind") != CLEANUP_KIND:
             continue
-        name = str(((row.get("observation") or {}).get("evidence") or {}).get("resource") or "")
-        if not name or name in present:
+        evidence = (row.get("observation") or {}).get("evidence") or {}
+        name = str(evidence.get("resource") or "")
+        if not name or name in present or str(evidence.get("provider") or "islo") != provider:
             continue
         ref = OperationRef(str(row["cell_id"]), int(row["epoch"]), CLEANUP_KIND, str(row["operation_key"]))
-        receipt = _receipt(ref, name, "already_absent", requested_at=float(row.get("updated_at") or time.time()))
-        absent = MutationOutcome("committed", receipt, {"resource": name})
+        requested_at = float(row.get("updated_at") or time.time())
+        receipt = _receipt(ref, name, "already_absent", provider=provider, requested_at=requested_at)
+        absent = MutationOutcome("committed", receipt, {"resource": name, "provider": provider})
         if journal.observe(ref, lambda outcome=absent: outcome).status == "committed":
             print(f"maintain: reconciled lost removal of {name}")
             settled.append(name)

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from swfactory import sandbox as sandbox_mod
+from swfactory.cells import CellIdentity
 from swfactory.config import Config
 from swfactory.models import RunResult, StageError
 from swfactory.sandbox import (
@@ -27,6 +28,8 @@ from swfactory.sandbox import (
     make_sandbox,
     scrub_env,
 )
+from swfactory.sandbox_governance import SandboxIdentity
+from swfactory.state import RunState
 
 # Whole-argument flags that would pass host env into the sandbox (note: `--environment` is the
 # islo *secrets environment*, a different thing, so flags are matched exactly, not by prefix).
@@ -678,10 +681,60 @@ def test_make_sandbox_islo_wires_config() -> None:
 # ---------------------------------------------------------------- DockerSandbox (fake docker)
 
 
+IDENTITY = SandboxIdentity("docker", "cell_0123456789abcdef01234567", 2, "deadbeef")
+
+
 def _docker(tmp_path: Path, **overrides) -> DockerSandbox:
-    kwargs = dict(image="swfactory-sandbox:test", pass_env=(), protected=())
+    kwargs = dict(image="swfactory-sandbox:test", pass_env=(), protected=(), identity=IDENTITY)
     kwargs.update(overrides)
     return DockerSandbox(tmp_path / "work", **kwargs)
+
+
+def _labels(argv: list[str]) -> dict[str, str]:
+    pairs = [argv[i + 1] for i, a in enumerate(argv) if a == "--label"]
+    return dict(pair.split("=", 1) for pair in pairs)
+
+
+class FakeDaemon:
+    """``subprocess.run`` over an in-memory container table: ``docker ps`` lists EVERY labelled
+    container whatever ``--filter`` asked for (so the test proves the observation, not the query,
+    is what authorizes a removal); ``docker rm -f <id>`` deletes unless ``refuse`` names the id;
+    any other ``docker`` call (``run``) succeeds."""
+
+    def __init__(self, containers: dict[str, dict[str, str]], *, refuse: set[str] = frozenset()) -> None:
+        self.containers = {cid: dict(labels) for cid, labels in containers.items()}
+        self.refuse = set(refuse)
+        self.removed: list[str] = []
+        self.calls: list[list[str]] = []
+        self.ps_error: str | None = None
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        if argv[:2] == ["docker", "ps"]:
+            if self.ps_error is not None:
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr=self.ps_error)
+            rows = [
+                json.dumps(
+                    {
+                        "ID": cid,
+                        "Names": f"swf-{cid}",
+                        "Labels": ",".join(f"{k}={v}" for k, v in labels.items()),
+                        "State": "running" if cid.startswith("up") else "exited",
+                        "CreatedAt": "2026-09-10 14:07:54 +0300 EEST",
+                    }
+                )
+                for cid, labels in self.containers.items()
+                if labels.get("swfactory.owned") == "true"
+            ]
+            return subprocess.CompletedProcess(argv, 0, stdout="".join(r + "\n" for r in rows), stderr="")
+        if argv[:3] == ["docker", "rm", "-f"]:
+            cid = argv[3]
+            if cid in self.refuse:
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr=f"Error response from daemon: {cid} busy")
+            self.removed.append(cid)
+            self.containers.pop(cid, None)
+            return subprocess.CompletedProcess(argv, 0, stdout=cid + "\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="out\n", stderr="")
 
 
 def _e_flags(argv: list[str]) -> list[str]:
@@ -695,7 +748,8 @@ def test_docker_argv_shape_mounts_workdir_in_place(tmp_path, monkeypatch) -> Non
     res = sb.run("uv run pytest")
     argv, w = seen["argv"], sb.workdir
     assert res.ok
-    assert argv[:6] == ["docker", "run", "--rm", "--init", "-v", f"{w}:{w}"]  # rw, same path
+    assert argv[:4] == ["docker", "run", "--rm", "--init"]
+    assert argv[argv.index("-v") + 1] == f"{w}:{w}"  # rw, same path
     assert f"{DOCKER_CACHE_VOLUME}:{DOCKER_HOME}/.cache" in argv
     assert argv[argv.index("-w") + 1] == w
     assert argv[argv.index("--network") + 1] == "bridge"
@@ -913,14 +967,118 @@ def test_srt_denies_only_existing_paths(tmp_path, monkeypatch) -> None:
 
 
 def test_docker_custom_uid_gets_tmp_home_and_no_cache_volume(tmp_path) -> None:
-    sb = sandbox_mod.DockerSandbox(tmp_path, image="img", user="1001:1001")
+    sb = sandbox_mod.DockerSandbox(tmp_path, image="img", user="1001:1001", identity=IDENTITY)
     argv = sb.argv("uv run pytest")
     assert "--user" in argv and "1001:1001" in argv
     assert f"HOME={sandbox_mod.DOCKER_TMP_HOME}" in argv
     assert not any(a.startswith(sandbox_mod.DOCKER_CACHE_VOLUME) for a in argv)
     assert argv[-1].startswith('mkdir -p "$HOME" && uv run pytest')
-    root_sb = sandbox_mod.DockerSandbox(tmp_path, image="img", user="root")
+    root_sb = sandbox_mod.DockerSandbox(tmp_path, image="img", user="root", identity=IDENTITY)
     assert "HOME=" not in " ".join(root_sb.argv("true"))
+
+
+# ------------------------------------------------- DockerSandbox identity + cleanup (#2052)
+
+
+def test_docker_argv_labels_and_names_every_container_with_the_cell_identity(tmp_path, monkeypatch) -> None:
+    """#2035's orphan prerequisite: a container the killed docker client left running must say whose
+    it is. ``docker run`` carries the Cell/epoch/run labels and a name derived from them; nothing in
+    the identity is a credential."""
+    seen = _fake_srt(monkeypatch)
+    sb = _docker(tmp_path)
+    sb.run("true")
+    argv = seen["argv"]
+    assert argv[:4] == ["docker", "run", "--rm", "--init"]
+    assert _labels(argv) == {
+        "swfactory.owned": "true",
+        "swfactory.cell": "cell_0123456789abcdef01234567",
+        "swfactory.epoch": "2",
+        "swfactory.attempt": "deadbeef",
+    }
+    name = argv[argv.index("--name") + 1]
+    assert name.startswith(IDENTITY.stable_name + "-")
+    assert argv.index("--name") < argv.index("swfactory-sandbox:test")  # options before image
+    sb.run("true")
+    assert seen["argv"][seen["argv"].index("--name") + 1] != name  # sequential commands never collide
+    assert _labels(seen["argv"]) == _labels(argv)  # ...but carry the same identity
+    sb.run_agent("true")
+    assert _labels(seen["argv"]) == _labels(argv)
+    _assert_no_credentials(argv)
+
+
+def test_make_sandbox_docker_labels_the_run_with_its_cell_binding(tmp_path, monkeypatch) -> None:
+    """The identity comes from the host-owned ``cell.json`` runtime writes before the sandbox exists
+    (the same evidence ``stages.cell_evidence`` trusts); a direct run without a Cell is labelled with
+    the Cell it would be at epoch 1, so a later managed Cell for the issue can still claim it."""
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / ".factory" / "r1"
+    RunState(run_dir).write_control(
+        "cell.json", json.dumps({"cell_id": "cell_abcdefabcdefabcdefabcdef", "epoch": 3, "managed": True})
+    )
+    cfg = Config(issue="42", sandbox="docker", workdir=".factory/r1/work", run_id="deadbeef")
+    sb = make_sandbox(cfg, "42", run_dir=run_dir)
+    assert isinstance(sb, DockerSandbox)
+    assert sb.identity == SandboxIdentity("docker", "cell_abcdefabcdefabcdefabcdef", 3, "deadbeef")
+    assert sb.state is not None and sb.state.root == RunState(run_dir).root
+
+    direct = make_sandbox(Config(issue="42", sandbox="docker", repo="acme/w", target_dir="", run_id="deadbeef"), "42")
+    assert isinstance(direct, DockerSandbox)
+    assert direct.identity == SandboxIdentity("docker", CellIdentity("acme/w", "", "42").stable_id(), 1, "deadbeef")
+    assert direct.state is None
+
+
+def test_docker_close_removes_only_its_own_containers_and_records_receipts(tmp_path, monkeypatch) -> None:
+    """The probe from #2052/#2035: the docker CLI (this process) died mid-command, so ``--rm`` never
+    ran and the container is still up. ``close()`` asks the daemon by the labels argv stamped, lets
+    ``authorize_cleanup`` refuse everything that is not exactly this Cell/epoch/run, and leaves a
+    receipt per removal in the run's host-owned control state."""
+    mine = dict(IDENTITY.labels)
+    other = dict(SandboxIdentity("docker", "cell_fedcba9876543210fedcba98", 2, "deadbeef").labels)
+    stale = {**mine, "swfactory.epoch": "1"}
+    daemon = FakeDaemon({"up-mine": mine, "up-other": other, "up-stale": stale, "up-bare": {}})
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", daemon)
+    state = RunState(tmp_path / "run")
+    sb = _docker(tmp_path, state=state)
+
+    sb.close()
+
+    assert daemon.removed == ["up-mine"]
+    assert set(daemon.containers) == {"up-other", "up-stale", "up-bare"}
+    (ps,) = [c for c in daemon.calls if c[:2] == ["docker", "ps"] and "up-mine" not in c][:1]
+    filters = [ps[i + 1] for i, a in enumerate(ps) if a == "--filter"]
+    assert sorted(filters) == sorted(f"label={k}={v}" for k, v in IDENTITY.labels.items())  # asks by identity
+    receipts = json.loads(state.read_control("cleanup.json"))
+    assert [(r["resource_id"], r["status"], r["provider"]) for r in receipts] == [("up-mine", "converged", "docker")]
+    assert receipts[0]["cell_id"] == IDENTITY.cell_id and receipts[0]["epoch"] == 2
+    assert receipts[0]["operation_key"].startswith("sandbox_cleanup:")
+
+
+def test_docker_close_leaves_visible_debt_when_the_daemon_refuses_and_converges_on_retry(tmp_path, monkeypatch) -> None:
+    """Provider failure is cleanup debt, not a print: the receipt says ``failed`` and names the
+    container (still labelled, so the backend sweep can find it); the next close converges."""
+    daemon = FakeDaemon({"up-mine": dict(IDENTITY.labels)}, refuse={"up-mine"})
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", daemon)
+    state = RunState(tmp_path / "run")
+    sb = _docker(tmp_path, state=state)
+
+    sb.close()
+    assert daemon.containers == {"up-mine": dict(IDENTITY.labels)}
+    (receipt,) = json.loads(state.read_control("cleanup.json"))
+    assert receipt["status"] == "failed" and receipt["resource_id"] == "up-mine" and "busy" in receipt["detail"]
+
+    daemon.refuse.clear()
+    sb.close()
+    assert daemon.removed == ["up-mine"]
+    (receipt,) = json.loads(state.read_control("cleanup.json"))
+    assert receipt["status"] == "converged"
+
+    # an unreachable daemon: nothing can be enumerated, so the debt is the whole identity
+    daemon.ps_error = "Cannot connect to the Docker daemon"
+    sb.close()
+    (receipt,) = json.loads(state.read_control("cleanup.json"))
+    assert receipt["status"] == "ambiguous" and receipt["resource_id"] == IDENTITY.stable_name
+    assert "Cannot connect" in receipt["detail"]
+    assert sb.receipts and sb.receipts[-1]["status"] == "ambiguous"  # observable without the state file too
 
 
 def test_default_docker_user_is_host_uid_on_linux(monkeypatch) -> None:

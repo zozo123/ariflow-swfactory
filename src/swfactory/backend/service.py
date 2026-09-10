@@ -1520,6 +1520,8 @@ class Factory:
             # The nightly orphan sweep runs HERE, next to the Cell store and the operation journal:
             # a worker deciding from age alone is #2075. Cells say who still owns a sandbox; the
             # journal keeps every removal intent so a lost ``islo rm`` reply is reconciled, not printed.
+            # A docker factory (``SWF_SANDBOX=docker``) sweeps its labelled work containers the same
+            # way (#2052); any other factory never runs ``docker`` here.
             ttl_s = body.get("ttl_s")
             if type(ttl_s) is not int or ttl_s < 1:
                 raise ValueError("ttl_s must be a positive integer")
@@ -1529,6 +1531,7 @@ class Factory:
                 islo=IsloClient(self.owner),
                 cells=self.cell_store.list(limit=1000),
                 control=self.control,
+                docker=maintain.select_containers(os.environ),
             )
         if path == "/metrics/runs":
             return MetricsSource(self.root).runs()

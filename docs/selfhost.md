@@ -117,9 +117,14 @@ Two more limits worth naming:
   `SWF_GATE_REPLAY` at a replay fixture, which is refused for backend-managed cells and recorded as
   actor `replay:*` so the chain never claims a person answered. Treat unattended self-hosting as a
   deliberate, visible operator choice.
-- **`sandbox.docker` cleanup is unresolved.** Teardown is `--rm` only, `close()` is a no-op, and
-  argv sets no `--name`/`--label`, so an interrupted run can leave one unidentifiable container.
-  That is why the claim stays experimental.
+- **`sandbox.docker` cleanup is best-effort on the host, reconciled by the backend.** Every
+  container carries the run's Cell/epoch/run-id labels and a name derived from them; `close()`
+  reclaims exactly that identity's containers and writes a receipt to `cleanup.json`, and a factory
+  whose backend runs with `SWF_SANDBOX=docker` sweeps what a killed docker client left behind by
+  label (`docker ps -a --filter label=swfactory.owned=true`), refusing anything a live Cell still
+  owns. A host that merely has docker installed never runs `docker` from the sweep. The claim stays
+  experimental because the container is not the production trust boundary (see above), not because
+  a container can go unattributed.
 
 ## Proof of the loop
 
