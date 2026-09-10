@@ -28,7 +28,109 @@ permissions:
   contents: write
 
 jobs:
+  # Issue #2048: this workflow used to run its own smaller suite and ship on the strength of it,
+  # never consuming the candidate manifest ci.yml seals. A green smoke suite on the tagged tree is
+  # not evidence that the mandatory legs -- airflow-main, rust, contract-equivalence, the eval
+  # suite -- ever ran against it, so the smoke suite could pass on a tree that had never been a
+  # candidate at all.
+  #
+  # PR-merge-to-release identity rule (docs/promotion-policy.md): evidence is bound to a commit,
+  # but what ships is a TREE. Merging a pull request gives main a new commit SHA even when its
+  # content is byte-identical to the tested candidate, so demanding commit equality would refuse
+  # every legitimate release. This job therefore requires retained candidate evidence whose
+  # `tested_sha` names a commit with the SAME TREE as the commit the tag points at. A squash that
+  # changed anything produces a different tree and has no evidence.
+  #
+  # A dry run reports the same verdict but does not fail on it: a rehearsal creates no tag and
+  # ships nothing, and refusing it would only stop maintainers from testing the four-target build.
+  candidate-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SHIPPED_COMMIT: ${{ github.sha }}
+      DRY_RUN_INPUT: ${{ github.event.inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - run: uv sync
+
+      - name: Recover the retained candidate manifest for the shipped commit
+        id: evidence
+        run: |
+          set -euo pipefail
+          shipped_tree=$(git rev-parse "HEAD^{tree}")
+          echo "shipped_tree=$shipped_tree" >> "$GITHUB_OUTPUT"
+
+          # ci.yml runs on every push to main, so the commit a tag names has a readiness run of its
+          # own. Selecting runs by head_sha is what binds the evidence to this commit; a search by
+          # branch would happily return the newest green run on main instead.
+          runs=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHIPPED_COMMIT&per_page=20" \
+            --jq '.workflow_runs[].id' 2>/dev/null || true)
+          for run_id in $runs; do
+            # An expired artifact is indistinguishable from one that never existed, so it is
+            # filtered out here rather than downloaded and found empty later.
+            artifact=$(gh api "repos/$REPO/actions/runs/$run_id/artifacts" \
+              --jq '[.artifacts[] | select(.expired == false)
+                     | select(.name | startswith("candidate-readiness")) | .id] | first // ""' \
+              2>/dev/null || true)
+            [ -n "$artifact" ] || continue
+            gh api "repos/$REPO/actions/artifacts/$artifact/zip" > /tmp/evidence.zip || continue
+            mkdir -p /tmp/evidence && unzip -o -q /tmp/evidence.zip -d /tmp/evidence
+            found=$(find /tmp/evidence -name candidate-readiness.json -print -quit || true)
+            if [ -n "$found" ]; then
+              cp "$found" /tmp/candidate-readiness.json
+              echo "manifest=/tmp/candidate-readiness.json" >> "$GITHUB_OUTPUT"
+              break
+            fi
+          done
+          # A retention window that has expired is indistinguishable from evidence that never
+          # existed, and both must refuse the tag. Silence here is the whole point of the gate.
+          if [ ! -f /tmp/candidate-readiness.json ]; then
+            echo "::warning::no retained candidate-readiness artifact for $SHIPPED_COMMIT"
+            exit 0
+          fi
+          tested=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tested_sha"])' \
+            /tmp/candidate-readiness.json)
+          # Nothing in this manifest is trusted until the verifier below recomputes its digest,
+          # and this value goes into an API path before that happens. A commit SHA is 40 hex
+          # characters or it is not a commit.
+          if ! printf '%s' "$tested" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::candidate evidence tested_sha is not a resolved commit SHA"
+            exit 1
+          fi
+          tested_tree=$(gh api "repos/$REPO/commits/$tested" --jq .commit.tree.sha || true)
+          echo "tested_tree=$tested_tree" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse a tag whose shipped tree has no valid candidate evidence
+        env:
+          MANIFEST: ${{ steps.evidence.outputs.manifest }}
+          SHIPPED_TREE: ${{ steps.evidence.outputs.shipped_tree }}
+          TESTED_TREE: ${{ steps.evidence.outputs.tested_tree }}
+        run: |
+          # `set +e` on purpose: the default shell is `bash -e`, which would abort on the verifier's
+          # refusal before the dry-run branch below could report it as a rehearsal.
+          set +e -uo pipefail
+          uv run python scripts/promotion_policy.py release-evidence \
+            --manifest "$MANIFEST" \
+            --shipped-commit "$SHIPPED_COMMIT" \
+            --shipped-tree "$SHIPPED_TREE" \
+            --tested-tree "$TESTED_TREE"
+          verdict=$?
+          if [ "$verdict" -ne 0 ] && [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] \
+             && [ "$DRY_RUN_INPUT" != "false" ]; then
+            echo "::warning::a real publish of this tree would be refused; a rehearsal ships nothing"
+            exit 0
+          fi
+          exit "$verdict"
+
   release:
+    needs: candidate-evidence
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # The gate has run by the time anything else starts, so every later job can take the version

@@ -1,0 +1,53 @@
+name: promotion-policy
+# Branch protection lives in a settings page nobody diffs. Issue #2048 was exactly that: a
+# `candidate-readiness` job went green on every pull request while the live API still required
+# only `test` and `airflow-parity` and administrators could bypass both.
+#
+# This workflow is the drift alarm. It runs two checks that fail for different reasons:
+#
+#   audit  offline and deterministic -- the policy names jobs that exist, mandatory legs are not
+#          `continue-on-error`, advisory legs are, and the aggregate job fans in exactly the
+#          mandatory set. This one runs everywhere and blocks a pull request that edits the policy
+#          or the jobs out of agreement with each other.
+#   diff   the live settings against the same file. Reading branch protection needs administrative
+#          scope, which `github.token` does not have, so this leg runs only where the maintainer
+#          token exists and says so loudly when it does not -- an unverified run must never read
+#          as a verified one.
+on:
+  push: { branches: [main] }
+  pull_request:
+  schedule:
+    # Drift is introduced by hand in a web UI, on no schedule, and is invisible until a release
+    # needs the boundary. Daily is how a hand edit gets noticed the next day rather than never.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - run: uv sync
+
+      - name: The policy agrees with the workflows it governs
+        run: uv run python scripts/promotion_policy.py audit
+
+      - name: The policy agrees with the live repository settings
+        # A missing token is reported, never assumed benign: the step below prints why the boundary
+        # could not be verified instead of leaving a green tick that means nothing.
+        env:
+          GH_TOKEN: ${{ secrets.SWF_POLICY_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::SWF_POLICY_ADMIN_TOKEN is not set; live branch protection was NOT verified."
+            echo "::warning::Reading protection requires admin scope. See docs/promotion-policy.md."
+            exit 0
+          fi
+          uv run python scripts/promotion_policy.py diff

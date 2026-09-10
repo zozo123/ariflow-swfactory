@@ -8,8 +8,8 @@ name: control-plane-gate
 # `set_protected`, so on the production backend the list is agent-enforced only).
 #
 # This job is the layer that does not run inside the cage. It re-checks the same list against the
-# delivered diff, so a guard bypass, a hand-edited `factory/*` branch, or a future backend with no
-# kernel enforcement still cannot land a control-plane change under factory authorship.
+# delivered diff, so a guard bypass, a hand-edited branch, or a future backend with no kernel
+# enforcement still cannot land a control-plane change under factory authorship.
 #
 # It reads the protected list from the BASE revision, never from the pull request. Reading the
 # PR's own copy would let one diff shrink the list and edit the newly-unprotected file in the same
@@ -17,10 +17,17 @@ name: control-plane-gate
 # missing base `factory.toml` is a hard failure for the same reason: deleting the file must not
 # disarm the check.
 #
-# Scope: only factory-authored branches. `deliver` force-updates the bot-owned `factory/*` branch,
-# so that prefix (or the `agent-authored` label) is what marks a change as machine-produced. Human
-# pull requests are unaffected -- a person may still change the confinement, on a normal branch,
-# under normal review.
+# Scope (issue #2048): every pull request, on every branch. The gate used to arm itself only for
+# `factory/*` heads, which made the branch name a privilege -- a factory run that delivered to
+# `feat/...` was ungated, and nothing about a prefix is a credential. The only way out is now an
+# explicit `control-plane-maintenance` label applied by a human maintainer, and a label applied by
+# the factory's own identity does not count: an agent may not widen its own cage in the pull
+# request that uses the wider cage. `.github/promotion-policy.yml` holds both lists, and
+# docs/promotion-policy.md documents the human maintenance path.
+#
+# `protected-paths` is a required status context on main, so this job must report on every pull
+# request. It carries no job-level `if:` for that reason: a skipped required check reports neutral
+# and would let exactly the changes this gate exists to refuse merge unexamined.
 
 on:
   pull_request:
@@ -28,6 +35,9 @@ on:
 
 permissions:
   contents: read
+  # Reading who applied the exemption label; the label list on the event says what, never who.
+  issues: read
+  pull-requests: read
 
 jobs:
   protected-paths:
@@ -36,25 +46,87 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with: { python-version: "3.12" }
+      - run: uv sync
 
-      - name: Decide whether this pull request is factory-authored
+      - name: Take the gate's own rules from the base revision, never from this pull request
+        id: base
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # `factory.toml` is already read from the base, below, and this step extends the same
+          # rule to the gate's own rules. A pull request that supplied them could delete
+          # `github-actions[bot]` from `factory_identities`, or rename `exemption_label` to one it
+          # can apply to itself, and then use the exemption it had just widened -- in the very
+          # change the exemption exists to keep under human review.
+          #
+          # The protected branch tip is preferred over the recorded base SHA: it is the revision a
+          # merge actually lands on, and a stale pull request cannot reach back to an older copy.
+          dir="$RUNNER_TEMP/base-policy"
+          mkdir -p "$dir"
+          policy=".github/promotion-policy.yml"
+          script="scripts/promotion_policy.py"
+          for rev in "origin/$BASE_REF" "$BASE_SHA"; do
+            if git show "$rev:.github/promotion-policy.yml" > "$dir/promotion-policy.yml" 2>/dev/null \
+               && git show "$rev:scripts/promotion_policy.py" > "$dir/promotion_policy.py" 2>/dev/null; then
+              policy="$dir/promotion-policy.yml"
+              script="$dir/promotion_policy.py"
+              echo "gate rules taken from $rev"
+              break
+            fi
+          done
+          if [ "$policy" != "$dir/promotion-policy.yml" ]; then
+            # Only reachable before this file exists on the protected branch, which is the pull
+            # request that introduces it. Say so rather than let it read as a verified run.
+            echo "::warning::the base revision carries no promotion policy; this pull request's own copy governs it"
+          fi
+          echo "policy=$policy" >> "$GITHUB_OUTPUT"
+          echo "script=$script" >> "$GITHUB_OUTPUT"
+          # The exemption label's name is part of the rules and comes from the same revision.
+          uv run python -c \
+            'import sys, yaml; print("label=" + yaml.safe_load(open(sys.argv[1]))["control_plane"]["exemption_label"])' \
+            "$policy" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve who applied the exemption label, if anybody did
+        id: label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          LABEL: ${{ steps.base.outputs.label }}
+        run: |
+          set -euo pipefail
+          # The most recent `labeled` event for this label is the grant. Reading it from the
+          # timeline rather than from `github.actor` matters because the run that enforces the gate
+          # is usually a later `synchronize`, whose actor is whoever pushed, not whoever exempted.
+          actor=$(gh api "repos/$REPO/issues/$PR/timeline" --paginate \
+            --jq "[.[] | select(.event == \"labeled\") | select(.label.name == \"$LABEL\") | .actor.login] | last // \"\"" \
+            2>/dev/null || echo "")
+          echo "actor=$actor" >> "$GITHUB_OUTPUT"
+          echo "exemption label last applied by: ${actor:-<nobody>}"
+
+      - name: Decide whether the protected-path gate is armed
         id: scope
         env:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
-        run: |
-          set -euo pipefail
-          enforce=no
-          case "$HEAD_REF" in
-            factory/*) enforce=yes ;;
-          esac
-          for label in $LABELS; do
-            [ "$label" = "agent-authored" ] && enforce=yes
-          done
-          echo "enforce=$enforce" >> "$GITHUB_OUTPUT"
-          echo "head_ref=$HEAD_REF enforce=$enforce"
+          # A JSON array, not a joined string: label names may contain spaces, so joining and
+          # re-splitting them invents labels -- `needs control-plane-maintenance review` would
+          # tokenise into three, one of which is the exemption.
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          LABEL_ACTOR: ${{ steps.label.outputs.actor }}
+          POLICY: ${{ steps.base.outputs.policy }}
+          SCRIPT: ${{ steps.base.outputs.script }}
+        run: >-
+          uv run python "$SCRIPT" --policy "$POLICY" control-plane
+          --head-ref "$HEAD_REF"
+          --labels-json "$LABELS_JSON"
+          --label-actor "$LABEL_ACTOR"
+          --github-output "$GITHUB_OUTPUT"
 
-      - name: Refuse control-plane paths in a factory-authored diff
+      - name: Refuse control-plane paths in this diff
         if: steps.scope.outputs.enforce == 'yes'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -90,7 +162,7 @@ jobs:
           ]
 
           # `tests/` is protected only for `fix` stages (build must be able to add tests), so a
-          # factory-authored diff touching tests is legitimate. Every other entry is absolute here.
+          # diff touching tests is legitimate. Every other entry is absolute here.
           waived = {"tests"}
           rules = [e for e in entries if e not in waived]
 
@@ -103,19 +175,19 @@ jobs:
           hits = [(p, e) for p in changed for e in [offends(p)] if e]
           for path, entry in hits:
               print(f"::error file={path}::control-plane path is protected by '{entry}' in the "
-                    f"base factory.toml; a factory-authored change may not modify it")
+                    f"base factory.toml; this pull request may not modify it")
 
           print(f"checked {len(changed)} changed paths against {len(rules)} protected entries")
           if hits:
               print(
-                  "\nThis diff changes paths that govern the factory itself. Land it as a human "
-                  "pull request on a non-factory branch, under normal review, instead of under "
-                  "factory authorship."
+                  "\nThis diff changes paths that govern the factory itself. A maintainer who "
+                  "intends the change applies the 'control-plane-maintenance' label to this pull "
+                  "request by hand; see docs/promotion-policy.md, 'Changing the control plane'."
               )
               sys.exit(1)
           print("no protected path touched")
           PY
 
-      - name: Skipped
+      - name: Exempted
         if: steps.scope.outputs.enforce != 'yes'
-        run: echo "not a factory-authored branch; the protected-path gate does not apply"
+        run: echo "a maintainer exempted this pull request by label; the protected-path gate stood down"
