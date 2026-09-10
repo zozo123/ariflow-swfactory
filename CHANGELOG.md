@@ -10,6 +10,8 @@ All notable changes to this project will be documented here. The format follows
 
 ### Added
 
+- Require every work node to opt into parallel safety before the experimental executor enables provider forks; mixed or default plans run serially.
+
 - The prompt templates a blueprint references are part of the inputs one Cell epoch accepts
   (#2098). The blueprint document was pinned, but `src/swfactory/prompts/*.md` — the actual
   instruction handed to the model — was not, so two workers on different swfactory builds holding a
