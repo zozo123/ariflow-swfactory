@@ -9,6 +9,8 @@ in `stages.py`. Details: README + docs/*.md.
 
 ## Commands
 - `uv sync`; `uv run pytest` — the hermetic suite (fake subprocess, tmp git repos, no network).
+  `addopts` already carries `-q`; a second `-q` hides the pass/fail summary line, and `| tail`
+  hides the exit code — read `${pipestatus[1]}` (zsh) before calling a run green.
 - `uv run ruff check . && uv run ruff format --check .` — line length 100; E,F,I,B,UP,SIM.
 - `uv run swfactory demo [--sandbox srt|docker] [--real]` — scripted replay, no keys, ~10 s;
   `--real` runs claude in an islo sandbox and opens a real PR.
@@ -20,6 +22,9 @@ in `stages.py`. Details: README + docs/*.md.
 - `uv run swfactory approve <dag_run_id> intent|plan [--reject] [--map-index <j>]`; `doctor
   [--json]` (exit 1 per red row, with a `fix:`); `metrics|maintain --root .`; `herd`; `webhook`.
 - `cargo test --manifest-path rust/Cargo.toml --workspace`, `cargo fmt`/`clippy -- -D warnings` —
+  run these after ANY change to `blueprints/*.toml`, backend HTTP shapes or CLI surfaces, not only
+  to `rust/`: the crates are a second reader of those contracts (`deny_unknown_fields`, and a test
+  that parses every shipped blueprint), and two PRs went red in CI for skipping them.
   the `swf` operator binary in `rust/` (docs/swf.md). It drives the same Airflow/`gh`/`islo`
   interfaces as `control.py` only in explicit `--direct` mode. Normally it connects to the Python
   `backend.py` API; service credentials and work-order validation live there. It runs no stage. `contract-equivalence` CI asserts both languages
