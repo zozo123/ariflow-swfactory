@@ -44,6 +44,21 @@ class SandboxIdentity:
             "swfactory.attempt": self.attempt_id,
         }
 
+    @classmethod
+    def from_labels(cls, provider: str, labels: Mapping[str, str]) -> SandboxIdentity | None:
+        """The identity a resource's labels *claim*, or ``None`` when they are not a complete factory
+        stamp. A claim confers nothing: ``authorize_cleanup`` decides whether it may be acted on."""
+        if labels.get("swfactory.owned") != "true":
+            return None
+        try:
+            identity = cls(
+                provider, labels["swfactory.cell"], int(labels["swfactory.epoch"]), labels["swfactory.attempt"]
+            )
+            identity.validate()
+        except (KeyError, ValueError):
+            return None
+        return identity
+
 
 class CleanupDecision(StrEnum):
     REMOVE = "remove"

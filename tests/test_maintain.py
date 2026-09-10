@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from swfactory.maintain import (
 )
 from swfactory.models import AgentResult, Diagnosis
 from swfactory.runtime import run_id_for
+from swfactory.sandbox import DockerContainers
+from swfactory.sandbox_governance import SandboxIdentity
 
 BANDS = {
     "window_runs": 20,
@@ -571,3 +574,117 @@ def test_request_sweep_goes_through_the_backend_and_refuses_without_one(monkeypa
     monkeypatch.setattr(cell_callback.urllib.request, "urlopen", lambda request, **_k: _Response(request))
     assert maintain.request_sweep(3600)["removed"] == ["swf-a-1-aaaaaaaa"]
     assert sent == [("http://backend:8082/v1/workers/sweep", {"ttl_s": 3600})]
+
+
+# ---------------------------------------------------------------- docker orphan sweep (#2052)
+
+
+class FakeDocker:
+    """``docker ps -a --filter label=swfactory.owned=true`` as ``sandbox.DockerContainers`` hands it
+    to the sweep -- only labelled containers -- and ``docker rm -f``; ``lose``/``fail`` as FakeIslo."""
+
+    def __init__(
+        self, items: Mapping[str, Mapping[str, str]], *, lose: set[str] = frozenset(), fail: set[str] = frozenset()
+    ) -> None:
+        self.items = {
+            cid: {"id": cid, "name": f"swf-{cid}", "labels": dict(labels), "running": True}
+            for cid, labels in items.items()
+        }
+        self.lose, self.fail = set(lose), set(fail)
+        self.removed: list[str] = []
+        self.listing_error: Exception | None = None
+
+    def containers(self) -> list[dict]:
+        if self.listing_error is not None:
+            raise self.listing_error
+        return list(self.items.values())
+
+    def remove(self, container_id: str) -> None:
+        if container_id in self.fail:
+            raise RuntimeError(f"docker rm {container_id} failed")
+        self.removed.append(container_id)
+        del self.items[container_id]
+        if container_id in self.lose:
+            raise TimeoutError(f"docker rm {container_id}: response lost")
+
+
+def _labels(cell_id: str, epoch: int, attempt: str = "deadbeef") -> dict[str, str]:
+    return dict(SandboxIdentity("docker", cell_id, epoch, attempt).labels)
+
+
+def test_sweep_selects_docker_containers_by_label_and_refuses_a_live_cells(tmp_path: Path) -> None:
+    """#2035's orphan: a container whose docker client was killed mid-command is still running with
+    the labels ``DockerSandbox.argv`` stamped. Labels select; the Cell store decides: a live Cell at
+    its epoch keeps its container, a finished Cell's is removed and journaled, a Cell the store does
+    not know is only observed, incomplete labels are refused."""
+    cells = [
+        _cell("cell_live", "running"),
+        _cell("cell_done", "success"),
+        _cell("cell_rearmed", "running", epoch=2),
+    ]
+    docker = FakeDocker(
+        {
+            "live1": _labels("cell_live", 1),  # live Cell at its current epoch -> kept
+            "done1": _labels("cell_done", 1),  # terminal Cell never cleaned up -> removed
+            "stale1": _labels("cell_rearmed", 1),  # older epoch while the Cell is live again -> refused
+            "unknown1": _labels("cell_unknown", 1),  # no Cell row: not ours to judge -> observed
+            "half": {"swfactory.owned": "true", "swfactory.cell": "cell_done"},  # incomplete -> refused
+        }
+    )
+    control = ControlKernel(tmp_path / "control")
+    report = maintain.sweep_containers(docker=docker, cells=cells, control=control)
+    assert docker.removed == ["done1"]
+    assert report["removed"] == ["done1"] and report["debt"] == [] and report["reconciled"] == []
+    assert sorted(report["kept"]) == ["half", "live1", "stale1", "unknown1"]
+    rows = {r["cell_id"]: r for r in control.operations.db.execute("SELECT * FROM operations")}
+    assert list(rows) == ["cell_done"] and rows["cell_done"]["kind"] == "sandbox_cleanup"
+    receipt = json.loads(rows["cell_done"]["result_json"])
+    assert (receipt["provider"], receipt["resource_id"], receipt["status"]) == ("docker", "done1", "converged")
+    assert control.operations.unresolved() == []
+    # the Cell finished since: its stale container is now an orphan the sweep may reclaim
+    cells[2] = _cell("cell_rearmed", "success", epoch=2)
+    report = maintain.sweep_containers(docker=docker, cells=cells, control=control)
+    assert report["removed"] == ["stale1"] and docker.removed == ["done1", "stale1"]
+
+
+def test_sweep_journals_a_lost_docker_rm_and_settles_it_by_provider(tmp_path: Path) -> None:
+    """A lost ``docker rm`` reply converges like a lost ``islo rm``; a docker pass never settles an
+    islo row (or the reverse) just because the other provider's listing lacks that name."""
+    control = ControlKernel(tmp_path / "control")
+    cells = [_cell("cell_done", "success")]
+    docker = FakeDocker({"gone1": _labels("cell_done", 1)}, lose={"gone1"})
+    report = maintain.sweep_containers(docker=docker, cells=cells, control=control)
+    assert report["removed"] == ["gone1"] and report["debt"] == []
+    (row,) = control.operations.db.execute("SELECT state,result_json FROM operations").fetchall()
+    assert row["state"] == "committed" and json.loads(row["result_json"])["status"] == "already_absent"
+
+    # islo debt survives a docker pass whose listing of course does not show the islo sandbox
+    stuck = "swf-stuck-1-bbbbbbbb"
+    islo = FakeIslo([{"name": stuck, "created_at": OLD}], fail={stuck})
+    assert _sweep(islo, [], control)["debt"] == [stuck]
+    docker = FakeDocker({"stuck2": _labels("cell_done", 1)}, fail={"stuck2"})
+    report = maintain.sweep_containers(docker=docker, cells=cells, control=control)
+    assert report["debt"] == ["stuck2"] and report["reconciled"] == []
+    pending = {r["observation"]["evidence"]["resource"] for r in control.operations.unresolved()}
+    assert pending == {stuck, "stuck2"}
+    # and the islo pass leaves the docker row alone
+    islo.fail.clear()
+    report = _sweep(islo, [], control)
+    assert report["removed"] == [stuck] and report["reconciled"] == []
+    assert {r["observation"]["evidence"]["resource"] for r in control.operations.unresolved()} == {"stuck2"}
+
+
+def test_sweep_sandboxes_sweeps_docker_containers_when_the_factory_runs_on_docker(tmp_path: Path) -> None:
+    """The backend's one sweep entry point covers both providers: islo by owner + name, docker by
+    label, selected by the factory's own ``SWF_SANDBOX``; the report merges. Without that setting
+    no ``docker`` command ever runs (the unit suite must stay hermetic on a host that has docker)."""
+    control = ControlKernel(tmp_path / "control")
+    cells = [_cell("cell_done", "success", idx=1)]
+    done = f"swf-demo-2-{run_id_for(RUN, 1)}"
+    islo = FakeIslo([{"name": done, "created_at": OLD}])
+    docker = FakeDocker({"done1": _labels("cell_done", 1)})
+    report = maintain.sweep_sandboxes(3600, owner=ME, islo=islo, cells=cells, control=control, now=NOW, docker=docker)
+    assert report["removed"] == [done, "done1"] and docker.removed == ["done1"]
+    assert maintain.select_containers({}) is None
+    assert maintain.select_containers({"SWF_SANDBOX": "islo"}) is None
+    assert isinstance(maintain.select_containers({"SWF_SANDBOX": "docker"}), DockerContainers)

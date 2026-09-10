@@ -26,6 +26,7 @@ import importlib
 import json
 import os
 import posixpath
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -35,11 +36,21 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
+from swfactory.cells import CellIdentity
+from swfactory.cleanup_receipt import CleanupReceipt, CleanupStatus
 from swfactory.config import Config
+from swfactory.idempotency import OperationRef
 from swfactory.models import RunResult, StageError
 from swfactory.paths import confined_path, confined_posix_path, normalize_relative_path
+from swfactory.sandbox_governance import (
+    CleanupDebt,
+    CleanupDecision,
+    ResourceObservation,
+    SandboxIdentity,
+    authorize_cleanup,
+)
 from swfactory.state import RunState
 
 # Exit code reported when a command is killed by the timeout (mirrors coreutils `timeout`).
@@ -135,7 +146,7 @@ class Sandbox(Protocol):
         ...
 
     def close(self) -> None:
-        """Release the sandbox (islo rm / no-op)."""
+        """Release the sandbox (islo rm / docker rm of this identity's containers / no-op)."""
         ...
 
 
@@ -473,6 +484,11 @@ class DockerSandbox(LocalSandbox):
     host's ``~/.claude`` + ``~/.claude.json`` into the container ``$HOME``. Target verification
     receives neither credential mode.
 
+    Every container carries the run's ``SandboxIdentity`` as ``--label``s (Cell, epoch, run id --
+    no credential) and a name derived from it, so one left running after this process died is
+    attributable: ``close()`` reclaims exactly this identity's containers and records a receipt, and
+    the backend sweep (``maintain.sweep_containers``) reclaims the rest once their Cell is over.
+
     Honest limits: a container shares the host kernel and the Docker socket is root-equivalent
     on the host; no phantom tokens. Use for testing the pipeline locally, not as the production
     trust boundary (that is islo).
@@ -483,14 +499,22 @@ class DockerSandbox(LocalSandbox):
         workdir: Path,
         *,
         image: str,
+        identity: SandboxIdentity,
         pass_env: Sequence[str] = (),
         credentials: str = "env",
         protected: Sequence[str] = (),
         network: str = "bridge",
         user: str | None = None,
         home: str = DOCKER_HOME,
+        state: RunState | None = None,
     ) -> None:
         super().__init__(workdir)
+        # Required, not optional: a container without the Cell/epoch/run stamp is the orphan #2035
+        # describes -- alive after its docker client died, attributable to nobody.
+        identity.validate()
+        self.identity = identity
+        self.state = state
+        self.receipts: list[dict[str, Any]] = []  # what the last close() observed, for callers without state
         self.name = f"docker:{self.root.name}"
         self.image = image
         self.pass_env = tuple(pass_env)
@@ -530,12 +554,22 @@ class DockerSandbox(LocalSandbox):
                     mounts += ["-v", f"{src}:{self.home}/{rel}"]
         return mounts
 
+    def container_name(self) -> str:
+        """``<stable_name>-<6 hex>``: the identity, made unique per command. ``--rm`` frees a name
+        only once the daemon has finished removing the previous container, so back-to-back commands
+        (or a retry after a killed client left one running) would otherwise collide; the labels,
+        not the name, are what attribute the container."""
+        return f"{self.identity.stable_name}-{secrets.token_hex(3)}"
+
     def argv(self, cmd: str, *, cwd: str | None = None, agent: bool = False) -> list[str]:
-        """``docker run --rm --init <mounts> -w <cwd> --network <net> [-e NAME]... <image> bash -lc
-        <cmd>``. ``-e NAME`` (no ``=value``) makes docker copy the variable from the CLI's own
-        environment (``env()``), so no secret is ever an argv token."""
+        """``docker run --rm --init --name <n> --label k=v... <mounts> -w <cwd> --network <net>
+        [-e NAME]... <image> bash -lc <cmd>``. ``-e NAME`` (no ``=value``) makes docker copy the
+        variable from the CLI's own environment (``env()``), so no secret is ever an argv token."""
         run_cwd = str(self._abs(cwd)) if cwd else self.workdir
-        argv = ["docker", "run", "--rm", "--init", *self.mounts(agent=agent)]
+        argv = ["docker", "run", "--rm", "--init", "--name", self.container_name()]
+        for key, value in self.identity.labels.items():
+            argv += ["--label", f"{key}={value}"]
+        argv += self.mounts(agent=agent)
         argv += ["-w", run_cwd, "--network", self.network]
         if self.user:
             argv += ["--user", self.user]
@@ -581,6 +615,116 @@ class DockerSandbox(LocalSandbox):
             env=self.env(agent=True),
             timeout_s=timeout_s,
         )
+
+    def close(self) -> None:
+        """Reclaim the containers this identity labelled, and record what happened.
+
+        ``--rm`` removes a container whose command finished; it never reclaims one whose docker
+        client (this process) was killed mid-command -- the orphan of #2035. So the daemon is asked
+        by label, ``authorize_cleanup`` refuses anything that is not exactly this Cell/epoch/run
+        however the query answered, and every removal is intent (``CleanupDebt``) before the ``rm``
+        and settled only when the daemon confirmed it. The receipts land in the run's host-owned
+        control state (``cleanup.json``); a container left behind is still labelled, so the
+        backend's sweep (``maintain.sweep_containers``) finds it once its Cell is over.
+        """
+        fleet = DockerContainers()
+        requested_at = time.time()
+        try:
+            rows = fleet.containers(self.identity.labels)
+        except Exception as e:  # noqa: BLE001 - an unreachable daemon is an unknown outcome, not a clean exit
+            self._record([self._receipt(self.identity.stable_name, "ambiguous", requested_at, detail=str(e))])
+            return
+        debt = CleanupDebt()
+        receipts: list[dict[str, Any]] = []
+        for row in rows:
+            observation = ResourceObservation(row["id"], row["labels"], row["running"])
+            decision = authorize_cleanup(self.identity, observation, current_epoch=self.identity.epoch, active=False)
+            if decision != CleanupDecision.REMOVE:
+                print(f"sandbox: refusing to remove container {row['id']}: {decision} (labels {row['labels']})")
+                continue
+            debt.record(row["id"], self.identity)
+            try:
+                fleet.remove(row["id"])
+            except Exception as e:  # noqa: BLE001 - one refused rm must not skip the others; it is debt below
+                receipts.append(self._receipt(row["id"], "failed", requested_at, detail=str(e)))
+                continue
+            debt.settle(row["id"], self.identity)
+            receipts.append(self._receipt(row["id"], "converged", requested_at))
+        for container_id in debt.outstanding:
+            print(f"sandbox: container {container_id} of {self.identity.stable_name} left as cleanup debt")
+        if receipts:
+            self._record(receipts)
+
+    def _receipt(self, resource_id: str, status: CleanupStatus, requested_at: float, *, detail: str = "") -> dict:
+        # The same operation identity the backend sweep journals a removal under, so a receipt here
+        # and a row there name one effect.
+        ref = OperationRef.build(
+            self.identity.cell_id, self.identity.epoch, "sandbox_cleanup", resource_id, self.identity.attempt_id
+        )
+        return CleanupReceipt.build(
+            cell_id=self.identity.cell_id,
+            epoch=self.identity.epoch,
+            operation_key=ref.key,
+            provider="docker",
+            resource_id=resource_id,
+            status=status,
+            requested_at=requested_at,
+            detail=detail,
+        ).to_dict()
+
+    def _record(self, receipts: list[dict[str, Any]]) -> None:
+        self.receipts = receipts
+        if self.state is not None:
+            self.state.write_control("cleanup.json", json.dumps(receipts, indent=2, sort_keys=True) + "\n")
+
+
+def _parse_labels(raw: str) -> dict[str, str]:
+    """``docker ps`` renders labels as ``k=v,k=v``; none of the factory's values contain either."""
+    labels: dict[str, str] = {}
+    for pair in raw.split(","):
+        key, sep, value = pair.partition("=")
+        if sep:
+            labels[key] = value
+    return labels
+
+
+class DockerContainers:
+    """The docker daemon as ``DockerSandbox.close`` and the backend sweep see it: the containers that
+    carry the factory's labels, and ``docker rm -f``. Raises rather than answering empty when the
+    daemon cannot be reached, so a caller never mistakes silence for a clean fleet."""
+
+    def containers(self, labels: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
+        """``docker ps -a`` narrowed to ``swfactory.owned=true`` plus ``labels``, as
+        ``{id, name, labels, running}`` rows."""
+        argv = ["docker", "ps", "-a"]
+        for key, value in {"swfactory.owned": "true", **(labels or {})}.items():
+            argv += ["--filter", f"label={key}={value}"]
+        res = _run_subprocess(
+            [*argv, "--format", "{{json .}}"], cwd=None, env=scrub_env(os.environ), timeout_s=_CONTROL_TIMEOUT_S
+        )
+        if not res.ok:
+            raise RuntimeError(f"docker ps failed: {res.stderr.strip()[-500:]}")
+        rows = []
+        for line in res.stdout.splitlines():
+            if not line.strip():
+                continue
+            raw = json.loads(line)
+            rows.append(
+                {
+                    "id": str(raw.get("ID") or ""),
+                    "name": str(raw.get("Names") or ""),
+                    "labels": _parse_labels(str(raw.get("Labels") or "")),
+                    "running": raw.get("State") == "running",
+                }
+            )
+        return rows
+
+    def remove(self, container_id: str) -> None:
+        res = _run_subprocess(
+            ["docker", "rm", "-f", container_id], cwd=None, env=scrub_env(os.environ), timeout_s=_CONTROL_TIMEOUT_S
+        )
+        if not res.ok:
+            raise RuntimeError(f"docker rm {container_id} failed: {res.stderr.strip()[-500:]}")
 
 
 def default_docker_user() -> str | None:
@@ -1098,6 +1242,21 @@ class ToolsetSandbox:
             self.state.clear_control(TOOLSET_STATE_FILE)
 
 
+def _docker_identity(cfg: Config, issue_id: str, run_dir: Path | None) -> SandboxIdentity:
+    """The Cell/epoch this run executes as, read from the host-owned ``cell.json`` that
+    ``runtime._prepare_ctx`` writes before the sandbox exists -- the evidence ``stages.cell_evidence``
+    trusts, never a job dict. A direct run has no binding and is labelled as the Cell it would be at
+    epoch 1, so the backend sweep can still attribute (and refuse to touch) its containers; the
+    attempt is the run id, so two runs of one Cell never share a container identity."""
+    binding: dict[str, Any] = {}
+    if run_dir is not None:
+        state = RunState(run_dir)
+        if state.has_control("cell.json"):
+            binding = json.loads(state.read_control("cell.json"))
+    cell_id = binding.get("cell_id") or CellIdentity(cfg.repo, cfg.target_dir, issue_id).stable_id()
+    return SandboxIdentity("docker", str(cell_id), int(binding.get("epoch") or 1), cfg.run_id)
+
+
 def make_sandbox(
     cfg: Config,
     issue_id: str,
@@ -1146,11 +1305,13 @@ def make_sandbox(
         return DockerSandbox(
             Path(cfg.workdir),
             image=cfg.docker_image,
+            identity=_docker_identity(cfg, issue_id, run_dir),
             pass_env=claude_env if cfg.docker_credentials == "env" else (),
             credentials=cfg.docker_credentials,
             protected=protected,
             network=cfg.docker_network,
             user=cfg.docker_user or default_docker_user(),
+            state=RunState(run_dir) if run_dir is not None else None,
         )
     return IsloSandbox(
         cfg.sandbox_name(issue_id, repo),
