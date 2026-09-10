@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -200,6 +201,9 @@ def test_loads_rejects_unknown_section_and_bad_toml() -> None:
         ({"name": "x" * 64}, "pattern"),
         ({"targets": []}, "at least 1"),
         ({"trigger": {"kind": "cron"}}, "requires trigger.cron"),
+        ({"trigger": {"kind": "cron", "cron": "0 6 * * 1"}}, "timezone-aware trigger.start"),
+        ({"trigger": {"kind": "cron", "cron": "0 6 * * 1", "start": "2026-01-05T00:00:00"}}, "timezone-aware"),
+        ({"trigger": {"max_active_runs": 0}}, "greater than or equal to 1"),
         ({"bogus": 1}, "bogus"),
     ],
 )
@@ -223,11 +227,15 @@ def test_valid_variants() -> None:
             trigger={
                 "kind": "cron",
                 "cron": "0 6 * * 1",
+                "start": "2026-01-05T00:00:00+00:00",
                 "issues": ["42", "demo/issue.md", "42"],
             }
         )
     )
     assert bp.trigger.cron == "0 6 * * 1"
+    assert bp.schedule_limits().origin == datetime(2026, 1, 5, tzinfo=UTC)
+    assert bp.schedule_limits().max_active_runs == 1, "a cron line runs one tick at a time unless told otherwise"
+    assert Blueprint.model_validate(_data()).schedule_limits().max_active_runs == 16
     assert bp.trigger.issues == ["42", "demo/issue.md"]
     assert [job["issue"] for job in bp.jobs({})] == [
         "42",

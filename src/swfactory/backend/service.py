@@ -28,7 +28,7 @@ from typing import Any
 
 from swfactory import blueprint, maintain
 from swfactory.admission import Priority
-from swfactory.cell_runtime import identity_for_job
+from swfactory.cell_runtime import SCHEDULE_ACTOR, identity_for_job
 from swfactory.cells import (
     SCHEMA_VERSION,
     TERMINAL_STATES,
@@ -120,6 +120,12 @@ def _work_id(request: str, desired_epochs: dict[str, int]) -> str:
         separators=(",", ":"),
     )
     return "submit_" + hashlib.sha256(payload.encode()).hexdigest()[:32]
+
+
+def _snapshot_digest(order: dict[str, Any]) -> str:
+    """The accepted request as bare sha256 hex: every Cell binding of one order is stamped with it,
+    so the worker can prove a bindings list came from one logical work order and not from two."""
+    return str(order["request_digest"]).removeprefix("sha256:")
 
 
 def _priority(value: Any) -> Priority:
@@ -275,6 +281,7 @@ class Factory:
         conf: dict[str, Any],
         actor: str,
         priority: Priority,
+        airflow_run_id: str | None = None,
     ) -> dict[str, Any]:
         """Build the versioned, immutable payload one admitted command is re-delivered from.
 
@@ -282,7 +289,8 @@ class Factory:
         blueprint from disk: source identity, the selected jobs, the resolved policy and blueprint
         identity, and the deterministic Airflow run id. ``request_digest`` covers the request alone,
         so one request stays recognisable across attempts; the desired Cell epochs are retry/epoch
-        identity and are deliberately kept out of it.
+        identity and are deliberately kept out of it. A scheduled run's own id (``airflow_run_id``)
+        *is* in the request: each tick is a new order, a retried fan_out of one tick is the same one.
         """
         request = {
             "schema_version": WORK_ORDER_SCHEMA,
@@ -315,6 +323,8 @@ class Factory:
                 for job in jobs
             ],
         }
+        if airflow_run_id is not None:
+            request["airflow_run_id"] = airflow_run_id
         digest = request_digest(request)
         desired = {str(int(job["job_idx"])): self._desired_epoch(job) for job in jobs}
         return {
@@ -323,7 +333,7 @@ class Factory:
             "desired_epochs": desired,
             "conf": conf,
             "generation": os.getenv("SWF_GENERATION") or "stable",
-            "dag_run_id": "swf__" + _work_id(digest, desired).removeprefix("submit_"),
+            "dag_run_id": airflow_run_id or "swf__" + _work_id(digest, desired).removeprefix("submit_"),
         }
 
     def submit(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -347,11 +357,18 @@ class Factory:
         actor = str(body.get("actor") or "operator").strip()
         if not actor or len(actor) > 128:
             raise ValueError("actor must be a nonempty string of at most 128 characters")
+        # A run Airflow's scheduler already created, asking to be admitted (#2067). Only the schedule
+        # actor may name one: every other channel gets its run *from* the dispatch it is asking for.
+        airflow_run_id = None
+        if body.get("airflow_run_id") is not None:
+            airflow_run_id = text(body, "airflow_run_id", max_len=250)
+            if actor != SCHEDULE_ACTOR:
+                raise ValueError(f"airflow_run_id is reserved for Airflow-scheduled runs (actor {SCHEDULE_ACTOR})")
 
         conf: dict[str, Any] = {"issues": issues, **({"targets": targets} if targets else {})}
         jobs = list(line.jobs(conf))
         priority = _priority(body.get("priority"))
-        order = self._work_order(line, jobs, conf, actor, priority)
+        order = self._work_order(line, jobs, conf, actor, priority, airflow_run_id)
         submission_id = _work_id(order["request_digest"], order["desired_epochs"])
         # One capacity unit per Factory Cell the order will activate, declared before anything is
         # activated, so every affected repository is counted and no sibling can be released early.
@@ -564,6 +581,23 @@ class Factory:
         line_name = str(order["line"])
         actor = str(order["actor"])
         jobs = {int(job["job_idx"]): job for job in order["jobs"]}
+        path = "/dags/" + urllib.parse.quote(line_name, safe="")
+        attached = order.get("airflow_run_id")
+        if attached is not None:
+            # The run exists already; Airflow, not the caller, says whether it is one this order may
+            # bind. Asked before any Cell is activated, so a refused attach activates nothing.
+            try:
+                self._attached_run(path, str(attached))
+            except Refused as error:
+                # Proven by Airflow's own answer: there is no live scheduled run to bind, and there
+                # never will be for this id. Retire now rather than hold the unit through the
+                # delivery budget -- nothing was sent, so the failure is local.
+                self.control.admission.assert_lease(intent.work_id, intent.lease_token)
+                self._compensate(intent, str(error))
+                raise
+            except Exception as error:
+                self._recover_dispatch(intent, error, compensate=True)
+                raise
         try:
             bindings = self._bind_members(intent, jobs, line_name, actor)
         except Exception as error:
@@ -571,12 +605,17 @@ class Factory:
             # activations instead of leaving Cells no work order owns.
             self._recover_dispatch(intent, error, compensate=True)
             raise
+        if attached is not None:
+            # Binding to the scheduled run is the whole delivery: dispatching would create a second
+            # copy of the same schedule, and the run cannot be paused out from under itself.
+            self._bind_run(bindings, line_name, str(attached), actor)
+            self.control.admission.record_dispatch(intent.work_id, token=intent.lease_token, dag_run_id=str(attached))
+            return str(attached)
         authority = min(bindings, key=lambda row: row["cell_id"])
         conf = dict(order["conf"])
         conf["_factory_cells"] = bindings
         conf["_factory_submission_id"] = intent.work_id
         conf["_factory_actor"] = actor
-        path = "/dags/" + urllib.parse.quote(line_name, safe="")
         dag_run_id = str(order["dag_run_id"])
         dispatch_ref = OperationRef.build(authority["cell_id"], authority["epoch"], "airflow_dispatch", intent.work_id)
 
@@ -636,6 +675,24 @@ class Factory:
         self.control.admission.record_dispatch(intent.work_id, token=intent.lease_token, dag_run_id=run_id)
         return run_id
 
+    def _attached_run(self, path: str, run_id: str) -> dict[str, Any]:
+        """The scheduled run a work order asks to attach to, as Airflow reports it right now.
+
+        ``Refused`` is proof (absent, not scheduler-created, already finished); any other failure is
+        an unknown Airflow state and stays retryable.
+        """
+        status, payload = self.airflow("GET", path + "/dagRuns/" + urllib.parse.quote(run_id, safe=""), None)
+        if status == 404:
+            raise Refused(409, "scheduled Airflow run does not exist")
+        if status != 200 or not isinstance(payload, dict):
+            raise ControlError(f"Airflow run state unavailable (HTTP {status})")
+        if payload.get("run_type") != "scheduled":
+            raise Refused(409, "only an Airflow-scheduled run can attach to a work order")
+        state = str(payload.get("state"))
+        if state not in {"queued", "running"}:
+            raise Refused(409, f"scheduled Airflow run is already {state}")
+        return payload
+
     def _bind_members(
         self,
         intent: DispatchIntent,
@@ -668,8 +725,10 @@ class Factory:
                     "job_idx": member.job_idx,
                     "cell_id": cell["cell_id"],
                     "epoch": int(cell["epoch"]),
+                    "repo": member.repo,
                     "policy_digest": policy_digest,
                     "factory_generation": cell.get("factory_generation") or generation,
+                    "snapshot_digest": _snapshot_digest(intent.order.payload),
                 }
             )
         return bindings
@@ -882,7 +941,7 @@ class Factory:
         run_id = str(dispatch.get("dag_run_id") or order["dag_run_id"])
         line_name = str(order["line"])
         path = "/dags/" + urllib.parse.quote(line_name, safe="")
-        return {
+        document = {
             "state": "submitted" if state == "bound" else str(state),
             "submission_id": work_id,
             "dag_id": line_name,
@@ -893,6 +952,22 @@ class Factory:
             "blueprint": {"name": line_name, "resolved": True},
             "url": self.airflow_url + path + "/runs/" + urllib.parse.quote(run_id, safe=""),
         }
+        if state == "bound":
+            # The same rows a dispatched run reads from its conf, for the run that had no conf to
+            # read: a scheduled run binds its jobs from this answer (``cell_runtime.bind_jobs``).
+            document["bindings"] = [
+                {
+                    "job_idx": member.job_idx,
+                    "cell_id": member.cell_id,
+                    "epoch": member.cell_epoch,
+                    "repo": member.repo,
+                    "policy_digest": self.cell_store.get(member.cell_id).get("policy_digest"),
+                    "factory_generation": self.cell_store.get(member.cell_id).get("factory_generation"),
+                    "snapshot_digest": _snapshot_digest(order),
+                }
+                for member in members
+            ]
+        return document
 
     def compatibility(self, method: str, target: str, body: dict | None) -> tuple[int, Any]:
         parsed = urllib.parse.urlsplit(target)

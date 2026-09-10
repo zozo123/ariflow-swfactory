@@ -8,9 +8,14 @@ For every blueprint file this module emits ``DAG(dag_id=<blueprint.name>)``::
 ``fan_out`` turns ``dag_run.conf`` into jobs; a scheduled line falls back to its required trigger
 issues. The ``job`` task group is expanded over them, so one issue can be applied to N target repos
 with one addressable approval per (issue,target). Backend-managed submissions additionally carry
-verified Factory Cell id/epoch/policy bindings. Direct legacy Airflow submissions derive the same
-cell id but remain explicitly unmanaged. Airflow is the only lifecycle scheduler; managed tasks
-report state back to the backend solely for epoch-fenced authority, admission and evidence.
+verified Factory Cell id/epoch/policy bindings. A cron-created run has no submitter to carry them,
+so ``fan_out`` admits it through the backend's work orders itself and stops if it cannot. Direct
+legacy Airflow submissions derive the same cell id but remain explicitly unmanaged. Airflow is the
+only lifecycle scheduler; managed tasks report state back to the backend solely for epoch-fenced
+authority, admission and evidence.
+
+Every DAG declares its run bounds from the blueprint (``Blueprint.schedule_limits``): a cron line
+has a timezone-aware origin and one run in flight, and no run outlives the sandbox it runs in.
 
 Loops and bounded ``Plan.work`` execution live inside stage functions, never in the DAG.
 """
@@ -18,7 +23,7 @@ Loops and bounded ``Plan.work`` execution live inside stage functions, never in 
 from __future__ import annotations
 
 import tomllib
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -55,13 +60,29 @@ def gate_mode(gate: dict[str, Any]) -> str:
 
 
 def read_shape(path: Path) -> dict[str, Any]:
-    """The subset of a blueprint the DAG structure depends on. Validation happens in tasks."""
+    """The subset of a blueprint the DAG structure depends on. Validation happens in tasks, except
+    for the schedule origin: a cron DAG without a timezone-aware ``trigger.start`` would be scheduled
+    and then fail in ``fan_out`` every tick, so that one is refused at parse time.
+
+    The run bounds duplicate ``swfactory.blueprint.Blueprint.schedule_limits`` because DAG parsing
+    must not import swfactory; ``tests/test_dag_parity.py`` pins the two to the same answer.
+    """
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     trigger = data.get("trigger", {})
     limits = data.get("limits", {})
+    cron = trigger.get("cron") if trigger.get("kind") == "cron" else None
+    start = trigger.get("start")
+    if cron is not None and start is None:
+        raise ValueError(f"{path.name}: trigger.kind='cron' requires trigger.start")
+    if start is not None and (not isinstance(start, datetime) or start.tzinfo is None):
+        raise ValueError(f"{path.name}: trigger.start must be a timezone-aware datetime")
     return {
         "name": data.get("blueprint", {}).get("name") or path.stem,
-        "cron": trigger.get("cron") if trigger.get("kind") == "cron" else None,
+        "cron": cron,
+        "start": start,
+        "max_active_runs": int(trigger.get("max_active_runs") or (1 if cron else 16)),
+        # a run may live no longer than its sandbox: past the TTL the cell is gone either way
+        "run_timeout": timedelta(seconds=int(data.get("sandbox", {}).get("ttl_s", 172_800))),
         "order": list(data["stages"]["order"]),
         "gates": {g["after"]: g for g in data.get("gates", [])},
         "stage_timeout": timedelta(hours=int(limits.get("stage_timeout_h", 3))),
@@ -189,6 +210,9 @@ def _setup_task(name: str, shape: dict[str, Any]):
         task_id="setup",
         retries=2,
         execution_timeout=shape["stage_timeout"],
+        # setup is where a cell comes to exist; unbounded, N setups meant N live cells regardless
+        # of the parallelism the stages after it declare
+        max_active_tis_per_dagrun=shape["max_parallel_jobs"],
         on_failure_callback=_failure_callback,
     )
     def setup(job: dict, **context: Any) -> dict:
@@ -233,7 +257,10 @@ def build_dag(shape: dict[str, Any]) -> DAG:
     with DAG(
         dag_id=name,
         schedule=shape["cron"],
+        start_date=shape["start"],
         catchup=False,
+        max_active_runs=shape["max_active_runs"],
+        dagrun_timeout=shape["run_timeout"],
         params={
             "issues": Param([], type="array", description="issue numbers or issue .md paths"),
             "issue": Param("", type="string", description="single issue (compat)"),
@@ -244,15 +271,21 @@ def build_dag(shape: dict[str, Any]) -> DAG:
 
         @task(task_id="fan_out")
         def fan_out(**context: Any) -> list[dict]:
+            from swfactory import cell_runtime
             from swfactory.blueprint import load
-            from swfactory.cell_runtime import bind_jobs
 
-            conf = context["dag_run"].conf or {}
+            dag_run = context["dag_run"]
+            conf = dag_run.conf or {}
             jobs = load(name).jobs(conf)
             bindings = conf.get("_factory_cells")
             if bindings is not None and not isinstance(bindings, list):
                 raise ValueError("_factory_cells must be an array")
-            return bind_jobs(jobs, bindings)
+            if dag_run.run_type == "scheduled":
+                # A cron tick admits nothing by itself. The run obtains its Cell bindings from the
+                # backend here, before any sandbox exists, or raises and the line stops -- there is
+                # no unmanaged fallback for a governed line.
+                bindings = cell_runtime.admit_scheduled_run(name, dag_run.run_id, jobs)
+            return cell_runtime.bind_jobs(jobs, bindings)
 
         @task_group(group_id=GROUP_ID)
         def job(job: dict) -> None:

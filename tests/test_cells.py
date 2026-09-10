@@ -20,15 +20,27 @@ def _job(index: int = 0) -> dict[str, object]:
     }
 
 
+DIGEST = "d" * 64
+
+
+def _binding(cell: dict[str, object], job: dict[str, object]) -> dict[str, object]:
+    """The row the backend puts in ``_factory_cells``: identity, epoch, repository and the digest
+    of the accepted work order every binding of one run is stamped with."""
+    return {
+        "job_idx": job["job_idx"],
+        "cell_id": cell["cell_id"],
+        "epoch": cell["epoch"],
+        "repo": job["repo"],
+        "snapshot_digest": DIGEST,
+    }
+
+
 def test_cell_identity_and_binding_are_deterministic(tmp_path: Path) -> None:
     store = CellStore(tmp_path / "cells.sqlite3")
     try:
         identity = identity_for_job(_job())
         cell = store.activate(identity, actor="test")
-        rows = bind_jobs(
-            [_job()],
-            [{"job_idx": 0, "cell_id": cell["cell_id"], "epoch": cell["epoch"]}],
-        )
+        rows = bind_jobs([_job()], [_binding(cell, _job())])
         assert rows == [
             {
                 **_job(),
@@ -51,14 +63,32 @@ def test_direct_binding_is_descriptive_not_managed() -> None:
     assert row["cell_managed"] is False
 
 
-def test_binding_rejects_wrong_cell_or_epoch() -> None:
+def test_binding_rejects_wrong_cell_epoch_or_repo() -> None:
+    cell = {"cell_id": identity_for_job(_job()).stable_id(), "epoch": 1}
     with pytest.raises(ValueError, match="binding mismatch"):
-        bind_jobs([_job()], [{"job_idx": 0, "cell_id": "cell_wrong", "epoch": 1}])
+        bind_jobs([_job()], [_binding({**cell, "cell_id": "cell_wrong"}, _job())])
     with pytest.raises(ValueError, match="epoch must be positive"):
-        bind_jobs(
-            [_job()],
-            [{"job_idx": 0, "cell_id": identity_for_job(_job()).stable_id(), "epoch": 0}],
-        )
+        bind_jobs([_job()], [_binding({**cell, "epoch": 0}, _job())])
+    with pytest.raises(ValueError, match="binding mismatch"):
+        bind_jobs([_job()], [_binding(cell, {**_job(), "repo": "acme/other"})])
+
+
+def test_a_bindings_list_is_all_or_nothing() -> None:
+    """Half a run managed means the other half executes with no admission behind it (#2067)."""
+    jobs = [_job(0), {**_job(1), "issue": "43"}]
+    cells = [{"cell_id": identity_for_job(job).stable_id(), "epoch": 1} for job in jobs]
+    complete = [_binding(cell, job) for cell, job in zip(cells, jobs, strict=True)]
+    assert [job["cell_managed"] for job in bind_jobs(jobs, complete)] == [True, True]
+    with pytest.raises(ValueError, match="partial"):
+        bind_jobs(jobs, complete[:1])
+    with pytest.raises(ValueError, match="partial"):
+        bind_jobs(jobs, [])
+    with pytest.raises(ValueError, match="every job exactly once"):
+        bind_jobs(jobs, [complete[0], {**complete[0]}])
+    with pytest.raises(ValueError, match="one work order"):
+        bind_jobs(jobs, [complete[0], {**complete[1], "snapshot_digest": "e" * 64}])
+    with pytest.raises(ValueError, match="must be objects"):
+        bind_jobs(jobs, [complete[0], {"job_idx": 1}])
 
 
 def test_active_cell_cannot_be_double_dispatched(tmp_path: Path) -> None:

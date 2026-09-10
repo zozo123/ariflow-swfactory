@@ -14,7 +14,7 @@ import json
 import os
 import shutil
 import tomllib
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -35,6 +35,7 @@ name = "nightly"
 [trigger]
 kind = "cron"
 cron = "0 6 * * 1"
+start = 2026-01-05T00:00:00+00:00
 issues = ["ops/nightly.md"]
 [[targets]]
 repo = "acme/app"
@@ -197,6 +198,8 @@ def test_dag_shape(dagbag, path: Path) -> None:
     assert dag.get_task("job.deliver").retries == 2
     timeout = timedelta(hours=shape["limits"].get("stage_timeout_h", 3))
     parallel = shape["limits"].get("max_parallel_jobs", 4)
+    # setup is where a cell comes to exist, so it is bounded like the stages that use it (#2070)
+    assert dag.get_task("job.setup").max_active_tis_per_dagrun == parallel
     for stage in shape["order"]:
         t = dag.get_task(f"job.{stage}")
         assert t.retries == (2 if stage == "deliver" else 0), stage
@@ -275,6 +278,126 @@ def test_job_tasks_equal_blueprint_pipeline(dagbag, path: Path) -> None:
     assert _linear_order(dag) == expected
 
 
+@pytest.mark.parametrize("path", BLUEPRINTS, ids=BLUEPRINT_IDS)
+def test_dag_schedule_limits_mirror_the_blueprint(dagbag, path: Path) -> None:
+    """``read_shape`` derives the run bounds with stdlib only; ``Blueprint.schedule_limits`` is the
+    validated declaration. They must be one answer (#2070), the way ``gate_mode`` is pinned."""
+    from swfactory.blueprint import load
+
+    bp = load(str(path))
+    dag = dagbag.dags[bp.name]
+    limits = bp.schedule_limits()
+    assert dag.catchup is False
+    assert dag.max_active_runs == limits.max_active_runs
+    assert dag.dagrun_timeout == limits.run_timeout == timedelta(seconds=bp.sandbox.ttl_s)
+    assert dag.start_date == limits.origin
+    if bp.trigger.kind == "cron":
+        assert dag.start_date is not None and dag.start_date.tzinfo is not None
+        assert dag.max_active_runs == 1, "a scheduled line never stacks runs behind an unanswered gate"
+    else:
+        assert dag.start_date is None and dag.schedule is None
+
+
+def test_a_cron_line_first_automated_run_follows_from_its_declared_origin(dagbag) -> None:
+    """Airflow's own timetable, asked from the blueprint's origin: the first run is the first tick
+    at or after it. Airflow stays the only party that says *when*; the blueprint only says *from*."""
+    from airflow.timetables.base import TimeRestriction
+    from airflow.timetables.trigger import CronTriggerTimetable
+
+    dag = dagbag.dags["liquid"]
+    assert dag.start_date == datetime(2026, 9, 1, tzinfo=UTC)
+    # The DAG holds the SDK's declaration of the timetable; the scheduler's implementation of the
+    # same cron and timezone is what answers "when".
+    timetable = CronTriggerTimetable(dag.schedule, timezone=dag.timezone)
+    info = timetable.next_dagrun_info(
+        last_automated_data_interval=None,
+        restriction=TimeRestriction(earliest=dag.start_date, latest=None, catchup=True),
+    )
+    assert info is not None and info.run_after == datetime(2026, 9, 1, 6, 17, tzinfo=UTC)
+    # and the line itself never back-fills the ticks it slept through
+    assert dag.catchup is False
+
+
+def test_a_cron_line_without_an_origin_does_not_parse(blueprints_mod, tmp_path: Path) -> None:
+    """A scheduled DAG with no start is a run that fails in fan_out every tick; refuse it at parse time."""
+    toml = NIGHTLY_TOML.replace("start = 2026-01-05T00:00:00+00:00\n", "")
+    (tmp_path / "no_origin.toml").write_text(toml, encoding="utf-8")
+    with pytest.raises(ValueError, match="trigger.start"):
+        blueprints_mod.read_shape(tmp_path / "no_origin.toml")
+    naive = NIGHTLY_TOML.replace("2026-01-05T00:00:00+00:00", "2026-01-05T00:00:00")
+    (tmp_path / "naive.toml").write_text(naive, encoding="utf-8")
+    with pytest.raises(ValueError, match="timezone-aware"):
+        blueprints_mod.read_shape(tmp_path / "naive.toml")
+
+
+def _fan_out(dagbag, name: str):
+    return dagbag.dags[name].get_task("fan_out").python_callable
+
+
+def _scheduled(run_id: str = "scheduled__2026-09-10T06:17:00+00:00") -> SimpleNamespace:
+    return SimpleNamespace(conf=None, run_id=run_id, run_type="scheduled")
+
+
+def test_a_scheduled_run_is_admitted_through_the_backend_or_stops_in_fan_out(
+    dagbag, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2067: an empty-conf scheduled run must leave ``fan_out`` with positive-epoch managed Cells
+    for every job, or not leave it at all. Nothing downstream can run unmanaged by falling back."""
+    pytest.importorskip("swfactory")
+    # liquid drains a label-selected backlog through the SCM at fan-out (#2069); stand in for the
+    # SCM here so the run has two issues to admit without a network.
+    import swfactory.blueprint as blueprint_mod
+    from swfactory import cell_runtime
+    from swfactory.blueprint import load
+    from swfactory.cell_callback import CellCallbackError
+    from swfactory.cell_runtime import identity_for_job
+
+    monkeypatch.setattr(blueprint_mod, "_drain", lambda line: ["2034", "2035"])
+    fan_out = _fan_out(dagbag, "liquid")
+    jobs = load("liquid").jobs(None)
+    assert len(jobs) == 2
+
+    # No backend configured on the worker: the run stops here, before any sandbox exists.
+    monkeypatch.delenv("SWF_BACKEND_URL", raising=False)
+    monkeypatch.delenv("SWF_BACKEND_TOKEN", raising=False)
+    with pytest.raises(CellCallbackError, match="SWF_BACKEND_URL"):
+        fan_out(dag_run=_scheduled())
+
+    # The backend answers with complete bindings for this run: every job is managed at its epoch.
+    asked: list[tuple[str, str, int]] = []
+    digest = "a" * 64
+
+    def admit(line: str, dag_run_id: str, wanted: list[dict]) -> list[dict]:
+        asked.append((line, dag_run_id, len(wanted)))
+        return [
+            {
+                "job_idx": job["job_idx"],
+                "cell_id": identity_for_job(job).stable_id(),
+                "epoch": 3,
+                "repo": job["repo"],
+                "snapshot_digest": digest,
+                "policy_digest": "policy:x",
+                "factory_generation": "stable",
+            }
+            for job in wanted
+        ]
+
+    monkeypatch.setattr(cell_runtime, "admit_scheduled_run", admit)
+    bound = fan_out(dag_run=_scheduled())
+    assert asked == [("liquid", "scheduled__2026-09-10T06:17:00+00:00", 2)]
+    assert [(job["cell_managed"], job["cell_epoch"]) for job in bound] == [(True, 3), (True, 3)]
+    assert [job["issue"] for job in bound] == [job["issue"] for job in jobs]
+
+    # A partial answer binds nothing: half a managed run is an unmanaged run.
+    monkeypatch.setattr(cell_runtime, "admit_scheduled_run", lambda *args: admit(*args)[:1])
+    with pytest.raises(ValueError, match="partial"):
+        fan_out(dag_run=_scheduled())
+
+    # A manual direct submission keeps its explicitly unmanaged legacy shape; that path is unchanged.
+    manual = fan_out(dag_run=SimpleNamespace(conf={"issues": ["2034"]}, run_id="manual__x", run_type="manual"))
+    assert [(job["cell_managed"], job["cell_epoch"]) for job in manual] == [(False, 1)]
+
+
 # ---------------------------------------------------------------- synthetic blueprint
 
 
@@ -283,6 +406,8 @@ def test_synthetic_blueprint_cron_and_auto_gate(nightly_dag) -> None:
 
     dag = nightly_dag
     assert dag.schedule == "0 6 * * 1"
+    assert dag.start_date == datetime(2026, 1, 5, tzinfo=UTC)
+    assert dag.max_active_runs == 1 and dag.dagrun_timeout == timedelta(seconds=86400)
     assert sorted(dag.task_ids) == sorted(
         [
             "fan_out",

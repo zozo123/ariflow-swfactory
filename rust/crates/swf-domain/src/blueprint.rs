@@ -130,6 +130,15 @@ pub struct Trigger {
     /// and the per-skip record, this side only has to read the blueprint without refusing it.
     #[serde(default)]
     pub backlog: Option<Backlog>,
+    /// `trigger.start`: the timetable's origin (`DAG(start_date)`), required for a cron line and
+    /// timezone-aware. The TOML datetime arrives here as its RFC 3339 text (the parse goes through
+    /// a JSON value); it is validated, never scheduled -- this side only reads.
+    #[serde(default)]
+    pub start: Option<String>,
+    /// `trigger.max_active_runs`: runs in flight at once (`DAG(max_active_runs)`). The DAG defaults
+    /// it to 1 for a cron line and 16 otherwise; the blueprint may pin it.
+    #[serde(default)]
+    pub max_active_runs: Option<u32>,
 }
 
 /// `[trigger.backlog]` — a label-selected backlog for a scheduled line.
@@ -482,6 +491,24 @@ impl Blueprint {
                     "trigger.backlog.batch must be >= 1",
                 ));
             }
+        }
+        match &self.trigger.start {
+            None if self.trigger.kind == TriggerKind::Cron => {
+                return Err(BlueprintError::invalid(
+                    "trigger.kind='cron' requires trigger.start",
+                ))
+            }
+            Some(start) if chrono::DateTime::parse_from_rfc3339(start.trim()).is_err() => {
+                return Err(BlueprintError::invalid(
+                    "trigger.start must be a timezone-aware datetime",
+                ))
+            }
+            _ => {}
+        }
+        if self.trigger.max_active_runs == Some(0) {
+            return Err(BlueprintError::invalid(
+                "trigger.max_active_runs must be >= 1",
+            ));
         }
         let mut seen: Vec<String> = Vec::new();
         for raw in &self.trigger.issues {
@@ -1319,8 +1346,19 @@ order = ["intent", "deliver"]
     fn cron_triggers_must_carry_a_cron_expression() {
         let text = format!("{MINIMAL}\n[trigger]\nkind = \"cron\"\n");
         assert_eq!(err(&text), "trigger.kind='cron' requires trigger.cron");
-        let ok = format!("{MINIMAL}\n[trigger]\nkind = \"cron\"\ncron = \"0 6 * * 1\"\n");
-        assert!(parse(&ok).is_ok());
+        // ...and an origin, because a scheduled DAG without one fails in fan_out every tick.
+        let no_start = format!("{MINIMAL}\n[trigger]\nkind = \"cron\"\ncron = \"0 6 * * 1\"\n");
+        assert_eq!(err(&no_start), "trigger.kind='cron' requires trigger.start");
+        let naive = format!("{no_start}start = 2026-01-01T00:00:00\n");
+        assert_eq!(
+            err(&naive),
+            "trigger.start must be a timezone-aware datetime"
+        );
+        let ok = format!("{no_start}start = 2026-01-01T00:00:00+00:00\nmax_active_runs = 2\n");
+        let bp = parse(&ok).expect("a cron trigger with an aware origin parses");
+        assert_eq!(bp.trigger.max_active_runs, Some(2));
+        let zero = format!("{no_start}start = 2026-01-01T00:00:00+00:00\nmax_active_runs = 0\n");
+        assert_eq!(err(&zero), "trigger.max_active_runs must be >= 1");
     }
 
     #[test]
@@ -1477,6 +1515,10 @@ order = ["intent", "deliver"]
             .expect("liquid has [trigger.backlog]");
         assert_eq!((backlog.label.as_str(), backlog.batch), ("liquid", 1));
         assert!(liquid.trigger.issues.is_empty());
+        // A cron line declares its origin and runs one at a time: a slow or unanswered run holds
+        // the next tick back instead of stacking beside it.
+        assert!(liquid.trigger.start.is_some());
+        assert_eq!(liquid.trigger.max_active_runs, Some(1));
         assert_eq!(liquid.targets.len(), 1);
         assert_eq!(liquid.targets[0].dir, "");
         assert!(liquid.gates.iter().all(|g| g.requires_human()));
