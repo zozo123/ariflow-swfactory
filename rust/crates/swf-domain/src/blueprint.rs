@@ -1423,7 +1423,7 @@ order = ["intent", "deliver"]
         assert_eq!(toolset.sandbox.backend, "sbx");
         assert_eq!(toolset.sandbox.workdir, "/workspace/repo");
         assert_eq!(toolset.limits.max_build_iterations, 2);
-        assert_eq!(toolset.sandbox.ttl_s, 129_600);
+        assert_eq!(toolset.sandbox.ttl_s, 10_800);
 
         let Some(liquid) = by_stem("liquid") else {
             panic!("liquid.toml missing");

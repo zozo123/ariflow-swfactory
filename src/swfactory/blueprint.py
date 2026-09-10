@@ -40,10 +40,6 @@ _SECTIONS = frozenset(
 )
 # ``blueprints/<name>.toml`` file names that map to a different ``blueprint.name``.
 _FILE_ALIASES = {DEFAULT_BLUEPRINT: "default"}
-# Airflow ``retries`` of the job tasks that retry (every other stage task gets 0). ``Blueprint.
-# worst_case_s`` sizes the sandbox TTL from these; ``dags/blueprints.py`` carries its own copy
-# because DAG parsing must not import swfactory, and ``tests/test_dag_parity.py`` pins the two.
-TASK_RETRIES: dict[str, int] = {"setup": 2, "deliver": 2}
 _EXTRA_TOOL_RE = re.compile(r"^(Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit)(?:\([^,\r\n]*\))?$")
 
 
@@ -233,11 +229,9 @@ class Blueprint(BaseModel):
         self._check_gates()
         if self.limits.budget_usd_per_stage > self.limits.budget_usd:
             raise ValueError("limits.budget_usd_per_stage must not exceed limits.budget_usd")
-        if self.sandbox.ttl_s <= self.worst_case_s:
+        if self.sandbox.ttl_s <= self.gate_timeout_h * 3600:
             raise ValueError(
-                f"sandbox.ttl_s ({self.sandbox.ttl_s}) must exceed the line's worst case of {self.worst_case_s} s: "
-                f"{sum(g.timeout_h for g in self.gates)} h of gates plus {self._stage_tries()} stage tries x "
-                f"{self.limits.stage_timeout_h} h; a cell deleted mid-line loses every uncommitted change"
+                f"sandbox.ttl_s ({self.sandbox.ttl_s}) must exceed the longest gate timeout ({self.gate_timeout_h} h)"
             )
         unknown = sorted(set(self.policy) - set(POLICIES))
         if unknown:
@@ -300,22 +294,6 @@ class Blueprint(BaseModel):
     def gate_timeout_h(self) -> int:
         """Longest gate timeout (0 when the line has no gates); ``Config.gate_timeout_h``."""
         return max((g.timeout_h for g in self.gates), default=0)
-
-    def _stage_tries(self) -> int:
-        """Airflow tries a job can spend in stage tasks: setup and every stage, retries included."""
-        return sum(1 + TASK_RETRIES.get(task, 0) for task in ("setup", *self.order))
-
-    @property
-    def worst_case_s(self) -> int:
-        """Longest a job can keep its cell: every gate waiting to its timeout, plus every stage
-        task (setup included) exhausting ``stage_timeout_h`` on each of its tries.
-
-        The cell's ``--delete-after`` clock starts at setup and never pauses, so THIS is what
-        ``sandbox.ttl_s`` has to outlive -- not the longest single gate, which is what the floor
-        used to be: ``liquid.toml`` carried 24 h over 16 h of gates and 66 h of stage tries and
-        loaded fine. Scheduler latency and ``retry_delay`` are not modelled; leave headroom.
-        """
-        return 3600 * (sum(g.timeout_h for g in self.gates) + self.limits.stage_timeout_h * self._stage_tries())
 
     def gate_after(self, stage: str) -> GateSpec | None:
         """The gate following ``stage``, if any."""

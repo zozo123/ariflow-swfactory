@@ -97,4 +97,17 @@ with DAG(
         # never decides from sandbox age alone nor runs ``islo rm``.
         return maintain.request_sweep(Config(issue="maintain").sandbox_ttl_s)
 
+    @task(task_id="reconcile_backend", trigger_rule="all_done")
+    def reconcile_backend() -> dict | None:
+        """Ask the backend to settle Factory Cells whose lifecycle reports were lost (#2071).
+
+        The backend reads each held Cell's run back from Airflow, releases the unit and redelivers
+        the queue itself; this task only asks, so Airflow stays the one scheduler. An install
+        without ``SWF_BACKEND_URL`` has no backend to ask and returns ``None``.
+        """
+        from swfactory.cell_callback import resume_backend
+
+        return resume_backend()
+
     check_bands() >> sweep_sandboxes()
+    reconcile_backend()

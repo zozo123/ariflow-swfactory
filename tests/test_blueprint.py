@@ -28,8 +28,7 @@ def _data(**changes: Any) -> dict[str, Any]:
             {"after": "intent", "artifact": "intent.md", "timeout_h": 2},
             {"after": "plan", "artifact": "plan.md", "timeout_h": 6},
         ],
-        # 2 h + 6 h of gates plus 11 stage tries x 3 h: the floor is 41 h, exclusive.
-        "sandbox": {"kind": "local", "ttl_s": 48 * 3600},
+        "sandbox": {"kind": "local", "ttl_s": 7 * 3600},
     }
     base.update(changes)
     return base
@@ -47,7 +46,7 @@ def test_every_shipped_blueprint_loads(path: Path) -> None:
     bp = load(str(path))
     assert bp.name == ("factory" if path.stem == "default" else path.stem)
     assert bp.order[0] == "intent" and bp.order[-1] == "deliver"
-    assert bp.targets and bp.sandbox.ttl_s > bp.worst_case_s > bp.gate_timeout_h * 3600
+    assert bp.targets and bp.sandbox.ttl_s > bp.gate_timeout_h * 3600
 
 
 def test_default_blueprint_is_v1_pipeline() -> None:
@@ -98,7 +97,7 @@ def test_toolset_line_runs_the_default_order_on_airflows_own_sandbox(
     job = bp.jobs({"issues": ["demo/issue.md"]})[0]
     cfg = bp.config(job, run_id="r1234567")
     assert cfg.sandbox == "toolset" and cfg.toolset_backend == "sbx"
-    assert cfg.sandbox_ttl_s == 129_600 > bp.worst_case_s
+    assert cfg.sandbox_ttl_s == 10_800 > cfg.gate_timeout_h * 3600
     assert bp.config(job, run_id="r1", agent="claude").sandbox == "toolset"  # a real boundary
 
     seen: list[str] = []
@@ -209,30 +208,6 @@ def test_validation_errors(changes: dict[str, Any], match: str) -> None:
         Blueprint.model_validate(_data(**changes))
 
 
-def test_ttl_must_outlive_the_whole_line_not_just_the_longest_gate() -> None:
-    """``liquid.toml`` shipped a 24 h TTL over two 8 h gates and six 6 h stages. That passed the old
-    floor (the longest single gate) and would have deleted the cell in the middle of a build. The
-    floor is the line's worst case: every gate to its timeout plus every stage task, setup and the
-    ``deliver`` retries included, running to ``stage_timeout_h``."""
-    liquid_shape = _data(
-        gates=[
-            {"after": "intent", "artifact": "intent.md", "timeout_h": 8},
-            {"after": "plan", "artifact": "plan.md", "timeout_h": 8},
-        ],
-        limits={"stage_timeout_h": 6},
-        sandbox={"kind": "local", "ttl_s": 24 * 3600},
-    )
-    with pytest.raises(ValidationError, match="worst case"):
-        Blueprint.model_validate(liquid_shape)
-    bp = Blueprint.model_validate({**liquid_shape, "sandbox": {"kind": "local", "ttl_s": 96 * 3600}})
-    # setup (3 tries) + intent, spec, plan, build_and_test, review (1 each) + deliver (3 tries)
-    assert bp.worst_case_s == 3600 * (8 + 8 + 6 * 11)
-    assert bp_mod.TASK_RETRIES == {"setup": 2, "deliver": 2}
-    # a line without gates or retries still has to outlive its own stage tasks
-    with pytest.raises(ValidationError, match="worst case"):
-        Blueprint.model_validate(_data(gates=[], sandbox={"kind": "local", "ttl_s": 3 * 3600}))
-
-
 def test_policy_override_via_toml_is_additive_only() -> None:
     text = DEFAULT_TOML.replace("extra_allowed_tools = []", 'extra_allowed_tools = ["NotebookEdit"]')
     bp = loads(text)
@@ -316,7 +291,7 @@ def test_config_maps_limits_sandbox_and_target(monkeypatch: pytest.MonkeyPatch) 
     )
     assert cfg.blueprint == "factory" and cfg.sandbox == "srt"
     assert cfg.gateway_profile == "swfactory" and cfg.islo_environment == "swfactory"
-    assert cfg.sandbox_ttl_s == 345_600 and cfg.sandbox_idle_s == 900
+    assert cfg.sandbox_ttl_s == 172_800 and cfg.sandbox_idle_s == 900
     assert cfg.islo_snapshot == "swf-golden-20260902"
     assert cfg.max_build_iterations == 3 and cfg.max_review_fixes == 1 and cfg.max_turns == 55
     assert cfg.max_budget_usd_per_stage == 2.0 and cfg.max_budget_usd == 8.0

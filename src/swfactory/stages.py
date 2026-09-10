@@ -70,7 +70,6 @@ from swfactory.models import (
 )
 from swfactory.publication_identity import PublicationIdentity, publication_key, this_instance
 from swfactory.sandbox import SRT_RUNTIME_PROTECTED, LocalSandbox, Sandbox, SrtSandbox
-from swfactory.sandbox_contract import compute_lost
 from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
 from swfactory.state import JournalCorruption, RunBusyError, RunState
 
@@ -690,38 +689,6 @@ def _seed_exclude(ctx: Ctx) -> None:
         ctx.sb.write(path, current + sep + "\n".join(missing) + "\n")
 
 
-def _lost_work(ctx: Ctx, base: str) -> bool:
-    """Durable evidence that the cell held commits the host does not: a recorded HEAD past the
-    base, or a stage that writes code already on the orchestrator's log. Until ``deliver`` pushes,
-    that work exists nowhere else."""
-    recorded = ctx.state.read_control("workspace-head").strip() if ctx.state.has_control("workspace-head") else ""
-    progressed = any(record.stage in {"build_and_test", "review", "deliver"} for record in _persisted(ctx))
-    return bool(recorded and recorded != base) or progressed
-
-
-def _acquire(ctx: Ctx) -> None:
-    """Bring the run's cell up, or say exactly why the Cell cannot continue.
-
-    A cell provisioned by an earlier task can be gone by now: ``--delete-after`` fired during a
-    gate, or someone removed it. ``ensure()`` alone is create-if-needed and would hand setup a
-    fresh clone to carry on with, so the loss is settled first, against host-owned state: either
-    nothing beyond the recorded base ever existed in the cell and re-provisioning is stated out
-    loud, or the run fails on the provider-neutral reason ``infrastructure_lost``.
-    """
-    sb = ctx.sb
-    if ctx.state.has_control("workspace-head") and ctx.state.has_control("base") and not sb.alive():
-        base = ctx.state.read_control("base").strip()
-        if _lost_work(ctx, base):
-            lost = compute_lost(
-                ctx.cfg.sandbox,
-                sb.name,
-                detail="expired or removed after work was committed in it; refusing to rebuild on a fresh clone",
-            )
-            raise StageError("sandbox", lost.summary(), retryable=False)
-        print(f"sandbox: {sb.name} is gone before any work was committed; re-provisioning from base {base}")
-    sb.ensure()
-
-
 @_owned
 def setup(ctx: Ctx) -> StageResult:
     """Prepare the sandbox: repo, bot identity, baseline, work branch, deps, base sha, contract."""
@@ -755,7 +722,7 @@ def setup(ctx: Ctx) -> StageResult:
         ctx.state.write_control("identity.json", identity)
     if isinstance(sb, LocalSandbox):
         seed_local_workdir(sb.root, ctx.cfg.target_dir)
-    _acquire(ctx)
+    sb.ensure()
     _seed_exclude(ctx)
     # Identity travels as `git -c` (here and in commit()): srt forbids writes to .git/config.
     if not sb.run("git rev-parse --verify -q HEAD").ok:
@@ -777,8 +744,11 @@ def setup(ctx: Ctx) -> StageResult:
     if sb.run(f"git rev-parse --verify -q {branch_ref}").ok:
         _sh(ctx, f"git checkout -q {q}")
     else:
-        # The cell is alive yet the branch is not: not an expiry, an unexplained workspace change.
-        if _lost_work(ctx, base):
+        recorded_head = (
+            ctx.state.read_control("workspace-head").strip() if ctx.state.has_control("workspace-head") else ""
+        )
+        progressed = any(record.stage in {"build_and_test", "review", "deliver"} for record in _persisted(ctx))
+        if (recorded_head and recorded_head != base) or progressed:
             raise StageError(
                 "policy",
                 "factory branch disappeared after work began; refusing to recreate lost work",

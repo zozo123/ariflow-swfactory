@@ -46,7 +46,7 @@ nit_cap = 3
 kind = "islo"
 gateway_profile = "swfactory"
 environment = "swfactory"
-ttl_s = 172800              # 48 h > 5 h of gates + 10 stage tries x 3 h = 35 h
+ttl_s = 86400               # 24 h: still > 4 h plan gate
 idle_s = 900
 
 [deliver]

@@ -66,6 +66,17 @@ MAX_RESPONSE = 16 * 1024 * 1024
 # A Factory Cell that is live at its recorded epoch: the states an earlier dispatch attempt can
 # legitimately have left behind and this one may adopt.
 LIVE_CELL_STATES = frozenset({"dispatching", "queued", "running"})
+# How often one live Cell's Airflow run is read back for a lost terminal report, and how old the
+# Cell's last write must be before it is asked about at all. The reconcile runs on every transition
+# and submission, so without a floor a busy factory would ask Airflow about every running Cell on
+# every callback -- and during an Airflow outage each ask is a 30s timeout. The age floor is what
+# separates a report still in flight from a lost one: a Cell bound or reported seconds ago is not
+# owed anything yet, and reading its run back that early would cancel a dispatch Airflow has only
+# just accepted.
+RECONCILE_INTERVAL_S = 60.0
+# `_settle_lost_report`'s answer when Airflow itself could not be asked: distinct from "the run is
+# still live" so one failed read stops the pass instead of timing out once per remaining Cell.
+UNANSWERED = "unanswered"
 LINE_NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\Z")
 SEG = r"[^/?#]+"
 READ_ROUTES = re.compile(
@@ -160,6 +171,13 @@ class Factory:
             opener=self.opener.open,
         )
         self.auth_lock = threading.Lock()
+        # Live Cells whose Airflow run could not be read back on the last reconcile, keyed by cell
+        # id: the terminal report they may owe is in doubt, and `fleet()` shows that doubt rather
+        # than a queue that is stuck for no visible reason. In-memory on purpose -- it is a
+        # projection of the last observation, rebuilt by the next pass.
+        self.callback_debt: dict[str, dict[str, Any]] = {}
+        self.reconcile_interval_s = RECONCILE_INTERVAL_S
+        self._observed_at: dict[str, float] = {}
 
     def close(self) -> None:
         self.cell_store.close()
@@ -427,6 +445,7 @@ class Factory:
             memberships = self.control.admission.held_memberships(limit=limit)
         except Exception:  # noqa: BLE001 - reconciliation must never break its caller
             return repaired
+        airflow_answering = True
         for work_id, cell_id, epoch in memberships:
             try:
                 cell = self.cell_store.get(cell_id)
@@ -438,9 +457,22 @@ class Factory:
                     # A later epoch exists, so this one ended -- Cells only re-arm from a terminal
                     # state -- even though how it ended was never reported here.
                     outcome = "cancelled"
-                elif int(cell["epoch"]) == epoch and str(cell["state"]) in TERMINAL_STATES:
+                elif int(cell["epoch"]) != epoch:
+                    continue
+                elif str(cell["state"]) in TERMINAL_STATES:
                     outcome = str(cell["state"])
+                elif cell.get("airflow_run_id") and airflow_answering:
+                    # Live at this epoch on a run Airflow may already have closed: the one case the
+                    # Cell alone cannot decide (#2071). Airflow's run state is read back for it.
+                    settled = self._settle_lost_report(work_id, cell)
+                    if settled == UNANSWERED:
+                        airflow_answering = False
+                    if settled not in TERMINAL_STATES:
+                        continue
+                    outcome = str(settled)
                 else:
+                    if cell.get("airflow_run_id"):
+                        self.callback_debt[cell_id] = {"work_id": work_id, "detail": "Airflow did not answer"}
                     continue
             try:
                 self.control.release_for_terminal_cell(work_id, cell_id=cell_id, epoch=epoch, state=outcome)
@@ -448,6 +480,69 @@ class Factory:
                 continue
             repaired.append(work_id)
         return repaired
+
+    def _settle_lost_report(self, work_id: str, cell: dict[str, Any]) -> str | None:
+        """Replay the terminal report a finished Airflow run owes this still-live Cell.
+
+        A worker reports a Cell's end through ``cell_callback``; when that POST never reaches the
+        backend -- ``_failure_callback`` ran while the backend was down, or the worker died holding
+        the report -- the Cell stays ``running`` on a run Airflow has already closed, and the unit
+        it holds blocks the queue behind it forever. Airflow decided how the run ended; this only
+        reads that decision back, the same observation ``_journal_airflow_cancel`` makes, and applies
+        it through the same fenced Cell patch a callback would have. A run still live settles
+        nothing. An Airflow that cannot answer settles nothing either, but the doubt is kept in
+        ``callback_debt`` so ``fleet()`` can show a lost report instead of a silently stuck queue.
+        Returns the terminal state adopted, ``None`` when nothing could be decided, or
+        ``UNANSWERED`` when Airflow could not even be asked.
+        """
+        cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
+        dag_id, run_id = str(cell.get("airflow_dag_id") or ""), str(cell.get("airflow_run_id") or "")
+        now = time.time()
+        last_write = max(float(cell.get("updated_at") or 0.0), self._observed_at.get(cell_id, 0.0))
+        if not dag_id or now - last_write < self.reconcile_interval_s:
+            return None
+        self._observed_at[cell_id] = now
+        path = "/dags/" + urllib.parse.quote(dag_id, safe="") + "/dagRuns/" + urllib.parse.quote(run_id, safe="")
+        try:
+            status, payload = self.airflow("GET", path, None)
+        except Exception as error:  # noqa: BLE001 - an observation that fails proves nothing
+            self.callback_debt[cell_id] = {"work_id": work_id, "run_id": run_id, "detail": str(error)[:512]}
+            return UNANSWERED
+        run_state = str(payload.get("state") or "") if isinstance(payload, dict) else ""
+        if status == 404:
+            # The run was removed under the backend; whatever it computed, it computes no more.
+            outcome = "cancelled"
+        elif status == 200 and run_state in {"success", "failed"}:
+            outcome = run_state
+        elif status == 200 and run_state:
+            self.callback_debt.pop(cell_id, None)
+            return None
+        else:
+            self.callback_debt[cell_id] = {"work_id": work_id, "run_id": run_id, "detail": f"HTTP {status}"}
+            return UNANSWERED
+        self.callback_debt.pop(cell_id, None)
+        operation_key = f"airflow-reconcile:{run_id}:{outcome}"
+        try:
+            updated = self.cell_store.patch(cell_id, epoch, operation_key, state=outcome)
+        except DuplicateOperation:
+            updated = cell
+        except StaleEpoch:
+            return None
+        self.evidence.append(
+            cell_id=cell_id,
+            epoch=epoch,
+            kind="lifecycle_transition",
+            payload={
+                "from": cell.get("state"),
+                "requested": outcome,
+                "to": updated.get("state"),
+                "reason": f"Airflow run {run_state or 'absent'}; the worker's report never arrived",
+                "dag_run_id": run_id,
+            },
+            policy_digest=updated.get("policy_digest"),
+            trace=TraceContext.for_cell(cell_id, epoch, "lifecycle", operation_key),
+        )
+        return outcome
 
     def _deliver(self, work_id: str) -> str | None:
         """Deliver this one admitted command now, letting its failure reach the submitter."""
@@ -958,6 +1053,9 @@ class Factory:
             bottlenecks.append(f"repair_debt:{len(unresolved)}")
         if cleanup_debt:
             bottlenecks.append(f"cleanup_debt:{cleanup_debt}")
+        callback_debt = len(self.callback_debt)
+        if callback_debt:
+            bottlenecks.append(f"callback_debt:{callback_debt}")
         return {
             "cells_active": sum(counts.get(s, 0) for s in ("dispatching", "queued", "running")),
             "cells_queued": counts.get("queued", 0),
@@ -967,6 +1065,7 @@ class Factory:
             "queue_depth": int(pressure.get("queued", 0)),
             "unresolved_operations": len(unresolved),
             "cleanup_debt": cleanup_debt,
+            "callback_debt": callback_debt,
             "generation_counts": dict(sorted(generations.items())),
             "bottlenecks": bottlenecks,
         }

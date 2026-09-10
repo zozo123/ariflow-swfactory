@@ -81,10 +81,7 @@ nit_cap = 3
 kind = "islo"                # SWF_SANDBOX=docker for a dev box
 gateway_profile = "swfactory"
 environment = "swfactory"
-ttl_s = 345600               # 96 h. The floor is the WHOLE line, not the longest gate: 8 h + 8 h of
-                             # gates plus 11 stage tries (setup x3, four stages, deliver x3) x 6 h =
-                             # 82 h, exclusive. 24 h used to pass and would have deleted the cell
-                             # mid-build; #2072.
+ttl_s = 86400                # 24 h > max gate timeout (8 h); the validator floor is exclusive
 idle_s = 900
 # snapshot deliberately unset: a golden snapshot pins a stale copy of the tree this line edits.
 

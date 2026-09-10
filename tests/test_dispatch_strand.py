@@ -567,3 +567,135 @@ def test_racing_distinct_submissions_never_exceed_capacity(backend) -> None:
     pressure = box.factory.control.admission.snapshot()["pressure"]
     assert pressure["held_units"] == 2
     assert len(box.airflow.created) == 2
+
+
+# ------------------------------------------- 12. the lost terminal callback (#2071)
+
+
+def _lose_the_terminal_report(box, work: dict, run_state: str | None = "failed") -> str:
+    """Airflow finishes the run; the worker's report never reaches the backend."""
+    cell_id = work["cells"][0]
+    box.finish(cell_id, state="running")
+    run_id = box.factory.cell_store.get(cell_id)["airflow_run_id"]
+    if run_state is None:
+        del box.airflow.runs[run_id]
+    else:
+        box.airflow.runs[run_id]["state"] = run_state
+    return cell_id
+
+
+def test_a_lost_terminal_callback_is_reconciled_against_airflow_on_restart(backend) -> None:
+    """The issue's probe: running Cell, finished run, no callback, queued order, restart."""
+    box = backend(Limits(global_active=1))
+    a = box.submit("1")
+    b = box.submit("2")
+    cell_id = _lose_the_terminal_report(box, a, "failed")
+    assert _state(box, b["submission_id"]) == "queued"
+
+    box.restart()
+    assert box.factory._reconcile_held_units() == [a["submission_id"]], "the held unit was never reconciled"
+    cell = box.factory.cell_store.get(cell_id)
+    assert cell["state"] == "failed", f"Cell stayed {cell['state']!r} after its run finished"
+    box.factory.resume_dispatch()
+    assert len(box.airflow.created_for(b["submission_id"])) == 1, "the queued order never dispatched"
+    assert _state(box, b["submission_id"]) == "bound"
+    assert box.factory.control.admission.snapshot()["pressure"]["held_units"] == 1
+    history = box.factory.cell_store.history(cell_id)
+    assert any(e["kind"] == "patch" and e["payload"].get("state") == "failed" for e in history)
+
+
+def test_a_lost_success_report_adopts_the_run_outcome(backend) -> None:
+    box = backend(Limits(global_active=1))
+    a = box.submit("1")
+    b = box.submit("2")
+    cell_id = _lose_the_terminal_report(box, a, "success")
+    box.restart()
+    box.factory.resume_dispatch()
+    assert box.factory.cell_store.get(cell_id)["state"] == "success"
+    assert _state(box, b["submission_id"]) == "bound"
+
+
+def test_an_absent_airflow_run_releases_its_unit_as_cancelled(backend) -> None:
+    """A run deleted under the backend certainly is not computing; the unit is held for nothing."""
+    box = backend(Limits(global_active=1))
+    a = box.submit("1")
+    b = box.submit("2")
+    cell_id = _lose_the_terminal_report(box, a, None)
+    box.restart()
+    box.factory.resume_dispatch()
+    assert box.factory.cell_store.get(cell_id)["state"] == "cancelled"
+    assert _state(box, b["submission_id"]) == "bound"
+
+
+def test_a_live_airflow_run_is_not_mistaken_for_a_lost_callback(backend) -> None:
+    """Only Airflow's verdict ends a Cell; a run still going keeps its unit."""
+    box = backend(Limits(global_active=1))
+    a = box.submit("1")
+    b = box.submit("2")
+    cell_id = _lose_the_terminal_report(box, a, "running")
+    box.restart()
+    assert box.factory.resume_dispatch() == []
+    assert box.factory.cell_store.get(cell_id)["state"] == "running"
+    assert _state(box, b["submission_id"]) == "queued"
+    assert box.factory.fleet()["callback_debt"] == 0
+
+
+def test_an_unreachable_airflow_keeps_the_unit_held_and_surfaces_the_debt(backend) -> None:
+    """When the run cannot be read, nothing is released -- but the doubt is counted, not hidden."""
+    box = backend(Limits(global_active=1))
+    a = box.submit("1")
+    b = box.submit("2")
+    cell_id = _lose_the_terminal_report(box, a, "failed")
+    real = box.airflow.__call__
+
+    def blackhole(method: str, path: str, body: dict | None):
+        if method == "GET" and "/dagRuns/" in path:
+            raise OSError("airflow is down")
+        return real(method, path, body)
+
+    box.restart()
+    box.factory.airflow = blackhole  # type: ignore[method-assign,assignment]
+    assert box.factory.resume_dispatch() == []
+    assert box.factory.cell_store.get(cell_id)["state"] == "running"
+    assert _state(box, b["submission_id"]) == "queued"
+    fleet = box.factory.fleet()
+    assert fleet["callback_debt"] == 1 and "callback_debt:1" in fleet["bottlenecks"], fleet
+
+    box.factory.airflow = box.airflow  # type: ignore[method-assign]
+    box.factory.resume_dispatch()
+    assert box.factory.cell_store.get(cell_id)["state"] == "failed"
+    assert _state(box, b["submission_id"]) == "bound"
+    assert box.factory.fleet()["callback_debt"] == 0
+
+
+def test_reconciling_a_lost_callback_twice_releases_one_unit_only(backend) -> None:
+    box = backend(Limits(global_active=1))
+    a = box.submit("1")
+    b = box.submit("2")
+    _lose_the_terminal_report(box, a, "failed")
+    box.restart()
+    assert box.factory._reconcile_held_units() == [a["submission_id"]]
+    assert box.factory._reconcile_held_units() == []
+    box.factory.resume_dispatch()
+    assert _state(box, b["submission_id"]) == "bound"
+    assert box.factory.control.admission.snapshot()["pressure"]["held_units"] == 1
+
+
+def test_a_multi_job_order_releases_when_its_last_lost_report_is_reconciled(backend) -> None:
+    """One sibling reported; the other's report was lost. The order holds both units until then."""
+    box = backend(Limits(global_active=2, per_repo_active=2), SECOND_TARGET)
+    multi = box.submit("1")
+    queued = box.submit("2")
+    reported, lost = multi["cells"]
+    box.finish(reported, state="success")
+    box.finish(lost, state="running")
+    run_id = box.factory.cell_store.get(lost)["airflow_run_id"]
+    box.airflow.runs[run_id]["state"] = "failed"
+    assert _state(box, queued["submission_id"]) == "queued"
+
+    box.restart()
+    box.factory.resume_dispatch()
+    assert box.factory.cell_store.get(reported)["state"] == "success", "a reconcile must not rewrite a reported Cell"
+    assert box.factory.cell_store.get(lost)["state"] == "failed"
+    assert _state(box, multi["submission_id"]) == "failed", "the worst member outcome must win"
+    assert _state(box, queued["submission_id"]) == "bound"

@@ -94,30 +94,20 @@ def _stage_fn(stage: str):
 
 def _cell_transition(job: dict[str, Any], state: str, context: dict[str, Any], suffix: str) -> None:
     """Runtime-only callback; unmanaged/direct Airflow runs are intentionally no-ops."""
-    from swfactory.cell_callback import transition
+    from swfactory.cell_callback import report
 
-    dag_run = context["dag_run"]
-    ti = context.get("ti")
-    task_id = getattr(ti, "task_id", suffix)
-    try_number = getattr(ti, "try_number", 0)
-    transition(
-        job,
-        state,
-        operation_key=(f"airflow:{dag_run.run_id}:{int(job['job_idx'])}:{task_id}:{try_number}:{suffix}"),
-    )
+    report(job, state, context, suffix)
 
 
 def _failure_callback(context: dict[str, Any]) -> None:
-    """Mark the current managed cell failed without changing Airflow's failure semantics."""
-    try:
-        ti = context["ti"]
-        jobs = ti.xcom_pull(task_ids="fan_out") or []
-        index = int(ti.map_index)
-        if not isinstance(jobs, list) or not 0 <= index < len(jobs):
-            return
-        _cell_transition(jobs[index], "failed", context, "failed")
-    except Exception:
-        return
+    """Mark the current managed cell failed without changing Airflow's failure semantics.
+
+    Used to swallow every exception, which is how a backend outage at failure time left the Cell
+    ``running`` and its admission unit held forever (#2071); the report is now recorded as debt.
+    """
+    from swfactory.cell_callback import report_failure
+
+    report_failure(context)
 
 
 def _stage_task(name: str, stage: str, shape: dict[str, Any], outlets: list[Asset]):

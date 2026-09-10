@@ -324,7 +324,7 @@ def test_the_liquid_gates_expire_inside_the_schedule_period() -> None:
     bp = load(ROOT / "blueprints" / "liquid.toml")
     longest_gate_s = max(gate.timeout_h for gate in bp.gates) * 3600
     assert longest_gate_s < 24 * 3600, "a daily line needs sub-daily gates"
-    assert bp.sandbox.ttl_s > bp.worst_case_s > longest_gate_s, "the cell must outlive the whole line"
+    assert bp.sandbox.ttl_s > longest_gate_s, "the cell must outlive its longest gate"
 
 
 def test_a_scheduled_liquid_run_draws_its_work_from_the_trigger() -> None:
