@@ -2,21 +2,32 @@
 
 Airflow workers may construct a patch, but they never receive GitHub publication credentials. The
 backend validates the current Cell epoch, bound Airflow run, policy, capability and immutable
-operation intent before a write. Ambiguous retries observe the deterministic remote marker before
-replay, so GitHub publication and issue creation share one durable mutation/evidence path.
+operation intent before a write. Ambiguous retries observe the remote before replay: a publication
+is judged from the branch and pull-request lifecycle bound to immutable git content, an issue from
+its deterministic marker, so both share one durable mutation/evidence path.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+from dataclasses import asdict
 from typing import Any
 
 from swfactory.authority import ResourceKind
 from swfactory.core_capabilities import CoreMutationRequest
 from swfactory.idempotency import MutationOutcome
 from swfactory.liquid_security_runtime import Capability, SecurityContext
-from swfactory.scm import GitHubScm
+from swfactory.models import StageError
+from swfactory.recovery_accounting import (
+    Observation,
+    Outcome,
+    PublicationReceipt,
+    RecoveryAction,
+    RemoteIdentity,
+    classify_observation,
+)
+from swfactory.scm import GitHubScm, patch_content_digest
 
 from .core_service import airflow_binding, ensure_core, intent_digest
 from .service import Factory, Refused, text
@@ -123,13 +134,16 @@ def _publish(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str
     if len(patch) > MAX_PATCH_BYTES:
         raise ValueError("patch exceeds backend publication limit")
     patch_digest = hashlib.sha256(patch).hexdigest()
+    # The marker is a lookup hint for people reading the PR. It is not the proof: anyone with write
+    # access can edit a body, so a retry is judged on git content (`patch_content_digest`) instead.
     marker = f"{_MARKER_PREFIX}{patch_digest} -->"
     publish_body = pr_body.rstrip() + "\n\n" + marker + "\n"
+    base_branch = str(body.get("base_branch") or "main")
     digest = intent_digest(
         {
             "kind": "github_publish",
             "repo": factory.repo,
-            "base_branch": str(body.get("base_branch") or "main"),
+            "base_branch": base_branch,
             "branch": branch,
             "title": title,
             "body": pr_body,
@@ -149,9 +163,46 @@ def _publish(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str
         replay_safe=True,
         parts=(branch, patch_digest),
     )
+    expected = _publication_identity(factory.repo, base_branch, branch, patch_content_digest(patch))
+
+    def judge(receipt: PublicationReceipt | None) -> MutationOutcome:
+        """One verdict, from the remote alone, for the first attempt and for every reconcile."""
+        if receipt is None:
+            return MutationOutcome(
+                "definitely_absent", None, {"branch": branch}, "neither a pull request nor the branch exists"
+            )
+        evidence = {"patch_sha256": patch_digest, **asdict(receipt)}
+        observed = Observation(
+            Outcome.COMMITTED if receipt.verify(expected) else Outcome.REFUSED,
+            _publication_identity(
+                receipt.repository, receipt.base_revision, receipt.branch, receipt.content_digest
+            ).digest,
+            evidence,
+        )
+        if classify_observation(expected, observed) is not RecoveryAction.ADOPT:
+            # A marker-bearing PR whose branch was rewritten, a branch another writer owns, or a PR
+            # against another base/repository: not this publication, and not ours to overwrite.
+            return MutationOutcome(
+                "divergent",
+                None,
+                evidence,
+                f"{receipt.pr_state} remote state for {branch} does not prove the intended git content",
+            )
+        if receipt.pr_state == "branch_only":
+            # Died between the push and `gh pr create`: the ref already holds the intended commits,
+            # so the replay finishes the publication on it rather than judging it absent.
+            return MutationOutcome(
+                "definitely_absent", None, evidence, "the branch carries the intended commits but no PR exists"
+            )
+        return MutationOutcome(
+            "committed",
+            evidence,
+            evidence,
+            f"{receipt.pr_state} pull request carries the intended git content",
+        )
 
     def publish() -> dict[str, Any]:
-        url = scm.publish(
+        scm.publish(
             branch=branch,
             patch=patch,
             title=title,
@@ -159,45 +210,25 @@ def _publish(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str
             labels=labels,
             allowed_prefixes=allowed,
         )
-        return {"url": url, "branch": branch, "patch_sha256": patch_digest}
+        # The receipt is read back from GitHub the way a reconcile reads it, so the journal never
+        # holds a claim the remote cannot repeat (and a later replay compares like with like).
+        outcome = judge(scm.observe_publication(branch))
+        if outcome.status != "committed":
+            raise StageError("scm", f"publication did not verify on the remote: {outcome.detail}", retryable=True)
+        return dict(outcome.result)
 
     def reconcile() -> MutationOutcome:
-        rows = factory._gh(
-            [
-                "pr",
-                "list",
-                "--head",
-                branch,
-                "--state",
-                "open",
-                "--limit",
-                "1",
-                "--json",
-                "url,body,headRefOid",
-            ]
-        )
-        if not rows:
-            return MutationOutcome(
-                "definitely_absent", None, {"branch": branch}, "no open PR exists for deterministic branch"
-            )
-        row = rows[0]
-        observed_body = str(row.get("body") or "")
-        observed_url = str(row.get("url") or "")
-        if marker in observed_body:
-            return MutationOutcome(
-                "committed",
-                {"url": observed_url, "branch": branch, "patch_sha256": patch_digest},
-                {"branch": branch, "url": observed_url, "head": row.get("headRefOid")},
-                "PR carries the desired patch digest marker",
-            )
-        return MutationOutcome(
-            "divergent",
-            None,
-            {"branch": branch, "url": observed_url, "head": row.get("headRefOid")},
-            "an open PR exists but does not prove the desired patch digest",
-        )
+        try:
+            return judge(scm.observe_publication(branch))
+        except StageError as error:
+            return MutationOutcome("ambiguous", None, {"branch": branch}, f"remote observation failed: {error}")
 
     return factory.control.mutate_core(request, publish, reconcile=reconcile).result
+
+
+def _publication_identity(repo: str, base: str, branch: str, content_digest: str) -> RemoteIdentity:
+    """Repository, base, branch and git content: the four things a publication receipt must bind."""
+    return RemoteIdentity("github_publish", repo, f"{base}:{branch}", content_digest)
 
 
 def _open_issue(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str, Any]:
