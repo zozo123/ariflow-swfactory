@@ -140,7 +140,11 @@ class WorkExecutor:
         cancellation = cancellation or Cancellation()
         declared_conflicts = conflict_set(ordered)
         parallel = (
-            self.policy.allow_parallel and supports_fork and self.policy.max_parallel > 1 and not declared_conflicts
+            self.policy.allow_parallel
+            and supports_fork
+            and self.policy.max_parallel > 1
+            and not declared_conflicts
+            and all(node.parallel_safe for node in ordered)
         )
         results: dict[str, NodeResult] = {}
         target_head = input_head

@@ -345,6 +345,9 @@ describes a capability more strongly than its claim.
 
 <!-- capability-inventory:end -->
 
+Provider-fork execution remains experimental and requires every work node to set
+`parallel_safe=True`; a mixed or default plan uses serial execution.
+
 For development, install the locked Airflow group and run the repository checks:
 
 ```sh

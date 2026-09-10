@@ -65,6 +65,8 @@ in `stages.py`. Details: README + docs/*.md.
   `[workspace.package]` — bump both. Install: docs/swf.md#install.
 
 ## Conventions
+- Experimental `WorkExecutor` enables forks only when every node sets `parallel_safe=True`;
+  default or mixed plans use the conservative serial fallback even on fork-capable providers.
 - Python 3.12, `from __future__ import annotations`, type hints, docstrings that say WHY. Stdlib
   first (`subprocess`, `tomllib`, `statistics`, `xml.etree`). No Airflow import under `src/`;
   `dags/*.py` import swfactory only inside task callables (the parity test asserts it).

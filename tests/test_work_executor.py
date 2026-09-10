@@ -79,6 +79,38 @@ def _execute(executor: WorkExecutor, nodes: tuple[WorkNode, ...], *, supports_fo
     )
 
 
+@pytest.mark.parametrize("safe_flags", [(False, False), (True, False), (False, True)])
+def test_parallel_execution_requires_every_node_to_opt_in(safe_flags: tuple[bool, bool]) -> None:
+    """A provider's fork capability cannot override the plan's safety decision."""
+    caller = threading.get_ident()
+    runner_threads: list[int] = []
+    started: list[str] = []
+
+    def run(request: NodeRequest) -> NodeResult:
+        runner_threads.append(threading.get_ident())
+        started.append(request.node.id)
+        return _runner()(request)
+
+    nodes = tuple(
+        WorkNode(id=node_id, files=(f"{node_id}.py",), parallel_safe=safe)
+        for node_id, safe in zip(("a", "b"), safe_flags, strict=True)
+    )
+    report = _execute(WorkExecutor(run, _merger), nodes)
+
+    assert not report.parallel
+    assert runner_threads == [caller, caller]
+    assert started == ["a", "b"]
+    assert report.final_head == f"{HEAD}+a+b"
+    assert not report.cancelled
+
+
+def test_default_work_nodes_do_not_opt_into_parallel_execution() -> None:
+    nodes = (WorkNode(id="a", files=("a.py",)), WorkNode(id="b", files=("b.py",)))
+    report = _execute(WorkExecutor(_runner(), _merger), nodes)
+    assert not report.parallel
+    assert [receipt.node_id for receipt in report.merges] == ["a", "b"]
+
+
 def test_independent_nodes_fan_out_and_fan_in_in_node_id_order() -> None:
     """Completion order is provider timing; merge order has to be a property of the graph."""
     slow_first = WorkNode(id="b", files=("b.py",), parallel_safe=True)
