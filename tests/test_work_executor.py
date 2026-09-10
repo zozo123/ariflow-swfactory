@@ -299,3 +299,46 @@ def test_the_executor_never_starts_a_thread_when_it_is_not_parallel() -> None:
     _execute(WorkExecutor(_runner(), _merger), nodes, supports_fork=False)
 
     assert threading.active_count() == before
+
+
+@pytest.mark.parametrize("supports_fork", [False, True])
+def test_cancelled_successful_wave_never_calls_merger(supports_fork: bool) -> None:
+    cancellation = Cancellation()
+    barrier = threading.Barrier(2) if supports_fork else None
+    merged: list[str] = []
+
+    def run(request: NodeRequest) -> NodeResult:
+        if barrier is not None:
+            barrier.wait(timeout=5)
+        cancellation.cancel()
+        return _runner()(request)
+
+    def merge(result: NodeResult, target_head: str, index: int) -> MergeReceipt:
+        merged.append(result.node_id)
+        return _merger(result, target_head, index)
+
+    nodes = tuple(WorkNode(id=n, files=(f"{n}.py",), parallel_safe=True) for n in ("a", "b"))
+    report = _execute(WorkExecutor(run, merge), nodes, supports_fork=supports_fork, cancellation=cancellation)
+
+    assert report.cancelled
+    assert merged == []
+    assert report.merges == ()
+    assert report.final_head == HEAD
+
+
+def test_cancellation_in_first_merge_prevents_remaining_merge_callbacks() -> None:
+    cancellation = Cancellation()
+    merged: list[str] = []
+
+    def merge(result: NodeResult, target_head: str, index: int) -> MergeReceipt:
+        merged.append(result.node_id)
+        cancellation.cancel()
+        return _merger(result, target_head, index)
+
+    nodes = tuple(WorkNode(id=n, files=(f"{n}.py",), parallel_safe=True) for n in ("a", "b"))
+    report = _execute(WorkExecutor(_runner(), merge), nodes, cancellation=cancellation)
+
+    assert report.cancelled
+    assert merged == ["a"]
+    assert [receipt.node_id for receipt in report.merges] == ["a"]
+    assert report.final_head == f"{HEAD}+a"

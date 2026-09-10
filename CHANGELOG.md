@@ -6,6 +6,8 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Stop experimental workgraph fan-in when cancellation is observed after node execution or between merge callbacks.
+
 ### Added
 
 - The prompt templates a blueprint references are part of the inputs one Cell epoch accepts
