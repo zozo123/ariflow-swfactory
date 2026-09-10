@@ -5,9 +5,10 @@ that task, a validated issue-local DAG is expanded into stable topological waves
 one governed workspace. Shared-workspace execution is serial by design; provider fork/clone fan-out
 remains experimental until a provider can prove isolated lineage, cancellation and teardown.
 
-Progress is checkpointed in host-owned RunState after every node and before every agent attempt. An
-Airflow task retry therefore resumes from durable node receipts without replaying completed work or
-reusing a failed agent-envelope identity, while workspace-head fencing refuses an unexpected checkout.
+Progress is journalled in host-owned RunState: an attempt row before every agent call (node or
+repair), a receipt after its commit, and the verdict of every test run. An Airflow task retry
+therefore resumes from the last committed candidate without replaying completed work or reusing a
+dead attempt's identity, while workspace-head fencing refuses a checkout the journal cannot explain.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import time
 from typing import Any
 
 from swfactory import stages
-from swfactory.models import BuildSummary, Plan, PlanTask, StageError, StageResult
+from swfactory.models import BuildSummary, Plan, PlanTask, StageError, StageResult, TestResult
 from swfactory.workgraph import WorkNode, conflict_set
 
 _PROGRESS = "workgraph-progress.json"
@@ -51,7 +52,10 @@ def _load_progress(ctx: stages.Ctx, plan: Plan, current_head: str) -> dict[str, 
             "input_head": current_head,
             "head": current_head,
             "agent_calls": 0,
+            "attempt": None,
             "nodes": [],
+            "repairs": [],
+            "verified": None,
         }
     try:
         progress = json.loads(ctx.state.read_control(_PROGRESS))
@@ -61,19 +65,27 @@ def _load_progress(ctx: stages.Ctx, plan: Plan, current_head: str) -> dict[str, 
         raise StageError("policy", "workgraph progress has an unsupported schema")
     if progress.get("plan_digest") != expected:
         raise StageError("policy", "workgraph progress belongs to a different plan")
-    if not isinstance(progress.get("nodes"), list):
-        raise StageError("policy", "workgraph progress node receipts are invalid")
+    progress.setdefault("repairs", [])
+    if not isinstance(progress.get("nodes"), list) or not isinstance(progress["repairs"], list):
+        raise StageError("policy", "workgraph progress receipts are invalid")
     input_head = progress.get("input_head")
     checkpoint_head = progress.get("head")
     if not isinstance(input_head, str) or not input_head or not isinstance(checkpoint_head, str) or not checkpoint_head:
         raise StageError("policy", "workgraph progress is incomplete")
-    if checkpoint_head != current_head:
+    attempt = progress.setdefault("attempt", None)
+    progress.setdefault("verified", None)
+    # The one drift a retry may explain: the factory's own commit for a journalled attempt whose
+    # receipt never landed. `commit()` recorded that HEAD in host state and `_assert_workspace_head`
+    # has just proved the sandbox still sits on it; `_resume` settles it. Anything else is somebody
+    # else's checkout.
+    own_commit = isinstance(attempt, dict) and attempt.get("input_head") == checkpoint_head
+    if checkpoint_head != current_head and not own_commit:
         raise StageError(
             "policy",
             f"workgraph checkpoint expects HEAD {checkpoint_head} but workspace is {current_head}",
         )
     agent_calls = progress.setdefault("agent_calls", len(progress["nodes"]))
-    if type(agent_calls) is not int or agent_calls < len(progress["nodes"]):
+    if type(agent_calls) is not int or agent_calls < len(progress["nodes"]) + len(progress["repairs"]):
         raise StageError("policy", "workgraph attempt counter is invalid")
     return progress
 
@@ -114,23 +126,114 @@ def _node_prompt(ctx: stages.Ctx, plan_text: str, spec_text: str, node: PlanTask
     )
 
 
-def _execute_nodes(
-    ctx: stages.Ctx,
-    plan: Plan,
-    spec_text: str,
-    plan_text: str,
-) -> tuple[int, dict[str, Any]]:
-    declared_conflicts = [
-        {"left": left, "right": right, "files": list(files)} for left, right, files in conflict_set(_nodes(plan))
-    ]
+def _open_progress(ctx: stages.Ctx, plan: Plan) -> dict[str, Any]:
+    """Fence the workspace, load the journal, and settle whatever a dead process left in flight."""
     current_head = stages._assert_workspace_head(ctx, "workgraph start")
     progress = _load_progress(ctx, plan, current_head)
+    attempt = progress["attempt"]
+    if attempt is not None:
+        if current_head == progress["head"]:
+            # Died before its commit: whatever the agent left uncommitted was never verified and is
+            # discarded, so the retry starts its fresh identity from the checkpointed candidate.
+            _abandon(ctx, progress, current_head)
+        else:
+            _settle(ctx, progress, plan, current_head)
+    return progress
+
+
+def _attempt(
+    ctx: stages.Ctx,
+    progress: dict[str, Any],
+    *,
+    kind: str,
+    ident: str | int,
+    stage: str,
+    prompt: str,
+    commit_stage: str,
+    label: str,
+    title: str,
+    **extra: Any,
+) -> str:
+    """Journal one paid attempt, invoke the agent, commit what it produced; returns the new HEAD.
+
+    The attempt row is durable before the provider is called: it carries the identity a retry must
+    not reuse and the input HEAD that lets `_load_progress` tell the factory's own commit from
+    foreign drift. The caller settles it with `_settle`.
+    """
+    before = stages._assert_workspace_head(ctx, f"workgraph {kind} {ident}")
+    agent_call = int(progress["agent_calls"]) + 1
+    progress["agent_calls"] = agent_call
+    progress["attempt"] = {
+        "kind": kind,
+        "id": ident,
+        "agent_call": agent_call,
+        "input_head": before,
+        "started_at": time.time(),
+        **extra,
+    }
+    _store_progress(ctx, progress)
+    try:
+        result = stages._agent(ctx, stage, agent_call, prompt, BuildSummary)
+        return stages.commit(ctx, stage=commit_stage, msg=f"{label}: {stages._summary_line(result, title)}")
+    except BaseException:
+        _abandon(ctx, progress, before)
+        raise
+
+
+def _abandon(ctx: stages.Ctx, progress: dict[str, Any], head: str) -> None:
+    """Restore the attempt's input HEAD and strike the attempt: nothing of it is a candidate."""
+    _restore(ctx, head)
+    progress["attempt"] = None
+    _store_progress(ctx, progress)
+
+
+def _settle(ctx: stages.Ctx, progress: dict[str, Any], plan: Plan, after: str) -> dict[str, Any]:
+    """Turn the in-flight attempt's commit into a receipt and advance the checkpoint to it."""
+    attempt = progress["attempt"]
+    before = attempt["input_head"]
+    receipt: dict[str, Any] = {
+        "agent_call": attempt["agent_call"],
+        "input_head": before,
+        "output_head": after,
+        "duration_s": round(time.time() - attempt["started_at"], 3),
+    }
+    if attempt["kind"] == "node":
+        node = next(row for row in plan.work if row.id == attempt["id"])
+        changed_text = stages._sh(ctx, f"git diff --name-only {shlex.quote(before)}..{shlex.quote(after)} -- .")
+        changed = tuple(sorted(line.strip() for line in changed_text.splitlines() if line.strip()))
+        unexpected = sorted(set(changed) - set(node.files))
+        if unexpected:
+            _abandon(ctx, progress, before)
+            raise StageError(
+                "policy",
+                f"Plan.work node {node.id!r} changed files outside its declared scope: {unexpected}",
+            )
+        receipt = {
+            "node_id": node.id,
+            "state": "ok",
+            "layer": attempt["layer"],
+            **receipt,
+            "depends_on": list(node.depends_on),
+            "declared_files": list(node.files),
+            "changed_files": list(changed),
+            "parallel_safe_hint": node.parallel_safe,
+        }
+        progress["nodes"].append(receipt)
+    else:
+        receipt = {"repair": attempt["id"], **receipt}
+        progress["repairs"].append(receipt)
+    progress["head"] = after
+    progress["attempt"] = None
+    _store_progress(ctx, progress)
+    return receipt
+
+
+def _execute_nodes(ctx: stages.Ctx, plan: Plan, spec_text: str, plan_text: str, progress: dict[str, Any]) -> None:
     completed = {
         str(row["node_id"]): row
         for row in progress["nodes"]
         if isinstance(row, dict) and row.get("state") == "ok" and row.get("node_id")
     }
-
     for layer_index, layer in enumerate(plan.work_layers()):
         for node in sorted(layer, key=lambda item: item.id):
             if node.id in completed:
@@ -138,58 +241,33 @@ def _execute_nodes(
             missing = sorted(dep for dep in node.depends_on if dep not in completed)
             if missing:
                 raise StageError("policy", f"Plan.work node {node.id!r} has incomplete dependencies: {missing}")
-            before = stages._assert_workspace_head(ctx, f"workgraph node {node.id}")
-            agent_call = int(progress["agent_calls"]) + 1
-            progress["agent_calls"] = agent_call
-            _store_progress(ctx, progress)
-            started = time.monotonic()
-            try:
-                result = stages._agent(
-                    ctx,
-                    "build",
-                    agent_call,
-                    _node_prompt(ctx, plan_text, spec_text, node),
-                    BuildSummary,
-                )
-                after = stages.commit(
-                    ctx,
-                    stage=f"work:{node.id}",
-                    msg=f"work {node.id}: {stages._summary_line(result, node.title)}",
-                )
-                changed_text = stages._sh(
-                    ctx,
-                    f"git diff --name-only {shlex.quote(before)}..{shlex.quote(after)} -- .",
-                )
-                changed = tuple(sorted(line.strip() for line in changed_text.splitlines() if line.strip()))
-                unexpected = sorted(set(changed) - set(node.files))
-                if unexpected:
-                    _restore(ctx, before)
-                    raise StageError(
-                        "policy",
-                        f"Plan.work node {node.id!r} changed files outside its declared scope: {unexpected}",
-                    )
-            except BaseException:
-                _restore(ctx, before)
-                raise
-            receipt = {
-                "node_id": node.id,
-                "state": "ok",
-                "layer": layer_index,
-                "agent_call": agent_call,
-                "input_head": before,
-                "output_head": after,
-                "depends_on": list(node.depends_on),
-                "declared_files": list(node.files),
-                "changed_files": list(changed),
-                "parallel_safe_hint": node.parallel_safe,
-                "duration_s": round(time.monotonic() - started, 3),
-            }
-            progress["nodes"].append(receipt)
-            progress["head"] = after
-            _store_progress(ctx, progress)
-            completed[node.id] = receipt
+            after = _attempt(
+                ctx,
+                progress,
+                kind="node",
+                ident=node.id,
+                stage="build",
+                prompt=_node_prompt(ctx, plan_text, spec_text, node),
+                commit_stage=f"work:{node.id}",
+                label=f"work {node.id}",
+                title=node.title,
+                layer=layer_index,
+            )
+            completed[node.id] = _settle(ctx, progress, plan, after)
 
-    ordered_receipts = [completed[node.id] for node in plan.work]
+
+def _verify(
+    ctx: stages.Ctx, progress: dict[str, Any], plan: Plan, conflicts: list[dict[str, Any]]
+) -> tuple[TestResult, str]:
+    """Test the checkpointed candidate, journal the verdict, and derive the execution report from it.
+
+    Written after every run, not once after fan-in: the report's ``final_head`` is the HEAD the
+    suite actually ran on, which after a repair is not the HEAD the nodes fanned in to.
+    """
+    tests, output = stages.run_tests(ctx)
+    progress["verified"] = {"head": progress["head"], "ok": tests.ok, **stages._test_numbers(tests)}
+    _store_progress(ctx, progress)
+    by_id = {row["node_id"]: row for row in progress["nodes"]}
     report = {
         "schema_version": 1,
         "mode": "shared_workspace_serial",
@@ -200,14 +278,13 @@ def _execute_nodes(
         "final_head": progress["head"],
         "plan_digest": progress["plan_digest"],
         "agent_calls": progress["agent_calls"],
-        "declared_conflicts": declared_conflicts,
-        "nodes": ordered_receipts,
+        "declared_conflicts": conflicts,
+        "nodes": [by_id[node.id] for node in plan.work],
+        "repairs": progress["repairs"],
+        "verified": progress["verified"],
     }
-    ctx.write_artifact(
-        f"{ctx.art}/workgraph-execution.json",
-        json.dumps(report, indent=2, sort_keys=True) + "\n",
-    )
-    return int(progress["agent_calls"]), report
+    ctx.write_artifact(f"{ctx.art}/workgraph-execution.json", json.dumps(report, indent=2, sort_keys=True) + "\n")
+    return tests, output
 
 
 def _legacy_build(ctx: stages.Ctx, spec_text: str, plan_text: str) -> StageResult:
@@ -256,30 +333,40 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
     if not plan.work:
         return _legacy_build(ctx, spec_text, plan_text)
 
-    node_calls, report = _execute_nodes(ctx, plan, spec_text, plan_text)
-    tests, output = stages.run_tests(ctx)
-    if tests.ok:
+    conflicts = [
+        {"left": left, "right": right, "files": list(files)} for left, right, files in conflict_set(_nodes(plan))
+    ]
+    progress = _open_progress(ctx, plan)
+    _execute_nodes(ctx, plan, spec_text, plan_text, progress)
+
+    def outcome(tests: TestResult) -> StageResult:
         return StageResult(
             stage="build_and_test",
             artifacts=[f"{ctx.art}/workgraph-execution.json"],
             numbers={
                 "work_nodes": float(len(plan.work)),
-                "work_conflicts": float(len(report["declared_conflicts"])),
+                "work_conflicts": float(len(conflicts)),
                 "parallel_nodes": 0.0,
-                "repair_iterations": 0.0,
-                "first_pass_ci": 1.0,
+                "repair_iterations": float(len(progress["repairs"])),
+                "first_pass_ci": float(not progress["repairs"]),
                 **stages._test_numbers(tests),
             },
         )
 
+    tests, output = _verify(ctx, progress, plan, conflicts)
+    if tests.ok:
+        return outcome(tests)
     failures = f"exit code {tests.exit_code}; failed={tests.failed} errors={tests.errors}\n\n{output}"
-    for repair in range(1, ctx.cfg.max_build_iterations):
-        iteration = node_calls + repair
-        result = stages._agent(
+    # The bound counts journalled repairs, so a retry continues the budget rather than reopening it.
+    while len(progress["repairs"]) < ctx.cfg.max_build_iterations - 1:
+        repair = len(progress["repairs"]) + 1
+        after = _attempt(
             ctx,
-            "fix",
-            iteration,
-            stages.render_prompt(
+            progress,
+            kind="repair",
+            ident=repair,
+            stage="fix",
+            prompt=stages.render_prompt(
                 "fix",
                 issue_id=ctx.issue.id,
                 spec=spec_text,
@@ -287,23 +374,14 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
                 failures=failures,
                 protected=stages._protected(ctx, "fix"),
             ),
-            BuildSummary,
+            commit_stage="fix",
+            label="fix",
+            title=f"workgraph repair {repair}",
         )
-        stages.commit(ctx, stage="fix", msg=f"fix: {stages._summary_line(result, f'workgraph repair {repair}')}")
-        tests, output = stages.run_tests(ctx)
+        _settle(ctx, progress, plan, after)
+        tests, output = _verify(ctx, progress, plan, conflicts)
         if tests.ok:
-            return StageResult(
-                stage="build_and_test",
-                artifacts=[f"{ctx.art}/workgraph-execution.json"],
-                numbers={
-                    "work_nodes": float(len(plan.work)),
-                    "work_conflicts": float(len(report["declared_conflicts"])),
-                    "parallel_nodes": 0.0,
-                    "repair_iterations": float(repair),
-                    "first_pass_ci": 0.0,
-                    **stages._test_numbers(tests),
-                },
-            )
+            return outcome(tests)
         failures = f"exit code {tests.exit_code}; failed={tests.failed} errors={tests.errors}\n\n{output}"
     raise StageError(
         "policy",
