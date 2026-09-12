@@ -109,7 +109,7 @@ class SmolvmSandboxBackend:
         self._journal_lock = threading.RLock()
 
     @contextmanager
-    def _response(self, method: str, path: str, body: Any, deadline: float) -> Iterator[Any]:
+    def _response(self, method: str, path: str, body: Any, deadline: float, *, root: bool = False) -> Iterator[Any]:
         conn = _UnixHTTPConnection(self.socket_path, self._remaining(deadline))
         data = body if isinstance(body, bytes) else json.dumps(body).encode() if body is not None else None
         headers = {"Content-Type": "application/octet-stream" if isinstance(body, bytes) else "application/json"}
@@ -127,7 +127,7 @@ class SmolvmSandboxBackend:
             timer = threading.Timer(self._remaining(deadline), expire)
             timer.daemon = True
             timer.start()
-            conn.request(method, "/api/v1" + path, body=data, headers=headers)
+            conn.request(method, path if root else "/api/v1" + path, body=data, headers=headers)
             response = conn.getresponse()
 
             def read_line() -> bytes:
@@ -164,6 +164,33 @@ class SmolvmSandboxBackend:
             if not isinstance(value, dict):
                 raise SmolvmError("invalid SmolVM control response")
             return response.status, value
+
+    def check_ready(self, *, timeout: float = 5) -> None:
+        """Probe daemon liveness and dispatch readiness without provisioning a VM.
+
+        These root endpoints share one deadline. Success does not establish KVM,
+        image availability, or guest isolation; those require the live VM checks.
+        """
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("SmolVM readiness timeout must be positive and finite")
+        deadline = time.monotonic() + timeout
+        with self._response("GET", "/health", None, deadline, root=True) as (response, _):
+            if response.status != 200:
+                raise SmolvmError(f"SmolVM health returned HTTP {response.status}")
+            data = response.read(_CONTROL_LIMIT + 1)
+            self._remaining(deadline)
+            if len(data) > _CONTROL_LIMIT:
+                raise SmolvmError("SmolVM health response exceeds limit")
+            try:
+                health = json.loads(data)
+            except (ValueError, UnicodeError) as exc:
+                raise SmolvmError("invalid SmolVM health response") from exc
+            if not isinstance(health, dict) or health.get("status") != "ok":
+                raise SmolvmError("SmolVM daemon is not healthy")
+        with self._response("GET", "/readyz", None, deadline, root=True) as (response, _):
+            self._remaining(deadline)
+            if response.status != 200:
+                raise SmolvmError(f"SmolVM readiness returned HTTP {response.status}")
 
     def _save(self, name: str, record: dict) -> None:
         with self._journal_lock:

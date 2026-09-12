@@ -38,7 +38,11 @@ uv run --no-sync swfactory doctor --blueprint your-product --sandbox toolset --a
 Use an immutable image digest for a reproducible deployment. The default factory image provides
 Git, Python, uv, Claude Code, bash and GNU coreutils. File helpers need bash `pipefail`, `head`,
 `base64` and `find`. Prewarm images on the host before imposing guest egress restrictions.
-`doctor` checks that the adapter loads; the live tests below check an actual runtime.
+`doctor` checks that the adapter loads and probes the configured Unix socket with read-only
+`GET /health` and `GET /readyz` requests, sharing a five-second deadline. A missing socket,
+permission failure, unhealthy response, or saturated daemon fails preflight. No VM is created.
+Readiness does not verify KVM, the configured image, or guest isolation; the live tests below
+check an actual runtime.
 
 Set the blueprint's existing sandbox selection to `toolset` for managed Airflow runs. A direct
 CLI rehearsal can use `swfactory run --blueprint your-product --issue 42 --sandbox toolset

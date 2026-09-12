@@ -51,6 +51,7 @@ in `stages.py`. Details: README + docs/*.md.
   the run journal still records completed stages. Persist termination and require a new run.
 - Experimental SmolVM: `SWF_TOOLSET_BACKEND=smolvm` selects the local Unix-socket backend;
   `SWF_TOOLSET_SMOLVM_SOCKET`, `_IMAGE`, `_CPUS`, `_MEMORY_MB` configure it. See docs/smolvm.md.
+  `doctor` probes daemon health and readiness within five seconds without creating a VM.
   Journal names before create, never replay ambiguous commands, and retain failed cleanup debt.
   No native TTL or forks are claimed. `SWF_TEST_LIVE_SMOLVM=1` enables the real-VM tests.
 - Webhook CLI intake commits to `SWF_WEBHOOK_INBOX` before 202; the background dispatcher uses
@@ -130,6 +131,8 @@ in `stages.py`. Details: README + docs/*.md.
   Never point the hook at anything but `python3` — the islo image has no pip and no uv.
 - `git commit`, `git push`, `gh pr`, `curl`, `wget` in a stage's Bash call: denied by substring, so
   even a heredoc containing those words is refused. Use Write/Edit for content.
+- Demo test commands rebuild checked-hash source bytecode before pytest. Same-size edits can
+  otherwise reuse stale timestamp caches and exhaust scripted fixes despite corrected source.
 - Scripted replay against `[sandbox] kind = "islo"`: the CLI already downgrades `agent=scripted` to
   `LocalSandbox` unless `--sandbox` is explicit (the DAG smoke path sets `SWF_SANDBOX=local`).
 - Fixtures are `{stage}.{iteration}.{patch|json|md}`; iteration >= 2 of the build loop is stage

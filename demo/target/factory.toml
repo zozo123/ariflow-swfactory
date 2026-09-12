@@ -1,7 +1,8 @@
 # Contract between this repository and the software factory.
 # The factory reads this file; it never guesses commands.
 [commands]
-test = "uv run --group dev pytest --junitxml=.factory/junit.xml"
+# Rebuild bytecode before testing: rapid same-size edits can reuse timestamp-valid .pyc files.
+test = "uv run --group dev python -m compileall -q -f --invalidation-mode checked-hash src && uv run --group dev pytest --junitxml=.factory/junit.xml"
 lint = "uv run --group dev python -m compileall -q src"
 
 [paths]
