@@ -131,6 +131,8 @@ in `stages.py`. Details: README + docs/*.md.
   Never point the hook at anything but `python3` — the islo image has no pip and no uv.
 - `git commit`, `git push`, `gh pr`, `curl`, `wget` in a stage's Bash call: denied by substring, so
   even a heredoc containing those words is refused. Use Write/Edit for content.
+- Demo test commands rebuild checked-hash source bytecode before pytest. Same-size edits can
+  otherwise reuse stale timestamp caches and exhaust scripted fixes despite corrected source.
 - Scripted replay against `[sandbox] kind = "islo"`: the CLI already downgrades `agent=scripted` to
   `LocalSandbox` unless `--sandbox` is explicit (the DAG smoke path sets `SWF_SANDBOX=local`).
 - Fixtures are `{stage}.{iteration}.{patch|json|md}`; iteration >= 2 of the build loop is stage

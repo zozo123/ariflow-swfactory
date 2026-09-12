@@ -31,6 +31,8 @@ uv sync --locked
 uv run swfactory demo
 ```
 
+The demo rebuilds source bytecode before tests so rapid fixes are tested against current code.
+
 The replay uses authored agent fixtures to change a calculator project, fail a build, repair it,
 review the result, and deliver to a local Git remote. Demo approvals are automatic. Dependency
 installation needs network access; the replay needs **no model key, GitHub token, Airflow, Docker,

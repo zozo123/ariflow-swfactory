@@ -5,6 +5,7 @@ A deliberately tiny library the software factory operates on. `demo/issue.md` (D
 directory and produces intent -> spec -> plan -> code + tests -> reviewed PR under
 `docs/factory/DEMO-1/`.
 
-`factory.toml` is the contract: the test command (`uv run --group dev pytest --junitxml=.factory/junit.xml`),
-the lint command, and the paths the agent may not edit (`factory.toml`, `tests/`). `CLAUDE.md`
-holds the agent-facing notes for this package.
+`factory.toml` is the contract: the test and lint commands, and the paths the agent may not edit
+(`factory.toml`, `tests/`). The test command rebuilds source bytecode with checked hashes before
+running pytest and writing `.factory/junit.xml`. This prevents rapid same-size fixes from
+executing stale timestamp-based bytecode. `CLAUDE.md` holds the agent-facing notes for this package.

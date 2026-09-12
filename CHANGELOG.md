@@ -8,6 +8,8 @@ All notable changes to this project will be documented here. The format follows
 
 - Fail SmolVM doctor preflight when the configured daemon is unreachable, unhealthy, or not
   ready, using read-only health/readiness requests under one five-second deadline.
+- Rebuild demo source bytecode before tests so rapid same-size fixes cannot reuse stale Python
+  instructions and spuriously exhaust the scripted fix fixtures.
 
 - Add an experimental SmolVM toolset backend with Unix-socket execution, bounded output,
   durable provisioning/command fencing, verified deletion, and opt-in live VM checks.
