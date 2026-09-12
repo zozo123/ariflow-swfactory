@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFINEMENT = (
     "src/swfactory/agent.py",
     "src/swfactory/sandbox.py",
+    "src/swfactory/smolvm_backend.py",
     "src/swfactory/sandbox_contract.py",
     "src/swfactory/stages.py",
     "src/swfactory/security_boundary.py",

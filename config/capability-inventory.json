@@ -206,6 +206,24 @@
         "`selfhost`",
         "self-hosted run"
       ]
+    },
+    {
+      "id": "sandbox.smolvm",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "SmolVM execution keeps host authority outside the guest, fences interrupted operations, and retains unconfirmed cleanup debt.",
+      "owner": "security+recovery",
+      "runtime_entry": "swfactory.smolvm_backend.SmolvmSandboxBackend via ToolsetSandbox",
+      "environment": "Dedicated Linux/KVM host with an operator-owned SmolVM Unix socket; live qualification required",
+      "test": "tests/test_smolvm_backend.py (HTTP contract) and opt-in tests/test_smolvm_live.py",
+      "evidence": [
+        "tests/test_smolvm_backend.py"
+      ],
+      "follow_up": "Qualify the pinned runtime with real VM checks, close the observation/auto-start race, and add cancellation-aware lineage before enabling forks.",
+      "public_surface": [
+        "SmolVM",
+        "sandbox.smolvm"
+      ]
     }
   ]
 }

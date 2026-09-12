@@ -972,6 +972,10 @@ def load_toolset_backend(name: str, **kwargs: object):
     Kept lazy and by name so swfactory never imports Airflow at module scope (the DAG-parse rule)
     and so an unreleased backend is a clear error rather than an import failure at startup.
     """
+    if name == "smolvm":
+        from swfactory.smolvm_backend import SmolvmSandboxBackend
+
+        return SmolvmSandboxBackend(**kwargs)
     if ":" in name:
         module_path, separator, cls_name = name.rpartition(":")
         if not separator or not module_path or not cls_name:
@@ -1229,7 +1233,7 @@ class ToolsetSandbox:
         return self.run(f"test -e {shlex.quote(self._abs(path))}", timeout_s=_CONTROL_TIMEOUT_S).ok
 
     def close(self) -> None:
-        """Destroy the sandbox; best effort, the backend's own TTL is the backstop."""
+        """Destroy the sandbox; retain the handle on failure for explicit cleanup reconciliation."""
         self._restore_id()
         if self.sandbox_id is None:
             return
@@ -1290,6 +1294,20 @@ def make_sandbox(
             backend_kwargs = {
                 "host_network_policy": cfg.toolset_sbx_host_network_policy,
                 "image": cfg.toolset_sbx_image,
+            }
+        elif cfg.toolset_backend == "smolvm":
+            import hashlib
+
+            # Bind the VM to this run and target before the backend sends its create request.
+            identity = f"{cfg.repo}\0{cfg.target_dir}\0{issue_id}\0{cfg.run_id}"
+            backend_kwargs = {
+                "socket_path": cfg.toolset_smolvm_socket,
+                "image": cfg.toolset_smolvm_image,
+                "cpus": cfg.toolset_smolvm_cpus,
+                "memory_mb": cfg.toolset_smolvm_memory_mb,
+                "machine_name": "swf-smol-" + hashlib.sha256(identity.encode()).hexdigest()[:32],
+                "state": RunState(run_dir) if run_dir is not None else None,
+                "env": {k: os.environ[k] for k in claude_env if k in os.environ},
             }
         return ToolsetSandbox(
             load_toolset_backend(cfg.toolset_backend, **backend_kwargs),

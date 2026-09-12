@@ -72,6 +72,7 @@ protected = [
   # --- the confinement itself: editing these is how a run would widen its own cage ------------
   "src/swfactory/agent.py",             # tool policy, GUARD_PATH_DENY, guard installation
   "src/swfactory/sandbox.py",           # every sandbox backend and its argv
+  "src/swfactory/smolvm_backend.py",    # SmolVM confinement and host-owned recovery
   "src/swfactory/sandbox_contract.py",
   "src/swfactory/stages.py",            # stage semantics, incl. applying this very list
   "src/swfactory/security_boundary.py",

@@ -90,6 +90,10 @@ POLICY_SETTINGS: tuple[str, ...] = (
     "toolset_backend",
     "toolset_sbx_host_network_policy",  # whether the sandbox may reach the network at all
     "toolset_sbx_image",  # what the generated code executes inside
+    "toolset_smolvm_socket",  # which trusted daemon owns this run's execution
+    "toolset_smolvm_image",
+    "toolset_smolvm_cpus",
+    "toolset_smolvm_memory_mb",
     "toolset_workdir",
     "srt_allowed_domains",
     "docker_image",
