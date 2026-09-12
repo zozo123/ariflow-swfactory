@@ -6,6 +6,9 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Fail SmolVM doctor preflight when the configured daemon is unreachable, unhealthy, or not
+  ready, using read-only health/readiness requests under one five-second deadline.
+
 - Add an experimental SmolVM toolset backend with Unix-socket execution, bounded output,
   durable provisioning/command fencing, verified deletion, and opt-in live VM checks.
   Configure it with `SWF_TOOLSET_BACKEND=smolvm` and `SWF_TOOLSET_SMOLVM_*` settings.

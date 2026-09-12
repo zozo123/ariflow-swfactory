@@ -272,7 +272,8 @@ claim's support level; a profile without a claim is an integration seam, not an 
 
 An experimental [SmolVM backend](docs/smolvm.md) is available through `toolset` with
 `SWF_TOOLSET_BACKEND=smolvm`. It uses a host-owned Unix socket and durable attempt records;
-native TTL and provider-fork execution are not enabled by this integration.
+native TTL and provider-fork execution are not enabled by this integration. `swfactory doctor`
+checks daemon health and readiness without provisioning a VM.
 
 Provider capabilities differ. A warm-start snapshot does not establish live-fork support. The
 Docker rehearsal mounts the host Docker socket and belongs on a host you control. Model credentials

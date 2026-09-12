@@ -520,3 +520,53 @@ def test_cli_doctor_rejects_invalid_provider_choice() -> None:
     res = CliRunner().invoke(app, ["doctor", "--sandbox", "spaceship"])
     assert res.exit_code == 2
     assert "config error" in res.output and "sandbox" in res.output
+
+
+@pytest.mark.parametrize("error", [None, FileNotFoundError("missing socket"), TimeoutError("deadline exceeded")])
+def test_smolvm_doctor_probes_configured_daemon(monkeypatch, error):
+    from swfactory.smolvm_backend import SmolvmSandboxBackend
+
+    seen = []
+
+    def probe(self):
+        seen.append((self.socket_path, self.image, self.cpus, self.memory_mb))
+        if error:
+            raise error
+
+    monkeypatch.setattr(SmolvmSandboxBackend, "check_ready", probe)
+    result = by_name(
+        run_doctor(
+            cfg(
+                sandbox="toolset",
+                toolset_backend="smolvm",
+                toolset_smolvm_socket="/custom/api.sock",
+                toolset_smolvm_image="example:pin",
+                toolset_smolvm_cpus=3,
+                toolset_smolvm_memory_mb=512,
+            ),
+            green(),
+            root=ROOT,
+        )
+    )["smolvm daemon"]
+    assert seen == [("/custom/api.sock", "example:pin", 3, 512)]
+    assert result.ok is (error is None)
+    if error:
+        assert str(error) in result.detail
+        assert "SWF_TOOLSET_SMOLVM_SOCKET" in result.fix
+    else:
+        assert "no VM provisioned" in result.detail
+
+
+def test_smolvm_doctor_skips_probe_when_loader_fails(monkeypatch):
+    from swfactory.smolvm_backend import SmolvmSandboxBackend
+
+    monkeypatch.setattr(SmolvmSandboxBackend, "check_ready", lambda self: pytest.fail("must skip"))
+
+    def broken(name):
+        raise ImportError("unavailable")
+
+    result = by_name(
+        run_doctor(cfg(sandbox="toolset", toolset_backend="smolvm"), green(), root=ROOT, toolset_loader=broken)
+    )
+    assert not result["toolset backend"].ok
+    assert "smolvm daemon" not in result

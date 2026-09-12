@@ -51,6 +51,7 @@ in `stages.py`. Details: README + docs/*.md.
   the run journal still records completed stages. Persist termination and require a new run.
 - Experimental SmolVM: `SWF_TOOLSET_BACKEND=smolvm` selects the local Unix-socket backend;
   `SWF_TOOLSET_SMOLVM_SOCKET`, `_IMAGE`, `_CPUS`, `_MEMORY_MB` configure it. See docs/smolvm.md.
+  `doctor` probes daemon health and readiness within five seconds without creating a VM.
   Journal names before create, never replay ambiguous commands, and retain failed cleanup debt.
   No native TTL or forks are claimed. `SWF_TEST_LIVE_SMOLVM=1` enables the real-VM tests.
 - Webhook CLI intake commits to `SWF_WEBHOOK_INBOX` before 202; the background dispatcher uses

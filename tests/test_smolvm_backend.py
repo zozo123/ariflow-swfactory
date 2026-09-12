@@ -32,6 +32,10 @@ def sse(event, data):
 def daemon(tmp_path, monkeypatch, request):
     fake = SimpleNamespace(machines={}, calls=[], uploads={}, stream=None, create_hook=None, delete_status=200)
 
+    fake.health = {"status": "ok", "version": "test"}
+    fake.health_status = 200
+    fake.ready_status = 200
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -43,7 +47,11 @@ def daemon(tmp_path, monkeypatch, request):
             path = self.path.removeprefix("/api/v1/machines").strip("/")
             name = path.split("/")[0]
             status, result = 200, {}
-            if self.command == "POST" and not path:
+            if self.path == "/health":
+                status, result = fake.health_status, fake.health
+            elif self.path == "/readyz":
+                status = fake.ready_status
+            elif self.command == "POST" and not path:
                 if fake.create_hook:
                     fake.create_hook(data)
                 if data["name"] in fake.machines:
@@ -461,3 +469,51 @@ def test_released_airflow_toolset_consumes_backend_result(daemon, tmp_path, monk
     with pytest.raises(StopIteration) as result:
         coroutine.send(None)
     assert "ok" in result.value.value and "[stdout]" in result.value.value
+
+
+def test_readiness_is_read_only_and_uses_root_endpoints(daemon, tmp_path):
+    be = backend(daemon, tmp_path)
+    be.check_ready()
+    assert [(method, path) for method, path, _ in daemon.calls] == [("GET", "/health"), ("GET", "/readyz")]
+    assert daemon.machines == {} and be._records == {}
+
+
+@pytest.mark.parametrize(
+    "field,value,message",
+    [
+        ("health_status", 503, "health returned HTTP 503"),
+        ("health", {"status": "broken"}, "not healthy"),
+        ("health", [], "not healthy"),
+        ("ready_status", 503, "readiness returned HTTP 503"),
+    ],
+)
+def test_readiness_rejects_unhealthy_daemon(daemon, tmp_path, field, value, message):
+    setattr(daemon, field, value)
+    with pytest.raises(SmolvmError, match=message):
+        backend(daemon, tmp_path).check_ready()
+    assert all(method == "GET" for method, _, _ in daemon.calls)
+
+
+def test_readiness_shares_one_deadline(monkeypatch):
+    from contextlib import contextmanager
+
+    deadlines = []
+    clock = [100.0]
+    monkeypatch.setattr("swfactory.smolvm_backend.time.monotonic", lambda: clock[0])
+
+    @contextmanager
+    def response(method, path, body, deadline, *, root):
+        deadlines.append(deadline)
+        assert method == "GET" and root and body is None
+        if path == "/health":
+            clock[0] += 4
+            yield SimpleNamespace(status=200, read=lambda _: b'{"status":"ok"}'), None
+        else:
+            clock[0] += 2
+            yield SimpleNamespace(status=200), None
+
+    be = SmolvmSandboxBackend()
+    monkeypatch.setattr(be, "_response", response)
+    with pytest.raises(TimeoutError, match="deadline"):
+        be.check_ready(timeout=5)
+    assert deadlines == [105, 105]

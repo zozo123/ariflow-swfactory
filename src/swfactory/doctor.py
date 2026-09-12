@@ -512,6 +512,27 @@ def _check_factory_toml(cfg: Config, runner: Runner, root: Path) -> Check:
 # ---------------------------------------------------------------- driver
 
 
+def _check_smolvm_ready(cfg: Config) -> Check:
+    from swfactory.smolvm_backend import SmolvmSandboxBackend
+
+    try:
+        backend = SmolvmSandboxBackend(
+            socket_path=cfg.toolset_smolvm_socket,
+            image=cfg.toolset_smolvm_image,
+            cpus=cfg.toolset_smolvm_cpus,
+            memory_mb=cfg.toolset_smolvm_memory_mb,
+        )
+        backend.check_ready()
+    except Exception as exc:
+        return Check(
+            "smolvm daemon",
+            False,
+            f"{type(exc).__name__}: {exc}",
+            "start the SmolVM daemon and check SWF_TOOLSET_SMOLVM_SOCKET and socket permissions; see docs/smolvm.md",
+        )
+    return Check("smolvm daemon", True, f"{cfg.toolset_smolvm_socket}: healthy and ready (no VM provisioned)")
+
+
 def run_doctor(
     cfg: Config,
     runner: Runner | None = None,
@@ -569,6 +590,8 @@ def run_doctor(
         checks.append(_check_docker(runner))
     elif cfg.sandbox == "toolset":
         checks.append(_check_toolset_backend(cfg.toolset_backend, toolset_loader))
+        if checks[-1].ok and cfg.toolset_backend == "smolvm":
+            checks.append(_check_smolvm_ready(cfg))
     else:
         checks.append(Check("local sandbox", True, "no external sandbox provider"))
 
