@@ -6,6 +6,11 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Add an experimental SmolVM toolset backend with Unix-socket execution, bounded output,
+  durable provisioning/command fencing, verified deletion, and opt-in live VM checks.
+  Configure it with `SWF_TOOLSET_BACKEND=smolvm` and `SWF_TOOLSET_SMOLVM_*` settings.
+- Default toolset TTL capability to false; a backend must explicitly establish TTL support.
+
 - Stop experimental workgraph fan-in when cancellation is observed after node execution or between merge callbacks.
 
 ### Added

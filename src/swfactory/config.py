@@ -106,6 +106,10 @@ class Config(BaseSettings):
     toolset_backend: str = "sbx"
     toolset_sbx_host_network_policy: Literal["unknown", "deny-all", "allow-all"] = "unknown"
     toolset_sbx_image: str = "python:3.12-slim"
+    toolset_smolvm_socket: str = "/run/smolvm/api.sock"
+    toolset_smolvm_image: str = DOCKER_DEFAULT_IMAGE
+    toolset_smolvm_cpus: int = Field(default=2, ge=1, le=255)
+    toolset_smolvm_memory_mb: int = Field(default=2048, ge=128, le=2**32 - 1)
     toolset_workdir: str = "/workspace/repo"  # repository root inside a SandboxBackend
     sandbox_owner: str | None = None  # SWF_SANDBOX_OWNER: only this creator's sandboxes may be rm'd
 

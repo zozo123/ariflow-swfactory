@@ -270,6 +270,10 @@ claim's support level; a profile without a claim is an integration seam, not an 
 | `islo` | [`sandbox.islo`](config/capability-inventory.json) | experimental | Remote MicroVM execution with configured gateway and environment |
 | `toolset` | none | adapter | Airflow common.ai sandbox adapter; capabilities depend on its configured backend |
 
+An experimental [SmolVM backend](docs/smolvm.md) is available through `toolset` with
+`SWF_TOOLSET_BACKEND=smolvm`. It uses a host-owned Unix socket and durable attempt records;
+native TTL and provider-fork execution are not enabled by this integration.
+
 Provider capabilities differ. A warm-start snapshot does not establish live-fork support. The
 Docker rehearsal mounts the host Docker socket and belongs on a host you control. Model credentials
 are supplied only through the selected agent/provider configuration; backend and publishing secrets
@@ -345,6 +349,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `factory.generations` | `experimental` | `generation manifests and parent-owned promotion path` | tests/test_generation_contract.py |
 | `sandbox.islo` | `experimental` | `swfactory.sandbox.IsloSandbox (islo use / cp / rm control plane)` | ci:evals-islo in .github/workflows/evals.yml (a real claude run inside a MicroVM) plus the hermetic argv contracts in tests/test_sandbox_argv.py |
 | `selfhost.factory` | `experimental` | `swfactory run --blueprint selfhost (target dir is the repo root), executing swfactory.stages against the factory's own tree` | tests/test_selfhost.py (contract parses, every protected entry survives literal-prefix reduction, confinement modules are refused for build and fix, both gates are non-auto, one line serves both backends) |
+| `sandbox.smolvm` | `experimental` | `swfactory.smolvm_backend.SmolvmSandboxBackend via ToolsetSandbox` | tests/test_smolvm_backend.py (HTTP contract) and opt-in tests/test_smolvm_live.py |
 
 <!-- capability-inventory:end -->
 

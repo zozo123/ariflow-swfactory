@@ -139,7 +139,7 @@ def docker_document() -> ProviderDocument:
     )
 
 
-def toolset_document(backend: str, *, attach: bool = True) -> ProviderDocument:
+def toolset_document(backend: str, *, attach: bool = True, ttl: bool = False) -> ProviderDocument:
     return ProviderDocument(
         provider=f"toolset:{backend}",
         implementation="ToolsetSandbox",
@@ -151,10 +151,10 @@ def toolset_document(backend: str, *, attach: bool = True) -> ProviderDocument:
             pause_resume=False,
             network_policy=True,
             filesystem_isolation=True,
-            ttl=True,
+            ttl=ttl,
             exact_teardown=True,
         ),
-        notes=("optional backend features remain false until conformance proves them",),
+        notes=("optional backend features, including TTL, remain false until conformance proves them",),
     )
 
 
