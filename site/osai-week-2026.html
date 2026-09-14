@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Open-Source AI Software Factory — an Open Source AI Week 2026 community workshop on durable agent orchestration with Apache Airflow and disposable remote execution with Crabbox."
+    />
+    <meta name="theme-color" content="#ffffff" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Open-Source AI Software Factory — Airflow × Crabbox" />
+    <meta
+      property="og:description"
+      content="A hands-on Open Source AI Week 2026 workshop: GitHub issue in, evidence-backed PR out. Airflow owns the lifecycle; Crabbox supplies disposable execution."
+    />
+    <meta property="og:url" content="https://zozo123.github.io/ariflow-swfactory/osai-week-2026.html" />
+    <meta property="og:image" content="https://zozo123.github.io/ariflow-swfactory/social-card.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="canonical" href="https://zozo123.github.io/ariflow-swfactory/osai-week-2026.html" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>Open-Source AI Software Factory — Airflow × Crabbox</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="site-header">
+      <div class="shell nav">
+        <a class="brand" href="./">swfactory</a>
+        <nav aria-label="Primary navigation">
+          <a href="#workshop">Workshop</a>
+          <a href="#agenda">Agenda</a>
+          <a href="#stack">Open-source stack</a>
+          <a href="https://github.com/zozo123/ariflow-swfactory/issues/2122">RSVP</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main-content" class="shell">
+      <section class="hero" id="workshop">
+        <p class="label">Proposed Open Source AI Week 2026 community workshop</p>
+        <h1>Open-Source AI Software Factory</h1>
+        <p class="lede">
+          Build a small, inspectable software factory where a GitHub issue becomes a reviewable,
+          evidence-backed pull request. Apache Airflow owns the durable lifecycle. Crabbox supplies
+          disposable remote execution. Humans keep approval and merge authority.
+        </p>
+        <div class="actions">
+          <a class="primary" href="https://github.com/zozo123/ariflow-swfactory/issues/2122">RSVP free on GitHub</a>
+          <a href="https://opensourceaiweek.com/">Open Source AI Week 2026</a>
+        </div>
+        <p>
+          <strong>Monday, October 19, 2026 · 2:00–4:00 PM Pacific · San Francisco</strong><br />
+          Exact venue to be announced · Free · Hands-on workshop + live demo · Target capacity: 40 builders
+        </p>
+      </section>
+
+      <section id="why">
+        <h2>The systems problem after “the agent can code”</h2>
+        <p>
+          Generating a patch is only one step. A reliable AI engineering system also needs bounded
+          execution, durable identity, retries, human gates, reproducible verification, credential
+          boundaries, retained evidence, and one explicit promotion authority. This workshop builds
+          that control path in the open rather than hiding it behind a product demo.
+        </p>
+        <p class="formula" aria-label="Workshop system flow">
+          issue → plan → approval → airflow → crabbox → evidence → pull request
+        </p>
+      </section>
+
+      <section id="agenda">
+        <h2>Two-hour build path</h2>
+        <ol class="steps">
+          <li>
+            <strong>0:00–0:15 · Factory contract.</strong>
+            <span>Separate durable authority from disposable compute and define what a worker may mutate.</span>
+          </li>
+          <li>
+            <strong>0:15–0:40 · Issue to plan.</strong>
+            <span>Run the scripted swfactory path, inspect the generated plan, and bind human approval to evidence.</span>
+          </li>
+          <li>
+            <strong>0:40–1:10 · Durable orchestration.</strong>
+            <span>Trace how Airflow owns mapped work, waits, retries, cancellation, and lifecycle state.</span>
+          </li>
+          <li>
+            <strong>1:10–1:35 · Disposable execution.</strong>
+            <span>Move build/test work to a Crabbox runner, stream output, and retain the exact command evidence.</span>
+          </li>
+          <li>
+            <strong>1:35–1:55 · Failure and convergence.</strong>
+            <span>Walk through stale workers, retries, ambiguous mutations, bounded repair, and deterministic promotion.</span>
+          </li>
+          <li>
+            <strong>1:55–2:00 · Take-home path.</strong>
+            <span>Install the skills, clone the open repositories, and adapt the verification contract to your project.</span>
+          </li>
+        </ol>
+      </section>
+
+      <section id="stack">
+        <h2>Open-source stack</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Project</th><th>Role in the workshop</th><th>Source</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Airflow Software Factory</td>
+                <td>Open reference implementation for issue → plan → approval → execution → review → delivery.</td>
+                <td><a href="https://github.com/zozo123/ariflow-swfactory">GitHub</a></td>
+              </tr>
+              <tr>
+                <td>Apache Airflow</td>
+                <td>Durable lifecycle scheduler for mapped work, retries, waits, and human approval gates.</td>
+                <td><a href="https://airflow.apache.org/">airflow.apache.org</a></td>
+              </tr>
+              <tr>
+                <td>Crabbox</td>
+                <td>Remote execution control plane for leasing a runner, syncing a worktree, running commands, and collecting evidence.</td>
+                <td><a href="https://crabbox.sh/">crabbox.sh</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          The workshop is project-first, not vendor-first. The local swfactory replay requires no
+          model key. Remote providers are optional execution backends; no single provider is required
+          to understand or reproduce the architecture.
+        </p>
+      </section>
+
+      <section id="principles">
+        <h2>Design rules we will test</h2>
+        <ul class="plain-list">
+          <li><strong>Parallelism is cheap. Authority is singular.</strong></li>
+          <li>Workers, sessions, sandboxes, boxes, and speculative branches may disappear.</li>
+          <li>Work identity, approvals, mutation history, evidence, and final repository state stay durable.</li>
+          <li>Sandboxes can edit and test; they cannot approve, publish, or promote themselves.</li>
+          <li>Retries must be fenced or idempotent; ambiguous external effects are observed before replay.</li>
+          <li>Only evidence for the exact candidate can authorize promotion.</li>
+        </ul>
+      </section>
+
+      <section id="attend">
+        <h2>Who should come</h2>
+        <p>
+          Open-source maintainers, AI/agent engineers, platform and CI engineers, orchestration
+          practitioners, and anyone trying to turn coding agents into a reliable engineering system.
+          Bring a laptop if you want to follow along; observers and first-time contributors are welcome.
+        </p>
+        <p>
+          Suggested local prerequisites: Git, Python 3.12, and <code>uv</code>. Crabbox is optional
+          for the first path; a remote-execution demo will be shown separately.
+        </p>
+      </section>
+
+      <section id="inclusion">
+        <h2>Open and inclusive</h2>
+        <p>
+          This is a free community workshop intended to be open to all attendees regardless of race,
+          gender, background, employer, seniority, or prior open-source experience. We especially
+          welcome first-time contributors and people who want to learn the systems layer behind agents.
+          Respectful participation is required.
+        </p>
+      </section>
+
+      <section id="host">
+        <h2>Host</h2>
+        <p>
+          <strong>Yossi Eliaz, PhD</strong> — Principal Engineer (AI), working on agent execution,
+          software factories, CI runners, isolated compute, and scientific-computing systems.
+        </p>
+      </section>
+
+      <section id="week">
+        <h2>Open Source AI Week 2026</h2>
+        <p>
+          This workshop is being submitted as a community event for
+          <a href="https://opensourceaiweek.com/">Open Source AI Week 2026</a>, the Bay Area's
+          decentralized open-source AI celebration running October 16–25, 2026. Approval/listing is
+          pending; this page does not imply endorsement by the event organizers or by the open-source
+          projects referenced above.
+        </p>
+      </section>
+
+      <section id="rsvp">
+        <h2>RSVP</h2>
+        <p>
+          <a class="primary" href="https://github.com/zozo123/ariflow-swfactory/issues/2122">RSVP on GitHub</a>
+        </p>
+        <p>
+          React with a thumbs-up or leave a comment with the workflow you want to test. The exact
+          venue and any final setup notes will be posted on the RSVP issue.
+        </p>
+      </section>
+    </main>
+
+    <footer class="shell">
+      <span>Open-Source AI Software Factory</span>
+      <span>Community workshop · San Francisco · October 19, 2026</span>
+      <a href="https://github.com/zozo123/ariflow-swfactory">Source</a>
+    </footer>
+  </body>
+</html>
