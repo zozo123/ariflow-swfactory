@@ -159,10 +159,7 @@ def merge_findings(groups: list[list[Finding]]) -> list[Finding]:
 
 
 def _risk_count(paths: tuple[str, ...]) -> int:
-    return sum(
-        any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in RISK_PREFIXES)
-        for path in paths
-    )
+    return sum(any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in RISK_PREFIXES) for path in paths)
 
 
 def _signature(findings: list[Finding]) -> tuple[tuple[str, str, int | None, str], ...]:
