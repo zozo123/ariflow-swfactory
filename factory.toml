@@ -12,9 +12,9 @@
 # so anything else is silently dropped rather than rejected: do not add keys expecting effect.
 
 [commands]
-# The hermetic suite: 653 tests, ~98 s wall, no network (fake subprocess, tmp git repos). Five
-# tests are collection-skipped because the DAG parity tests need `uv sync --group airflow`, which
-# a work cell does not have; CI's `airflow-parity` job covers those instead.
+# The hermetic Python suite runs with no network (fake subprocess, tmp git repos). The DAG parity
+# tests need `uv sync --group airflow`, which a work cell does not have; CI's `airflow-parity` job
+# covers those separately.
 #
 # This command runs INSIDE the work cell (`stages.run_tests` -> `ctx.sb.run(cmd)`), not on the
 # orchestrator, and `stages.setup` has already run `uv sync --group dev` there, so it resolves
@@ -54,9 +54,9 @@ tests = "tests"
 # they survive intact.
 #
 # `REVIEW.md`, `bands.yaml`, `.git/**`, `.claude/**`, `.github/**`, `docs/factory/**` and
-# `.factory/**` are already in `agent.GUARD_PATH_DENY` for every target. `factory.toml` and
-# `.github/` are repeated below anyway: the hard-coded rules are in-agent, and repeating them here
-# buys kernel enforcement on srt and docker.
+# `.factory/**` are already in `agent.GUARD_PATH_DENY` for every target. The Liquid review policy
+# and dispatcher are newer control-plane surfaces, so they are repeated explicitly below together
+# with the existing contract/CI protections.
 protected = [
   # --- this contract and the checks that police it -------------------------------------------
   "factory.toml",                       # a cell must not rewrite its own contract
@@ -69,12 +69,15 @@ protected = [
   "pyproject.toml",                     # the verification environment itself
   "uv.lock",
   "CLAUDE.md",                          # the knowledge page every later cell is briefed from
+  "REVIEW_LIQUID.md",                   # annealed-review authority is human-maintained
   # --- the confinement itself: editing these is how a run would widen its own cage ------------
   "src/swfactory/agent.py",             # tool policy, GUARD_PATH_DENY, guard installation
   "src/swfactory/sandbox.py",           # every sandbox backend and its argv
   "src/swfactory/smolvm_backend.py",    # SmolVM confinement and host-owned recovery
   "src/swfactory/sandbox_contract.py",
-  "src/swfactory/stages.py",            # stage semantics, incl. applying this very list
+  "src/swfactory/stages.py",            # canonical stage semantics
+  "src/swfactory/stage_registry.py",    # managed stage dispatch, including Liquid review
+  "src/swfactory/liquid_annealing.py",  # material-defect convergence and evidence semantics
   "src/swfactory/security_boundary.py",
   "src/swfactory/security_contract.py",
   "src/swfactory/worker_security.py",
