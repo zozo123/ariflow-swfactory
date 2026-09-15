@@ -6,17 +6,38 @@ from typing import Any
 StageCallable = Callable[[Any], Any]
 
 
-def resolve(stage: str) -> StageCallable:
-    """Resolve one canonical stage implementation for managed and replay callers.
+def _review(ctx: Any) -> Any:
+    """Dispatch the managed review stage without creating a second lifecycle surface.
 
-    `build_and_test` is the managed Plan.work implementation. Every other stage remains sourced
-    from the canonical stages registry. Keeping this decision here removes the DAG-only exception
-    and gives replay/CLI code one import to use as it migrates.
+    The ordinary line keeps the canonical single-review implementation.  A line that explicitly
+    selects ``REVIEW_LIQUID.md`` opts into the Liquid annealer: the policy path and its content are
+    already part of accepted inputs, so a Cell epoch cannot quietly switch review semantics between
+    Airflow tasks.  Both implementations still execute inside the one Airflow-owned ``review`` task.
+    """
+
+    blueprint = getattr(ctx, "blueprint", None)
+    if blueprint is not None and blueprint.review.policy == "REVIEW_LIQUID.md":
+        from swfactory.liquid_annealing import review
+
+        return review(ctx)
+    from swfactory.stages import review
+
+    return review(ctx)
+
+
+def resolve(stage: str) -> StageCallable:
+    """Resolve one canonical implementation for a managed factory stage.
+
+    ``build_and_test`` is the managed Plan.work implementation. ``review`` has one explicit policy
+    switch for the Liquid line, but remains one Airflow stage; the annealer may fan review evidence
+    out internally, never lifecycle work. Everything else comes from the canonical stages registry.
     """
     if stage == "build_and_test":
         from swfactory.work_stage import build_and_test
 
         return build_and_test
+    if stage == "review":
+        return _review
     from swfactory.stages import STAGES
 
     try:
