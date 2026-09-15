@@ -9,7 +9,8 @@ from swfactory import accepted_inputs, liquid_annealing, stage_registry, stages
 from swfactory.blueprint import load
 from swfactory.config import TargetContract, protected_for
 from swfactory.liquid_annealing import LANES, AnnealingObservation, evaluate, merge_findings
-from swfactory.models import Finding, TestResult as SwfTestResult
+from swfactory.models import Finding
+from swfactory.models import TestResult as SwfTestResult
 
 
 def _observation(**overrides: object) -> AnnealingObservation:
