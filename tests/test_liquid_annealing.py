@@ -257,7 +257,7 @@ def test_exhausted_major_blocks_even_without_a_review_blocker(monkeypatch: Any) 
     result = liquid_annealing._run_annealed_review(ctx)  # type: ignore[arg-type]
     assert result.status == "blocked"
     assert result.numbers["blockers"] == 0
-    assert result.numbers["majors"] == 1
+    assert result.numbers["major"] == 1
     assert result.numbers["crystallized"] == 0
 
 
