@@ -1,18 +1,17 @@
 """Annealed review convergence for the Liquid Software Factory line.
 
 This module borrows one useful idea from statistical mechanics without turning physics vocabulary
-into authority: exploration may be broad, but promotion must converge on retained evidence.  The
+into authority: exploration may be broad, but promotion must converge on retained evidence. The
 review stage therefore runs independent read-only specialist lanes, deterministically fans their
 findings in, repairs material defects inside the existing bounded review loop, and records a small
 set of dimensionless diagnostics that explain whether the candidate has crystallized.
 
-Apache Airflow remains the lifecycle scheduler.  Factory Cells remain the durable identity and
-fencing authority.  This module creates no tasks, branches, sandboxes, approvals or publications.
+Apache Airflow remains the lifecycle scheduler. Factory Cells remain the durable identity and
+fencing authority. This module creates no tasks, branches, sandboxes, approvals or publications.
 """
 
 from __future__ import annotations
 
-import contextlib
 import math
 from dataclasses import asdict, dataclass
 from typing import Literal
@@ -36,21 +35,6 @@ RISK_PREFIXES: tuple[str, ...] = (
     "src/swfactory/security",
     "src/swfactory/stages.py",
 )
-
-LANE_FOCUS: dict[str, str] = {
-    "correctness": (
-        "Correctness and architecture: invariants, edge cases, state transitions, concurrency, "
-        "recovery, API contracts, and whether the implementation actually satisfies spec.md."
-    ),
-    "verification": (
-        "Verification: missing or weak tests, false-positive tests, plan/test fidelity, failure "
-        "paths, deterministic reproduction, and whether the evidence proves the changed behavior."
-    ),
-    "risk": (
-        "Risk: security boundaries, credentials, injection/path traversal, external effects, "
-        "Airflow/Cell authority, operability, rollback/recovery, cost or retry amplification."
-    ),
-}
 
 
 @dataclass(frozen=True)
@@ -175,7 +159,10 @@ def merge_findings(groups: list[list[Finding]]) -> list[Finding]:
 
 
 def _risk_count(paths: tuple[str, ...]) -> int:
-    return sum(any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in RISK_PREFIXES) for path in paths)
+    return sum(
+        any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in RISK_PREFIXES)
+        for path in paths
+    )
 
 
 def _signature(findings: list[Finding]) -> tuple[tuple[str, str, int | None, str], ...]:
@@ -188,22 +175,12 @@ def _signature(findings: list[Finding]) -> tuple[tuple[str, str, int | None, str
     )
 
 
-@contextlib.contextmanager
-def _lane_budget(ctx: stages.Ctx, lanes: int):
-    """Keep the whole possible review ensemble inside the line's existing per-stage budget knob."""
-
-    original = ctx.cfg
-    calls = max(lanes * (ctx.cfg.max_review_fixes + 1), 1)
-    per_call = max(0.25, min(original.max_budget_usd_per_stage, original.max_budget_usd_per_stage / calls))
-    ctx.cfg = original.model_copy(update={"max_budget_usd_per_stage": per_call})
-    try:
-        yield
-    finally:
-        ctx.cfg = original
-
-
 def _review_prompt(ctx: stages.Ctx, *, lane: str, spec: str, plan: str, diff: str) -> str:
-    policy = stages._review_policy(ctx) + "\n\n## Assigned Liquid review lane\n" + LANE_FOCUS[lane] + "\n"
+    policy = (
+        stages._review_policy(ctx)
+        + f"\n\n## Assigned Liquid review lane\n{lane}\n"
+        + "Apply only the specialist lane with this name from the policy above.\n"
+    )
     return stages.render_prompt(
         "review",
         issue_id=ctx.issue.id,
@@ -224,27 +201,26 @@ def _round(
 ) -> tuple[list[Finding], int, list[dict[str, object]]]:
     groups: list[list[Finding]] = []
     lane_records: list[dict[str, object]] = []
-    with _lane_budget(ctx, len(LANES)):
-        for lane_index, lane in enumerate(LANES, start=1):
-            iteration = round_index * 10 + lane_index
-            result = stages._agent(
-                ctx,
-                "review",
-                iteration,
-                _review_prompt(ctx, lane=lane, spec=spec, plan=plan, diff=diff),
-                Review,
-            )
-            review = Review.model_validate(result.data)
-            groups.append(review.findings)
-            lane_records.append(
-                {
-                    "lane": lane,
-                    "iteration": iteration,
-                    "verdict": review.verdict,
-                    "findings": len(review.findings),
-                    "blockers": len(review.blockers),
-                }
-            )
+    for lane_index, lane in enumerate(LANES, start=1):
+        iteration = round_index * 10 + lane_index
+        result = stages._agent(
+            ctx,
+            "review",
+            iteration,
+            _review_prompt(ctx, lane=lane, spec=spec, plan=plan, diff=diff),
+            Review,
+        )
+        review = Review.model_validate(result.data)
+        groups.append(review.findings)
+        lane_records.append(
+            {
+                "lane": lane,
+                "iteration": iteration,
+                "verdict": review.verdict,
+                "findings": len(review.findings),
+                "blockers": len(review.blockers),
+            }
+        )
     merged = merge_findings(groups)
     review = Review(
         verdict="request_changes" if any(f.severity == "blocker" for f in merged) else "approve",
