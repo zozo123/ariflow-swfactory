@@ -11,6 +11,11 @@
 #   human -> deliver opens a PR on a bot-owned branch the agent had no credential to push -> a
 #   PERSON merges.
 #
+# The managed review stage uses REVIEW_LIQUID.md: three independent read-only specialist lanes fan
+# into one deterministic finding set, material defects enter the existing bounded fix+test loop,
+# and annealing.json records why the candidate did or did not crystallize. This is review evidence,
+# not another scheduler or promotion authority.
+#
 # Nothing here can promote itself. Both gates are `mode = "human"`, `deliver` force-updates only the
 # `factory/*` branch, and the agent holds no GitHub credential. The schedule changes when work
 # STARTS, never who decides it ships.
@@ -90,7 +95,9 @@ max_parallel_jobs = 1        # one job at a time against our own tree: two cells
 extra_allowed_tools = []
 
 [review]
-policy = "REVIEW.md"
+# This existing schema field is also the opt-in to the managed annealed-review dispatcher. The
+# resolved file content is SHA-pinned in AcceptedInputs, so a Cell epoch cannot switch policies.
+policy = "REVIEW_LIQUID.md"
 nit_cap = 3
 
 [sandbox]
