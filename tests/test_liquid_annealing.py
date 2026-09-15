@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 from swfactory import accepted_inputs, liquid_annealing, stage_registry, stages
 from swfactory.blueprint import load
-from swfactory.liquid_annealing import AnnealingObservation, LANES, evaluate, merge_findings
+from swfactory.config import TargetContract, protected_for
+from swfactory.liquid_annealing import LANES, AnnealingObservation, evaluate, merge_findings
 from swfactory.models import Finding, TestResult
 
 
@@ -272,3 +274,16 @@ def test_liquid_policy_is_the_managed_annealing_opt_in(monkeypatch: Any) -> None
     dispatch = stage_registry.resolve("review")
     assert dispatch(SimpleNamespace(blueprint=liquid)) is liquid_marker
     assert dispatch(SimpleNamespace(blueprint=default)) is default_marker
+
+
+def test_annealing_control_plane_is_selfhost_protected() -> None:
+    root = Path(__file__).resolve().parents[1]
+    contract = TargetContract.parse((root / "factory.toml").read_text(encoding="utf-8"))
+    protected = (
+        "REVIEW_LIQUID.md",
+        "src/swfactory/stage_registry.py",
+        "src/swfactory/liquid_annealing.py",
+    )
+    for stage in ("build", "fix"):
+        for path in protected:
+            assert path in protected_for(contract, stage), f"{path} writable during {stage}"
