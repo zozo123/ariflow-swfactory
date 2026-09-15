@@ -9,7 +9,7 @@ from swfactory import accepted_inputs, liquid_annealing, stage_registry, stages
 from swfactory.blueprint import load
 from swfactory.config import TargetContract, protected_for
 from swfactory.liquid_annealing import LANES, AnnealingObservation, evaluate, merge_findings
-from swfactory.models import Finding, TestResult
+from swfactory.models import Finding, TestResult as SwfTestResult
 
 
 def _observation(**overrides: object) -> AnnealingObservation:
@@ -167,6 +167,7 @@ class _Ctx:
         self.state = _State()
         self.issue = SimpleNamespace(id="LIQ-1")
         self.cfg = SimpleNamespace(max_review_fixes=max_review_fixes, max_build_iterations=4)
+        self.blueprint = SimpleNamespace(review=SimpleNamespace(nit_cap=3))
         self.written: dict[str, str] = {}
 
     def read_artifact(self, path: str) -> str:
@@ -190,7 +191,7 @@ def _stage_harness(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         stages,
         "run_tests",
-        lambda *_args: (TestResult(passed=1, exit_code=0), "ok"),
+        lambda *_args: (SwfTestResult(passed=1, exit_code=0), "ok"),
     )
     monkeypatch.setattr(
         stages,
