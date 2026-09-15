@@ -63,6 +63,7 @@ packages = ["src/swfactory"]
 "demo" = "swfactory/_assets/demo"
 ".claude/hooks" = "swfactory/_assets/.claude/hooks"
 "REVIEW.md" = "swfactory/_assets/REVIEW.md"
+"REVIEW_LIQUID.md" = "swfactory/_assets/REVIEW_LIQUID.md"
 "bands.yaml" = "swfactory/_assets/bands.yaml"
 "islo.yaml" = "swfactory/_assets/islo.yaml"
 
