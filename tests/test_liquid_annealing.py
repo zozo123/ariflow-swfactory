@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
-from swfactory import liquid_annealing, stage_registry, stages
+from swfactory import accepted_inputs, liquid_annealing, stage_registry, stages
 from swfactory.blueprint import load
 from swfactory.liquid_annealing import AnnealingObservation, LANES, evaluate, merge_findings
 from swfactory.models import Finding, TestResult
@@ -29,7 +29,16 @@ def _observation(**overrides: object) -> AnnealingObservation:
 
 
 def _lanes() -> list[dict[str, object]]:
-    return [{"lane": lane, "iteration": i, "verdict": "approve", "findings": 0, "blockers": 0} for i, lane in enumerate(LANES, 1)]
+    return [
+        {
+            "lane": lane,
+            "iteration": index,
+            "verdict": "approve",
+            "findings": 0,
+            "blockers": 0,
+        }
+        for index, lane in enumerate(LANES, 1)
+    ]
 
 
 def test_clean_candidate_crystallizes_only_after_all_lanes_and_green_tests() -> None:
@@ -69,18 +78,31 @@ def test_interface_surface_increases_the_nucleation_barrier() -> None:
 
 
 def test_specialist_fan_in_is_deterministic_and_keeps_the_stronger_severity() -> None:
-    lower = Finding(severity="minor", file="src/a.py", line=7, title="Same defect", detail="minor view")
-    higher = Finding(severity="major", file="src/a.py", line=7, title="same defect", detail="major view")
+    lower = Finding(
+        severity="minor",
+        file="src/a.py",
+        line=7,
+        title="Same defect",
+        detail="minor view",
+    )
+    higher = Finding(
+        severity="major",
+        file="src/a.py",
+        line=7,
+        title="same defect",
+        detail="major view",
+    )
     other = Finding(severity="nit", file="src/b.py", title="Naming", detail="small")
 
     merged = merge_findings([[lower, other], [higher]])
-    assert [(item.file, item.severity) for item in merged] == [("src/a.py", "major"), ("src/b.py", "nit")]
+    assert [(item.file, item.severity) for item in merged] == [
+        ("src/a.py", "major"),
+        ("src/b.py", "nit"),
+    ]
     assert merged[0].detail == "major view"
 
 
-def test_one_round_calls_all_specialist_lanes_and_fans_them_in(
-    monkeypatch: Any,
-) -> None:
+def test_one_round_calls_all_specialist_lanes_and_fans_them_in(monkeypatch: Any) -> None:
     calls: list[tuple[str, int, str]] = []
     ctx = SimpleNamespace(issue=SimpleNamespace(id="LIQ-1"))
 
@@ -120,7 +142,11 @@ def test_one_round_calls_all_specialist_lanes_and_fans_them_in(
         diff="diff",
     )
 
-    assert calls == [("review", 1, "correctness"), ("review", 2, "verification"), ("review", 3, "risk")]
+    assert calls == [
+        ("review", 1, "correctness"),
+        ("review", 2, "verification"),
+        ("review", 3, "risk"),
+    ]
     assert [record["lane"] for record in records] == list(LANES)
     assert dropped == 0
     assert len(findings) == 1 and findings[0].severity == "major"
@@ -150,7 +176,7 @@ class _Ctx:
         self.written[path] = content
 
 
-def _stage_harness(monkeypatch: Any, ctx: _Ctx) -> None:
+def _stage_harness(monkeypatch: Any) -> None:
     monkeypatch.setattr(stages, "_done", lambda *_args: None)
     monkeypatch.setattr(stages, "_assert_workspace_head", lambda *_args: "head")
     monkeypatch.setattr(stages, "_read_or", lambda *_args: "# Spec\n")
@@ -159,35 +185,41 @@ def _stage_harness(monkeypatch: Any, ctx: _Ctx) -> None:
     monkeypatch.setattr(stages, "_protected", lambda *_args: "tests/")
     monkeypatch.setattr(stages, "_summary_line", lambda *_args: "relax material defect")
     monkeypatch.setattr(stages, "commit", lambda *_args, **_kwargs: "fixed-head")
-    monkeypatch.setattr(stages, "run_tests", lambda *_args: (TestResult(passed=1, exit_code=0), "ok"))
+    monkeypatch.setattr(
+        stages,
+        "run_tests",
+        lambda *_args: (TestResult(passed=1, exit_code=0), "ok"),
+    )
     monkeypatch.setattr(
         stages,
         "_agent",
         lambda *_args, **_kwargs: SimpleNamespace(data={"summary": "relax material defect"}),
     )
-    monkeypatch.setattr(
-        stages,
-        "render_prompt",
-        lambda *_args, **_kwargs: "fix prompt",
-    )
+    monkeypatch.setattr(stages, "render_prompt", lambda *_args, **_kwargs: "fix prompt")
     monkeypatch.setattr(
         stages,
         "_sh",
         lambda _ctx, command, **_kwargs: "src/a.py\n" if "--name-only" in command else "diff",
     )
-    monkeypatch.setattr(
-        liquid_annealing,
-        "_initial_tests_green",
-        lambda _ctx: True,
-    )
+    monkeypatch.setattr(liquid_annealing, "_initial_tests_green", lambda _ctx: True)
 
 
 def test_stage_relaxes_major_retests_and_crystallizes(monkeypatch: Any) -> None:
     ctx = _Ctx(max_review_fixes=1)
-    _stage_harness(monkeypatch, ctx)
-    major = Finding(severity="major", file="src/a.py", title="material defect", detail="repair me")
+    _stage_harness(monkeypatch)
+    major = Finding(
+        severity="major",
+        file="src/a.py",
+        title="material defect",
+        detail="repair me",
+    )
 
-    def fake_round(_ctx: Any, *, round_index: int, **_kwargs: Any) -> tuple[list[Finding], int, list[dict[str, object]]]:
+    def fake_round(
+        _ctx: Any,
+        *,
+        round_index: int,
+        **_kwargs: Any,
+    ) -> tuple[list[Finding], int, list[dict[str, object]]]:
         return ([major] if round_index == 0 else []), 0, _lanes()
 
     monkeypatch.setattr(liquid_annealing, "_round", fake_round)
@@ -205,8 +237,13 @@ def test_stage_relaxes_major_retests_and_crystallizes(monkeypatch: Any) -> None:
 
 def test_exhausted_major_blocks_even_without_a_review_blocker(monkeypatch: Any) -> None:
     ctx = _Ctx(max_review_fixes=0)
-    _stage_harness(monkeypatch, ctx)
-    major = Finding(severity="major", file="src/a.py", title="material defect", detail="still open")
+    _stage_harness(monkeypatch)
+    major = Finding(
+        severity="major",
+        file="src/a.py",
+        title="material defect",
+        detail="still open",
+    )
     monkeypatch.setattr(
         liquid_annealing,
         "_round",
@@ -225,6 +262,7 @@ def test_liquid_policy_is_the_managed_annealing_opt_in(monkeypatch: Any) -> None
     default = load("factory")
     assert liquid.review.policy == "REVIEW_LIQUID.md"
     assert default.review.policy == "REVIEW.md"
+    assert accepted_inputs.packaged_review_policy_digest(liquid) is not None
 
     liquid_marker = object()
     default_marker = object()
