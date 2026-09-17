@@ -447,3 +447,78 @@ def test_an_external_head_change_is_still_refused_after_the_journal_learned_abou
     ctx.state.write_control("workspace-head", "feedface\n")
     with pytest.raises(StageError, match="checkpoint expects HEAD head0000-1 but workspace is feedface"):
         work_stage.build_and_test(ctx)
+
+
+# ------------------------------------------------- the execution decision is evidence, not a literal
+
+from types import SimpleNamespace  # noqa: E402
+
+from swfactory import sandbox_contract as _contract  # noqa: E402
+from swfactory.work_stage import execution_decision  # noqa: E402
+
+
+def _plan_with_two_independent_nodes() -> Plan:
+    return Plan(
+        files=["a.py", "b.py"],
+        steps=["s"],
+        tests=["t"],
+        work=[
+            PlanTask(id="a", title="A", files=["a.py"], parallel_safe=True),
+            PlanTask(id="b", title="B", files=["b.py"], parallel_safe=True),
+        ],
+    )
+
+
+def _decision_ctx(sandbox: str, backend: str = "sbx") -> SimpleNamespace:
+    return SimpleNamespace(cfg=SimpleNamespace(sandbox=sandbox, toolset_backend=backend))
+
+
+def test_the_report_states_why_this_provider_could_not_fan_out() -> None:
+    """``parallel: False`` used to be a literal beside a sentence about fork being experimental.
+    A literal says the same thing whatever the provider can do, which is the one thing a report
+    must not do."""
+    decision = execution_decision(_decision_ctx("docker"), _plan_with_two_independent_nodes())
+
+    assert decision["parallel"] is False
+    assert decision["reason"] == "serial_fallback_missing_fork"
+    assert decision["provider"] == "docker"
+
+
+def test_a_provider_that_claims_no_filesystem_isolation_says_so() -> None:
+    decision = execution_decision(_decision_ctx("local"), _plan_with_two_independent_nodes())
+
+    assert decision["parallel"] is False
+    assert "filesystem_isolation" in decision["reason"]
+
+
+def test_a_fork_capable_provider_flips_the_decision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The point of reading capabilities instead of hardcoding the answer: nothing in this module
+    changes when a provider learns to fork."""
+    original = _contract.provider_documents
+    monkeypatch.setattr(_contract, "provider_documents", lambda **_: original(islo_fork=True))
+
+    decision = execution_decision(_decision_ctx("islo"), _plan_with_two_independent_nodes())
+
+    assert decision["parallel"] is True
+    assert decision["mode"] == "provider_fork_parallel"
+    assert decision["reason"] == "capabilities_allow_parallel"
+
+
+def test_a_toolset_answer_belongs_to_the_backend_it_wraps() -> None:
+    decision = execution_decision(_decision_ctx("toolset", backend="sbx"), _plan_with_two_independent_nodes())
+
+    assert decision["provider"] == "toolset:sbx"
+
+
+def test_a_capability_failure_is_recorded_and_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This decides how to describe a run, never whether it may proceed."""
+
+    def explode(**_):
+        raise RuntimeError("capability layer is down")
+
+    monkeypatch.setattr(_contract, "provider_documents", explode)
+
+    decision = execution_decision(_decision_ctx("docker"), _plan_with_two_independent_nodes())
+
+    assert decision["parallel"] is False
+    assert "capability layer is down" in decision["reason"]
