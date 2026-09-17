@@ -21,6 +21,8 @@ from swfactory.self_improvement import (
     capability_signals,
     delivery_signals,
     interleave,
+    issue_commands,
+    issue_plan,
     ledger_signals,
     propose,
     rank_key,
@@ -164,3 +166,37 @@ def test_the_issue_body_leads_with_the_done_condition() -> None:
 
 def test_nothing_to_propose_says_so_rather_than_inventing_work() -> None:
     assert "every measured signal is at target" in report(Assessment().orders)
+
+
+# ------------------------------------------------- the last mechanical gap: proposal -> backlog
+
+
+def test_a_rendered_issue_carries_the_label_the_line_drains() -> None:
+    """`blueprints/liquid.toml` enrols on `trigger.backlog.label`; without it the issue is inert."""
+    (issue,) = issue_plan(propose([_signal(Source.CAPABILITY, "sandbox.islo")], budget=1).orders)
+
+    assert "liquid" in issue["labels"]
+    assert "**Done when:**" in issue["body"]
+
+
+def test_issue_commands_survive_a_body_full_of_backticks_and_quotes() -> None:
+    """Bodies are markdown with backticks and fenced blocks. An unquoted one is a broken command
+    at best and an injected one at worst, so the rendering has to be shell-safe by construction."""
+    orders = propose([_signal(Source.REACHABILITY, "mod", 10)], budget=1).orders
+
+    (command,) = issue_commands(orders)
+
+    assert command.startswith("gh issue create --title ")
+    assert "```sh" in command
+    # Every embedded single quote is escaped rather than closing the argument early.
+    assert command.count("'") % 2 == 0
+
+
+def test_rendering_issues_files_nothing() -> None:
+    """The boundary this module exists to hold: it proposes, a person acts."""
+    orders = propose([_signal(Source.CAPABILITY, "claim")], budget=1).orders
+
+    plan = issue_plan(orders)
+
+    assert isinstance(plan, list) and plan[0]["title"]
+    assert all(isinstance(line, str) for line in issue_commands(orders))

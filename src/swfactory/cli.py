@@ -209,6 +209,9 @@ def run(
 def improve(
     budget: Annotated[int, typer.Option(help="how many work orders to propose")] = 5,
     as_json: Annotated[bool, typer.Option("--json", help="machine-readable proposal")] = False,
+    as_issues: Annotated[
+        bool, typer.Option("--as-issues", help="print the gh commands that would enrol these on the liquid line")
+    ] = False,
     root: Annotated[Path | None, typer.Option(help="repository root (default: cwd)")] = None,
 ) -> None:
     """Propose the work the factory's own evidence says it needs, ranked and falsifiable.
@@ -221,7 +224,7 @@ def improve(
     It proposes only. The gates and the merge button are untouched.
     """
     from swfactory import metrics as improve_metrics
-    from swfactory.self_improvement import assess, propose, report
+    from swfactory.self_improvement import assess, issue_commands, propose, report
 
     where = Path(root) if root else Path.cwd()
     ledger = json.loads((where / "config" / "not-yet-wired.json").read_text())["modules"]
@@ -232,6 +235,10 @@ def improve(
     assessment = propose(assess(where, ledger=ledger, summary=summary), budget=budget)
     if as_json:
         typer.echo(json.dumps(assessment.to_dict(), indent=2, sort_keys=True))
+        return
+    if as_issues:
+        # Printed, never run: filing is an outward effect, and the loop proposes rather than acts.
+        typer.echo("\n\n".join(issue_commands(assessment.orders)))
         return
     typer.echo(report(assessment.orders))
     for refusal in assessment.refused:

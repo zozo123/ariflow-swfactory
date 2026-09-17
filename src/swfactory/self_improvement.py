@@ -22,6 +22,7 @@ unchanged, and nothing here can reach them.
 from __future__ import annotations
 
 import json
+import shlex
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
@@ -315,3 +316,36 @@ def report(orders: Sequence[WorkOrder]) -> str:
         lines.append(f"     done when: {order.done_when.predicate}")
         lines.append(f"     verify:    {order.done_when.check}")
     return "\n".join(lines)
+
+
+def issue_plan(orders: Sequence[WorkOrder], *, label: str = "liquid") -> list[dict[str, Any]]:
+    """The issues the liquid line would drain, one per work order.
+
+    Rendered, never filed. Filing is an outward effect on a real repository, and a loop that opens
+    issues on its own behalf has crossed from proposing into acting -- the one boundary this module
+    exists to hold. The caller decides.
+
+    `label` is the line's `trigger.backlog.label`: an issue carrying it is enrolled for the next
+    tick, which is what makes this the last mechanical gap between measuring and running.
+    """
+    return [
+        {
+            "title": order.title,
+            "body": order.as_issue(),
+            "labels": sorted({label, *order.labels}),
+            "source": order.source.value,
+            "key": order.key,
+        }
+        for order in orders
+    ]
+
+
+def issue_commands(orders: Sequence[WorkOrder], *, label: str = "liquid") -> list[str]:
+    """`gh issue create` lines for a person to read before any of them runs."""
+    lines = []
+    for issue in issue_plan(orders, label=label):
+        labels = ",".join(issue["labels"])
+        title = shlex.quote(issue["title"])
+        body = shlex.quote(issue["body"])
+        lines.append(f"gh issue create --title {title} --label {labels} --body {body}")
+    return lines
