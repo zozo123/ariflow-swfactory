@@ -206,6 +206,39 @@ def run(
 
 
 @app.command()
+def improve(
+    budget: Annotated[int, typer.Option(help="how many work orders to propose")] = 5,
+    as_json: Annotated[bool, typer.Option("--json", help="machine-readable proposal")] = False,
+    root: Annotated[Path | None, typer.Option(help="repository root (default: cwd)")] = None,
+) -> None:
+    """Propose the work the factory's own evidence says it needs, ranked and falsifiable.
+
+    Reads what the line has already measured about itself -- unreachable modules, capability claims
+    that never reached `validated`, and delivery metrics that miss their target -- and emits work
+    orders the liquid line can drain. Every order names the existing check that retires it, and one
+    whose done-condition cites no such check is refused rather than emitted.
+
+    It proposes only. The gates and the merge button are untouched.
+    """
+    from swfactory import metrics as improve_metrics
+    from swfactory.self_improvement import assess, propose, report
+
+    where = Path(root) if root else Path.cwd()
+    ledger = json.loads((where / "config" / "not-yet-wired.json").read_text())["modules"]
+    try:
+        summary = improve_metrics.summarize(improve_metrics.load_all(where))
+    except (OSError, ValueError):
+        summary = {}
+    assessment = propose(assess(where, ledger=ledger, summary=summary), budget=budget)
+    if as_json:
+        typer.echo(json.dumps(assessment.to_dict(), indent=2, sort_keys=True))
+        return
+    typer.echo(report(assessment.orders))
+    for refusal in assessment.refused:
+        typer.echo(f"refused: {refusal}", err=True)
+
+
+@app.command()
 def demo(
     real: Annotated[bool, typer.Option(help="claude agent, islo sandbox, github scm, prompt")] = False,
     agent: Annotated[str | None, typer.Option()] = None,
