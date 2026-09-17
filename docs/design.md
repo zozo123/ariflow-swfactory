@@ -94,12 +94,12 @@ otherwise.
 
 ## Airflow
 
-The dependency groups pin `apache-airflow==3.3.1` and standard provider 1.18.0. The optional CI
+The dependency groups pin `apache-airflow==3.3.2` and standard provider 1.19.0. The optional CI
 job `airflow-main` is configured to run DAG parity and smoke against upstream
 `apache/airflow@main` so API drift in the task SDK or HITL operators can surface before a release.
 
 ```sh
-uv sync --group airflow                              # apache-airflow 3.3.1 + standard provider
+uv sync --group airflow                              # apache-airflow 3.3.2 + standard provider
 export AIRFLOW_HOME=$PWD/airflow_home                # gitignored
 export AIRFLOW__CORE__DAGS_FOLDER=$PWD/dags AIRFLOW__CORE__LOAD_EXAMPLES=False
 uv run airflow standalone                            # UI on http://localhost:8080
@@ -272,7 +272,7 @@ Normal factory runs still send restrictive `SandboxSpec` requirements. The sbx p
 this setting does not configure the host. Set `SWF_TOOLSET_SBX_IMAGE` to a factory-ready image
 with Git, test tools and the agent; the upstream Python-only image is insufficient for those jobs.
 
-The supported stack stays pinned to `apache-airflow==3.3.1`: production should not track a dev
+The supported stack stays pinned to `apache-airflow==3.3.2`: production should not track a dev
 branch, while the `airflow-main` canary is configured to expose upstream drift. The GitHub delivery
 boundary is unchanged either way — the orchestrator still holds the GitHub credential and still
 applies the patch. Model-credential isolation remains a property of the selected backend.
@@ -349,7 +349,7 @@ the TOML schema, not the package, and moves only when a blueprint written for an
 no longer be read. `swfactory 2.0.0` reads `version = 1`; the two numbers are not expected to
 track each other, and neither implies the other's compatibility.
 
-Airflow's own pin (`apache-airflow==3.3.1`) is a dependency, not part of the public surface —
+Airflow's own pin (`apache-airflow==3.3.2`) is a dependency, not part of the public surface —
 moving it is a minor release unless a DAG a user has triggered stops working, which it would be.
 
 Releasing is a tag push: bump `version`, write the CHANGELOG section, tag `vX.Y.Z`, push the tag.
@@ -363,7 +363,7 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md#release) for the exact commands.
 - Blueprints are data in the **factory** repo, never in the target: gates, budgets and tool policy
   must not be agent-editable. Stage semantics stay Python (`stages.py`); a TOML file only chooses
   the walk, the knobs and the targets. Dynamic task mapping fans out over jobs and nothing else —
-  nested expansion (e.g. review lenses) is unsupported in Airflow 3.3.1 and loops stay inside stage
+  nested expansion (e.g. review lenses) is unsupported in Airflow 3.3.x and loops stay inside stage
   functions.
 - **Airflow, not islo Factory lines, is the spine.** The human gates need an approver identity in
   the audit trail, and the HITL response carries `responded_by_user`. `GateOperator` subclasses

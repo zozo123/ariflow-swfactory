@@ -41,8 +41,8 @@ dev = ["pytest>=8", "ruff>=0.12", "pyte>=0.8"]
 # `--sandbox toolset` works with the sbx backend (SWF_TOOLSET_BACKEND, default sbx) once the
 # `sbx` binary is on PATH; there is no --backend flag.
 airflow = [
-  "apache-airflow==3.3.1",
-  "apache-airflow-providers-standard==1.18.0",
+  "apache-airflow==3.3.2",
+  "apache-airflow-providers-standard==1.19.0",
   "apache-airflow-providers-common-ai>=0.8.0",
 ]
 # Optional outer composition layer. It discovers ``SoftwareFactory`` through the package entry
