@@ -256,6 +256,46 @@ def _execute_nodes(ctx: stages.Ctx, plan: Plan, spec_text: str, plan_text: str, 
             completed[node.id] = _settle(ctx, progress, plan, after)
 
 
+def execution_decision(ctx: stages.Ctx, plan: Plan) -> dict[str, Any]:
+    """Why this run fanned out, or did not, from the configured provider's capability facts.
+
+    These three fields were literals: ``mode``, ``parallel: False`` and a sentence about fork being
+    experimental. A literal cannot be wrong, which is the problem -- it said the same thing whatever
+    the provider could do, and `swfactory.execution_binding`, the module the capability inventory
+    names as the runtime entry for parallel workgraph, had no caller anywhere in the repository.
+
+    Only the configured sandbox is offered. `select_provider` would otherwise answer with whichever
+    provider happens to satisfy the requirement, and a report naming a provider the run is not using
+    is worse than no report. A capability-layer failure is recorded as the reason and never raises:
+    this decides how to describe the run, never whether it may proceed.
+    """
+    from swfactory.execution_binding import choose_execution
+    from swfactory.sandbox_contract import provider_documents, toolset_document
+
+    serial = {"mode": "shared_workspace_serial", "parallel": False}
+    # Toolset documents are keyed by the backend they wrap (``toolset:sbx``), because the capability
+    # answer belongs to that backend and not to the adapter in front of it.
+    name = f"toolset:{ctx.cfg.toolset_backend}" if ctx.cfg.sandbox == "toolset" else ctx.cfg.sandbox
+    try:
+        documents = {document.provider: document for document in provider_documents()}
+        document = documents.get(name) or (
+            toolset_document(ctx.cfg.toolset_backend) if ctx.cfg.sandbox == "toolset" else None
+        )
+        if document is None:
+            return {**serial, "provider": name, "reason": "provider publishes no capability document"}
+        provider, decision = choose_execution(_nodes(plan), (document,), preferred=(ctx.cfg.sandbox,))
+    except Exception as error:  # noqa: BLE001 - a capability answer is evidence, never a gate.
+        return {**serial, "provider": name, "reason": str(error)[:400]}
+    return {
+        "mode": "provider_fork_parallel" if decision.parallel else "shared_workspace_serial",
+        "parallel": decision.parallel,
+        "provider": decision.provider,
+        "reason": decision.reason,
+        "required_capabilities": list(decision.required_capabilities),
+        "provider_digest": provider.digest(),
+    }
+
+
 def _verify(
     ctx: stages.Ctx, progress: dict[str, Any], plan: Plan, conflicts: list[dict[str, Any]]
 ) -> tuple[TestResult, str]:
@@ -270,10 +310,8 @@ def _verify(
     by_id = {row["node_id"]: row for row in progress["nodes"]}
     report = {
         "schema_version": 1,
-        "mode": "shared_workspace_serial",
         "scheduler": "airflow",
-        "parallel": False,
-        "reason": "supported shared-workspace path serializes nodes; provider fork remains experimental",
+        **execution_decision(ctx, plan),
         "input_head": progress["input_head"],
         "final_head": progress["head"],
         "plan_digest": progress["plan_digest"],
