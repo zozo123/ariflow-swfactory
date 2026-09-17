@@ -235,6 +235,7 @@ def improve(
         propose,
         record,
         report,
+        stalled,
         trajectory_report,
     )
 
@@ -244,7 +245,10 @@ def improve(
         summary = improve_metrics.summarize(improve_metrics.load_all(where))
     except (OSError, ValueError):
         summary = {}
-    assessment = propose(assess(where, ledger=ledger, summary=summary), budget=budget)
+    # History first: what has stalled decides how this proposal is ranked, so a blocked order stops
+    # taking the top slot every cycle. Without a trajectory there is nothing stalled to know about.
+    past = history(record_to) if record_to is not None else []
+    assessment = propose(assess(where, ledger=ledger, summary=summary), budget=budget, stalled_keys=stalled(past))
     if as_json:
         typer.echo(json.dumps(assessment.to_dict(), indent=2, sort_keys=True))
         return
@@ -254,8 +258,6 @@ def improve(
         return
     typer.echo(report(assessment.orders))
     if record_to is not None:
-        # Read the trajectory BEFORE appending, or today's measurement is compared with itself.
-        past = history(record_to)
         typer.echo("\n" + trajectory_report(past, assessment))
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
         typer.echo(f"recorded: {record(assessment, record_to, at=stamp)}")
