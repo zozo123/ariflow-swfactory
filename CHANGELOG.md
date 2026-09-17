@@ -84,6 +84,20 @@ All notable changes to this project will be documented here. The format follows
   `#anchor` the repository advertises on the published site must exist as an `id` on the page. The
   reference check ran one way only -- a link had to resolve -- so a page styled by deleted classes,
   an asset nobody pointed at, and an advertised section that did not exist all sat outside it.
+- `doctor` checks the image every docker run actually executes in, not only that the daemon
+  answers. The published `ghcr.io/zozo123/swfactory-sandbox:latest` is not world-readable, so
+  `swfactory demo --sandbox docker` on a fresh machine reported `docker daemon: ok` and then died
+  inside its first stage on the registry's bare `denied`. The row is local-first, so a machine that
+  has already built the image passes without touching a registry, and the fix is the build command
+  CI already uses.
+- A preflight on the run entry: before the first job provisions anything, the sandbox provider's
+  own `doctor` rows must pass, and a failure refuses the run with the command that fixes it.
+  `islo` used to fail as `Sandbox creation failed: Environment not found`, from the provider, after
+  the run had started; it now refuses in about three seconds naming both the missing gateway
+  profile and the missing environment. Only provider rows block -- the rest of the report is
+  advice, and advice that fails a run is advice nobody keeps. `SWF_PREFLIGHT=0` skips it.
+  It runs once per invocation from the CLI rather than inside `_prepare_ctx`, because the DAG
+  builds a `Ctx` per task and that path's contract is that it performs no host I/O.
 
 ### Fixed
 

@@ -14,7 +14,8 @@ import pytest
 
 from swfactory import cli, runtime
 from swfactory.blueprint import load
-from swfactory.models import RunReport
+from swfactory.config import Config
+from swfactory.models import RunReport, StageError
 from swfactory.runtime import build_ctx, job_config, job_run_dir, run_id_for
 from swfactory.sandbox import IsloSandbox, LocalSandbox
 from swfactory.scm import LocalGitScm
@@ -168,3 +169,53 @@ def test_cli_run_derives_its_config_with_job_config(tmp_path: Path, monkeypatch:
         "cell_binding": None,
         "enforce_inputs": True,
     }
+
+
+# ------------------------------------------------------------------ preflight before provisioning
+
+
+def test_a_run_refuses_before_provisioning_when_its_provider_cannot_make_a_cell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The failure this replaces arrived several stages in, in the provider's own words, after a
+    MicroVM had already been started. Admission refuses before a sandbox exists; so does this."""
+    from swfactory import runtime
+    from swfactory.doctor import Check
+
+    monkeypatch.delenv("SWF_PREFLIGHT", raising=False)
+    monkeypatch.setattr(
+        "swfactory.doctor.preflight",
+        lambda cfg: [Check("docker image", False, "'img' is neither local nor pullable", "docker build -t x .")],
+    )
+
+    with pytest.raises(StageError) as caught:
+        runtime._preflight(Config(issue="demo", sandbox="docker", agent="scripted", scm="local"))  # type: ignore[arg-type]
+
+    assert caught.value.kind == "sandbox"
+    assert "docker image" in str(caught.value)
+    assert "fix: docker build -t x ." in str(caught.value)
+    assert caught.value.retryable is False
+
+
+def test_an_operator_can_skip_a_preflight_that_is_wrong_about_their_machine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from swfactory import runtime
+    from swfactory.doctor import Check
+
+    monkeypatch.setenv("SWF_PREFLIGHT", "0")
+    monkeypatch.setattr(
+        "swfactory.doctor.preflight",
+        lambda cfg: [Check("docker image", False, "unreachable", "docker build")],
+    )
+
+    runtime._preflight(Config(issue="demo", sandbox="docker", agent="scripted", scm="local"))  # type: ignore[arg-type]
+
+
+def test_a_green_preflight_lets_the_run_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    from swfactory import runtime
+
+    monkeypatch.delenv("SWF_PREFLIGHT", raising=False)
+    monkeypatch.setattr("swfactory.doctor.preflight", lambda cfg: [])
+
+    runtime._preflight(Config(issue="demo", sandbox="docker", agent="scripted", scm="local"))  # type: ignore[arg-type]

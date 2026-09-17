@@ -78,6 +78,7 @@ def green(**over: str | None) -> FakeRunner:
         "gh repo view zozo123/ariflow-swfactory --json name": '{"name":"ariflow-swfactory"}\n',
         "claude --version": "2.1.259 (Claude Code)\n",
         "docker info --format {{.ServerVersion}}": "29.0.0\n",
+        "docker image inspect --format {{.Id}} ghcr.io/zozo123/swfactory-sandbox:latest": "sha256:c0ffee\n",
     }
     base.update(over)
     return FakeRunner(base)
@@ -570,3 +571,103 @@ def test_smolvm_doctor_skips_probe_when_loader_fails(monkeypatch):
     )
     assert not result["toolset backend"].ok
     assert "smolvm daemon" not in result
+
+
+# ------------------------------------------------- the image the run actually executes in
+
+IMAGE = "ghcr.io/zozo123/swfactory-sandbox:latest"
+INSPECT = f"docker image inspect --format {{{{.Id}}}} {IMAGE}"
+MANIFEST = f"docker manifest inspect {IMAGE}"
+
+
+def test_a_locally_built_image_needs_no_registry() -> None:
+    """An offline machine that has already built the image must not be told to reach a registry."""
+    runner = green()
+
+    check = doctor._check_docker_image(runner, IMAGE)
+
+    assert check.ok and "present locally" in check.detail
+    assert not any("manifest" in " ".join(call) for call in runner.calls)
+
+
+def test_an_image_only_in_the_registry_passes_as_pullable() -> None:
+    runner = green(**{INSPECT: None, MANIFEST: '{"schemaVersion": 2}'})
+
+    check = doctor._check_docker_image(runner, IMAGE)
+
+    assert check.ok and "pullable" in check.detail
+
+
+def test_an_image_that_is_neither_local_nor_pullable_is_refused_with_the_build_command() -> None:
+    """The exact failure a reader hits: the published image is not world-readable, so a run dies
+    inside its first stage on the registry's bare ``denied``."""
+    runner = green(**{INSPECT: None, MANIFEST: None})
+
+    check = doctor._check_docker_image(runner, IMAGE)
+
+    assert not check.ok
+    assert "neither local nor pullable" in check.detail
+    assert "deploy/docker/sandbox.Dockerfile" in check.fix
+    assert "SWF_DOCKER_IMAGE=swfactory-sandbox:local" in check.fix
+
+
+def test_the_image_row_is_reported_beside_the_daemon() -> None:
+    checks = by_name(run_doctor(cfg(sandbox="docker"), green(), root=ROOT))
+
+    assert checks["docker daemon"].ok
+    assert checks["docker image"].ok
+
+
+def test_a_dead_daemon_does_not_also_report_the_image() -> None:
+    """One cause, one finding: an unreachable daemon cannot answer for the image either."""
+    runner = green(**{"docker info --format {{.ServerVersion}}": None})
+
+    checks = by_name(run_doctor(cfg(sandbox="docker"), runner, root=ROOT))
+
+    assert not checks["docker daemon"].ok
+    assert "docker image" not in checks
+
+
+# ------------------------------------------------------------------------------- preflight
+
+
+def test_preflight_blocks_on_the_provider_and_only_the_provider() -> None:
+    """``gh`` being unauthenticated is a real finding, but it is not a reason the cell cannot be
+    created -- and a precondition that fails a run for advice is a precondition nobody keeps."""
+    runner = green(**{INSPECT: None, MANIFEST: None, "gh auth status": None})
+    configuration = cfg(sandbox="docker")
+
+    report = run_doctor(configuration, runner, root=ROOT)
+    blocking = doctor.blocking(report)
+
+    assert [check.name for check in blocking] == ["docker image"]
+    assert not by_name(report)["gh auth"].ok
+
+
+def test_preflight_costs_nothing_for_a_local_sandbox() -> None:
+    """Every hermetic run builds a Ctx. If preflight shelled out here it would be a tax on the
+    whole suite, so ``local`` must resolve without touching a subprocess."""
+    runner = green()
+
+    assert doctor.preflight(cfg(sandbox="local", agent="scripted"), runner) == []
+    assert runner.calls == []
+
+
+def test_the_refusal_names_the_problem_and_the_command_that_fixes_it() -> None:
+    runner = green(**{INSPECT: None, MANIFEST: None})
+
+    text = doctor.preflight_report(doctor.preflight(cfg(sandbox="docker"), runner))
+
+    assert "docker image:" in text
+    assert "fix: docker build" in text
+
+
+def test_a_missing_islo_environment_is_a_preflight_refusal() -> None:
+    """What this used to be: ``Sandbox creation failed: Environment not found``, from the provider,
+    after the run had already started."""
+    runner = green(**{"islo environment list --output json": json.dumps([{"name": "other"}])})
+
+    blocking = doctor.preflight(cfg(sandbox="islo"), runner)
+
+    assert [check.name for check in blocking] == ["islo environment"]
+    assert "islo environment create --name swfactory" in blocking[0].fix

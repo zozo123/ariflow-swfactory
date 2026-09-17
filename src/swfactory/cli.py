@@ -19,13 +19,14 @@ import typer
 
 from swfactory import blueprint as blueprint_mod
 from swfactory import metrics as metrics_mod
+from swfactory import runtime as runtime_mod
 from swfactory.agent import Agent
 from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
 from swfactory.blueprint import Blueprint
 from swfactory.config import FACTORY_ROOT, Config
 from swfactory.dispatch import DEFAULT_INBOX, DeliveryConflict, DeliveryInbox
 from swfactory.models import RunReport, StageError
-from swfactory.runtime import build_ctx, ctx_for, job_run_dir
+from swfactory.runtime import build_ctx, ctx_for, job_config, job_run_dir
 from swfactory.scm import make_scm
 from swfactory.stages import Approver, Ctx, cli_approver, run_pipeline, setup
 
@@ -116,6 +117,15 @@ def _run_jobs(bp: Blueprint, issues: list[str], overrides: dict[str, Any], *, ta
     except ValueError as e:
         typer.echo(f"config error: {e}", err=True)
         raise typer.Exit(2) from e
+    # Before the first job provisions anything: every job in one invocation shares the sandbox
+    # provider, so one check answers for all of them. What this replaces is the provider's own
+    # error several stages in, after a cell already existed.
+    try:
+        runtime_mod._preflight(job_config(bp, jobs[0], run_id=run_id, overrides=overrides))
+    except StageError as e:
+        typer.echo(f"run unavailable: {e}", err=True)
+        raise typer.Exit(1) from e
+
     failed = False
     for job in jobs:
         if len(jobs) > 1:

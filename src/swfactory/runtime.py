@@ -192,6 +192,33 @@ def ctx_for(
         raise StageError("policy", str(error)) from error
 
 
+def _preflight(cfg: Config) -> None:
+    """Refuse a run whose sandbox provider cannot produce a cell, before one is provisioned.
+
+    Called once per invocation from the CLI, not from ``_prepare_ctx``: the DAG builds a Ctx per
+    task, so checking there would shell out six times a job and would cost host I/O in a path whose
+    whole contract is that it does none (``test_build_ctx_for_islo_touches_nothing_on_the_host``).
+    What a misconfigured environment used to produce was the provider's own words, several stages
+    in -- ``islo use ... failed (rc=1): Environment not found``, or a registry's bare ``denied`` --
+    while ``doctor`` already held a row for each with the command that fixes it. Only the provider
+    rows block: the rest of the report is advice, and advice must not fail a run.
+
+    ``SWF_PREFLIGHT=0`` skips it, for an operator who knows the check is wrong about their machine.
+    For ``local`` this costs no subprocess at all.
+    """
+    if os.environ.get("SWF_PREFLIGHT", "1") == "0":
+        return
+    from swfactory import doctor
+
+    blocking = doctor.preflight(cfg)
+    if blocking:
+        raise StageError(
+            "sandbox",
+            "preflight refused this run before provisioning:\n" + doctor.preflight_report(blocking),
+            retryable=False,
+        )
+
+
 def _prepare_ctx(
     cfg: Config,
     *,

@@ -382,6 +382,31 @@ def _check_docker(runner: Runner) -> Check:
     return Check("docker daemon", True, f"server {out.strip() or 'reachable'}")
 
 
+def docker_image_fix(image: str) -> str:
+    """Build the image locally. The published one is not world-readable, and a run that cannot
+    pull it fails inside the first stage with the registry's own word for it, ``denied``."""
+    return (
+        "docker build -t swfactory-sandbox:local -f deploy/docker/sandbox.Dockerfile . "
+        "&& export SWF_DOCKER_IMAGE=swfactory-sandbox:local"
+    )
+
+
+def _check_docker_image(runner: Runner, image: str) -> Check:
+    """A reachable daemon says nothing about the image every ``run()`` executes in.
+
+    Checked local-first so an offline machine that has already built the image passes without
+    touching a registry, and so the manifest probe only costs a round trip on the runs that were
+    going to pay for a pull anyway.
+    """
+    out, _ = _try(runner, ["docker", "image", "inspect", "--format", "{{.Id}}", image])
+    if out is not None:
+        return Check("docker image", True, f"{image!r} present locally")
+    out, err = _try(runner, ["docker", "manifest", "inspect", image])
+    if out is not None:
+        return Check("docker image", True, f"{image!r} absent locally; pullable")
+    return Check("docker image", False, f"{image!r} is neither local nor pullable: {err}", docker_image_fix(image))
+
+
 def _check_toolset_backend(name: str, loader: ToolsetLoader) -> Check:
     try:
         loader(name)
@@ -557,43 +582,7 @@ def run_doctor(
 
         toolset_loader = load_toolset_backend
 
-    checks: list[Check] = []
-    if cfg.sandbox == "islo":
-        checks.append(_check_islo_cli(runner))
-        if checks[-1].ok:
-            auth, status = _check_islo_auth(runner)
-            checks.append(auth)
-            checks += _check_integrations(
-                runner,
-                status,
-                # Islo clones ``github://...`` even when delivery uses the local SCM adapter.
-                github=True,
-                claude=cfg.agent == "claude",
-            )
-            checks.append(_check_gateway(runner, cfg.gateway_profile))
-            checks.append(_check_environment(runner, cfg.islo_environment))
-            if cfg.islo_snapshot:
-                checks.append(_check_snapshot(runner, cfg.islo_snapshot))
-        else:
-            skipped = "skipped: islo CLI unavailable"
-            checks.append(Check("islo auth", False, skipped, "islo login"))
-            checks.append(Check("integration github", False, skipped, "islo login --tool github"))
-            if cfg.agent == "claude":
-                checks.append(Check("integration claude", False, skipped, "islo login --tool claude"))
-            checks += [
-                Check("gateway profile", False, skipped, gateway_fix(cfg.gateway_profile)),
-                Check("islo environment", False, skipped, environment_fix(cfg.islo_environment)),
-            ]
-    elif cfg.sandbox == "srt":
-        checks.append(_check_srt(which))
-    elif cfg.sandbox == "docker":
-        checks.append(_check_docker(runner))
-    elif cfg.sandbox == "toolset":
-        checks.append(_check_toolset_backend(cfg.toolset_backend, toolset_loader))
-        if checks[-1].ok and cfg.toolset_backend == "smolvm":
-            checks.append(_check_smolvm_ready(cfg))
-    else:
-        checks.append(Check("local sandbox", True, "no external sandbox provider"))
+    checks: list[Check] = list(sandbox_checks(cfg, runner, which=which, toolset_loader=toolset_loader))
 
     if cfg.scm == "github":
         checks.append(_check_gh_auth(runner))
@@ -633,3 +622,105 @@ def table(checks: Sequence[Check]) -> str:
 def to_json(checks: Sequence[Check]) -> str:
     """Machine-readable report (``--json``): a list of check objects plus ``status``."""
     return json.dumps([{**asdict(c), "status": c.status} for c in checks], indent=2)
+
+
+# ---------------------------------------------------------------- preflight
+
+# The rows whose failure means the cell cannot be created at all. Everything else `doctor` reports
+# is advice; these are preconditions, so a run refuses on them before it provisions anything.
+PROVIDER_CHECKS = frozenset(
+    {
+        "islo cli",
+        "islo auth",
+        "gateway profile",
+        "islo environment",
+        "islo snapshot",
+        "srt",
+        "docker daemon",
+        "docker image",
+        "toolset backend",
+    }
+)
+
+
+def sandbox_checks(
+    cfg: Config,
+    runner: Runner | None = None,
+    *,
+    which: Which = shutil.which,
+    toolset_loader: ToolsetLoader | None = None,
+) -> list[Check]:
+    """Only the checks that decide whether ``cfg``'s sandbox provider can produce a cell.
+
+    Split out of :func:`run_doctor` so a run can pay for these and nothing else. `doctor` still
+    reports them in the same order, from the same code, so the preflight and the report can never
+    describe different environments.
+    """
+    runner = runner if runner is not None else subprocess_runner
+    if toolset_loader is None:
+        from swfactory.sandbox import load_toolset_backend
+
+        toolset_loader = load_toolset_backend
+    checks: list[Check] = []
+    if cfg.sandbox == "islo":
+        checks.append(_check_islo_cli(runner))
+        if checks[-1].ok:
+            auth, status = _check_islo_auth(runner)
+            checks.append(auth)
+            checks += _check_integrations(
+                runner,
+                status,
+                # Islo clones ``github://...`` even when delivery uses the local SCM adapter.
+                github=True,
+                claude=cfg.agent == "claude",
+            )
+            checks.append(_check_gateway(runner, cfg.gateway_profile))
+            checks.append(_check_environment(runner, cfg.islo_environment))
+            if cfg.islo_snapshot:
+                checks.append(_check_snapshot(runner, cfg.islo_snapshot))
+        else:
+            skipped = "skipped: islo CLI unavailable"
+            checks.append(Check("islo auth", False, skipped, "islo login"))
+            checks.append(Check("integration github", False, skipped, "islo login --tool github"))
+            if cfg.agent == "claude":
+                checks.append(Check("integration claude", False, skipped, "islo login --tool claude"))
+            checks += [
+                Check("gateway profile", False, skipped, gateway_fix(cfg.gateway_profile)),
+                Check("islo environment", False, skipped, environment_fix(cfg.islo_environment)),
+            ]
+    elif cfg.sandbox == "srt":
+        checks.append(_check_srt(which))
+    elif cfg.sandbox == "docker":
+        checks.append(_check_docker(runner))
+        if checks[-1].ok:
+            checks.append(_check_docker_image(runner, cfg.docker_image))
+    elif cfg.sandbox == "toolset":
+        checks.append(_check_toolset_backend(cfg.toolset_backend, toolset_loader))
+        if checks[-1].ok and cfg.toolset_backend == "smolvm":
+            checks.append(_check_smolvm_ready(cfg))
+    else:
+        checks.append(Check("local sandbox", True, "no external sandbox provider"))
+    return checks
+
+
+def blocking(checks: Sequence[Check]) -> list[Check]:
+    """Failures a run cannot start through, in report order."""
+    return [check for check in failed(checks) if check.name in PROVIDER_CHECKS]
+
+
+def preflight_report(checks: Sequence[Check]) -> str:
+    """One refusal a reader can act on: what is wrong, then the command that fixes it."""
+    lines = [f"{check.name}: {check.detail}" for check in checks]
+    lines += [f"fix: {check.fix}" for check in checks if check.fix]
+    return "\n".join(lines)
+
+
+def preflight(
+    cfg: Config,
+    runner: Runner | None = None,
+    *,
+    which: Which = shutil.which,
+    toolset_loader: ToolsetLoader | None = None,
+) -> list[Check]:
+    """The blocking provider failures for ``cfg``; empty when the run may proceed. Never raises."""
+    return blocking(sandbox_checks(cfg, runner, which=which, toolset_loader=toolset_loader))
