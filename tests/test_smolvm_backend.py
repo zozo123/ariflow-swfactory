@@ -51,6 +51,11 @@ def daemon(tmp_path, monkeypatch, request):
                 status, result = fake.health_status, fake.health
             elif self.path == "/readyz":
                 status = fake.ready_status
+            elif self.command == "POST" and self.path.endswith("/api/v1/machines/"):
+                # The real daemon routes `POST /api/v1/machines` and 404s the trailing slash. This
+                # double used to normalise the two, so a create that could never work against a
+                # real daemon passed here: every VM failed as "reconcile the recorded name".
+                status, result = 404, {"error": "not found"}
             elif self.command == "POST" and not path:
                 if fake.create_hook:
                     fake.create_hook(data)
@@ -250,7 +255,7 @@ def test_worker_restart_reconnects_without_create(daemon, tmp_path):
     restarted = backend(daemon, tmp_path)
     assert restarted.create(spec=spec()) == NAME
     assert restarted.run_command(NAME, "true", timeout=1, max_output_bytes=10).exit_code == 0
-    assert sum(path == "/api/v1/machines/" for _, path, _ in daemon.calls) == 1
+    assert sum(path == "/api/v1/machines" for _, path, _ in daemon.calls) == 1
 
 
 def test_interrupted_exec_is_deleted_never_replayed(daemon, tmp_path):
@@ -283,7 +288,7 @@ def test_ambiguous_create_reconciles_without_second_post(daemon, tmp_path, monke
 
     def lose_response(method, path, *args, **kwargs):
         result = original(method, path, *args, **kwargs)
-        if path == "/machines/":
+        if path == "/machines":
             raise TimeoutError("lost response")
         return result
 
@@ -291,7 +296,7 @@ def test_ambiguous_create_reconciles_without_second_post(daemon, tmp_path, monke
     with pytest.raises(TimeoutError):
         be.create(spec=spec())
     assert backend(daemon, tmp_path).create(spec=spec()) == NAME
-    assert sum(path == "/api/v1/machines/" for _, path, _ in daemon.calls) == 1
+    assert sum(path == "/api/v1/machines" for _, path, _ in daemon.calls) == 1
 
 
 def test_pending_absence_cannot_be_replayed_or_claimed_clean(daemon, tmp_path, monkeypatch):
@@ -517,3 +522,18 @@ def test_readiness_shares_one_deadline(monkeypatch):
     with pytest.raises(TimeoutError, match="deadline"):
         be.check_ready(timeout=5)
     assert deadlines == [105, 105]
+
+
+def test_create_targets_the_route_the_daemon_actually_serves(daemon, tmp_path):
+    """Pinned against the live contract: `POST /api/v1/machines` is 200, `/machines/` is 404.
+
+    Verified against a real `smolvm serve` daemon, whose OpenAPI declares `/api/v1/machines`. The
+    backend sent the trailing-slash form, so SmolVM could not create a single VM -- and the failure
+    surfaced as ``reconcile the recorded name``, which reads like state corruption rather than a
+    routing mistake.
+    """
+    backend(daemon, tmp_path).create(spec=spec())
+
+    creates = [path for method, path, _ in daemon.calls if method == "POST" and "/machines" in path]
+    assert "/api/v1/machines" in creates
+    assert not any(path.endswith("/machines/") for path in creates)
