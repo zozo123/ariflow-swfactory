@@ -349,3 +349,108 @@ def issue_commands(orders: Sequence[WorkOrder], *, label: str = "liquid") -> lis
         body = shlex.quote(issue["body"])
         lines.append(f"gh issue create --title {title} --label {labels} --body {body}")
     return lines
+
+
+# ---------------------------------------------------------------- the loop's memory
+
+# A proposal repeated this many times without being retired is not a work order any more: it is
+# evidence that the order itself is wrong -- too large, mis-scoped, or blocked on something the
+# loop cannot see. Re-emitting it unchanged is how a loop mistakes persistence for progress.
+STALL_THRESHOLD = 3
+
+
+@dataclass(frozen=True)
+class Delta:
+    """What moved between two assessments, in the loop's own units."""
+
+    retired: tuple[str, ...] = ()
+    appeared: tuple[str, ...] = ()
+    grew: tuple[str, ...] = ()
+    shrank: tuple[str, ...] = ()
+
+    @property
+    def converging(self) -> bool:
+        """More debt retired and shrunk than appeared and grew. The only claim worth making."""
+        return len(self.retired) + len(self.shrank) > len(self.appeared) + len(self.grew)
+
+
+def _keyed(signals: Iterable[Mapping[str, Any] | Signal]) -> dict[str, float]:
+    out = {}
+    for signal in signals:
+        if isinstance(signal, Signal):
+            out[f"{signal.source.value}:{signal.key}"] = signal.weight
+        else:
+            out[f"{signal['source']}:{signal['key']}"] = float(signal["weight"])
+    return out
+
+
+def delta(before: Iterable[Mapping[str, Any] | Signal], after: Iterable[Mapping[str, Any] | Signal]) -> Delta:
+    """Compare two assessments. Retired debt is the only outcome that counts as done."""
+    old, new = _keyed(before), _keyed(after)
+    return Delta(
+        retired=tuple(sorted(set(old) - set(new))),
+        appeared=tuple(sorted(set(new) - set(old))),
+        grew=tuple(sorted(k for k in set(old) & set(new) if new[k] > old[k])),
+        shrank=tuple(sorted(k for k in set(old) & set(new) if new[k] < old[k])),
+    )
+
+
+def stalled(history: Sequence[Mapping[str, Any]], *, threshold: int = STALL_THRESHOLD) -> tuple[str, ...]:
+    """Signals present in the last ``threshold`` assessments without once being retired.
+
+    The loop's own failure detector. Without it, a work order that nobody can finish is proposed
+    forever and every cycle reports the same "top priority" -- which reads like focus and is
+    actually a stall.
+    """
+    if len(history) < threshold:
+        return ()
+    # Counted over what was PROPOSED, not what was measured. Measuring three times in an afternoon
+    # is one cycle, not three, and a detector that cannot tell them apart flags the whole ledger the
+    # third time anyone runs it -- which is how a useful alarm becomes noise nobody reads.
+    recent = [
+        {f"{order['source']}:{order['key']}" for order in assessment.get("orders", [])}
+        for assessment in history[-threshold:]
+    ]
+    return tuple(sorted(set.intersection(*recent))) if all(recent) else ()
+
+
+def record(assessment: Assessment, directory: Path, *, at: str) -> Path:
+    """Append one assessment to the trajectory. ``at`` is supplied, never read from a clock here."""
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{at}.json"
+    path.write_text(json.dumps(assessment.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def history(directory: Path) -> list[dict[str, Any]]:
+    """Every recorded assessment, oldest first. A missing or unreadable file is skipped, not fatal:
+    a corrupt trajectory entry must not stop the factory from measuring itself today."""
+    if not directory.is_dir():
+        return []
+    out = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            out.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def trajectory_report(past: Sequence[Mapping[str, Any]], now: Assessment) -> str:
+    """What the last cycle actually changed, and what has stopped moving."""
+    if not past:
+        return "no prior assessment: this is the first measurement, so there is no trajectory yet"
+    moved = delta(past[-1].get("signals", []), now.signals)
+    lines = [
+        f"since the last assessment: {len(moved.retired)} retired, {len(moved.shrank)} shrank, "
+        f"{len(moved.appeared)} appeared, {len(moved.grew)} grew"
+    ]
+    if moved.retired:
+        lines.append(f"  retired: {', '.join(moved.retired)}")
+    if moved.appeared:
+        lines.append(f"  appeared: {', '.join(moved.appeared)}")
+    lines.append("  converging" if moved.converging else "  not converging")
+    stuck = stalled([*past, now.to_dict()])
+    if stuck:
+        lines.append(f"  stalled for {STALL_THRESHOLD}+ cycles, re-scope rather than re-propose: {', '.join(stuck)}")
+    return "\n".join(lines)

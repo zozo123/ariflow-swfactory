@@ -12,6 +12,7 @@ import json
 import urllib.error
 import urllib.request
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -212,6 +213,9 @@ def improve(
     as_issues: Annotated[
         bool, typer.Option("--as-issues", help="print the gh commands that would enrol these on the liquid line")
     ] = False,
+    record_to: Annotated[
+        Path | None, typer.Option("--record", help="append this assessment to a trajectory directory")
+    ] = None,
     root: Annotated[Path | None, typer.Option(help="repository root (default: cwd)")] = None,
 ) -> None:
     """Propose the work the factory's own evidence says it needs, ranked and falsifiable.
@@ -224,7 +228,15 @@ def improve(
     It proposes only. The gates and the merge button are untouched.
     """
     from swfactory import metrics as improve_metrics
-    from swfactory.self_improvement import assess, issue_commands, propose, report
+    from swfactory.self_improvement import (
+        assess,
+        history,
+        issue_commands,
+        propose,
+        record,
+        report,
+        trajectory_report,
+    )
 
     where = Path(root) if root else Path.cwd()
     ledger = json.loads((where / "config" / "not-yet-wired.json").read_text())["modules"]
@@ -241,8 +253,63 @@ def improve(
         typer.echo("\n\n".join(issue_commands(assessment.orders)))
         return
     typer.echo(report(assessment.orders))
+    if record_to is not None:
+        # Read the trajectory BEFORE appending, or today's measurement is compared with itself.
+        past = history(record_to)
+        typer.echo("\n" + trajectory_report(past, assessment))
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+        typer.echo(f"recorded: {record(assessment, record_to, at=stamp)}")
     for refusal in assessment.refused:
         typer.echo(f"refused: {refusal}", err=True)
+
+
+provenance_app = typer.Typer(help="Release artifact provenance: record digests, and verify downloads against them.")
+
+
+@provenance_app.command("manifest")
+def provenance_manifest(
+    artifact: Annotated[list[str], typer.Option(help="artifact path (repeatable)")],
+    source_sha: Annotated[str, typer.Option(help="commit the artifacts were built from")],
+    builder: Annotated[str, typer.Option(help="who built them")] = "github-actions",
+    workflow: Annotated[str, typer.Option(help="workflow that built them")] = "release.yml",
+    out: Annotated[Path, typer.Option(help="where to write the manifest")] = Path("provenance.json"),
+) -> None:
+    """Digest release artifacts into a manifest published beside them."""
+    from swfactory import provenance as provenance_mod
+
+    paths = [Path(a) for a in artifact]
+    missing = [str(p) for p in paths if not p.is_file()]
+    if missing:
+        typer.echo(f"no such artifact: {', '.join(missing)}", err=True)
+        raise typer.Exit(2)
+    document = provenance_mod.manifest(source_sha, builder, workflow, paths)
+    provenance_mod.write(out, document)
+    typer.echo(f"{out}: {len(document.artifacts)} artifacts from {source_sha}")
+
+
+@provenance_app.command("verify")
+def provenance_verify(
+    manifest_path: Annotated[Path, typer.Option("--manifest", help="manifest published with the release")],
+    root: Annotated[Path, typer.Option(help="directory holding the downloaded artifacts")] = Path("."),
+) -> None:
+    """Check downloaded artifacts against the manifest published with them. Exit 1 on any mismatch."""
+    from swfactory import provenance as provenance_mod
+
+    try:
+        document = provenance_mod.load(manifest_path)
+    except (OSError, KeyError, ValueError) as error:
+        typer.echo(f"unreadable manifest: {error}", err=True)
+        raise typer.Exit(2) from error
+    ok, failures = provenance_mod.verify(root, document)
+    if ok:
+        typer.echo(f"verified {len(document.artifacts)} artifacts against {manifest_path}")
+        return
+    for failure in failures:
+        typer.echo(failure, err=True)
+    raise typer.Exit(1)
+
+
+app.add_typer(provenance_app, name="provenance")
 
 
 @app.command()

@@ -15,7 +15,6 @@
     "line_authoring": "no importer and no entrypoint reaches it",
     "maintenance_incidents": "no importer and no entrypoint reaches it",
     "parallel_workers": "seven-lane bounded pool for candidate work",
-    "provenance": "no importer and no entrypoint reaches it",
     "provider_conformance": "provider capability conformance; upstream backends are unmerged",
     "public_capabilities": "no importer and no entrypoint reaches it",
     "reconcile": "no importer and no entrypoint reaches it",
