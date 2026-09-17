@@ -276,3 +276,52 @@ def test_an_assessment_round_trips_through_the_trajectory(tmp_path) -> None:
     record(assessment, tmp_path, at="20260101T000000")
 
     assert [entry["orders"][0]["key"] for entry in history(tmp_path)] == ["mod"]
+
+
+# ------------------------------------------------- the loop acting on its own stall signal
+
+
+def test_a_stalled_order_is_demoted_behind_work_that_can_still_move() -> None:
+    """Detecting a stall and then proposing it at position one anyway is the loop ignoring its own
+    signal: every cycle reports an identical top priority, which reads like focus and is a
+    standstill."""
+    signals = [_signal(Source.REACHABILITY, "huge", 900), _signal(Source.REACHABILITY, "small", 10)]
+
+    assessment = propose(signals, budget=2, stalled_keys=["reachability:huge"])
+
+    assert [order.key for order in assessment.orders] == ["small", "huge"]
+
+
+def test_a_stalled_order_is_demoted_but_never_dropped() -> None:
+    """Still real debt. It needs re-scoping by someone, not forgetting."""
+    assessment = propose([_signal(Source.REACHABILITY, "huge", 900)], budget=3, stalled_keys=["reachability:huge"])
+
+    assert [order.key for order in assessment.orders] == ["huge"]
+    assert assessment.orders[0].stalled is True
+
+
+def test_demotion_never_silences_a_whole_source() -> None:
+    """Demotion is within a source, so a stalled reachability item cannot push capability work out."""
+    signals = [_signal(Source.REACHABILITY, "stuck", 900), _signal(Source.CAPABILITY, "claim", 1)]
+
+    assessment = propose(signals, budget=2, stalled_keys=["reachability:stuck"])
+
+    assert {order.source for order in assessment.orders} == {Source.REACHABILITY, Source.CAPABILITY}
+
+
+def test_the_report_says_why_an_order_slid_down() -> None:
+    assessment = propose([_signal(Source.REACHABILITY, "huge", 900)], budget=1, stalled_keys=["reachability:huge"])
+
+    assert "[stalled: re-scope]" in report(assessment.orders)
+
+
+def test_the_assessment_records_what_was_stalled_when_it_was_taken() -> None:
+    assessment = propose([_signal(Source.CAPABILITY, "c")], budget=1, stalled_keys=["capability:c"])
+
+    assert assessment.to_dict()["stalled"] == ["capability:c"]
+
+
+def test_with_no_trajectory_nothing_is_stalled_and_ranking_is_unchanged() -> None:
+    signals = [_signal(Source.REACHABILITY, "huge", 900), _signal(Source.REACHABILITY, "small", 10)]
+
+    assert [o.key for o in propose(signals, budget=2).orders] == ["huge", "small"]

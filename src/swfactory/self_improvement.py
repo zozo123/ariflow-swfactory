@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import shlex
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -91,6 +91,7 @@ class WorkOrder:
     done_when: DoneWhen
     weight: float
     labels: tuple[str, ...] = ("liquid",)
+    stalled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {**asdict(self), "source": self.source.value}
@@ -109,6 +110,7 @@ class Assessment:
     signals: tuple[Signal, ...] = ()
     orders: tuple[WorkOrder, ...] = ()
     refused: tuple[str, ...] = field(default_factory=tuple)
+    stalled: tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -116,6 +118,7 @@ class Assessment:
             "signals": [{**asdict(s), "source": s.source.value} for s in self.signals],
             "orders": [order.to_dict() for order in self.orders],
             "refused": list(self.refused),
+            "stalled": list(self.stalled),
         }
 
 
@@ -229,20 +232,31 @@ def _order_for(signal: Signal) -> WorkOrder:
 
 
 def rank_key(order: WorkOrder) -> tuple[Any, ...]:
-    """Deterministic order: nothing here reads a clock or an arrival position."""
-    return (SOURCE_ORDER[order.source], -round(order.weight, 6), order.key)
+    """Deterministic order: nothing here reads a clock or an arrival position.
+
+    ``stalled`` leads the key, so an order that has not moved in three cycles sorts behind every
+    order that still might -- within its own source, so demotion never silences a whole source.
+    """
+    return (SOURCE_ORDER[order.source], order.stalled, -round(order.weight, 6), order.key)
 
 
-def propose(signals: Iterable[Signal], *, budget: int = 5) -> Assessment:
+def propose(signals: Iterable[Signal], *, budget: int = 5, stalled_keys: Iterable[str] = ()) -> Assessment:
     """Rank the evidence and emit the work the factory can verify it finished.
 
     A work order whose done-condition does not name a check this repository runs is refused and
     recorded, never emitted. That refusal is the loop's safety property: it cannot ask for something
     whose completion it would have to take on trust.
+
+    ``stalled_keys`` are demoted to the back of their source. Detecting a stall and then proposing
+    the same thing at position one anyway is the loop ignoring its own signal: the budget goes on
+    work that has already proven it will not move, and every cycle reports an identical "top
+    priority", which reads like focus and is a standstill. Demoted rather than dropped, because a
+    stalled item is still real debt -- it needs re-scoping by someone, not forgetting.
     """
     if budget < 1:
         raise ProposalError("a proposal budget must admit at least one work order")
     ordered = tuple(signals)
+    stuck = frozenset(stalled_keys)
     orders: list[WorkOrder] = []
     refused: list[str] = []
     for signal in ordered:
@@ -252,9 +266,14 @@ def propose(signals: Iterable[Signal], *, budget: int = 5) -> Assessment:
         except ProposalError as error:
             refused.append(f"{signal.source.value}:{signal.key}: {error}")
             continue
-        orders.append(order)
+        orders.append(replace(order, stalled=f"{signal.source.value}:{signal.key}" in stuck))
     orders.sort(key=rank_key)
-    return Assessment(signals=ordered, orders=tuple(interleave(orders, budget)), refused=tuple(refused))
+    return Assessment(
+        signals=ordered,
+        orders=tuple(interleave(orders, budget)),
+        refused=tuple(refused),
+        stalled=tuple(sorted(stuck)),
+    )
 
 
 def interleave(orders: Sequence[WorkOrder], budget: int) -> list[WorkOrder]:
@@ -312,7 +331,8 @@ def report(orders: Sequence[WorkOrder]) -> str:
         return "no work proposed: every measured signal is at target"
     lines = []
     for index, order in enumerate(orders, start=1):
-        lines.append(f"{index}. [{order.source.value}] {order.title}  (weight {order.weight:g})")
+        mark = "  [stalled: re-scope]" if order.stalled else ""
+        lines.append(f"{index}. [{order.source.value}] {order.title}  (weight {order.weight:g}){mark}")
         lines.append(f"     done when: {order.done_when.predicate}")
         lines.append(f"     verify:    {order.done_when.check}")
     return "\n".join(lines)
