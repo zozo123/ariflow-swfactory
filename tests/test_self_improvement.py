@@ -8,6 +8,8 @@ no single source may own the budget -- plus the arithmetic that decides what cou
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from swfactory.self_improvement import (
@@ -20,13 +22,18 @@ from swfactory.self_improvement import (
     WorkOrder,
     capability_signals,
     delivery_signals,
+    delta,
+    history,
     interleave,
     issue_commands,
     issue_plan,
     ledger_signals,
     propose,
     rank_key,
+    record,
     report,
+    stalled,
+    trajectory_report,
 )
 
 
@@ -200,3 +207,72 @@ def test_rendering_issues_files_nothing() -> None:
 
     assert isinstance(plan, list) and plan[0]["title"]
     assert all(isinstance(line, str) for line in issue_commands(orders))
+
+
+# ------------------------------------------------------------------------ the loop's memory
+
+
+def _assessment(signal_keys: dict[str, float], order_keys: tuple[str, ...] = ()) -> dict:
+    return {
+        "signals": [{"source": "reachability", "key": k, "weight": w} for k, w in signal_keys.items()],
+        "orders": [{"source": "reachability", "key": k} for k in order_keys],
+    }
+
+
+def test_retired_debt_is_the_only_outcome_that_counts_as_done() -> None:
+    moved = delta(_assessment({"a": 10, "b": 5})["signals"], _assessment({"b": 5})["signals"])
+
+    assert moved.retired == ("reachability:a",)
+    assert moved.converging
+
+
+def test_debt_that_grew_is_not_progress() -> None:
+    moved = delta(_assessment({"a": 10})["signals"], _assessment({"a": 40, "b": 1})["signals"])
+
+    assert moved.grew == ("reachability:a",)
+    assert moved.appeared == ("reachability:b",)
+    assert not moved.converging
+
+
+def test_a_standstill_is_reported_as_not_converging() -> None:
+    """A loop that calls no movement success is a loop that has stopped measuring."""
+    moved = delta(_assessment({"a": 10})["signals"], _assessment({"a": 10})["signals"])
+
+    assert not moved.converging
+
+
+def test_a_stall_counts_proposals_not_measurements() -> None:
+    """Measuring three times in an afternoon is one cycle, not three. Counting measurements flags
+    the whole ledger the third time anyone runs the command, and a noisy alarm is an ignored one."""
+    measured_often = [_assessment({"a": 1, "b": 2}) for _ in range(4)]
+
+    assert stalled(measured_often) == ()
+
+
+def test_something_proposed_every_cycle_and_never_done_is_flagged() -> None:
+    proposed = [_assessment({"a": 1, "b": 2}, order_keys=("a",)) for _ in range(3)]
+
+    assert stalled(proposed) == ("reachability:a",)
+
+
+def test_a_short_history_cannot_stall() -> None:
+    assert stalled([_assessment({"a": 1}, ("a",))], threshold=3) == ()
+
+
+def test_a_corrupt_trajectory_entry_does_not_stop_todays_measurement(tmp_path) -> None:
+    (tmp_path / "0001.json").write_text(json.dumps(_assessment({"a": 1})), encoding="utf-8")
+    (tmp_path / "0002.json").write_text("{ this is not json", encoding="utf-8")
+
+    assert len(history(tmp_path)) == 1
+
+
+def test_the_first_measurement_says_there_is_no_trajectory_yet(tmp_path) -> None:
+    assert "no trajectory yet" in trajectory_report([], Assessment())
+
+
+def test_an_assessment_round_trips_through_the_trajectory(tmp_path) -> None:
+    assessment = propose([_signal(Source.REACHABILITY, "mod", 10)], budget=1)
+
+    record(assessment, tmp_path, at="20260101T000000")
+
+    assert [entry["orders"][0]["key"] for entry in history(tmp_path)] == ["mod"]
