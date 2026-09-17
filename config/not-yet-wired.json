@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "modules": {
+    "airflow_binding": "no importer and no entrypoint reaches it",
+    "backend_store": "no importer and no entrypoint reaches it",
+    "ci_topology": "no importer and no entrypoint reaches it",
+    "contracts": "no importer and no entrypoint reaches it",
+    "evidence_release": "promotion evidence for a selected candidate",
+    "evidence_store": "no importer and no entrypoint reaches it",
+    "evolution": "candidate campaigns; runs when a provider proves fork",
+    "fault_evidence": "no importer and no entrypoint reaches it",
+    "generations": "promotion policy for candidate campaigns",
+    "harness_conformance": "no importer and no entrypoint reaches it",
+    "intake_policy": "no importer and no entrypoint reaches it",
+    "line_authoring": "no importer and no entrypoint reaches it",
+    "maintenance_incidents": "no importer and no entrypoint reaches it",
+    "parallel_workers": "seven-lane bounded pool for candidate work",
+    "provenance": "no importer and no entrypoint reaches it",
+    "provider_conformance": "provider capability conformance; upstream backends are unmerged",
+    "public_capabilities": "no importer and no entrypoint reaches it",
+    "reconcile": "no importer and no entrypoint reaches it",
+    "repo_coordination": "no importer and no entrypoint reaches it",
+    "repo_runtime": "no importer and no entrypoint reaches it",
+    "repo_topology_runtime": "no importer and no entrypoint reaches it",
+    "worker_evidence": "no importer and no entrypoint reaches it",
+    "worker_security": "no importer and no entrypoint reaches it",
+    "workspace_materialization": "per-candidate workspace preparation"
+  }
+}

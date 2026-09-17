@@ -17,6 +17,7 @@ one up without striking it off -- a ledger that only ever grows is a ledger nobo
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,36 +39,10 @@ ENTRYPOINTS = frozenset(
 )
 
 # Debt, with the reason it is not wired yet. Strike an entry off the moment something imports it.
-NOT_YET_WIRED: dict[str, str] = {
-    # The candidate-campaign layer. `execution_binding` became reachable when the build stage
-    # started deriving its execution decision from provider capabilities; these are the parts that
-    # only run once a provider proves `fork`, which no shipped provider does yet.
-    "evolution": "candidate campaigns; runs when a provider proves fork",
-    "generations": "promotion policy for candidate campaigns",
-    "parallel_workers": "seven-lane bounded pool for candidate work",
-    "evidence_release": "promotion evidence for a selected candidate",
-    "provider_conformance": "provider capability conformance; upstream backends are unmerged",
-    "workspace_materialization": "per-candidate workspace preparation",
-    # Upstream-pending or operator surfaces with no caller in this tree yet.
-    "airflow_binding": "no importer and no entrypoint reaches it",
-    "backend_store": "no importer and no entrypoint reaches it",
-    "ci_topology": "no importer and no entrypoint reaches it",
-    "contracts": "no importer and no entrypoint reaches it",
-    "evidence_store": "no importer and no entrypoint reaches it",
-    "fault_evidence": "no importer and no entrypoint reaches it",
-    "harness_conformance": "no importer and no entrypoint reaches it",
-    "intake_policy": "no importer and no entrypoint reaches it",
-    "line_authoring": "no importer and no entrypoint reaches it",
-    "maintenance_incidents": "no importer and no entrypoint reaches it",
-    "provenance": "no importer and no entrypoint reaches it",
-    "public_capabilities": "no importer and no entrypoint reaches it",
-    "reconcile": "no importer and no entrypoint reaches it",
-    "repo_coordination": "no importer and no entrypoint reaches it",
-    "repo_runtime": "no importer and no entrypoint reaches it",
-    "repo_topology_runtime": "no importer and no entrypoint reaches it",
-    "worker_evidence": "no importer and no entrypoint reaches it",
-    "worker_security": "no importer and no entrypoint reaches it",
-}
+# Debt, with the reason it is not wired yet. It lives in ``config/not-yet-wired.json`` so this gate
+# and ``swfactory improve`` read one file: a ledger the loop cannot see is a ledger it cannot retire.
+LEDGER = ROOT / "config" / "not-yet-wired.json"
+NOT_YET_WIRED: dict[str, str] = json.loads(LEDGER.read_text(encoding="utf-8"))["modules"]
 
 
 def imports_of(tree: ast.AST, package: str = "") -> set[str]:
