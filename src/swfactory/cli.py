@@ -248,7 +248,10 @@ def improve(
     # History first: what has stalled decides how this proposal is ranked, so a blocked order stops
     # taking the top slot every cycle. Without a trajectory there is nothing stalled to know about.
     past = history(record_to) if record_to is not None else []
-    assessment = propose(assess(where, ledger=ledger, summary=summary), budget=budget, stalled_keys=stalled(past))
+    signals = assess(where, ledger=ledger, summary=summary)
+    # Only debt the factory still carries can be stalled; anything retired has already been paid.
+    carried = [f"{signal.source.value}:{signal.key}" for signal in signals]
+    assessment = propose(signals, budget=budget, stalled_keys=stalled(past, present=carried))
     if as_json:
         typer.echo(json.dumps(assessment.to_dict(), indent=2, sort_keys=True))
         return
