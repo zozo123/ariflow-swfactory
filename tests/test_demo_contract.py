@@ -33,3 +33,18 @@ def test_demo_test_command_replaces_stale_bytecode(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert bytecode.read_bytes() != stale
     assert (target / ".factory" / "junit.xml").is_file()
+
+
+def test_the_demo_target_pins_the_interpreter_the_suite_uses() -> None:
+    """Without this pin the bytecode test above passes only by accident of what is installed.
+
+    `demo/target/pyproject.toml` asks for `>=3.12` and pinned nothing, so `uv run` inside the
+    target picked the newest interpreter on the machine -- 3.14 on a developer box, 3.12 on CI.
+    The test compiles `core.cpython-312.pyc` with the suite's interpreter and then asserts the
+    demo's own test command rewrote it; under 3.14 that command writes `core.cpython-314.pyc`
+    instead, so the watched file never changes and the failure reads as stale-bytecode logic
+    rather than as two different Pythons.
+    """
+    pinned = (ROOT / "demo" / "target" / ".python-version").read_text().strip()
+
+    assert pinned == (ROOT / ".python-version").read_text().strip()
