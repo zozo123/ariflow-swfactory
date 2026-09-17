@@ -157,6 +157,12 @@ All notable changes to this project will be documented here. The format follows
 - `site/assets/lifecycle-demo.gif` deployed to GitHub Pages on every push after the page that
   embedded it was rewritten. Nothing referenced it, and an animated GIF cannot honour the
   `prefers-reduced-motion` rule the rest of the site respects. Removed.
+- SmolVM could not create a single VM. The backend posted `POST /api/v1/machines/`; the daemon
+  routes `POST /api/v1/machines` and 404s the trailing slash, so every run died as `SmolVM create
+  failed (HTTP 404); reconcile the recorded name` -- wording that reads like state corruption
+  rather than a routing mistake. The test double normalised the two paths, so the whole suite
+  passed against a call that could never work. The double is now route-exact: with the trailing
+  slash restored, 40 tests fail instead of none.
 
 ### Changed
 

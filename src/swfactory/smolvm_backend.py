@@ -289,7 +289,9 @@ class SmolvmSandboxBackend:
             self._save(name, record)  # Before POST: worker death cannot erase the cleanup identity.
             status, info = self._json(
                 "POST",
-                "/machines/",
+                # No trailing slash: the daemon routes `POST /api/v1/machines` and 404s on
+                # `/machines/`, which made every create fail as "reconcile the recorded name".
+                "/machines",
                 {**expected, "name": name, "env": [{"name": k, "value": v} for k, v in env.items()]},
                 timeout=self.create_timeout,
             )
