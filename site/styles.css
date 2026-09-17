@@ -1,14 +1,32 @@
 :root {
-  color-scheme: light;
+  /* Light is the default because the page is documentation first. The dark block below is a
+     comfort setting, not a second brand: it re-points the same six tokens and nothing else. */
+  color-scheme: light dark;
   --bg: #ffffff;
   --text: #141414;
+  --lede: #333333;
   --muted: #666666;
   --line: #dedede;
   --soft: #f7f7f7;
   --accent: #111111;
+  --on-accent: #ffffff;
+  --screen: #0b1320;
   --max: 920px;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1114;
+    --text: #e7e9ec;
+    --lede: #c4c9d0;
+    --muted: #949aa4;
+    --line: #2b2f36;
+    --soft: #171a1f;
+    --accent: #e7e9ec;
+    --on-accent: #0f1114;
+  }
 }
 
 * {
@@ -35,6 +53,11 @@ a {
 
 a:hover {
   text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
 }
 
 code,
@@ -138,11 +161,12 @@ h2 {
   margin: 0;
   line-height: 1.1;
   letter-spacing: -0.035em;
+  text-wrap: balance;
 }
 
 h1 {
   max-width: 760px;
-  font-size: clamp(2.8rem, 9vw, 5.8rem);
+  font-size: clamp(2.6rem, 8vw, 5rem);
 }
 
 h2 {
@@ -157,7 +181,7 @@ p {
 .lede {
   margin: 1.5rem 0 0;
   max-width: 720px;
-  color: #333333;
+  color: var(--lede);
   font-size: clamp(1.15rem, 2.4vw, 1.4rem);
 }
 
@@ -179,7 +203,7 @@ p {
   border: 1px solid var(--accent);
   border-radius: 5px;
   background: var(--accent);
-  color: #ffffff;
+  color: var(--on-accent);
   text-decoration: none;
 }
 
@@ -220,7 +244,35 @@ p {
   margin-top: 0.65rem;
 }
 
-.table-wrap {
+.walkthrough {
+  margin: 1.5rem 0 0;
+}
+
+/* Twelve labelled stages do not survive being scaled to a phone, so the drawing keeps a legible
+   width and pans sideways -- the same container the sandbox table uses. */
+.walkthrough .pan {
+  margin-top: 0;
+}
+
+/* The drawing is authored on its own dark ground, so it keeps that ground in both themes
+   rather than becoming a bright slab on a dark page. */
+.walkthrough img {
+  display: block;
+  width: 100%;
+  min-width: 680px;
+  height: auto;
+  background: var(--screen);
+}
+
+.walkthrough figcaption {
+  max-width: 760px;
+  margin-top: 0.75rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.table-wrap,
+.pan {
   margin-top: 1.25rem;
   overflow-x: auto;
   border: 1px solid var(--line);
@@ -280,6 +332,19 @@ footer {
   padding-block: 2rem 3rem;
   color: var(--muted);
   font-size: 0.88rem;
+}
+
+/* 404 only: the same shell, held in the middle of the viewport instead of scrolling. */
+.not-found {
+  display: flex;
+  align-items: center;
+  min-height: calc(100dvh - 64px);
+  padding-block: 3rem;
+}
+
+.not-found > section {
+  border-bottom: 0;
+  padding: 0;
 }
 
 @media (max-width: 680px) {

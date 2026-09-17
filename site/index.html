@@ -7,7 +7,8 @@
       name="description"
       content="swfactory turns GitHub issues into reviewed pull requests using Apache Airflow, isolated agent work cells, deterministic gates, and retained evidence."
     />
-    <meta name="theme-color" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1114" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="swfactory | Issue in. Verified PR out." />
     <meta
@@ -31,6 +32,7 @@
         <a class="brand" href="#top">swfactory</a>
         <nav aria-label="Primary navigation">
           <a href="#algorithm">Algorithm</a>
+          <a href="#factory-demo">Walkthrough</a>
           <a href="#sandboxes">Sandboxes</a>
           <a href="#quickstart">Run it</a>
           <a href="https://github.com/zozo123/ariflow-swfactory">GitHub</a>
@@ -83,6 +85,31 @@
         <p class="formula" aria-label="Factory algorithm">
           issue -> cell -> airflow -> sandbox -> evidence -> pull request
         </p>
+      </section>
+
+      <section id="factory-demo">
+        <h2>One work order, end to end</h2>
+        <p>
+          The drawing follows a single issue from the operator console to a pull request a person
+          merges: where Airflow maps the work into cells, which two stages stop and wait for a
+          human, and where each stage leaves evidence behind.
+        </p>
+        <figure class="walkthrough">
+          <div class="pan">
+            <img
+              src="assets/factory-walkthrough.svg"
+              width="1200"
+              height="930"
+              loading="lazy"
+              decoding="async"
+              alt="A work order passes from the operator console to the backend, into Airflow, and into a work cell that runs setup, intent, a human intent gate, specification, plan, a human plan gate, build and test, review, delivery and cleanup, before a person merges the resulting pull request."
+            />
+          </div>
+          <figcaption>
+            Illustrated example, not a live execution. Run <code>uv run swfactory demo</code> to
+            watch the same stages replay locally and print a real stage report.
+          </figcaption>
+        </figure>
       </section>
 
       <section id="invariants">

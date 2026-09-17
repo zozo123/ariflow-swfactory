@@ -4,8 +4,8 @@
   "description": "Airflow-native software delivery with isolated AI agents and human gates.",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#07090d",
-  "theme_color": "#07090d",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
   "icons": [
     {
       "src": "favicon.svg",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from html.parser import HTMLParser
 from pathlib import Path
@@ -25,6 +26,7 @@ class PageProbe(HTMLParser):
         self.meta: dict[str, str] = {}
         self.canonical = ""
         self.unlabelled_buttons: list[dict[str, str]] = []
+        self.images: list[dict[str, str]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {key: value or "" for key, value in attrs}
@@ -43,8 +45,10 @@ class PageProbe(HTMLParser):
             self.references.append(href)
             if values.get("rel") == "canonical":
                 self.canonical = href
-        if tag == "script" and (src := values.get("src")):
+        if tag in {"script", "img"} and (src := values.get("src")):
             self.references.append(src)
+        if tag == "img":
+            self.images.append(values)
         if tag == "a" and (href := values.get("href")):
             if href.startswith("#"):
                 self.fragment_links.append(href[1:])
@@ -201,3 +205,178 @@ def test_pages_workflow_deploys_only_the_site_artifact() -> None:
     assert "id-token: write" in workflow
     assert "name: github-pages" in workflow
     assert "path: ./site" in workflow
+
+
+# --------------------------------------------------------------- reachability of what ships
+
+TEXT_SUFFIXES = frozenset(
+    {".html", ".css", ".js", ".json", ".md", ".py", ".sh", ".toml", ".txt", ".webmanifest", ".xml", ".yml", ".yaml"}
+)
+SKIP_DIRECTORIES = frozenset(
+    {".git", ".venv", ".ruff_cache", ".pytest_cache", "__pycache__", "node_modules", ".factory"}
+)
+# Build output only. Named by path, because ``demo/target`` is a real fixture directory.
+SKIP_PREFIXES = ("rust/target/",)
+# Files a web server hands out without any page linking to them.
+SERVED_WITHOUT_A_LINK = frozenset({"index.html", "404.html", ".nojekyll", "robots.txt", "sitemap.xml", "install.sh"})
+ADVERTISED_ANCHOR = re.compile(r"zozo123\.github\.io/ariflow-swfactory/#([\w-]+)")
+CSS_CLASS = re.compile(r"\.(-?[_a-zA-Z][\w-]*)")
+HTML_CLASS = re.compile(r'class="([^"]*)"')
+COLOUR_LITERAL = re.compile(r"#[0-9a-fA-F]{3,8}\b")
+TOKEN_BLOCK = re.compile(r"(?::root\s*\{[^}]*\})|(?:@media \(prefers-color-scheme: dark\)\s*\{.*?\n\})", re.S)
+
+
+def repository_text(root: Path) -> dict[str, str]:
+    """Every tracked-looking text file, so a reference from anywhere in the repo counts."""
+    found: dict[str, str] = {}
+    for path in root.rglob("*"):
+        if not path.is_file() or path.suffix not in TEXT_SUFFIXES:
+            continue
+        relative = path.relative_to(root)
+        if SKIP_DIRECTORIES & set(relative.parts) or str(relative).startswith(SKIP_PREFIXES):
+            continue
+        found[str(relative)] = path.read_text(encoding="utf-8", errors="ignore")
+    return found
+
+
+def undefined_classes(html: str, css: str) -> list[str]:
+    """Class names a page asks for that the one stylesheet it loads never defines."""
+    defined = set(CSS_CLASS.findall(css))
+    used: set[str] = set()
+    for value in HTML_CLASS.findall(html):
+        used.update(value.split())
+    return sorted(used - defined)
+
+
+def unreferenced_site_files(root: Path) -> list[str]:
+    """Files under ``site/`` that deploy to Pages while nothing in the repository names them."""
+    site = root / "site"
+    corpus = "\n".join(text for name, text in repository_text(root).items() if not name.startswith("site/"))
+    corpus += "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in sorted(site.rglob("*"))
+        if path.is_file() and path.suffix in TEXT_SUFFIXES
+    )
+    orphans = []
+    for path in sorted(site.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(site)
+        if str(relative) in SERVED_WITHOUT_A_LINK:
+            continue
+        if str(relative) not in corpus and path.name not in corpus:
+            orphans.append(str(relative))
+    return orphans
+
+
+def advertised_anchors(documents: dict[str, str]) -> set[str]:
+    """Fragments the repository tells a reader to open on the published site."""
+    return {anchor for text in documents.values() for anchor in ADVERTISED_ANCHOR.findall(text)}
+
+
+def hardcoded_colours(css: str) -> list[str]:
+    """Colour literals outside the token blocks -- the ones a theme switch cannot reach."""
+    return COLOUR_LITERAL.findall(TOKEN_BLOCK.sub("", css))
+
+
+def test_every_class_a_page_uses_is_defined_in_the_stylesheet() -> None:
+    """404.html shipped for weeks styled by classes -- ``error-card``, ``ambient``, ``kicker`` --
+    that were deleted with the previous design. Nothing failed: the page still parsed, still had
+    one ``h1``, still linked home, and rendered to visitors as unstyled black text on white."""
+    css = (SITE / "styles.css").read_text()
+
+    for name in ("index.html", "404.html"):
+        assert undefined_classes((SITE / name).read_text(), css) == [], name
+
+
+def test_a_page_styled_by_a_class_the_stylesheet_dropped_is_caught() -> None:
+    css = (SITE / "styles.css").read_text()
+    page = (SITE / "404.html").read_text().replace('class="label"', 'class="kicker"', 1)
+
+    assert undefined_classes(page, css) == ["kicker"]
+
+
+def test_every_image_resolves_and_carries_alternative_text() -> None:
+    """The probe read ``link`` and ``script`` but never ``img``, so the one drawing on the page
+    was outside the reference check that exists to keep the site free of dead files."""
+    for name in ("index.html", "404.html"):
+        _, page = parse_page(name)
+        assert_local_references_exist(page)
+        for image in page.images:
+            assert image.get("alt", "").strip(), f"{name}: image without alt text"
+
+
+def test_nothing_deploys_to_pages_that_the_repository_never_references() -> None:
+    """``assets/lifecycle-demo.gif`` was published on every deploy after the page that embedded it
+    was rewritten. The existing check ran one way only -- references must resolve -- so a file
+    nobody pointed at was invisible to it."""
+    assert unreferenced_site_files(ROOT) == []
+
+
+def test_an_asset_nothing_points_at_is_reported(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    (tree / "site" / "assets").mkdir(parents=True)
+    (tree / "README.md").write_text("styles.css and assets/kept.svg", encoding="utf-8")
+    (tree / "site" / "index.html").write_text('<link href="styles.css" />', encoding="utf-8")
+    (tree / "site" / "styles.css").write_text("body{}", encoding="utf-8")
+    (tree / "site" / "assets" / "kept.svg").write_text("<svg></svg>", encoding="utf-8")
+    (tree / "site" / "assets" / "stale.gif").write_bytes(b"GIF89a")
+
+    assert unreferenced_site_files(tree) == ["assets/stale.gif"]
+
+
+def test_every_anchor_the_repository_advertises_exists_on_the_page() -> None:
+    """README linked twice to ``/#factory-demo`` -- once from the header nav, once from the
+    quickstart -- for as long as the section it names was absent from the page."""
+    _, page = parse_page("index.html")
+
+    missing = sorted(advertised_anchors(repository_text(ROOT)) - set(page.ids))
+
+    assert missing == [], f"advertised on the site but not on the page: {missing}"
+
+
+def test_an_advertised_anchor_with_no_section_is_reported() -> None:
+    documents = {"README.md": "see https://zozo123.github.io/ariflow-swfactory/#factory-demo now"}
+
+    assert advertised_anchors(documents) == {"factory-demo"}
+
+
+def test_the_page_answers_to_the_readers_colour_scheme() -> None:
+    """``color-scheme: light`` was pinned while the manifest declared a dark theme colour, so the
+    two disagreed and a reader on a dark system got a full-brightness page either way."""
+    css = (SITE / "styles.css").read_text()
+
+    assert "color-scheme: light dark" in css
+    assert "@media (prefers-color-scheme: dark)" in css
+    for token in ("--bg", "--text", "--muted", "--line", "--soft", "--accent"):
+        assert css.count(f"{token}:") >= 2, token
+
+
+def test_no_colour_escapes_the_theme_tokens() -> None:
+    """``.lede`` carried a literal ``#333333``. A token block cannot re-point what never read it,
+    so that one rule stayed dark-on-dark when everything around it inverted."""
+    assert hardcoded_colours((SITE / "styles.css").read_text()) == []
+
+
+def test_a_colour_written_outside_the_token_blocks_is_caught() -> None:
+    css = (SITE / "styles.css").read_text().replace("color: var(--lede);", "color: #333333;", 1)
+
+    assert hardcoded_colours(css) == ["#333333"]
+
+
+def test_the_manifest_theme_matches_the_light_scheme_the_page_declares() -> None:
+    """The manifest painted an installed window ``#07090d`` while the stylesheet had no dark mode
+    at all, so the splash screen and the page it opened were different products."""
+    source, _ = parse_page("index.html")
+    manifest = json.loads((SITE / "site.webmanifest").read_text())
+
+    declared = dict(
+        re.findall(
+            r'<meta name="theme-color" media="\(prefers-color-scheme: (\w+)\)" content="([^"]+)"',
+            source,
+        )
+    )
+
+    assert set(declared) == {"light", "dark"}
+    assert declared["light"] != declared["dark"]
+    assert declared["light"] == manifest["theme_color"] == manifest["background_color"]
