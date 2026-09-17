@@ -4,28 +4,38 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex" />
-    <meta name="theme-color" content="#07090d" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1114" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
-    <title>Run not found | swfactory</title>
+    <title>Page not found | swfactory</title>
   </head>
-  <body class="error-page">
-    <div class="ambient" aria-hidden="true"></div>
-    <main>
-      <div class="error-shell">
-        <section class="error-card">
-          <a class="brand" href="./" aria-label="swfactory home">
-            <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-            <span class="brand-name">swfactory</span>
-          </a>
-          <div>
-            <p class="kicker">HTTP / 404</p>
-            <h1>Run not found.<br /><span>Return to control.</span></h1>
-            <p>The path missed the blueprint. The factory is still waiting where you left it.</p>
-          </div>
-          <a class="button button-primary" href="./">Back to the factory <span aria-hidden="true">↙</span></a>
-        </section>
+  <body>
+    <header class="site-header">
+      <div class="shell nav">
+        <a class="brand" href="./">swfactory</a>
+        <nav aria-label="Primary navigation">
+          <a href="./#algorithm">Algorithm</a>
+          <a href="./#factory-demo">Walkthrough</a>
+          <a href="./#quickstart">Run it</a>
+          <a href="https://github.com/zozo123/ariflow-swfactory">GitHub</a>
+        </nav>
       </div>
+    </header>
+
+    <main class="shell not-found">
+      <section>
+        <p class="label">HTTP 404</p>
+        <h1>This page is not part of the site.</h1>
+        <p class="lede">
+          The site is one page. Anything deeper — stages, evidence, run reports — lives in the
+          repository, not here.
+        </p>
+        <div class="actions">
+          <a class="primary" href="./">Back to the front page</a>
+          <a href="https://github.com/zozo123/ariflow-swfactory">Browse the repository</a>
+        </div>
+      </section>
     </main>
   </body>
 </html>

@@ -70,6 +70,20 @@ All notable changes to this project will be documented here. The format follows
 - `tests/test_recovery_acceptance.py`, `tests/test_workgraph_stage_execution.py`,
   `tests/test_work_executor.py` and `tests/test_generation_contract.py`. Four claims cited test
   files nobody had written; each now cites a test that executes the entrypoint it claims.
+- The illustrated walkthrough the README has linked to twice, at
+  `https://zozo123.github.io/ariflow-swfactory/#factory-demo`. The section went away when the
+  product site was collapsed to one page; the two links pointing at it did not, so both landed on
+  the front page with nothing to show. `site/assets/factory-walkthrough.svg` already drew exactly
+  what they promised and was deploying to Pages unreferenced. It is now on the page, inside a
+  horizontally scrolling container so twelve labelled stages stay legible on a phone, and captioned
+  as an illustrated example rather than a live execution.
+- Four reachability and theme gates in `tests/test_site.py`, each proved against a mutated copy the
+  way the capability-surface tests are. Every class a page uses must be defined in the one
+  stylesheet it loads; every `img` must resolve and carry alternative text; every file under
+  `site/` must be referenced by something, or be one a web server hands out unlinked; and every
+  `#anchor` the repository advertises on the published site must exist as an `id` on the page. The
+  reference check ran one way only -- a link had to resolve -- so a page styled by deleted classes,
+  an asset nobody pointed at, and an advertised section that did not exist all sat outside it.
 
 ### Fixed
 
@@ -115,6 +129,20 @@ All notable changes to this project will be documented here. The format follows
 - `OperationJournal.start_attempt` raised `RetryBudgetExhausted` inside its transaction, which
   rolled back the `exhausted` row it had just written; after a restart a dead operation looked
   retryable forever.
+- `site/404.html` rendered as unstyled black text on white. It was authored for the previous
+  design and still asked for `error-page`, `ambient`, `error-card`, `kicker` and `brand-mark`, none
+  of which survived into the current stylesheet. Every existing check still passed: the page parsed,
+  carried one `h1`, declared `noindex` and linked home. It now uses the shell, hero and action
+  styles the front page uses, and tells a reader where the content actually lives.
+- The site ignored the reader's colour scheme. `color-scheme` was pinned to `light` while
+  `site.webmanifest` and `404.html` both declared a `#07090d` dark theme colour, so an installed
+  window and the page it opened were different products. The stylesheet now re-points its tokens
+  under `prefers-color-scheme: dark`, the page declares a theme colour per scheme, and a test
+  refuses any colour literal written outside the token blocks -- the defect that kept `.lede` at a
+  hardcoded `#333333` where a theme switch could never reach it.
+- `site/assets/lifecycle-demo.gif` deployed to GitHub Pages on every push after the page that
+  embedded it was rewritten. Nothing referenced it, and an animated GIF cannot honour the
+  `prefers-reduced-motion` rule the rest of the site respects. Removed.
 
 ### Changed
 

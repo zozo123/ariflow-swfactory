@@ -15,7 +15,7 @@ People decide what reaches `main`.
 
 [Quickstart](#quickstart) · [Liquid methodology](#the-liquid-methodology) ·
 [Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
-[Interactive demo](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Agent skills](#agent-skills)
+[Illustrated walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Agent skills](#agent-skills)
 
 ![A software change moving through work cells from issue to reviewed pull request](site/factory-line.webp)
 
@@ -45,8 +45,8 @@ The terminal prints the stage report and delivery location. Find the machine-rea
 uv run swfactory state list
 ```
 
-Prefer to explore visually? The [interactive walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo)
-illustrates the workflow and approval decisions using simulated data.
+Prefer to see the shape first? The [illustrated walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo)
+draws the same stages and the two human gates as one diagram.
 
 ## What the factory gives you
 
