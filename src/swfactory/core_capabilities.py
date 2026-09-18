@@ -83,7 +83,7 @@ class CoreMutationRequest:
     target_tenant: str
     parts: tuple[str, ...] = ()
     secret_scope: str | None = None
-    replay_safe: bool = False
+    replay_safe: bool | None = None
     external_operation_key: str | None = None
     intent_digest: str | None = None
 

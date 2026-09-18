@@ -316,3 +316,24 @@ def test_the_budget_splits_across_the_population() -> None:
     requests = _requests(budget=CampaignBudget(max_cost_usd=9.0))
 
     assert [request.budget_usd for request in requests] == [3.0, 3.0, 3.0]
+
+
+def test_final_ranking_ignores_cost_and_wall_clock_when_evidence_is_equal() -> None:
+    repair, rethink = _requests(Strategy.REPAIR, Strategy.RETHINK)
+    first_pair = (
+        _outcome(repair, cost=99.0, duration=999.0),
+        _outcome(rethink, cost=0.01, duration=0.01),
+    )
+    second_pair = (
+        _outcome(repair, cost=0.01, duration=0.01),
+        _outcome(rethink, cost=99.0, duration=999.0),
+    )
+
+    first_order = tuple(
+        item.logical_id for item in sorted(first_pair, key=lambda item: rank_key(item, REQUIRED_DIMENSIONS))
+    )
+    second_order = tuple(
+        item.logical_id for item in sorted(second_pair, key=lambda item: rank_key(item, REQUIRED_DIMENSIONS))
+    )
+
+    assert first_order == second_order

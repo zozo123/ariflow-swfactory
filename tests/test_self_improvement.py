@@ -9,6 +9,7 @@ no single source may own the budget -- plus the arithmetic that decides what cou
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -35,6 +36,8 @@ from swfactory.self_improvement import (
     stalled,
     trajectory_report,
 )
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _signal(source: Source, key: str, weight: float = 1.0) -> Signal:
@@ -375,3 +378,87 @@ def test_the_report_distinguishes_demoted_from_re_admitted() -> None:
 
     assert "[stalled: re-scope]" in cold
     assert "[stalled: re-admitted to re-scope]" in hot
+
+
+# ------------------------------------------- capability debt: resolution, and which end comes first
+
+
+def _claim(cid: str, *, state="experimental", test="tests/test_self_improvement.py", environment="") -> dict:
+    return {"id": cid, "state": state, "support": "experimental", "test": test, "environment": environment}
+
+
+def test_the_nearest_capability_claim_is_proposed_before_the_furthest() -> None:
+    """Dead code and capability claims disagree about what is worth doing next, and the disagreement
+    is real: 360 unreachable lines cost more than 60, but the claim NEAREST validation is the
+    cheapest to close. Proposing the furthest one first is how a backlog never moves."""
+    signals = [
+        Signal(Source.CAPABILITY, "far", 3.0, "d"),
+        Signal(Source.CAPABILITY, "near", 1.0, "d"),
+    ]
+
+    assert [o.key for o in propose(signals, budget=2).orders] == ["near", "far"]
+
+
+def test_dead_code_still_leads_with_the_biggest_block() -> None:
+    """The opposite direction, in the same ranking, because the sources mean different things."""
+    signals = [Signal(Source.REACHABILITY, "small", 60, "d"), Signal(Source.REACHABILITY, "big", 360, "d")]
+
+    assert [o.key for o in propose(signals, budget=2).orders] == ["big", "small"]
+
+
+def test_weight_still_means_remaining_distance_everywhere() -> None:
+    """Inverting the weight for one source would have inverted delta() with it, where "shrank" must
+    always mean progress. The ordering differs per source; the units do not."""
+    moved = delta(
+        [{"source": "capability", "key": "c", "weight": 3.0}],
+        [{"source": "capability", "key": "c", "weight": 1.0}],
+    )
+
+    assert moved.shrank == ("capability:c",)
+    assert moved.converging
+
+
+def test_a_claim_whose_test_resolves_to_nothing_is_further_away(tmp_path) -> None:
+    (tmp_path / "config").mkdir()
+    document = {"claims": [_claim("real"), _claim("ghost", test="tests/test_nobody_wrote_this.py")]}
+
+    weights = {s.key: s.weight for s in capability_signals(document, root=ROOT)}
+
+    assert weights["ghost"] > weights["real"]
+
+
+def test_an_environment_needing_provisioning_is_further_away() -> None:
+    document = {
+        "claims": [
+            _claim("plain", environment="Ubuntu 24.04 with the runtime installed"),
+            _claim("gated", environment="requires ISLO_API_KEY and a hosted account"),
+        ]
+    }
+
+    weights = {s.key: s.weight for s in capability_signals(document, root=ROOT)}
+
+    assert weights["gated"] > weights["plain"]
+
+
+def test_github_hosted_is_not_mistaken_for_needing_provisioning() -> None:
+    """The false positive this cost: "GitHub-hosted Docker" matched a "hosted" term and scored a
+    claim CI already runs as if it were blocked on infrastructure."""
+    document = {
+        "claims": [
+            _claim("docker", environment="GitHub-hosted Docker"),
+            _claim("plain", environment="Ubuntu 24.04"),
+        ]
+    }
+
+    weights = {s.key: s.weight for s in capability_signals(document, root=ROOT)}
+
+    assert weights["docker"] == weights["plain"]
+
+
+def test_without_a_root_the_scoring_falls_back_to_state_alone() -> None:
+    """No tree to resolve against is not a reason to invent distance."""
+    document = {"claims": [_claim("a", test="tests/test_nobody_wrote_this.py", environment="needs kvm hardware")]}
+
+    (signal,) = capability_signals(document)
+
+    assert signal.weight == 2.0  # experimental(1) + environment(1); the test term needs a root

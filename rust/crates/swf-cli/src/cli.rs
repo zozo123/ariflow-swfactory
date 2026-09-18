@@ -237,7 +237,6 @@ pub struct ContextAddArgs {
     pub force: bool,
 }
 
-
 /// `swf factory …` — the canonical harness and operator surface.
 #[derive(Debug, Subcommand)]
 pub enum FactoryCmd {

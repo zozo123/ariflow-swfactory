@@ -343,7 +343,10 @@ def build_campaign_decision(
         raise CampaignDecisionError("evidence supplied for unknown candidates: " + ",".join(sorted(extras)))
 
     candidates = tuple(
-        _decision_candidate(outcome, evidence_bundles.get(outcome.logical_id)) for outcome in report.outcomes
+        sorted(
+            (_decision_candidate(outcome, evidence_bundles.get(outcome.logical_id)) for outcome in report.outcomes),
+            key=lambda candidate: candidate.candidate_id,
+        )
     )
     manifest = CampaignDecisionManifest(
         campaign_id=report.campaign_id,
