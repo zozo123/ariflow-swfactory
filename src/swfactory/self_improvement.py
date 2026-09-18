@@ -92,6 +92,7 @@ class WorkOrder:
     weight: float
     labels: tuple[str, ...] = ("liquid",)
     stalled: bool = False
+    demoted: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {**asdict(self), "source": self.source.value}
@@ -234,13 +235,22 @@ def _order_for(signal: Signal) -> WorkOrder:
 def rank_key(order: WorkOrder) -> tuple[Any, ...]:
     """Deterministic order: nothing here reads a clock or an arrival position.
 
-    ``stalled`` leads the key, so an order that has not moved in three cycles sorts behind every
+    ``demoted`` leads the key, so an order that has not moved in three cycles sorts behind every
     order that still might -- within its own source, so demotion never silences a whole source.
+
+    A stalled order that annealing has re-admitted is NOT demoted: when the loop has stopped
+    retiring anything, the item it keeps sidestepping is usually the one in its way.
     """
-    return (SOURCE_ORDER[order.source], order.stalled, -round(order.weight, 6), order.key)
+    return (SOURCE_ORDER[order.source], order.demoted, -round(order.weight, 6), order.key)
 
 
-def propose(signals: Iterable[Signal], *, budget: int = 5, stalled_keys: Iterable[str] = ()) -> Assessment:
+def propose(
+    signals: Iterable[Signal],
+    *,
+    budget: int = 5,
+    stalled_keys: Iterable[str] = (),
+    readmit_stalled: bool = False,
+) -> Assessment:
     """Rank the evidence and emit the work the factory can verify it finished.
 
     A work order whose done-condition does not name a check this repository runs is refused and
@@ -252,6 +262,10 @@ def propose(signals: Iterable[Signal], *, budget: int = 5, stalled_keys: Iterabl
     work that has already proven it will not move, and every cycle reports an identical "top
     priority", which reads like focus and is a standstill. Demoted rather than dropped, because a
     stalled item is still real debt -- it needs re-scoping by someone, not forgetting.
+
+    ``readmit_stalled`` suspends that demotion. `improvement_annealing` raises it when the loop has
+    retired nothing for several cycles: at that point avoiding the hard item is what is keeping the
+    loop stuck, so it comes back -- still marked, to be re-scoped rather than re-proposed unchanged.
     """
     if budget < 1:
         raise ProposalError("a proposal budget must admit at least one work order")
@@ -266,7 +280,8 @@ def propose(signals: Iterable[Signal], *, budget: int = 5, stalled_keys: Iterabl
         except ProposalError as error:
             refused.append(f"{signal.source.value}:{signal.key}: {error}")
             continue
-        orders.append(replace(order, stalled=f"{signal.source.value}:{signal.key}" in stuck))
+        is_stalled = f"{signal.source.value}:{signal.key}" in stuck
+        orders.append(replace(order, stalled=is_stalled, demoted=is_stalled and not readmit_stalled))
     orders.sort(key=rank_key)
     return Assessment(
         signals=ordered,
@@ -331,7 +346,9 @@ def report(orders: Sequence[WorkOrder]) -> str:
         return "no work proposed: every measured signal is at target"
     lines = []
     for index, order in enumerate(orders, start=1):
-        mark = "  [stalled: re-scope]" if order.stalled else ""
+        mark = ""
+        if order.stalled:
+            mark = "  [stalled: re-scope]" if order.demoted else "  [stalled: re-admitted to re-scope]"
         lines.append(f"{index}. [{order.source.value}] {order.title}  (weight {order.weight:g}){mark}")
         lines.append(f"     done when: {order.done_when.predicate}")
         lines.append(f"     verify:    {order.done_when.check}")

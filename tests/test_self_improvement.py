@@ -349,3 +349,29 @@ def test_retired_debt_stops_being_stalled() -> None:
 
     assert stalled(trajectory, present=["reachability:a"]) == ("reachability:a",)
     assert stalled(trajectory, present=[]) == ()
+
+
+# --------------------------------------------------- annealing re-admits what the loop avoids
+
+
+def test_re_admission_undemotes_a_stalled_order_without_forgetting_it_stalled() -> None:
+    """When the loop has retired nothing for several cycles, the item it keeps sidestepping is
+    usually the one in its way. It comes back to be re-scoped -- still marked, not reset."""
+    signals = [_signal(Source.REACHABILITY, "huge", 900), _signal(Source.REACHABILITY, "small", 10)]
+
+    cold = propose(signals, budget=2, stalled_keys=["reachability:huge"])
+    hot = propose(signals, budget=2, stalled_keys=["reachability:huge"], readmit_stalled=True)
+
+    assert [o.key for o in cold.orders] == ["small", "huge"]
+    assert [o.key for o in hot.orders] == ["huge", "small"]
+    assert hot.orders[0].stalled is True and hot.orders[0].demoted is False
+
+
+def test_the_report_distinguishes_demoted_from_re_admitted() -> None:
+    signals = [_signal(Source.REACHABILITY, "huge", 900)]
+
+    cold = report(propose(signals, budget=1, stalled_keys=["reachability:huge"]).orders)
+    hot = report(propose(signals, budget=1, stalled_keys=["reachability:huge"], readmit_stalled=True).orders)
+
+    assert "[stalled: re-scope]" in cold
+    assert "[stalled: re-admitted to re-scope]" in hot
