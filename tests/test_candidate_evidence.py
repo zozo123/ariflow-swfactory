@@ -283,7 +283,6 @@ def test_resealed_diff_cannot_claim_different_semantics(repo: Path, tmp_path: Pa
     remove_candidate_worktree(worktree)
 
 
-
 def test_bundle_binds_inherited_recipe_to_candidate_input(repo: Path, tmp_path: Path) -> None:
     recipe_dir = repo / ".swfactory"
     recipe_dir.mkdir()
