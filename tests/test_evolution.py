@@ -225,6 +225,7 @@ def test_a_campaign_cannot_approve_its_own_winner() -> None:
     """Selection proposes. ``generations.promotable`` still requires the human gate."""
     report = run_campaign(lambda request: _outcome(request), _requests(), human_approved=False)
 
+    assert report.exploration_selection.winner is not None
     assert report.selection.winner is None
     assert all("human_gate" in refusal for refusal in report.selection.refusals)
 
@@ -258,7 +259,8 @@ def test_independence_is_recorded_on_the_report_the_campaign_stores() -> None:
     # The report is stored as JSON, so it has to survive the trip.
     document = json.loads(json.dumps(report.to_dict()))
     assert document["independence"] == list(report.independence)
-    assert document["schema_version"] == 2
+    assert document["schema_version"] == 3
+    assert document["exploration_selection"]["winner"] == report.exploration_selection.winner
     assert document["experiment_round"]["round_id"] == report.campaign_id
     assert document["outcomes"][0]["evaluations"][0]["dimension"] == "correctness"
 
