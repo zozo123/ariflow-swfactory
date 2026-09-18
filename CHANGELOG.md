@@ -6,6 +6,12 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Add an advisory Turborepo 2.11.1 polyglot verification graph: the root uv project is discovered
+  natively, Python tests wait on an explicit nested-Rust build task, the Rust contract test joins the
+  same graph, remote Turbo cache is disabled, and the graph stays outside candidate-readiness. The
+  README and `docs/polyglot-task-graph.md` define the boundary as build acceleration inside a stage,
+  never a second lifecycle or promotion authority.
+
 - Fail SmolVM doctor preflight when the configured daemon is unreachable, unhealthy, or not
   ready, using read-only health/readiness requests under one five-second deadline.
 - Rebuild demo source bytecode before tests so rapid same-size fixes cannot reuse stale Python
