@@ -19,7 +19,7 @@ from swfactory.evolution import (
     run_campaign,
     select,
 )
-from swfactory.experiment_tree import ExperimentTreeError, NodeState, render, stack_rounds
+from swfactory.experiment_tree import ExperimentTreeError, NodeState, render, render_mermaid, stack_rounds
 from swfactory.generations import Dimension
 
 
@@ -227,3 +227,18 @@ def test_cli_renders_stored_campaign_reports(tmp_path: Path) -> None:
     assert "round 0  round-0" in result.output
     assert "round 1  round-1" in result.output
     assert "sha-round-1" in result.output
+
+    assert first.experiment_round is not None
+    assert second.experiment_round is not None
+    mermaid = render_mermaid(stack_rounds((first.experiment_round, second.experiment_round)))
+    assert mermaid.startswith("flowchart TD")
+    assert "root --> n0_0" in mermaid
+    assert "n0_0 --> n1_0" in mermaid
+    assert "class n0_0,n1_0 selected" in mermaid
+
+    mermaid_result = CliRunner().invoke(
+        app,
+        ["experiment-tree", *(str(path) for path in paths), "--mermaid"],
+    )
+    assert mermaid_result.exit_code == 0, mermaid_result.output
+    assert mermaid_result.output.startswith("flowchart TD")
