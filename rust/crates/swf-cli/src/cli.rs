@@ -711,6 +711,34 @@ mod tests {
     }
 
     #[test]
+    fn factory_run_is_the_canonical_harness_spelling() {
+        let cli = Cli::try_parse_from([
+            "swf",
+            "factory",
+            "run",
+            "research",
+            "--issue",
+            "42",
+            "--target",
+            "owner/repo",
+            "--harness",
+            "codex",
+            "--factory-id",
+            "session-1",
+        ])
+        .expect("factory run parses");
+
+        let Command::Factory(FactoryCmd::Run(args)) = cli.command else {
+            panic!("expected factory run");
+        };
+        assert_eq!(args.factory, "research");
+        assert_eq!(args.issues, ["42"]);
+        assert_eq!(args.targets, ["owner/repo"]);
+        assert_eq!(args.harness.as_deref(), Some("codex"));
+        assert_eq!(args.factory_id.as_deref(), Some("session-1"));
+    }
+
+    #[test]
     fn submit_requires_an_issue() {
         assert!(Cli::try_parse_from(["swf", "submit"]).is_err());
         assert!(Cli::try_parse_from(["swf", "submit", "--issue", "42"]).is_ok());
