@@ -266,6 +266,35 @@ def render(tree: ExperimentTree) -> str:
     return "\n".join(lines)
 
 
+def render_mermaid(tree: ExperimentTree) -> str:
+    """Render a deterministic GitHub-compatible Mermaid view of the validated tree."""
+    tree.validate()
+    lines = ['flowchart TD', f'  root["root\\n{tree.root_head}"]']
+    graph_ids: dict[str, str] = {}
+    previous_winner_graph_id = "root"
+    selected_ids: list[str] = []
+
+    for round_ in tree.rounds:
+        for index, node in enumerate(round_.nodes):
+            graph_id = f"n{round_.depth}_{index}"
+            graph_ids[node.id] = graph_id
+            head = node.recorded_head or "-"
+            label = f"{node.strategy}\\n{node.state.value}\\n{head}".replace('"', "'")
+            lines.append(f'  {graph_id}["{label}"]')
+            parent_graph_id = "root" if round_.depth == 0 else previous_winner_graph_id
+            lines.append(f"  {parent_graph_id} --> {graph_id}")
+            if node.selected:
+                selected_ids.append(graph_id)
+        winner = round_.winner
+        if winner is not None:
+            previous_winner_graph_id = graph_ids[winner.id]
+
+    lines.append("  classDef selected stroke-width:4px")
+    if selected_ids:
+        lines.append(f"  class {','.join(selected_ids)} selected")
+    return "\n".join(lines)
+
+
 def load_round(path: Path) -> ExperimentRound:
     document = json.loads(path.read_text(encoding="utf-8"))
     payload = document.get("experiment_round", document)
@@ -277,11 +306,15 @@ def load_round(path: Path) -> ExperimentRound:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate and render stacked candidate experiment rounds.")
     parser.add_argument("reports", nargs="+", type=Path, help="campaign report JSON files, oldest round first")
-    parser.add_argument("--json", action="store_true", help="emit the validated combined tree as JSON")
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--json", action="store_true", help="emit the validated combined tree as JSON")
+    output.add_argument("--mermaid", action="store_true", help="emit a GitHub-compatible Mermaid flowchart")
     args = parser.parse_args(argv)
     tree = stack_rounds(load_round(path) for path in args.reports)
     if args.json:
         print(json.dumps(tree.to_dict(), indent=2, sort_keys=True))
+    elif args.mermaid:
+        print(render_mermaid(tree))
     else:
         print(render(tree))
     return 0
