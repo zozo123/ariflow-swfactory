@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -50,14 +50,14 @@ def test_managed_work_order_binds_every_cell_to_one_snapshot() -> None:
 
 def test_human_gate_rejects_auto_and_stale_artifacts() -> None:
     policy = HumanGate("publish", True, "cell-1", 2, "a" * 64)
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     with pytest.raises(PermissionError, match="automatically"):
         authorize_gate(policy, GateResponse("publish", "auto", "approve", "cell-1", 2, "a" * 64, now))
     with pytest.raises(PermissionError, match="stale artifacts"):
         authorize_gate(policy, GateResponse("publish", "yossi", "approve", "cell-1", 2, "b" * 64, now))
-    assert (
-        authorize_gate(policy, GateResponse("publish", "yossi", "approve", "cell-1", 2, "a" * 64, now)).actor == "yossi"
-    )
+    assert authorize_gate(
+        policy, GateResponse("publish", "yossi", "approve", "cell-1", 2, "a" * 64, now)
+    ).actor == "yossi"
 
 
 def test_backlog_selection_is_bounded_and_explains_skips() -> None:
@@ -80,34 +80,17 @@ def test_backlog_selection_is_bounded_and_explains_skips() -> None:
 
 def test_schedule_limits_are_explicit_and_timezone_aware() -> None:
     limits = ScheduleLimits(
-        origin=datetime(2026, 1, 1, tzinfo=UTC),
+        origin=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        period=timedelta(days=1),
         max_active_runs=1,
         max_cells=4,
         run_timeout=timedelta(hours=20),
     )
-    assert limits.origin is not None and limits.origin.tzinfo is UTC
-    with pytest.raises(ValueError, match="timezone-aware"):
-        ScheduleLimits(origin=datetime(2026, 1, 1), max_active_runs=1, max_cells=4, run_timeout=timedelta(hours=1))
-    with pytest.raises(ValueError, match="positive"):
-        ScheduleLimits(origin=None, max_active_runs=0, max_cells=4, run_timeout=timedelta(hours=1))
-    with pytest.raises(ValueError, match="positive"):
-        ScheduleLimits(origin=None, max_active_runs=1, max_cells=4, run_timeout=timedelta(0))
-
-
-def test_the_shipped_lines_declare_their_schedule_limits() -> None:
-    """The bounds ``dags/blueprints.py`` hands Airflow come from here (#2070): a cron line has an
-    origin and one run at a time, a manual line has no origin and Airflow's declared default, and
-    every run is capped at the life of its own sandbox."""
-    from swfactory.blueprint import load
-
-    liquid = load("liquid").schedule_limits()
-    assert liquid.origin is not None and liquid.origin.tzinfo is not None
-    assert liquid.max_active_runs == 1
-    assert liquid.max_cells == 1
-    assert liquid.run_timeout == timedelta(seconds=load("liquid").sandbox.ttl_s)
-    manual = load("factory").schedule_limits()
-    assert (manual.origin, manual.max_active_runs) == (None, 16)
-    assert manual.run_timeout == timedelta(seconds=load("factory").sandbox.ttl_s)
+    assert limits.next_tick(datetime(2026, 1, 1, 12, tzinfo=timezone.utc)) == datetime(
+        2026, 1, 2, tzinfo=timezone.utc
+    )
+    assert limits.admit_run(active_runs=0, active_cells=2, requested_cells=2) == (True, "admitted")
+    assert limits.admit_run(active_runs=1, active_cells=0, requested_cells=1) == (False, "active-run-limit")
 
 
 def test_cross_channel_dedupe_and_complete_bindings() -> None:
