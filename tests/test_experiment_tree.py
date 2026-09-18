@@ -34,6 +34,9 @@ def _passing_outcome(request: CandidateRequest, head: str) -> CandidateOutcome:
             evaluation(Dimension.CORRECTNESS, passed=True, evidence="tests"),
             evaluation(Dimension.EVIDENCE, passed=True, evidence="report"),
         ),
+        candidate_ref=f"refs/swfactory/candidates/{request.logical_id}",
+        evidence_bundle_path=f".factory/candidate-evidence/{request.logical_id}",
+        evidence_digest="sha256:" + "a" * 64,
     )
 
 
