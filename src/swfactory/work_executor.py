@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from typing import Literal, Protocol
@@ -18,7 +18,7 @@ from typing import Literal, Protocol
 from swfactory.workgraph import WorkNode, conflict_set, deterministic_merge_order, waves
 
 NodeState = Literal["ok", "failed", "cancelled", "skipped"]
-ConflictKind = Literal["disjoint", "overlap", "stale_base", "protected"]
+ConflictKind = Literal["disjoint", "overlap", "stale_base", "protected", "undeclared"]
 
 
 @dataclass(frozen=True)
@@ -82,6 +82,7 @@ class ExecutionReport:
     results: tuple[NodeResult, ...]
     merges: tuple[MergeReceipt, ...]
     final_head: str
+    conflicts: tuple[ConflictReceipt, ...] = ()
     cancelled: bool = False
 
     def to_dict(self) -> dict:
@@ -149,6 +150,7 @@ class WorkExecutor:
         results: dict[str, NodeResult] = {}
         target_head = input_head
         merges: list[MergeReceipt] = []
+        conflicts: list[ConflictReceipt] = []
 
         for wave in waves(ordered):
             if cancellation.cancelled:
@@ -171,6 +173,20 @@ class WorkExecutor:
             for result in wave_results:
                 results[result.node_id] = result
             if cancellation.cancelled or any(result.state != "ok" for result in wave_results):
+                cancellation.cancel()
+                break
+
+            # Results are evidence, not merge authority. Check the files the provider says it
+            # actually touched before invoking the first merger callback. A conflict therefore
+            # leaves the authoritative target unchanged and survives in the execution report.
+            wave_conflicts = self.classify_conflicts(
+                wave_results,
+                observed_target_head=target_head,
+                expected_target_head=requests[0].input_head if requests else target_head,
+                declared_paths={request.node.id: request.node.files for request in requests},
+            )
+            if wave_conflicts:
+                conflicts.extend(wave_conflicts)
                 cancellation.cancel()
                 break
 
@@ -208,6 +224,7 @@ class WorkExecutor:
             results=tuple(results[node.id] for node in ordered),
             merges=tuple(merges),
             final_head=target_head,
+            conflicts=tuple(conflicts),
             cancelled=cancellation.cancelled,
         )
 
@@ -277,6 +294,8 @@ class WorkExecutor:
             result = self.runner(req)
             if result.logical_id != request.logical_id or result.node_id != request.node.id:
                 raise ValueError("runner returned result for the wrong logical node")
+            if result.input_head != request.input_head:
+                raise ValueError("runner returned result for the wrong input head")
             result = NodeResult(
                 **{
                     **asdict(result),
@@ -300,6 +319,7 @@ class WorkExecutor:
         *,
         observed_target_head: str,
         expected_target_head: str,
+        declared_paths: Mapping[str, Iterable[str]] | None = None,
     ) -> tuple[ConflictReceipt, ...]:
         ordered = tuple(results)
         found: list[ConflictReceipt] = []
@@ -314,6 +334,11 @@ class WorkExecutor:
             )
         protected = set(self.policy.protected_paths)
         for result in ordered:
+            if declared_paths is not None:
+                declared = set(declared_paths.get(result.node_id, ()))
+                unexpected = tuple(sorted(set(result.touched_files) - declared))
+                if unexpected:
+                    found.append(ConflictReceipt(result.node_id, "declaration", "undeclared", unexpected))
             hit = tuple(sorted(protected.intersection(result.touched_files)))
             if hit:
                 found.append(ConflictReceipt(result.node_id, "policy", "protected", hit))
