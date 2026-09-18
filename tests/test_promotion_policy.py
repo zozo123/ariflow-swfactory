@@ -402,3 +402,14 @@ def test_the_drift_check_workflow_exists_and_audits_the_policy() -> None:
 
 def test_the_policy_audit_agrees_with_the_checked_in_workflows() -> None:
     assert promotion_policy.audit_policy(POLICY, REPO) == []
+
+
+def test_superseded_live_gate_does_not_start_more_long_harnesses() -> None:
+    """Cancellation must drain this advisory job instead of blocking the next CI candidate."""
+    steps = _workflow("ci.yml")["jobs"]["live-gate-e2e"]["steps"]
+    by_id = {step.get("id"): step for step in steps if step.get("id")}
+    by_name = {step.get("name"): step for step in steps if step.get("name")}
+
+    assert "cancelled()" in str(by_id["python_harness"]["if"])
+    assert "cancelled()" in str(by_name["Keep scheduler evidence when either harness fails"]["if"])
+    assert "cancelled()" in str(by_name["Propagate harness failures to the job result"]["if"])
