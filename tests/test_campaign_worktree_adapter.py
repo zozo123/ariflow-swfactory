@@ -199,7 +199,7 @@ def test_adapter_retains_workspace_artifacts_before_cleanup(tmp_path: Path) -> N
     def runner(request, workspace: Path) -> CandidateOutcome:
         (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
         (workspace / "agent.log").write_text("proof from disposable workspace\n", encoding="utf-8")
-        _git(workspace, "add", "value.txt")
+        _git(workspace, "add", "value.txt", "agent.log")
         _git(workspace, "commit", "-q", "-m", "candidate")
         return _passing(request)
 
@@ -374,5 +374,6 @@ def test_required_inherited_recipe_missing_refuses_candidate(tmp_path: Path) -> 
     assert outcome.state == "refused"
     assert outcome.candidate_ref
     assert outcome.inherited_recipe_digest is None
-    assert "execution recipe" in outcome.detail
+    assert "ExecutionRecipeError" in outcome.detail
+    assert ".swfactory/candidate-run.json" in outcome.detail
     assert report.selection.winner is None
