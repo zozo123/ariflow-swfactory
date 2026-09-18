@@ -1038,6 +1038,25 @@ def doctor(
     raise typer.Exit(doctor_mod.exit_code(checks))
 
 
+@app.command("experiment-tree")
+def experiment_tree_cmd(
+    reports: Annotated[
+        list[Path],
+        typer.Argument(help="campaign report JSON files, in experiment depth order"),
+    ],
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable validated tree")] = False,
+) -> None:
+    """Validate and render stacked candidate campaign lineage."""
+    from swfactory.experiment_tree import load_round, render, stack_rounds
+
+    try:
+        tree = stack_rounds(load_round(path) for path in reports)
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        typer.echo(f"experiment tree: {error}", err=True)
+        raise typer.Exit(2) from error
+    typer.echo(json.dumps(tree.to_dict(), indent=2, sort_keys=True) if json_out else render(tree))
+
+
 @app.command()
 def herd(
     airflow_url: Annotated[str, typer.Option(envvar="AIRFLOW_URL")] = "http://localhost:8080",
