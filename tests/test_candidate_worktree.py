@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from swfactory.candidate_worktree import (
+    CandidateWorktree,
     CandidateWorktreeError,
     candidate_ref,
     create_candidate_worktree,
@@ -213,3 +214,36 @@ def test_candidate_id_is_hashed_before_becoming_a_git_ref() -> None:
     assert ref.startswith("refs/swfactory/candidates/")
     assert ref.count("/") == 3
     assert "weird" not in ref
+
+
+def test_forged_receipt_cannot_target_primary_checkout(repo: Path) -> None:
+    head = git(repo, "rev-parse", "HEAD")
+    forged = CandidateWorktree(
+        candidate_id="candidate-forged",
+        input_head=head,
+        path=str(repo),
+        ref=candidate_ref("candidate-forged"),
+        repo=str(repo),
+    )
+
+    with pytest.raises(CandidateWorktreeError, match="does not match candidate identity"):
+        freeze_candidate_worktree(forged)
+    with pytest.raises(CandidateWorktreeError, match="does not match candidate identity"):
+        remove_candidate_worktree(forged, force=True)
+
+
+def test_forged_receipt_cannot_choose_an_arbitrary_ref(repo: Path, tmp_path: Path) -> None:
+    head = git(repo, "rev-parse", "HEAD")
+    worktree = create_candidate_worktree(repo, "candidate-safe", head, root=tmp_path / "worktrees")
+    forged = CandidateWorktree(
+        candidate_id=worktree.candidate_id,
+        input_head=worktree.input_head,
+        path=worktree.path,
+        ref="refs/heads/main",
+        repo=worktree.repo,
+    )
+
+    with pytest.raises(CandidateWorktreeError, match="deterministic ref"):
+        freeze_candidate_worktree(forged)
+
+    remove_candidate_worktree(worktree)
