@@ -1,7 +1,10 @@
 {
-  "$schema": "https://turborepo.com/schema.json",
+  "$schema": "https://turborepo.dev/schema.json",
   "ui": "stream",
   "noUpdateNotifier": true,
+  "remoteCache": {
+    "enabled": false
+  },
   "futureFlags": {
     "experimentalPythonWorkspaces": true,
     "experimentalTaskCommand": true
@@ -16,13 +19,11 @@
         "--workspace",
         "--locked"
       ],
+      "cache": false,
       "inputs": [
         "$TURBO_ROOT$/rust/Cargo.toml",
         "$TURBO_ROOT$/rust/Cargo.lock",
         "$TURBO_ROOT$/rust/crates/**"
-      ],
-      "outputs": [
-        "$TURBO_ROOT$/rust/target/debug/swf"
       ]
     },
     "//#rust-domain-contract": {
@@ -37,6 +38,7 @@
         "contract",
         "--locked"
       ],
+      "cache": false,
       "dependsOn": [
         "//#rust-build"
       ],
