@@ -13,6 +13,7 @@ pub mod control_attention;
 pub mod control_plane;
 pub mod delivery;
 pub mod doctor;
+pub mod factory_manager;
 pub mod gates;
 pub mod logs;
 pub mod operator;
