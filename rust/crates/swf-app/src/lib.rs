@@ -20,6 +20,7 @@ pub mod ops;
 pub mod snapshot;
 pub mod stack;
 pub mod submit;
+pub mod task_runtime;
 
 pub use backend_context::BackendContext;
 pub use context::{Auth, Context, ContextStore};
