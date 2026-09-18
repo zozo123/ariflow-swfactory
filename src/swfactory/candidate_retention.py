@@ -158,11 +158,16 @@ def sweep_candidate_evidence(
         if lease.pinned or not expired:
             retained.append(token)
             continue
-        removed.append(token)
         if dry_run:
+            removed.append(token)
             continue
-        _safe_remove_object(objects, destination, token)
+        try:
+            _safe_remove_object(objects, destination, token)
+        except CandidateRetentionError:
+            malformed.append(token)
+            continue
         lease_path.unlink(missing_ok=True)
+        removed.append(token)
 
     return SweepReport(tuple(removed), tuple(retained), tuple(malformed))
 
