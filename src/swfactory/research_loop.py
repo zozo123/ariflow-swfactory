@@ -113,7 +113,6 @@ def annealed_strategy_schedule(
     return tuple(base[: max(1, len(base) - depth)] for depth in range(max_depth + 1))
 
 
-
 def entropy_strategy_schedule(
     max_depth: int,
     *,
