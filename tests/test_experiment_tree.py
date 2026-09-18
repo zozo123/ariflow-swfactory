@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from swfactory.evolution import CandidateOutcome, CandidateRequest, Strategy, evaluation, plan_requests, run_campaign, select
+from swfactory.evolution import (
+    CandidateOutcome,
+    CandidateRequest,
+    Strategy,
+    evaluation,
+    plan_requests,
+    run_campaign,
+    select,
+)
 from swfactory.experiment_tree import ExperimentTreeError, NodeState, render, stack_rounds
 from swfactory.generations import Dimension
 
