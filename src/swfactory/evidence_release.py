@@ -128,9 +128,7 @@ def bind_execution_recipe(
     """Return a manifest bound to the exact committed verification recipe."""
 
     if recipe.commit_sha != manifest.source_sha:
-        raise RuntimeError(
-            f"execution recipe commit {recipe.commit_sha} != candidate source {manifest.source_sha}"
-        )
+        raise RuntimeError(f"execution recipe commit {recipe.commit_sha} != candidate source {manifest.source_sha}")
     return CandidateManifest(
         source_sha=manifest.source_sha,
         base_sha=manifest.base_sha,
