@@ -67,11 +67,12 @@ class CandidateEvidenceBundle:
     source_size_bytes: int
     diff: RetainedArtifact
     artifacts: tuple[RetainedArtifact, ...]
+    run_contract_digest: str | None = None
     schema_version: int = 1
 
     def canonical_dict(self) -> dict[str, Any]:
         self.validate()
-        return {
+        document = {
             "schema_version": self.schema_version,
             "candidate_id": self.candidate_id,
             "input_head": self.input_head,
@@ -82,6 +83,9 @@ class CandidateEvidenceBundle:
             "diff": asdict(self.diff),
             "artifacts": [asdict(item) for item in sorted(self.artifacts, key=lambda item: item.name)],
         }
+        if self.run_contract_digest is not None:
+            document["run_contract_digest"] = self.run_contract_digest
+        return document
 
     def validate(self) -> None:
         if self.schema_version != 1:
@@ -105,6 +109,8 @@ class CandidateEvidenceBundle:
             raise CandidateEvidenceError("source snapshot sha256 is invalid")
         if self.source_size_bytes < 0:
             raise CandidateEvidenceError("source snapshot size is invalid")
+        if self.run_contract_digest is not None and not _DIGEST.fullmatch(self.run_contract_digest):
+            raise CandidateEvidenceError("run contract digest is invalid")
         self.diff.validate()
         names = [item.name for item in self.artifacts]
         if len(names) != len(set(names)):
@@ -124,6 +130,7 @@ def build_candidate_evidence_bundle(
     *,
     artifacts: Mapping[str, Path],
     destination: Path,
+    run_contract_digest: str | None = None,
 ) -> CandidateEvidenceBundle:
     """Retain a frozen candidate's diff and named artifacts under one manifest."""
     repo = repo.resolve()
@@ -176,6 +183,7 @@ def build_candidate_evidence_bundle(
         source_size_bytes=source.size_bytes,
         diff=diff_artifact,
         artifacts=tuple(retained),
+        run_contract_digest=run_contract_digest,
     )
     document = bundle.canonical_dict()
     document["manifest_digest"] = bundle.digest()
@@ -200,6 +208,9 @@ def load_candidate_evidence_bundle(destination: Path) -> CandidateEvidenceBundle
             source_size_bytes=int(document["source_size_bytes"]),
             diff=diff,
             artifacts=artifacts,
+            run_contract_digest=(
+                str(document["run_contract_digest"]) if document.get("run_contract_digest") is not None else None
+            ),
             schema_version=int(document.get("schema_version", 1)),
         )
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
@@ -269,6 +280,11 @@ def render_candidate_result(bundle: CandidateEvidenceBundle) -> str:
         f"- Output: `{bundle.output_head}`",
         f"- Frozen ref: `{bundle.candidate_ref}`",
         f"- Source snapshot: `sha256:{bundle.source_sha256}` ({bundle.source_size_bytes} bytes)",
+        *(
+            [f"- Run contract: `sha256:{bundle.run_contract_digest}`"]
+            if bundle.run_contract_digest is not None
+            else []
+        ),
         f"- Evidence manifest: `{bundle.digest()}`",
         "",
         "## Retained evidence",
