@@ -24,13 +24,14 @@ from __future__ import annotations
 
 import hashlib
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from swfactory.candidate_evidence import build_candidate_evidence_bundle
 from swfactory.candidate_worktree import (
     create_candidate_worktree,
     freeze_candidate_worktree,
@@ -39,6 +40,7 @@ from swfactory.candidate_worktree import (
 )
 from swfactory.experiment_tree import ExperimentNode, ExperimentRound, NodeState
 from swfactory.generations import CampaignBudget, Dimension, Evaluation, promotable
+from swfactory.source_snapshot import create_source_snapshot
 from swfactory.work_executor import Cancellation
 
 CandidateState = Literal["ok", "failed", "cancelled", "skipped", "refused"]
@@ -115,6 +117,8 @@ class CandidateOutcome:
     duration_s: float = 0.0
     detail: str = ""
     candidate_ref: str | None = None
+    evidence_bundle_path: str | None = None
+    evidence_digest: str | None = None
 
     @property
     def passed(self) -> frozenset[Dimension]:
@@ -133,17 +137,36 @@ class WorkspaceCandidateRunner(Protocol):
     def __call__(self, request: CandidateRequest, workspace: Path) -> CandidateOutcome: ...
 
 
+class CandidateArtifactCollector(Protocol):
+    """Name files that must survive after a successful candidate worktree is deleted."""
+
+    def __call__(
+        self,
+        request: CandidateRequest,
+        workspace: Path,
+        outcome: CandidateOutcome,
+    ) -> Mapping[str, Path]: ...
+
+
 def worktree_candidate_runner(
     repo: Path,
     worktree_root: Path,
     runner: WorkspaceCandidateRunner,
+    *,
+    evidence_root: Path | None = None,
+    source_cache_root: Path | None = None,
+    artifact_collector: CandidateArtifactCollector | None = None,
 ) -> CandidateRunner:
     """Adapt a workspace-aware runner to the ordinary campaign interface.
 
     Successful candidates are frozen under the deterministic factory candidate
-    ref before their disposable worktree is removed. The frozen Git revision is
-    authoritative: workers may not substitute a different output SHA.
+    ref and sealed into candidate-local evidence before their disposable worktree
+    is removed. The frozen Git revision is authoritative: workers may not
+    substitute a different output SHA, and a frozen candidate without verifiable
+    evidence is refused rather than returned as successful.
     """
+    resolved_evidence_root = (evidence_root or worktree_root.parent / "candidate-evidence").resolve()
+    resolved_source_cache = (source_cache_root or worktree_root.parent / "source-snapshots").resolve()
 
     def isolated(request: CandidateRequest) -> CandidateOutcome:
         worktree = create_candidate_worktree(
@@ -170,10 +193,40 @@ def worktree_candidate_runner(
                     f"candidate {request.logical_id} claimed output {outcome.output_head} "
                     f"but frozen worktree recorded {revision.output_head}"
                 )
+
+            try:
+                source = create_source_snapshot(repo, revision.input_head, resolved_source_cache)
+                artifacts = (
+                    artifact_collector(request, Path(worktree.path), outcome)
+                    if artifact_collector is not None
+                    else {}
+                )
+                destination = resolved_evidence_root / request.logical_id
+                bundle = build_candidate_evidence_bundle(
+                    repo,
+                    revision,
+                    source,
+                    artifacts=artifacts,
+                    destination=destination,
+                )
+            except Exception as error:  # noqa: BLE001 - evidence failure makes this candidate non-promotable.
+                return replace(
+                    outcome,
+                    state="refused",
+                    output_head=revision.output_head,
+                    candidate_ref=revision.ref,
+                    evidence_bundle_path=None,
+                    evidence_digest=None,
+                    detail=(
+                        f"candidate evidence capture failed: {type(error).__name__}: {error}"
+                    )[:2000],
+                )
             return replace(
                 outcome,
                 output_head=revision.output_head,
                 candidate_ref=revision.ref,
+                evidence_bundle_path=str(destination),
+                evidence_digest=bundle.digest(),
             )
         finally:
             remove_candidate_worktree(worktree, force=True)
@@ -281,6 +334,9 @@ def select(
             continue
         if outcome.output_head == outcome.input_head:
             refusals.append(f"{outcome.logical_id}: unchanged_output_head")
+            continue
+        if outcome.candidate_ref and not outcome.evidence_digest:
+            refusals.append(f"{outcome.logical_id}: missing_candidate_evidence")
             continue
         ok, failures = promotable(list(outcome.evaluations), required=set(required), human_approved=human_approved)
         if ok:
@@ -429,6 +485,8 @@ def _experiment_round(
         evidence = tuple(f"{item.dimension.value}:{item.result}:{item.evidence}" for item in outcome.evaluations)
         if outcome.candidate_ref:
             evidence += (f"candidate-ref:{outcome.candidate_ref}",)
+        if outcome.evidence_digest:
+            evidence += (f"candidate-evidence:{outcome.evidence_digest}",)
         nodes.append(
             ExperimentNode(
                 id=outcome.logical_id,
