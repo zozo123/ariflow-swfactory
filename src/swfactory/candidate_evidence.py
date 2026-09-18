@@ -192,11 +192,14 @@ def verify_candidate_evidence(repo: Path, manifest_path: Path) -> CandidateEvide
 
     names: set[str] = set()
     for artifact in manifest.artifacts:
-        _validate_artifact_name(artifact.name)
+        _validate_stored_artifact_name(artifact.name)
         if artifact.name in names:
             raise CandidateEvidenceError(f"duplicate candidate artifact name: {artifact.name}")
         names.add(artifact.name)
-        path = (bundle / artifact.path).resolve()
+        raw_path = bundle / artifact.path
+        if raw_path.is_symlink():
+            raise CandidateEvidenceError(f"candidate artifact is missing or not regular: {artifact.path}")
+        path = raw_path.resolve()
         try:
             path.relative_to(bundle.resolve())
         except ValueError as error:
@@ -229,9 +232,13 @@ def _candidate_token(candidate_id: str) -> str:
     return hashlib.sha256(candidate_id.encode()).hexdigest()[:24]
 
 
-def _validate_artifact_name(name: str) -> None:
+def _validate_stored_artifact_name(name: str) -> None:
     if not _ARTIFACT_NAME.fullmatch(name):
         raise CandidateEvidenceError(f"invalid candidate artifact name: {name!r}")
+
+
+def _validate_artifact_name(name: str) -> None:
+    _validate_stored_artifact_name(name)
     if name in {"changes.patch", "result.json", "manifest.json"}:
         raise CandidateEvidenceError(f"artifact name is reserved: {name}")
 
