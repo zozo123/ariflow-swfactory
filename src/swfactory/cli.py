@@ -1350,6 +1350,76 @@ def source_snapshot_cmd(
         typer.echo(f"{name.replace('_', ' '):<{width}}  {value}")
 
 
+@app.command("snapshot-replay")
+def snapshot_replay_cmd(
+    repo: Annotated[Path, typer.Argument(help="local Git repository containing the recorded commit")],
+    source_receipt: Annotated[Path, typer.Argument(help="JSON receipt from source-snapshot --json")],
+    destination: Annotated[Path, typer.Argument(help="empty directory for replay evidence")],
+    recipe_path: Annotated[
+        str,
+        typer.Option(help="recipe path loaded from the exact source commit"),
+    ] = ".swfactory/candidate-run.json",
+) -> None:
+    """Replay exact source bytes using the recipe committed with those bytes."""
+    from swfactory.execution_recipe import ExecutionRecipeError, load_execution_recipe
+    from swfactory.snapshot_replay import SnapshotReplayError, run_snapshot_recipe
+    from swfactory.source_snapshot import SourceSnapshot, SourceSnapshotError
+
+    try:
+        source = SourceSnapshot(**json.loads(source_receipt.read_text(encoding="utf-8")))
+        recipe = load_execution_recipe(repo, source.commit_sha, path=recipe_path)
+        receipt = run_snapshot_recipe(source, recipe, destination)
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        ExecutionRecipeError,
+        SnapshotReplayError,
+        SourceSnapshotError,
+    ) as error:
+        typer.echo(f"snapshot replay: {error}", err=True)
+        raise typer.Exit(2) from error
+    typer.echo(f"{destination / 'receipt.json'}  {receipt.digest}")
+    typer.echo(f"exit={receipt.exit_code} timed_out={str(receipt.timed_out).lower()}")
+
+
+@app.command("snapshot-replay-verify")
+def snapshot_replay_verify_cmd(
+    repo: Annotated[Path, typer.Argument(help="local Git repository containing the recorded commit")],
+    source_receipt: Annotated[Path, typer.Argument(help="JSON receipt from source-snapshot --json")],
+    destination: Annotated[Path, typer.Argument(help="replay evidence directory")],
+    json_out: Annotated[bool, typer.Option("--json", help="print the canonical verified receipt")] = False,
+) -> None:
+    """Re-hash replay evidence and re-bind it to source and recipe Git objects."""
+    from swfactory.snapshot_replay import SnapshotReplayError, verify_snapshot_run
+    from swfactory.source_snapshot import SourceSnapshot, SourceSnapshotError
+
+    try:
+        source = SourceSnapshot(**json.loads(source_receipt.read_text(encoding="utf-8")))
+        recipe, receipt = verify_snapshot_run(destination, snapshot=source, repo=repo)
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        SnapshotReplayError,
+        SourceSnapshotError,
+    ) as error:
+        typer.echo(f"snapshot replay: {error}", err=True)
+        raise typer.Exit(2) from error
+    if json_out:
+        document = receipt.canonical_dict()
+        document["receipt_digest"] = receipt.digest
+        document["execution_recipe_sha256"] = recipe.digest
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+    else:
+        typer.echo(
+            f"verified {receipt.commit_sha} recipe={recipe.digest} "
+            f"exit={receipt.exit_code} timed_out={str(receipt.timed_out).lower()}"
+        )
+
+
 @app.command()
 def herd(
     airflow_url: Annotated[str, typer.Option(envvar="AIRFLOW_URL")] = "http://localhost:8080",
