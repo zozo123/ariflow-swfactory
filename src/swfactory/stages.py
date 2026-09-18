@@ -1365,9 +1365,11 @@ def deliver(ctx: Ctx) -> StageResult:
     )
 
 
-# Import after the shared stage helpers are defined: work_stage depends on this module's
-# execution primitives, while this registry owns the one build-stage identity exposed to callers.
-from swfactory.work_stage import build_and_test
+def build_and_test(ctx: Ctx) -> StageResult:
+    """Compatibility entrypoint for the one managed build implementation."""
+    from swfactory.work_stage import build_and_test as managed_build_and_test
+
+    return managed_build_and_test(ctx)
 
 
 STAGES: dict[str, Stage] = {
