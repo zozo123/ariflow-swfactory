@@ -74,7 +74,11 @@ pub enum Command {
     /// Is this machine able to drive a factory? One line per check, a `fix:` for every failure.
     Doctor,
 
-    /// Send governed work to Airflow.
+    /// Manage logical factories through the Rust product surface.
+    #[command(subcommand)]
+    Factory(FactoryCmd),
+
+    /// Send governed work to Airflow. Compatibility alias for `swf factory run`.
     Submit(SubmitArgs),
 
     /// Approvals waiting, failures, blocked deliveries and orphan sandboxes.
@@ -231,6 +235,49 @@ pub struct ContextAddArgs {
     /// Replace an environment of the same name.
     #[arg(long)]
     pub force: bool,
+}
+
+
+
+/// `swf factory …` — the canonical harness and operator surface.
+#[derive(Debug, Subcommand)]
+pub enum FactoryCmd {
+    /// Run one logical factory. During migration this delegates scheduling to the existing submit path.
+    Run(FactoryRunArgs),
+
+    /// Inspect the scheduler-backed status of one factory run.
+    Status {
+        /// Current transition identity, `dag/run`, until logical FactoryRunId lookup lands.
+        run: String,
+    },
+}
+
+/// `swf factory run`
+#[derive(Debug, Args)]
+pub struct FactoryRunArgs {
+    /// Logical factory name. During migration this resolves to the installed blueprint of the same name.
+    #[arg(value_name = "NAME", default_value = "factory")]
+    pub factory: String,
+
+    /// An issue for the factory to answer. Repeatable.
+    #[arg(long = "issue", value_name = "REF", required = true)]
+    pub issues: Vec<String>,
+
+    /// A target repository override. Repeatable.
+    #[arg(long = "target", value_name = "OWNER/NAME")]
+    pub targets: Vec<String>,
+
+    /// AI harness that owns the outer session (codex, claude, cursor, custom).
+    #[arg(long, value_name = "NAME")]
+    pub harness: Option<String>,
+
+    /// Stable outer session id. Pair with --harness; reuse on retries.
+    #[arg(long = "factory-id", value_name = "ID")]
+    pub factory_id: Option<String>,
+
+    /// Poll until Airflow reaches a final state.
+    #[arg(long)]
+    pub wait: bool,
 }
 
 /// `swf submit`
@@ -661,6 +708,34 @@ mod tests {
                 .expect("parse");
         assert!(cli.yes);
         assert!(cli.json);
+    }
+
+    #[test]
+    fn factory_run_is_the_canonical_harness_spelling() {
+        let cli = Cli::try_parse_from([
+            "swf",
+            "factory",
+            "run",
+            "research",
+            "--issue",
+            "42",
+            "--target",
+            "owner/repo",
+            "--harness",
+            "codex",
+            "--factory-id",
+            "session-1",
+        ])
+        .expect("factory run parses");
+
+        let Command::Factory(FactoryCmd::Run(args)) = cli.command else {
+            panic!("expected factory run");
+        };
+        assert_eq!(args.factory, "research");
+        assert_eq!(args.issues, ["42"]);
+        assert_eq!(args.targets, ["owner/repo"]);
+        assert_eq!(args.harness.as_deref(), Some("codex"));
+        assert_eq!(args.factory_id.as_deref(), Some("session-1"));
     }
 
     #[test]
