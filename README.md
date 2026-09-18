@@ -13,7 +13,7 @@ plan, human approval, implementation, tests, review, and retained evidence. Apac
 managed lifecycle; isolated coding workers perform the work; the trusted factory publishes the result.
 People decide what reaches `main`.
 
-[Quickstart](#quickstart) · [Liquid methodology](#the-liquid-methodology) ·
+[Quickstart](#quickstart) · [Liquid methodology](#the-liquid-methodology) · [Physics](#physics-of-the-factory) ·
 [Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
 [Illustrated walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Agent skills](#agent-skills)
 
