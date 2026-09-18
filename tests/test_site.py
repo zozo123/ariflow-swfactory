@@ -219,6 +219,13 @@ SKIP_DIRECTORIES = frozenset(
 SKIP_PREFIXES = ("rust/target/",)
 # Files a web server hands out without any page linking to them.
 SERVED_WITHOUT_A_LINK = frozenset({"index.html", "404.html", ".nojekyll", "robots.txt", "sitemap.xml", "install.sh"})
+# Files kept on purpose that nothing links, each for a stated reason. They used to pass only because
+# `tests/test_site.py` happened to name them, which is an accident rather than a decision -- and the
+# same accident hid `osai-week-2026.html`, a real page reachable from nothing.
+KEPT_WITHOUT_A_LINK: dict[str, str] = {
+    "app.js": "a tombstone: the suite asserts it stays under 300 bytes and that no page loads it",
+    "social-card.svg": "the source the published social-card.png is rendered from",
+}
 ADVERTISED_ANCHOR = re.compile(r"zozo123\.github\.io/ariflow-swfactory/#([\w-]+)")
 CSS_CLASS = re.compile(r"\.(-?[_a-zA-Z][\w-]*)")
 HTML_CLASS = re.compile(r'class="([^"]*)"')
@@ -251,21 +258,33 @@ def undefined_classes(html: str, css: str) -> list[str]:
 def unreferenced_site_files(root: Path) -> list[str]:
     """Files under ``site/`` that deploy to Pages while nothing in the repository names them."""
     site = root / "site"
-    corpus = "\n".join(text for name, text in repository_text(root).items() if not name.startswith("site/"))
-    corpus += "\n".join(
-        path.read_text(encoding="utf-8", errors="ignore")
+    # Neither `site/` (handled per-file below) nor `tests/`: a test that audits a file is not a
+    # reference that reaches it. The comment explaining this fix named `osai-week-2026.html` and
+    # thereby vouched for it, which is the same self-reference bug one directory over.
+    corpus = "\n".join(
+        text
+        for name, text in repository_text(root).items()
+        if not name.startswith("site/") and not name.startswith("tests/")
+    )
+    # Keyed by path so a file can be excluded from its OWN corpus below. A page that names itself
+    # -- in a canonical link, an og:url, a self-referential anchor -- was counting as referenced,
+    # which is how `osai-week-2026.html` sat deployed and reachable from nothing for weeks while
+    # this check stayed green. Nothing can vouch for its own reachability.
+    inside = {
+        str(path.relative_to(site)): path.read_text(encoding="utf-8", errors="ignore")
         for path in sorted(site.rglob("*"))
         if path.is_file() and path.suffix in TEXT_SUFFIXES
-    )
+    }
     orphans = []
     for path in sorted(site.rglob("*")):
         if not path.is_file():
             continue
-        relative = path.relative_to(site)
-        if str(relative) in SERVED_WITHOUT_A_LINK:
+        relative = str(path.relative_to(site))
+        if relative in SERVED_WITHOUT_A_LINK or relative in KEPT_WITHOUT_A_LINK:
             continue
-        if str(relative) not in corpus and path.name not in corpus:
-            orphans.append(str(relative))
+        others = corpus + "\n".join(text for name, text in inside.items() if name != relative)
+        if relative not in others and path.name not in others:
+            orphans.append(relative)
     return orphans
 
 
@@ -380,3 +399,11 @@ def test_the_manifest_theme_matches_the_light_scheme_the_page_declares() -> None
     assert set(declared) == {"light", "dark"}
     assert declared["light"] != declared["dark"]
     assert declared["light"] == manifest["theme_color"] == manifest["background_color"]
+
+
+def test_every_deliberately_unlinked_file_still_exists_and_says_why() -> None:
+    """A standing exemption has to keep earning itself: a file removed from the tree must lose its
+    entry, and an entry without a reason is an exemption nobody can review."""
+    for name, reason in KEPT_WITHOUT_A_LINK.items():
+        assert (SITE / name).exists(), f"{name} is exempted but no longer present"
+        assert len(reason.split()) >= 5, f"{name}: exemption needs a real reason"
