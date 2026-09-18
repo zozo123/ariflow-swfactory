@@ -357,14 +357,8 @@ def _experiment_round(
     nodes: list[ExperimentNode] = []
     for outcome in outcomes:
         request = request_by_id[outcome.logical_id]
-        answered = (
-            outcome.state == "ok"
-            and bool(outcome.output_head)
-            and outcome.output_head != outcome.input_head
-        )
-        evidence = tuple(
-            f"{item.dimension.value}:{item.result}:{item.evidence}" for item in outcome.evaluations
-        )
+        answered = outcome.state == "ok" and bool(outcome.output_head) and outcome.output_head != outcome.input_head
+        evidence = tuple(f"{item.dimension.value}:{item.result}:{item.evidence}" for item in outcome.evaluations)
         nodes.append(
             ExperimentNode(
                 id=outcome.logical_id,
