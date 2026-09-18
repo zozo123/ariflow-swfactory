@@ -54,6 +54,29 @@ uv run swfactory candidate-evidence build \
 
 Artifacts are copied into the bundle. The manifest never points at the caller's mutable original.
 
+### Campaign hot path
+
+Workspace-aware candidate campaigns can seal this bundle automatically before the disposable
+worktree is removed:
+
+```python
+runner = worktree_candidate_runner(
+    repo,
+    worktree_root,
+    workspace_runner,
+    evidence_root=Path(".factory/candidate-evidence"),
+)
+```
+
+For every successful candidate, the adapter freezes the candidate ref, snapshots the exact input
+commit, retains a machine-readable candidate result beside the exact Git diff, and records the
+bundle manifest path and digest on `CandidateOutcome`. The same digest is projected into the
+experiment-tree node evidence.
+
+If bundle capture fails after the output was frozen, the outcome is marked failed and cannot win;
+its frozen SHA/ref are retained so the evidence failure is inspectable and repairable rather than
+silently discarding the answered code.
+
 ## Verify
 
 ```sh
