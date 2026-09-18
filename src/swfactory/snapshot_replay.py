@@ -8,7 +8,6 @@ Git commit, retains stdout/stderr, and seals the observed result under digests.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
 import json
 import os
 import shutil
@@ -16,6 +15,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
