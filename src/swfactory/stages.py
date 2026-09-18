@@ -845,41 +845,6 @@ def _summary_line(res: AgentResult, fallback: str) -> str:
     return (text or fallback)[:72]
 
 
-@_timed
-def build_and_test(ctx: Ctx) -> StageResult:
-    """Bounded build -> commit -> test loop; iterations >= 2 use the ``fix`` stage."""
-    if prior := _done(ctx, "build_and_test"):
-        return _skipped(prior)
-    spec_text = _read_or(ctx, f"{ctx.art}/spec.md")  # "(none)" when the line has no spec stage
-    plan_text = ctx.read_artifact(f"{ctx.art}/plan.md")
-    failures = ""
-    for i in range(1, ctx.cfg.max_build_iterations + 1):
-        stage = "build" if i == 1 else "fix"
-        prompt = render_prompt(
-            stage,
-            issue_id=ctx.issue.id,
-            spec=spec_text,
-            plan=plan_text,
-            failures=failures,
-            protected=_protected(ctx, stage),
-        )
-        res = _agent(ctx, stage, i, prompt, BuildSummary)
-        commit(ctx, stage=stage, msg=f"{stage}: {_summary_line(res, f'iteration {i}')}")
-        tr, output = run_tests(ctx)
-        if tr.ok:
-            numbers = {
-                "iterations": float(i),
-                "first_pass_ci": float(i == 1),
-                **_test_numbers(tr),
-            }
-            return StageResult(stage="build_and_test", numbers=numbers)
-        failures = f"exit code {tr.exit_code}; failed={tr.failed} errors={tr.errors}\n\n{output}"
-    raise StageError(
-        "policy",
-        f"tests still failing after {ctx.cfg.max_build_iterations} build iterations; last failure:\n{failures[-1500:]}",
-    )
-
-
 def cap_nits(review: Review, cap: int = NIT_CAP) -> tuple[Review, int]:
     """Keep the first ``cap`` nits in order of appearance; return (review, dropped count)."""
     kept: list[Finding] = []
@@ -1398,6 +1363,11 @@ def deliver(ctx: Ctx) -> StageResult:
             "denied_tool_calls": float(denied),
         },
     )
+
+
+# Import after the shared stage helpers are defined: work_stage depends on this module's
+# execution primitives, while this registry owns the one build-stage identity exposed to callers.
+from swfactory.work_stage import build_and_test
 
 
 STAGES: dict[str, Stage] = {
