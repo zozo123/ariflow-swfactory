@@ -57,7 +57,9 @@ impl TaskInvocation {
         match (&self.cell_id, self.epoch) {
             (None, None) => {}
             (Some(cell), Some(_)) => {
-                let suffix = cell.strip_prefix("cell_").ok_or(TaskInvocationError::InvalidCellId)?;
+                let suffix = cell
+                    .strip_prefix("cell_")
+                    .ok_or(TaskInvocationError::InvalidCellId)?;
                 if suffix.len() != 24 || !suffix.chars().all(|ch| ch.is_ascii_hexdigit()) {
                     return Err(TaskInvocationError::InvalidCellId);
                 }
