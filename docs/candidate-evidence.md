@@ -60,6 +60,17 @@ An optional artifact collector can name files inside the disposable workspace; t
 those bytes into the bundle before cleanup. With no collector, the bundle still retains the exact
 source identity and Git diff.
 
+Campaigns may also configure an inherited execution-recipe path. When configured, the adapter
+loads that recipe from the candidate **input commit**, not from the mutable worktree or the
+candidate output. The bundle records recipe digest, input commit, and path, and verification reloads
+the recipe from Git to prove the digest still describes the inherited contract.
+
+This is intentionally distinct from the release-side execution recipe in
+[execution-recipes.md](execution-recipes.md): release verification binds to the candidate source
+being verified, while campaign provenance records the trusted contract the sibling inherited before
+it started editing. Missing or invalid required campaign recipe evidence makes the frozen candidate
+`refused`.
+
 ## Build
 
 First freeze a candidate and capture the source-snapshot receipt. Then:
