@@ -522,3 +522,45 @@ def test_a_capability_failure_is_recorded_and_never_raises(monkeypatch: pytest.M
 
     assert decision["parallel"] is False
     assert "capability layer is down" in decision["reason"]
+
+
+# --------------------------------------------- the first provider that can actually fan out
+
+
+def test_boat_is_the_first_provider_to_declare_fork() -> None:
+    """Every capability in `boat_document` was observed against a live account, not read off a
+    product page: two forks taken from ONE snapshot each inherited the parent's file and could not
+    see the other's write, and `delete` removed all three.
+
+    `workgraph.provider-fork` sat experimental for exactly as long as nobody could show the
+    invariant holding somewhere real.
+    """
+    from swfactory.sandbox_contract import boat_document, provider_documents
+
+    forkers = [d.provider for d in provider_documents() if d.capabilities.fork]
+
+    assert forkers == ["boat"]
+    caps = boat_document().capabilities
+    assert caps.snapshot and caps.filesystem_isolation and caps.exact_teardown
+
+
+def test_boat_does_not_claim_the_one_thing_that_was_not_exercised() -> None:
+    """A capability document is the one place a guess is indistinguishable from a measurement.
+    Egress policy was never tested, so it is not claimed."""
+    from swfactory.sandbox_contract import boat_document
+
+    assert boat_document().capabilities.network_policy is False
+
+
+def test_a_fork_capable_provider_turns_the_run_parallel_with_no_code_change_here() -> None:
+    """The point of deriving the decision from capabilities instead of asserting it: `work_stage`
+    is untouched, and a provider that learns to fork flips the run by itself."""
+    plan = _plan_with_two_independent_nodes()
+
+    serial = execution_decision(_decision_ctx("docker"), plan)
+    parallel = execution_decision(_decision_ctx("boat"), plan)
+
+    assert serial["parallel"] is False and serial["reason"] == "serial_fallback_missing_fork"
+    assert parallel["parallel"] is True
+    assert parallel["mode"] == "provider_fork_parallel"
+    assert parallel["reason"] == "capabilities_allow_parallel"

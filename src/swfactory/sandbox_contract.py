@@ -180,6 +180,45 @@ def islo_document(*, snapshot: bool = False, fork: bool = False) -> ProviderDocu
     )
 
 
+def boat_document() -> ProviderDocument:
+    """boat.dev (formerly Box by ASCII): the first provider to demonstrate fork for this factory.
+
+    Every capability below was observed against a live account rather than read off a product page,
+    because `workgraph.provider-fork` has sat experimental for exactly as long as nobody could show
+    the invariant holding somewhere real:
+
+        create   `boat new --ttl 1800` -> state ready
+        snapshot `boat stop` -> snapshotAvailable true, snapshotCompletedAt stamped
+        fork     `boat fork` twice off ONE snapshot -> two independent sandboxes
+        lineage  both forks read the parent's file: immutable parent identity
+        isolation each fork's own write is invisible to its sibling
+        teardown `boat delete` -> both gone from `boat list`
+
+    `network_policy` is False and stays False. The CLI exposes `--no-env` and per-sandbox
+    environment control, but egress policy was NOT exercised here, and a capability document is the
+    one place a guess is indistinguishable from a measurement.
+    """
+    return ProviderDocument(
+        provider="boat",
+        implementation="BoatSandbox",
+        capabilities=SandboxCapabilities(
+            create=True,
+            attach=True,
+            snapshot=True,
+            fork=True,
+            pause_resume=True,
+            network_policy=False,
+            filesystem_isolation=True,
+            ttl=True,
+            exact_teardown=True,
+        ),
+        notes=(
+            "fork observed: two forks from one snapshot inherited parent state and stayed isolated",
+            "egress policy unexercised; network_policy is not claimed",
+        ),
+    )
+
+
 def provider_documents(*, islo_snapshot: bool = False, islo_fork: bool = False) -> tuple[ProviderDocument, ...]:
     return (
         local_document(),
@@ -187,6 +226,7 @@ def provider_documents(*, islo_snapshot: bool = False, islo_fork: bool = False) 
         docker_document(),
         toolset_document("configured"),
         islo_document(snapshot=islo_snapshot, fork=islo_fork),
+        boat_document(),
     )
 
 
