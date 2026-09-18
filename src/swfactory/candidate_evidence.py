@@ -146,9 +146,7 @@ def build_candidate_evidence_bundle(
             raise CandidateEvidenceError("artifact name must be nonempty")
         raw_source = Path(source_path)
         if raw_source.is_symlink() or not raw_source.is_file():
-            raise CandidateEvidenceError(
-                f"artifact {name!r} is absent, not regular, or a symlink: {raw_source}"
-            )
+            raise CandidateEvidenceError(f"artifact {name!r} is absent, not regular, or a symlink: {raw_source}")
         source_path = raw_source.resolve()
         digest, _ = _digest_file(source_path)
         retained_path = artifact_dir / f"{index:03d}-{digest[:16]}"
