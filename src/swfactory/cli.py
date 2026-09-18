@@ -1205,6 +1205,91 @@ def candidate_evidence_verify(
         typer.echo(f"verified {bundle.candidate_id} {bundle.output_head} {bundle.digest()}")
 
 
+snapshot_replay_app = typer.Typer(
+    help="Run and verify explicit recipes against immutable source snapshots.",
+    no_args_is_help=True,
+)
+app.add_typer(snapshot_replay_app, name="snapshot-replay")
+
+
+@snapshot_replay_app.command("run")
+def snapshot_replay_run(
+    source_receipt: Annotated[Path, typer.Argument(help="JSON receipt from source-snapshot --json")],
+    recipe_path: Annotated[Path, typer.Argument(help="JSON execution recipe")],
+    destination: Annotated[Path, typer.Argument(help="empty directory for replay evidence")],
+) -> None:
+    """Execute one exact snapshot with one explicit argv/env/cwd/timeout recipe."""
+    from swfactory.snapshot_replay import SnapshotReplayError, SnapshotRunRecipe, run_snapshot_recipe
+    from swfactory.source_snapshot import SourceSnapshot, SourceSnapshotError
+
+    try:
+        source_doc = json.loads(source_receipt.read_text(encoding="utf-8"))
+        recipe_doc = json.loads(recipe_path.read_text(encoding="utf-8"))
+        source = SourceSnapshot(**source_doc)
+        recipe = SnapshotRunRecipe(
+            argv=tuple(str(value) for value in recipe_doc["argv"]),
+            cwd=str(recipe_doc.get("cwd", ".")),
+            env=tuple((str(row[0]), str(row[1])) for row in recipe_doc.get("env", ())),
+            timeout_s=float(recipe_doc.get("timeout_s", 300.0)),
+            schema_version=int(recipe_doc.get("schema_version", 1)),
+        )
+        receipt = run_snapshot_recipe(source, recipe, destination)
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        IndexError,
+        json.JSONDecodeError,
+        SnapshotReplayError,
+        SourceSnapshotError,
+    ) as error:
+        typer.echo(f"snapshot replay: {error}", err=True)
+        raise typer.Exit(2) from error
+    typer.echo(f"{destination / 'receipt.json'}  {receipt.digest}")
+    typer.echo(f"exit={receipt.exit_code} timed_out={str(receipt.timed_out).lower()}")
+
+
+@snapshot_replay_app.command("verify")
+def snapshot_replay_verify(
+    destination: Annotated[Path, typer.Argument(help="snapshot replay evidence directory")],
+    source_receipt: Annotated[
+        Path | None,
+        typer.Option("--source-receipt", help="optionally re-bind to exact source snapshot bytes"),
+    ] = None,
+    json_out: Annotated[bool, typer.Option("--json", help="print the canonical receipt")] = False,
+) -> None:
+    """Re-hash replay evidence and optionally re-verify its exact source archive."""
+    from swfactory.snapshot_replay import SnapshotReplayError, verify_snapshot_run
+    from swfactory.source_snapshot import SourceSnapshot, SourceSnapshotError
+
+    try:
+        snapshot = None
+        if source_receipt is not None:
+            snapshot = SourceSnapshot(**json.loads(source_receipt.read_text(encoding="utf-8")))
+        recipe, receipt = verify_snapshot_run(destination, snapshot=snapshot)
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        SnapshotReplayError,
+        SourceSnapshotError,
+    ) as error:
+        typer.echo(f"snapshot replay: {error}", err=True)
+        raise typer.Exit(2) from error
+    if json_out:
+        document = receipt.canonical_dict()
+        document["receipt_digest"] = receipt.digest
+        document["recipe_digest"] = recipe.digest
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+    else:
+        typer.echo(
+            f"verified {receipt.commit_sha} {receipt.recipe_digest} "
+            f"exit={receipt.exit_code} timed_out={str(receipt.timed_out).lower()}"
+        )
+
+
 @app.command("experiment-tree")
 def experiment_tree_cmd(
     reports: Annotated[
