@@ -319,25 +319,19 @@ def test_the_budget_splits_across_the_population() -> None:
 
 
 def test_final_ranking_ignores_cost_and_wall_clock_when_evidence_is_equal() -> None:
-    evaluations = (
-        evaluation(Dimension.CORRECTNESS, "pass", "tests"),
-        evaluation(Dimension.EVIDENCE, "pass", "bundle"),
+    repair, rethink = _requests(Strategy.REPAIR, Strategy.RETHINK)
+    first_pair = (
+        _outcome(repair, cost=99.0, duration=999.0),
+        _outcome(rethink, cost=0.01, duration=0.01),
     )
-    slow_expensive = outcome(
-        "cand_a",
-        Strategy.REPAIR,
-        output_head="a" * 40,
-        evaluations=evaluations,
-        cost_usd=99.0,
-        duration_s=999.0,
-    )
-    fast_cheap = outcome(
-        "cand_b",
-        Strategy.RETHINK,
-        output_head="b" * 40,
-        evaluations=evaluations,
-        cost_usd=0.01,
-        duration_s=0.01,
+    second_pair = (
+        _outcome(repair, cost=0.01, duration=0.01),
+        _outcome(rethink, cost=99.0, duration=999.0),
     )
 
-    assert rank_key(slow_expensive, REQUIRED_DIMENSIONS) < rank_key(fast_cheap, REQUIRED_DIMENSIONS)
+    first_order = tuple(item.logical_id for item in sorted(first_pair, key=lambda item: rank_key(item, REQUIRED_DIMENSIONS)))
+    second_order = tuple(
+        item.logical_id for item in sorted(second_pair, key=lambda item: rank_key(item, REQUIRED_DIMENSIONS))
+    )
+
+    assert first_order == second_order
