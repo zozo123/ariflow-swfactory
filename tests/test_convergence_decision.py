@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from swfactory.convergence_decision import build_convergence_decision
-
-
 ROWS = (
     {"logical_id": "cand_b", "evidence_digest": "sha256:" + "b" * 64},
     {"logical_id": "cand_a", "evidence_digest": "sha256:" + "a" * 64},
@@ -13,6 +10,8 @@ ROWS = (
 
 
 def test_convergence_digest_is_invariant_to_completion_order() -> None:
+    from swfactory.convergence_decision import build_convergence_decision
+
     orders = (
         ROWS,
         tuple(reversed(ROWS)),
@@ -27,6 +26,8 @@ def test_convergence_digest_is_invariant_to_completion_order() -> None:
 
 
 def test_convergence_canonicalizes_candidates_and_dimensions() -> None:
+    from swfactory.convergence_decision import build_convergence_decision
+
     decision = build_convergence_decision(
         ROWS,
         winner="cand_b",
@@ -38,6 +39,8 @@ def test_convergence_canonicalizes_candidates_and_dimensions() -> None:
 
 
 def test_convergence_refuses_unverifiable_decisions() -> None:
+    from swfactory.convergence_decision import build_convergence_decision
+
     bad_cases = (
         ((), "cand_a"),
         (({"logical_id": "cand_a", "evidence_digest": "bad"},), "cand_a"),
