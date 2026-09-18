@@ -270,3 +270,16 @@ def test_campaign_decision_build_reports_domain_errors_instead_of_nameerror(
     assert result.exit_code == 2
     assert "campaign decision:" in result.output
     assert "NameError" not in result.output
+
+
+def test_campaign_decision_digest_ignores_outcome_arrival_order(campaign) -> None:
+    from dataclasses import replace
+
+    report, bundles = campaign
+    first = build_campaign_decision(report, bundles)
+    second = build_campaign_decision(replace(report, outcomes=tuple(reversed(report.outcomes))), bundles)
+
+    assert first.digest() == second.digest()
+    assert tuple(item.candidate_id for item in first.candidates) == tuple(
+        sorted(item.candidate_id for item in first.candidates)
+    )
