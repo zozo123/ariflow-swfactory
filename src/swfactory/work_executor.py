@@ -18,7 +18,7 @@ from typing import Literal, Protocol
 from swfactory.workgraph import WorkNode, conflict_set, deterministic_merge_order, waves
 
 NodeState = Literal["ok", "failed", "cancelled", "skipped"]
-ConflictKind = Literal["disjoint", "overlap", "stale_base", "protected"]
+ConflictKind = Literal["disjoint", "overlap", "stale_base", "protected", "undeclared"]
 
 
 @dataclass(frozen=True)
@@ -173,6 +173,36 @@ class WorkExecutor:
             if cancellation.cancelled or any(result.state != "ok" for result in wave_results):
                 cancellation.cancel()
                 break
+
+            # Provider results are observations, not merge authority. Validate the files they
+            # actually touched against the declared wave before the first merger callback.
+            wave_nodes = {node.id: node for node in wave.nodes}
+            conflicts = list(
+                self.classify_conflicts(
+                    wave_results,
+                    observed_target_head=target_head,
+                    expected_target_head=target_head,
+                )
+            )
+            for result in wave_results:
+                node = wave_nodes[result.node_id]
+                undeclared = tuple(sorted(set(result.touched_files) - set(node.files)))
+                if undeclared:
+                    conflicts.append(ConflictReceipt(result.node_id, "policy", "undeclared", undeclared))
+                if result.input_head != target_head:
+                    conflicts.append(
+                        ConflictReceipt(
+                            result.node_id,
+                            "target",
+                            "stale_base",
+                            detail=f"expected {target_head}, observed {result.input_head}",
+                        )
+                    )
+            if conflicts:
+                detail = "; ".join(
+                    f"{item.kind}:{item.left}:{item.right}:{','.join(item.files)}" for item in conflicts
+                )
+                raise ValueError(f"workgraph fan-in refused before merge: {detail}")
 
             # Completion timing is irrelevant: fan-in is always node-id stable.
             for node_id in deterministic_merge_order(r.node_id for r in wave_results):
