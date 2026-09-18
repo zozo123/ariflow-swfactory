@@ -6,7 +6,6 @@
 //! drifting apart while the factory underneath keeps moving.
 
 pub mod attention;
-pub mod backend_context;
 pub mod cells;
 pub mod context;
 pub mod control_attention;
@@ -21,7 +20,6 @@ pub mod snapshot;
 pub mod stack;
 pub mod submit;
 
-pub use backend_context::BackendContext;
 pub use context::{Auth, Context, ContextStore};
 pub use control_attention::ControlAttention;
 pub use operator::OperatorOps;
