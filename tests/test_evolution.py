@@ -236,7 +236,8 @@ def test_independence_is_recorded_on_the_report_the_campaign_stores() -> None:
     # The report is stored as JSON, so it has to survive the trip.
     document = json.loads(json.dumps(report.to_dict()))
     assert document["independence"] == list(report.independence)
-    assert document["schema_version"] == 1
+    assert document["schema_version"] == 2
+    assert document["experiment_round"]["round_id"] == report.campaign_id
     assert document["outcomes"][0]["evaluations"][0]["dimension"] == "correctness"
 
 

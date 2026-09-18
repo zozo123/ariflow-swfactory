@@ -30,6 +30,7 @@ from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
+from swfactory.experiment_tree import ExperimentNode, ExperimentRound, NodeState
 from swfactory.generations import CampaignBudget, Dimension, Evaluation, promotable
 from swfactory.work_executor import Cancellation
 
@@ -70,6 +71,7 @@ class CandidateRequest:
     strategy: Strategy
     input_head: str
     parent_generation: str | None = None
+    parent_candidate: str | None = None
     depth: int = 0
     budget_usd: float = 0.0
     timeout_s: int = 1800
@@ -78,7 +80,16 @@ class CandidateRequest:
     def logical_id(self) -> str:
         """Stable identity for this exact question, so a replay is recognisable as the same one."""
         raw = "\0".join(
-            (self.campaign_id, self.cell_id, str(self.epoch), self.strategy.value, self.input_head)
+            (
+                self.campaign_id,
+                self.cell_id,
+                str(self.epoch),
+                self.strategy.value,
+                self.input_head,
+                self.parent_generation or "",
+                self.parent_candidate or "",
+                str(self.depth),
+            )
         ).encode()
         return "cand_" + hashlib.sha256(raw).hexdigest()[:24]
 
@@ -130,10 +141,13 @@ class CampaignReport:
     selection: Selection = field(default_factory=lambda: Selection(None, "not_selected"))
     independence: tuple[str, ...] = ()
     cancelled: bool = False
+    experiment_round: ExperimentRound | None = None
 
     def to_dict(self) -> dict[str, Any]:
         document = asdict(self)
-        document["schema_version"] = 1
+        if self.experiment_round is not None:
+            document["experiment_round"] = self.experiment_round.to_dict()
+        document["schema_version"] = 2
         document["scheduler"] = "airflow"
         return document
 
@@ -200,6 +214,12 @@ def select(
         if outcome.state != "ok":
             refusals.append(f"{outcome.logical_id}: {outcome.state}")
             continue
+        if not outcome.output_head:
+            refusals.append(f"{outcome.logical_id}: no_output_head")
+            continue
+        if outcome.output_head == outcome.input_head:
+            refusals.append(f"{outcome.logical_id}: unchanged_output_head")
+            continue
         ok, failures = promotable(list(outcome.evaluations), required=set(required), human_approved=human_approved)
         if ok:
             return Selection(outcome.logical_id, f"promotable:{outcome.strategy.value}", ranking, tuple(refusals))
@@ -216,6 +236,7 @@ def plan_requests(
     strategies: Sequence[Strategy] = DEFAULT_STRATEGIES,
     budget: CampaignBudget | None = None,
     parent_generation: str | None = None,
+    parent_candidate: str | None = None,
     depth: int = 0,
 ) -> tuple[CandidateRequest, ...]:
     """Turn a budget and a list of strategies into the exact questions a campaign may ask."""
@@ -230,6 +251,10 @@ def plan_requests(
             f"campaign budget admits at most {budget.max_candidates} candidates to depth "
             f"{budget.max_depth}; asked for {len(strategies)} at depth {depth}"
         )
+    if depth == 0 and parent_candidate is not None:
+        raise CampaignError("the first experiment round cannot name a parent candidate")
+    if depth > 0 and not parent_candidate:
+        raise CampaignError("a descendant experiment round requires the previous winner as parent_candidate")
     share = round(budget.max_cost_usd / len(strategies), 6)
     return tuple(
         CandidateRequest(
@@ -239,6 +264,7 @@ def plan_requests(
             strategy=strategy,
             input_head=input_head,
             parent_generation=parent_generation,
+            parent_candidate=parent_candidate,
             depth=depth,
             budget_usd=share,
             timeout_s=budget.max_wall_s,
@@ -272,6 +298,10 @@ def run_campaign(
     head = requests[0].input_head
     if any(request.input_head != head for request in requests):
         raise CampaignError("every candidate in one campaign starts from the same input head")
+    if len({request.depth for request in requests}) != 1:
+        raise CampaignError("every candidate in one campaign must have the same tree depth")
+    if len({request.parent_candidate for request in requests}) != 1:
+        raise CampaignError("every candidate in one campaign must have the same parent candidate")
     cancellation = cancellation or Cancellation()
 
     started = time.monotonic()
@@ -305,9 +335,55 @@ def run_campaign(
             tuple(outcome.logical_id for outcome in outcomes),
             (f"spent {spent} usd over {elapsed}s",),
         )
-        return report
-    report.selection = select(outcomes, required=required, human_approved=human_approved)
+    else:
+        report.selection = select(outcomes, required=required, human_approved=human_approved)
+    report.experiment_round = _experiment_round(requests, outcomes, report.selection)
     return report
+
+
+def _experiment_round(
+    requests: Sequence[CandidateRequest],
+    outcomes: Sequence[CandidateOutcome],
+    selection: Selection,
+) -> ExperimentRound:
+    """Project one campaign into a frozen/provisional sibling bush.
+
+    A successful execution with a distinct recorded head answered its question,
+    even when its verification dimensions lost. Such a node is frozen evidence.
+    Runner/infrastructure failures and unchanged/missing heads remain provisional
+    and can be repaired without inventing a new branch in the experiment tree.
+    """
+    request_by_id = {request.logical_id: request for request in requests}
+    nodes: list[ExperimentNode] = []
+    for outcome in outcomes:
+        request = request_by_id[outcome.logical_id]
+        answered = outcome.state == "ok" and bool(outcome.output_head) and outcome.output_head != outcome.input_head
+        evidence = tuple(f"{item.dimension.value}:{item.result}:{item.evidence}" for item in outcome.evaluations)
+        nodes.append(
+            ExperimentNode(
+                id=outcome.logical_id,
+                parent_id=request.parent_candidate,
+                depth=request.depth,
+                strategy=request.strategy.value,
+                input_head=request.input_head,
+                result=outcome.state,
+                state=NodeState.ANSWERED if answered else NodeState.PROVISIONAL,
+                recorded_head=outcome.output_head if answered else None,
+                selected=selection.winner == outcome.logical_id,
+                evidence=evidence,
+                detail=outcome.detail,
+            )
+        )
+    round_ = ExperimentRound(
+        round_id=requests[0].campaign_id,
+        input_head=requests[0].input_head,
+        depth=requests[0].depth,
+        parent_candidate=requests[0].parent_candidate,
+        nodes=tuple(nodes),
+        winner_id=selection.winner,
+    )
+    round_.validate()
+    return round_
 
 
 def _sequential(
@@ -354,6 +430,8 @@ def _guarded(runner: CandidateRunner, request: CandidateRequest, cancellation: C
         )
     if outcome.logical_id != request.logical_id or outcome.strategy != request.strategy:
         raise CampaignError("candidate runner returned an outcome for a different request")
+    if outcome.input_head != request.input_head:
+        raise CampaignError("candidate runner returned an outcome for a different input head")
     if outcome.duration_s:
         return outcome
     return replace(outcome, duration_s=round(time.monotonic() - started, 3))
