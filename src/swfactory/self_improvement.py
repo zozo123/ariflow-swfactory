@@ -415,40 +415,23 @@ def delta(before: Iterable[Mapping[str, Any] | Signal], after: Iterable[Mapping[
     )
 
 
-def stalled(
-    history: Sequence[Mapping[str, Any]],
-    *,
-    threshold: int = STALL_THRESHOLD,
-    present: Iterable[str] | None = None,
-) -> tuple[str, ...]:
-    """Debt proposed ``threshold`` times across the trajectory and still unretired.
+def stalled(history: Sequence[Mapping[str, Any]], *, threshold: int = STALL_THRESHOLD) -> tuple[str, ...]:
+    """Signals present in the last ``threshold`` assessments without once being retired.
 
-    The loop's own failure detector. Without it, a work order nobody can finish is proposed forever
-    and every cycle reports the same "top priority" -- which reads like focus and is a stall.
-
-    Counted over the WHOLE history, not the last few cycles, because demoting a stalled order
-    removes it from that cycle's proposals -- and a consecutive-run rule then reads the gap as
-    progress and promotes it again. Measured on a real trajectory that oscillated exactly so:
-
-        cycle 1-3  evolution proposed
-        cycle 4    evolution stalled, demoted, therefore absent from the orders
-        cycle 5    run broken, evolution back at position one
-
-    The correction erased its own evidence. Counting occurrences makes the flag sticky: once earned
-    it holds until the debt is actually retired.
-
-    ``present`` is the debt the factory still carries. A key absent from it has been paid, so it
-    stops being stalled rather than haunting the trajectory forever.
+    The loop's own failure detector. Without it, a work order that nobody can finish is proposed
+    forever and every cycle reports the same "top priority" -- which reads like focus and is
+    actually a stall.
     """
-    counts: dict[str, int] = {}
-    for assessment in history:
-        for order in assessment.get("orders", []):
-            key = f"{order['source']}:{order['key']}"
-            counts[key] = counts.get(key, 0) + 1
-    stuck = {key for key, seen in counts.items() if seen >= threshold}
-    if present is not None:
-        stuck &= set(present)
-    return tuple(sorted(stuck))
+    if len(history) < threshold:
+        return ()
+    # Counted over what was PROPOSED, not what was measured. Measuring three times in an afternoon
+    # is one cycle, not three, and a detector that cannot tell them apart flags the whole ledger the
+    # third time anyone runs it -- which is how a useful alarm becomes noise nobody reads.
+    recent = [
+        {f"{order['source']}:{order['key']}" for order in assessment.get("orders", [])}
+        for assessment in history[-threshold:]
+    ]
+    return tuple(sorted(set.intersection(*recent))) if all(recent) else ()
 
 
 def record(assessment: Assessment, directory: Path, *, at: str) -> Path:
