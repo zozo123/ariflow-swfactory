@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -50,6 +51,14 @@ def repo(tmp_path: Path) -> Path:
     git(root, "add", "value.txt")
     git(root, "commit", "-qm", "base")
     return root
+
+
+def reseal_manifest(path: Path) -> None:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    canonical = {key: value for key, value in document.items() if key != "manifest_digest"}
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+    document["manifest_digest"] = "sha256:" + hashlib.sha256(payload).hexdigest()
+    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def answered_candidate(repo: Path, tmp_path: Path):
@@ -232,5 +241,42 @@ def test_symlink_bundle_destination_is_refused(repo: Path, tmp_path: Path) -> No
 
     with pytest.raises(CandidateEvidenceError, match="destination is a symlink"):
         build_candidate_evidence_bundle(repo, revision, source, artifacts={}, destination=link)
+
+    remove_candidate_worktree(worktree)
+
+
+def test_resealed_manifest_cannot_substitute_another_candidate_ref(repo: Path, tmp_path: Path) -> None:
+    source, worktree, revision = answered_candidate(repo, tmp_path)
+    destination = tmp_path / "bundle"
+    build_candidate_evidence_bundle(repo, revision, source, artifacts={}, destination=destination)
+    manifest = destination / "manifest.json"
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    document["candidate_ref"] = "refs/swfactory/candidates/" + "0" * 24
+    manifest.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    reseal_manifest(manifest)
+
+    with pytest.raises(CandidateEvidenceError, match="deterministic ref"):
+        verify_candidate_evidence_bundle(destination, repo=repo)
+
+    remove_candidate_worktree(worktree)
+
+
+def test_resealed_diff_cannot_claim_different_semantics(repo: Path, tmp_path: Path) -> None:
+    source, worktree, revision = answered_candidate(repo, tmp_path)
+    destination = tmp_path / "bundle"
+    build_candidate_evidence_bundle(repo, revision, source, artifacts={}, destination=destination)
+    fake = b"diff --git a/value.txt b/value.txt\n# different but self-consistent evidence\n"
+    diff_path = destination / "candidate.diff"
+    diff_path.write_bytes(fake)
+
+    manifest = destination / "manifest.json"
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    document["diff"]["sha256"] = hashlib.sha256(fake).hexdigest()
+    document["diff"]["size_bytes"] = len(fake)
+    manifest.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    reseal_manifest(manifest)
+
+    with pytest.raises(CandidateEvidenceError, match="does not match the recorded input/output revisions"):
+        verify_candidate_evidence_bundle(destination, repo=repo)
 
     remove_candidate_worktree(worktree)
