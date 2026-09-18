@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -130,8 +131,16 @@ def create_candidate_worktree(
     )
 
 
-def freeze_candidate_worktree(worktree: CandidateWorktree) -> CandidateRevision:
-    """Freeze one clean, changed candidate HEAD under an immutable factory ref."""
+def freeze_candidate_worktree(
+    worktree: CandidateWorktree,
+    *,
+    allowed_untracked: Iterable[str] = (),
+) -> CandidateRevision:
+    """Freeze one committed candidate HEAD under an immutable factory ref.
+
+    Tracked edits are never allowed. Callers may name untracked evidence files that are intentionally
+    retained outside Git; every other untracked path still refuses the freeze.
+    """
     repo = Path(worktree.repo).resolve()
     raw_path = Path(worktree.path)
     if raw_path.is_symlink():
@@ -140,10 +149,22 @@ def freeze_candidate_worktree(worktree: CandidateWorktree) -> CandidateRevision:
     _verify_receipt_identity(worktree, path)
     _verify_membership(repo, path)
 
-    status = _git(path, "status", "--porcelain=v1", "--untracked-files=all")
-    if status.strip():
+    tracked_status = _git(path, "status", "--porcelain=v1", "--untracked-files=no")
+    if tracked_status.strip():
         raise CandidateWorktreeError(
-            f"candidate {worktree.candidate_id} has uncommitted files; commit or discard them before freeze"
+            f"candidate {worktree.candidate_id} has uncommitted tracked files; commit or discard them before freeze"
+        )
+    allowed = {_validate_evidence_path(item) for item in allowed_untracked}
+    untracked = {
+        item
+        for item in _git(path, "ls-files", "--others", "--exclude-standard", "-z").split("\x00")
+        if item
+    }
+    unexpected = sorted(untracked - allowed)
+    if unexpected:
+        raise CandidateWorktreeError(
+            f"candidate {worktree.candidate_id} has uncommitted files; commit or discard them before freeze: "
+            + ", ".join(unexpected)
         )
 
     input_head = _git(repo, "rev-parse", "--verify", f"{worktree.input_head}^{{commit}}").strip()
@@ -262,6 +283,13 @@ def _validate_candidate_id(candidate_id: str) -> None:
 def _validate_revision(revision: str) -> None:
     if not revision or revision.startswith("-") or "\x00" in revision or "\n" in revision or "\r" in revision:
         raise CandidateWorktreeError(f"invalid Git revision: {revision!r}")
+
+
+def _validate_evidence_path(path: str) -> str:
+    value = str(path).replace("\\", "/").strip("/")
+    if not value or value.startswith("../") or "/../" in f"/{value}/" or any(ch in value for ch in ("\x00", "\n", "\r")):
+        raise CandidateWorktreeError(f"invalid allowed evidence path: {path!r}")
+    return value
 
 
 def _git(repo: Path, *args: str) -> str:
