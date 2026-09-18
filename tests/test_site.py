@@ -127,6 +127,9 @@ def test_homepage_explains_the_actual_algorithm_and_authorities() -> None:
     assert "one durable Factory Cell" in source
     assert "(cell_id, epoch, operation_key)" in source
     assert "Humans keep final merge authority" in source
+    assert "Matter, motion, and authority" in source
+    assert "accelerate motion != mint authority" in source
+    assert "an accelerator may change time-to-answer, never the answer" in source
 
 
 def test_sandbox_table_is_complete_and_honest() -> None:
