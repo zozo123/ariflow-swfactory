@@ -6,6 +6,9 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from swfactory.campaign_decision import CampaignDecisionError, plan_descendant_campaign
 from swfactory.candidate_evidence import verify_candidate_evidence_bundle
 from swfactory.evolution import (
     CandidateOutcome,
@@ -15,7 +18,7 @@ from swfactory.evolution import (
     run_campaign,
     worktree_candidate_runner,
 )
-from swfactory.generations import Dimension
+from swfactory.generations import CampaignBudget, Dimension
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -378,3 +381,112 @@ def test_required_inherited_recipe_missing_refuses_candidate(tmp_path: Path) -> 
     assert outcome.inherited_recipe_digest is None
     assert "execution recipe" in outcome.detail
     assert report.selection.winner is None
+
+
+
+def _successful_report(tmp_path: Path):
+    repo, base = _repo(tmp_path)
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate")
+        return _passing(request)
+
+    report = run_campaign(
+        worktree_candidate_runner(repo, tmp_path / "worktrees", runner),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+    return repo, report
+
+
+def test_descendant_planner_binds_children_to_verified_parent_decision(tmp_path: Path) -> None:
+    repo, report = _successful_report(tmp_path)
+    winner = report.outcomes[0]
+    assert winner.output_head
+    assert winner.evidence_digest
+
+    plan = plan_descendant_campaign(
+        report,
+        repo=repo,
+        campaign_id="round-1",
+        strategies=(Strategy.RETHINK, Strategy.SCRATCH),
+    )
+
+    assert plan.parent_campaign_id == "round-0"
+    assert plan.parent_candidate == winner.logical_id
+    assert plan.parent_evidence_digest == winner.evidence_digest
+    assert plan.input_head == winner.output_head
+    assert plan.depth == 1
+    assert plan.parent_decision_digest.startswith("sha256:")
+    assert plan.digest().startswith("sha256:")
+    assert {request.strategy for request in plan.requests} == {Strategy.RETHINK, Strategy.SCRATCH}
+    assert all(request.input_head == winner.output_head for request in plan.requests)
+    assert all(request.parent_candidate == winner.logical_id for request in plan.requests)
+    assert all(request.parent_decision_digest == plan.parent_decision_digest for request in plan.requests)
+    assert all(request.depth == 1 for request in plan.requests)
+
+
+def test_descendant_planner_refuses_tampered_parent_evidence(tmp_path: Path) -> None:
+    repo, report = _successful_report(tmp_path)
+    outcome = report.outcomes[0]
+    assert outcome.evidence_bundle_path
+    bundle = verify_candidate_evidence_bundle(Path(outcome.evidence_bundle_path), repo=repo)
+    retained = Path(outcome.evidence_bundle_path) / bundle.diff.path
+    retained.write_bytes(retained.read_bytes() + b"tamper")
+
+    with pytest.raises(CampaignDecisionError, match="candidate evidence verification failed"):
+        plan_descendant_campaign(report, repo=repo, campaign_id="round-1")
+
+
+def test_descendant_planner_refuses_selection_tree_drift(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    repo, report = _successful_report(tmp_path)
+    assert report.experiment_round is not None
+    report.experiment_round = replace(report.experiment_round, winner_id=None)
+
+    with pytest.raises(CampaignDecisionError, match="experiment-tree winner differs"):
+        plan_descendant_campaign(report, repo=repo, campaign_id="round-1")
+
+
+def test_descendant_planner_preserves_depth_budget(tmp_path: Path) -> None:
+    repo, report = _successful_report(tmp_path)
+    budget = CampaignBudget(max_depth=0)
+
+    with pytest.raises(CampaignDecisionError, match="descendant campaign is inadmissible"):
+        plan_descendant_campaign(
+            report,
+            repo=repo,
+            campaign_id="round-1",
+            strategies=(Strategy.REPAIR,),
+            budget=budget,
+        )
+
+
+def test_descendant_request_identity_changes_with_parent_decision_digest() -> None:
+    first = plan_requests(
+        campaign_id="round-1",
+        cell_id="cell",
+        epoch=1,
+        input_head="b" * 40,
+        strategies=(Strategy.REPAIR,),
+        parent_candidate="cand-parent",
+        parent_decision_digest="sha256:" + "1" * 64,
+        depth=1,
+    )[0]
+    second = plan_requests(
+        campaign_id="round-1",
+        cell_id="cell",
+        epoch=1,
+        input_head="b" * 40,
+        strategies=(Strategy.REPAIR,),
+        parent_candidate="cand-parent",
+        parent_decision_digest="sha256:" + "2" * 64,
+        depth=1,
+    )[0]
+
+    assert first.logical_id != second.logical_id
