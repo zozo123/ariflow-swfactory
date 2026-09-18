@@ -262,9 +262,7 @@ def plan_descendant_campaign(
         if not answered:
             continue
         if not outcome.evidence_bundle_path or not outcome.evidence_digest:
-            raise CampaignDecisionError(
-                f"{outcome.logical_id}: answered sibling is missing retained evidence"
-            )
+            raise CampaignDecisionError(f"{outcome.logical_id}: answered sibling is missing retained evidence")
         try:
             bundle = verify_candidate_evidence_bundle(Path(outcome.evidence_bundle_path), repo=repo)
         except CandidateEvidenceError as error:
@@ -272,9 +270,7 @@ def plan_descendant_campaign(
                 f"{outcome.logical_id}: candidate evidence verification failed: {error}"
             ) from error
         if bundle.digest() != outcome.evidence_digest:
-            raise CampaignDecisionError(
-                f"{outcome.logical_id}: recorded evidence digest differs from retained bundle"
-            )
+            raise CampaignDecisionError(f"{outcome.logical_id}: recorded evidence digest differs from retained bundle")
         bundles[outcome.logical_id] = bundle
 
     # Fan-in is rebuilt from immutable sibling evidence rather than trusted from
