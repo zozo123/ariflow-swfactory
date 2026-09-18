@@ -86,9 +86,7 @@ class ExperimentNode:
             input_head=str(document["input_head"]),
             result=str(document["result"]),
             state=NodeState(str(document["state"])),
-            recorded_head=(
-                str(document["recorded_head"]) if document.get("recorded_head") is not None else None
-            ),
+            recorded_head=(str(document["recorded_head"]) if document.get("recorded_head") is not None else None),
             selected=bool(document.get("selected", False)),
             evidence=tuple(str(item) for item in document.get("evidence", ())),
             detail=str(document.get("detail", "")),
