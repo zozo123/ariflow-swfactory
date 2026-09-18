@@ -154,6 +154,8 @@ class OperationJournal:
                 "intent_digest": "TEXT",
                 "attempt_owner": "TEXT",
                 "attempt_lease_until": "REAL",
+                "replay_safe": "INTEGER",
+                "max_attempts": "INTEGER",
             }
             for name, ddl in additions.items():
                 if name not in columns:
@@ -163,24 +165,64 @@ class OperationJournal:
             # opening it anyway is what turns a rollback into a duplicated external effect.
             ensure_named_schema(self.db, "operations")
 
-    def begin(self, ref: OperationRef, *, intent_digest: str | None = None) -> str:
-        """Create a durable intent if absent and verify immutable operation identity."""
+    def begin(
+        self,
+        ref: OperationRef,
+        *,
+        intent_digest: str | None = None,
+        replay_safe: bool | None = None,
+        max_attempts: int | None = None,
+    ) -> str:
+        """Create a durable intent and bind the recovery policy when supplied."""
         self._validate_ref(ref)
         self._validate_digest(intent_digest)
+        if max_attempts is not None and max_attempts < 1:
+            raise OperationIdentityConflict("operation retry budget must be positive")
         now = time.time()
         with self.lock, self.db:
             self.db.execute(
                 """INSERT OR IGNORE INTO operations(
-                    operation_key,cell_id,epoch,kind,state,result_json,updated_at,attempts,intent_digest
-                ) VALUES(?,?,?,?,?,?,?,?,?)""",
-                (ref.key, ref.cell_id, ref.epoch, ref.kind, "intent", None, now, 0, intent_digest),
+                    operation_key,cell_id,epoch,kind,state,result_json,updated_at,attempts,intent_digest,
+                    replay_safe,max_attempts
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    ref.key,
+                    ref.cell_id,
+                    ref.epoch,
+                    ref.kind,
+                    "intent",
+                    None,
+                    now,
+                    0,
+                    intent_digest,
+                    None if replay_safe is None else int(replay_safe),
+                    max_attempts,
+                ),
             )
             row = self.get(ref.key)
             self._assert_identity(ref, row, intent_digest=intent_digest)
+            stored_safe = row.get("replay_safe")
+            stored_max = row.get("max_attempts")
+            if replay_safe is not None and stored_safe is not None and bool(stored_safe) != replay_safe:
+                raise OperationIdentityConflict(f"operation key {ref.key!r} was reused with divergent replay policy")
+            if max_attempts is not None and stored_max is not None and int(stored_max) != max_attempts:
+                raise OperationIdentityConflict(f"operation key {ref.key!r} was reused with divergent retry budget")
+            updates: list[str] = []
+            values: list[Any] = []
             if intent_digest is not None and row.get("intent_digest") is None:
+                updates.append("intent_digest=?")
+                values.append(intent_digest)
+            if replay_safe is not None and stored_safe is None:
+                updates.append("replay_safe=?")
+                values.append(int(replay_safe))
+            if max_attempts is not None and stored_max is None:
+                updates.append("max_attempts=?")
+                values.append(max_attempts)
+            if updates:
+                values.extend((now, ref.key))
                 self.db.execute(
-                    "UPDATE operations SET intent_digest=?,updated_at=? WHERE operation_key=?",
-                    (intent_digest, now, ref.key),
+                    f"UPDATE operations SET {','.join(updates)},updated_at=? WHERE operation_key=?",
+                    values,
                 )
         return str(self.get(ref.key)["state"])
 
@@ -348,15 +390,28 @@ class OperationJournal:
         reports the operation in doubt. Reconciliation is required before a retry of any prior
         attempt, including an expired claim.
         """
+        budget = budget or budget_for(ref.kind)
         existed = True
         try:
             row = self.get(ref.key)
         except KeyError:
             existed = False
-            self.begin(ref, intent_digest=intent_digest)
+            self.begin(
+                ref,
+                intent_digest=intent_digest,
+                replay_safe=replay_safe,
+                max_attempts=budget.max_attempts,
+            )
             row = self.get(ref.key)
         else:
             self._assert_identity(ref, row, intent_digest=intent_digest)
+            self.begin(
+                ref,
+                intent_digest=intent_digest,
+                replay_safe=replay_safe,
+                max_attempts=budget.max_attempts,
+            )
+            row = self.get(ref.key)
         if row["state"] == "committed":
             return row["result"]
 
