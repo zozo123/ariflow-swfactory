@@ -93,11 +93,20 @@ def create_candidate_worktree(
     _restrict_dir(root)
     token = ref.rsplit("/", 1)[-1]
     destination = root / token
-    if destination.exists():
-        raise CandidateWorktreeError(f"candidate worktree already exists: {destination}")
-
+    reservation = root / f".{token}.reserve"
     try:
+        fd = os.open(reservation, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as error:
+        raise CandidateWorktreeError(f"candidate worktree is already being created: {destination}") from error
+    else:
+        os.close(fd)
+
+    added = False
+    try:
+        if destination.exists() or destination.is_symlink():
+            raise CandidateWorktreeError(f"candidate worktree already exists: {destination}")
         _git(repo, "worktree", "add", "--detach", str(destination), commit)
+        added = True
         observed = _git(destination, "rev-parse", "HEAD").strip()
         if observed != commit:
             raise CandidateWorktreeError(f"candidate worktree head {observed} != expected {commit}")
@@ -106,9 +115,11 @@ def create_candidate_worktree(
         if common.resolve() != expected_common.resolve():
             raise CandidateWorktreeError("candidate worktree is attached to a different Git repository")
     except BaseException:
-        if destination.exists():
+        if added:
             _remove_path(repo, destination, force=True)
         raise
+    finally:
+        reservation.unlink(missing_ok=True)
 
     return CandidateWorktree(
         candidate_id=candidate_id,
