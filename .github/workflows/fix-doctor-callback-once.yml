@@ -1,0 +1,66 @@
+name: fix-doctor-callback-once
+
+on:
+  push:
+    branches: [finish/all-2040]
+    paths:
+      - ops/fix-doctor-callback-once.json
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+      - name: Restore managed worker callback doctor contract
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("src/swfactory/backend/service.py")
+          lines = path.read_text().splitlines()
+          start = next(i for i, line in enumerate(lines) if line == '        if path == "/doctor":')
+          end = next(
+              (i for i in range(start + 1, len(lines)) if lines[i].startswith("        if path == ") or lines[i].startswith("        elif path == ")),
+              len(lines),
+          )
+          return_i = max(i for i in range(start + 1, end) if lines[i].startswith("            return "))
+          return_expr = lines[return_i].strip().removeprefix("return ")
+          marker = '"name": "managed worker callback"'
+          if any(marker in line for line in lines[start:end]):
+              raise SystemExit(0)
+          insert = [
+              '            callback_ok = bool(os.getenv("SWF_BACKEND_URL")) and bool(os.getenv("SWF_BACKEND_TOKEN"))',
+              f'            {return_expr}.append(',
+              '                {',
+              '                    "name": "managed worker callback",',
+              '                    "ok": callback_ok,',
+              '                    "status": "ok" if callback_ok else "fail",',
+              '                    "detail": "backend callback credentials configured" if callback_ok else "managed workers cannot call the backend",',
+              '                    "required": True,',
+              '                    "fix": "" if callback_ok else "set SWF_BACKEND_URL and SWF_BACKEND_TOKEN for managed workers",',
+              '                }',
+              '            )',
+          ]
+          lines[return_i:return_i] = insert
+          path.write_text("\n".join(lines) + "\n")
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - run: uv run ruff check --fix src/swfactory/backend/service.py && uv run ruff format src/swfactory/backend/service.py
+      - name: Commit source fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/swfactory/backend/service.py
+          git commit -m "fix: restore managed worker callback doctor contract"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
