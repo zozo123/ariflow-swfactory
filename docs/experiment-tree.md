@@ -60,21 +60,26 @@ from a selected answered node.
 This distinction prevents an OOM or dead runner from becoming fake experimental evidence while also
 preventing a disappointing but valid result from being silently edited away.
 
-## Exact-revision selection
+## Exact-revision exploration versus promotion
 
-`swfactory.evolution.select` refuses a candidate that has no distinct output revision even if its
-evaluation objects say `pass`.
+The factory now keeps two explicit decisions instead of overloading one word:
 
-A selected candidate therefore requires all of the following:
+- `exploration_selection` chooses the evidence-best answered revision that later experiments may
+  descend from;
+- `selection` remains promotion-aware and still requires the existing human gate.
+
+Both refuse candidates with no distinct output revision. An exploration-selected candidate requires:
 
 1. candidate state is `ok`;
 2. `output_head` exists;
 3. `output_head != input_head`;
-4. required evaluation dimensions pass;
-5. the existing human promotion gate approves it.
+4. required evaluation dimensions pass.
 
-The experiment tree does not weaken promotion policy. It gives promotion policy a better lineage
-object to reason about.
+Promotion requires all of those conditions **plus human approval**.
+
+This distinction is what permits an autonomous experiment loop to ask the next question without
+granting itself authority to merge, deploy, or promote the answer. The experiment tree records
+exploration lineage; the promotion surface remains singular and human-gated.
 
 ## Two independent lineages
 
@@ -107,11 +112,11 @@ The existing promotion boundary remains singular.
 
 ## Stored report
 
-`CampaignReport.to_dict()` now emits schema version 2 and includes an `experiment_round` object:
+`CampaignReport.to_dict()` now emits schema version 3, records both selection surfaces, and includes an `experiment_round` object:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "campaign_id": "round-1",
   "input_head": "sha-parent",
   "experiment_round": {
