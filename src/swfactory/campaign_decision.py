@@ -186,8 +186,7 @@ def build_campaign_decision(
         raise CampaignDecisionError("evidence supplied for unknown candidates: " + ",".join(sorted(extras)))
 
     candidates = tuple(
-        _decision_candidate(outcome, evidence_bundles.get(outcome.logical_id))
-        for outcome in report.outcomes
+        _decision_candidate(outcome, evidence_bundles.get(outcome.logical_id)) for outcome in report.outcomes
     )
     manifest = CampaignDecisionManifest(
         campaign_id=report.campaign_id,
@@ -278,9 +277,7 @@ def load_campaign_decision(path: Path) -> CampaignDecisionManifest:
                 output_head=str(item["output_head"]) if item.get("output_head") is not None else None,
                 candidate_ref=str(item["candidate_ref"]) if item.get("candidate_ref") is not None else None,
                 evidence_bundle_digest=(
-                    str(item["evidence_bundle_digest"])
-                    if item.get("evidence_bundle_digest") is not None
-                    else None
+                    str(item["evidence_bundle_digest"]) if item.get("evidence_bundle_digest") is not None else None
                 ),
                 evaluations=tuple(DecisionEvaluation(**row) for row in item.get("evaluations", ())),
                 cost_usd=float(item["cost_usd"]),

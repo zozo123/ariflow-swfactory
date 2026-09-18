@@ -1246,8 +1246,7 @@ def campaign_decision_build(
         document = json.loads(report.read_text(encoding="utf-8"))
         paths = _candidate_evidence_paths(candidate_evidence)
         bundles = {
-            candidate_id: verify_candidate_evidence_bundle(path, repo=repo_path)
-            for candidate_id, path in paths.items()
+            candidate_id: verify_candidate_evidence_bundle(path, repo=repo_path) for candidate_id, path in paths.items()
         }
         manifest = build_campaign_decision_from_document(document, bundles)
         write_campaign_decision(destination, manifest)
@@ -1291,6 +1290,39 @@ def campaign_decision_verify(
         typer.echo(json.dumps(document, indent=2, sort_keys=True))
     else:
         typer.echo(f"verified {manifest.campaign_id} {manifest.digest()}")
+
+
+@app.command("research-schedule")
+def research_schedule_cmd(
+    max_depth: Annotated[int, typer.Option(help="deepest descendant experiment round")] = 1,
+    max_candidates: Annotated[int, typer.Option(help="maximum sibling candidates per round")] = 4,
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable cooling schedule")] = False,
+) -> None:
+    """Show the deterministic exploration-width cooling schedule."""
+    from swfactory.evolution import CampaignError
+    from swfactory.research_loop import annealed_strategy_schedule
+
+    try:
+        schedule = annealed_strategy_schedule(max_depth, max_candidates=max_candidates)
+    except CampaignError as error:
+        typer.echo(f"research schedule: {error}", err=True)
+        raise typer.Exit(2) from error
+    document = {
+        "authority": "exploration-only",
+        "scheduler": "airflow",
+        "rounds": [
+            {
+                "depth": depth,
+                "strategies": [strategy.value for strategy in strategies],
+            }
+            for depth, strategies in enumerate(schedule)
+        ],
+    }
+    if json_out:
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        return
+    for round_ in document["rounds"]:
+        typer.echo(f"depth {round_['depth']}: {' '.join(round_['strategies'])}")
 
 
 @app.command("experiment-tree")

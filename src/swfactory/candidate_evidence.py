@@ -130,9 +130,7 @@ class CandidateEvidenceBundle:
             if not _DIGEST.fullmatch(self.inherited_recipe_sha256):
                 raise CandidateEvidenceError("inherited execution recipe digest is invalid")
             if self.inherited_recipe_commit_sha != self.input_head:
-                raise CandidateEvidenceError(
-                    "inherited execution recipe commit must equal the candidate input head"
-                )
+                raise CandidateEvidenceError("inherited execution recipe commit must equal the candidate input head")
             if not self.inherited_recipe_path:
                 raise CandidateEvidenceError("inherited execution recipe path is empty")
         self.diff.validate()
@@ -170,8 +168,7 @@ def build_candidate_evidence_bundle(
         )
     if inherited_recipe is not None and inherited_recipe.commit_sha != revision.input_head:
         raise CandidateEvidenceError(
-            f"inherited execution recipe commit {inherited_recipe.commit_sha} "
-            f"!= candidate input {revision.input_head}"
+            f"inherited execution recipe commit {inherited_recipe.commit_sha} != candidate input {revision.input_head}"
         )
     if destination.exists() and not destination.is_dir():
         raise CandidateEvidenceError(f"candidate evidence destination is not a directory: {destination}")
@@ -248,9 +245,7 @@ def load_candidate_evidence_bundle(destination: Path) -> CandidateEvidenceBundle
                 else None
             ),
             inherited_recipe_path=(
-                str(document["inherited_recipe_path"])
-                if document.get("inherited_recipe_path") is not None
-                else None
+                str(document["inherited_recipe_path"]) if document.get("inherited_recipe_path") is not None else None
             ),
             schema_version=int(document.get("schema_version", 1)),
         )
@@ -301,13 +296,9 @@ def verify_candidate_evidence_bundle(destination: Path, *, repo: Path | None = N
                     path=bundle.inherited_recipe_path or "",
                 )
             except RuntimeError as error:
-                raise CandidateEvidenceError(
-                    f"inherited execution recipe verification failed: {error}"
-                ) from error
+                raise CandidateEvidenceError(f"inherited execution recipe verification failed: {error}") from error
             if recipe.digest != bundle.inherited_recipe_sha256:
-                raise CandidateEvidenceError(
-                    "inherited execution recipe digest does not match the recorded Git object"
-                )
+                raise CandidateEvidenceError("inherited execution recipe digest does not match the recorded Git object")
         expected_diff = _git_bytes(
             repo,
             "diff",

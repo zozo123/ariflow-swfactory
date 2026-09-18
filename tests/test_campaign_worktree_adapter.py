@@ -191,7 +191,6 @@ def test_experiment_node_retains_frozen_candidate_ref_as_evidence(tmp_path: Path
     assert any(item.startswith("candidate-ref:refs/swfactory/candidates/") for item in node.evidence)
 
 
-
 def test_adapter_retains_workspace_artifacts_before_cleanup(tmp_path: Path) -> None:
     repo, base = _repo(tmp_path)
     root = tmp_path / "worktrees"
@@ -296,7 +295,6 @@ def test_experiment_node_retains_candidate_evidence_digest(tmp_path: Path) -> No
     assert outcome.evidence_digest
     node = report.experiment_round.nodes[0]
     assert f"candidate-evidence:{outcome.evidence_digest}" in node.evidence
-
 
 
 def test_campaign_can_require_inherited_input_recipe(tmp_path: Path) -> None:
