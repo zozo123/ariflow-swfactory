@@ -19,6 +19,7 @@ pub mod operator;
 pub mod ops;
 pub mod snapshot;
 pub mod stack;
+pub mod stage_runtime;
 pub mod submit;
 
 pub use backend_context::BackendContext;
