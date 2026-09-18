@@ -318,6 +318,8 @@ def load_campaign_decision(path: Path) -> CampaignDecisionManifest:
 def verify_campaign_decision(
     path: Path,
     evidence_paths: Mapping[str, Path],
+    *,
+    repo: Path | None = None,
 ) -> CampaignDecisionManifest:
     """Re-load the decision and prove every answered candidate still has the bound bundle."""
 
@@ -334,7 +336,7 @@ def verify_campaign_decision(
     for candidate in manifest.candidates:
         if not candidate.answered:
             continue
-        bundle = verify_candidate_evidence_bundle(evidence_paths[candidate.candidate_id])
+        bundle = verify_candidate_evidence_bundle(evidence_paths[candidate.candidate_id], repo=repo)
         observed = bundle.digest()
         if observed != candidate.evidence_bundle_digest:
             raise CampaignDecisionError(
