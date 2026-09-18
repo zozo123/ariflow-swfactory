@@ -422,7 +422,7 @@ class OperationJournal:
                 max_delay_s=budget.max_delay_s,
             )
         stored_safe = row.get("replay_safe")
-        effective_replay_safe = replay_safe if replay_safe is not None else stored_safe in {True, 1}
+        effective_replay_safe = replay_safe if replay_safe is not None else bool(stored_safe)
 
         if row["state"] == "committed":
             return row["result"]
