@@ -191,7 +191,18 @@ def worktree_candidate_runner(
             if outcome.state != "ok":
                 return outcome
 
-            revision = freeze_candidate_worktree(worktree)
+            artifacts = artifact_collector(request, Path(worktree.path), outcome) if artifact_collector else {}
+            workspace = Path(worktree.path).resolve()
+            allowed_untracked: list[str] = []
+            for artifact in artifacts.values():
+                raw_artifact = Path(artifact)
+                try:
+                    relative = raw_artifact.resolve().relative_to(workspace)
+                except ValueError:
+                    continue
+                allowed_untracked.append(relative.as_posix())
+
+            revision = freeze_candidate_worktree(worktree, allowed_untracked=allowed_untracked)
             verify_candidate_revision(repo, revision)
             if outcome.output_head is not None and outcome.output_head != revision.output_head:
                 raise CampaignError(
@@ -205,9 +216,6 @@ def worktree_candidate_runner(
                     load_execution_recipe(repo, revision.input_head, path=inherited_recipe_path)
                     if inherited_recipe_path is not None
                     else None
-                )
-                artifacts = (
-                    artifact_collector(request, Path(worktree.path), outcome) if artifact_collector is not None else {}
                 )
                 destination = resolved_evidence_root / request.logical_id
                 bundle = build_candidate_evidence_bundle(
