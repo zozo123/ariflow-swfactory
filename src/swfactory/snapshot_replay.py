@@ -203,7 +203,7 @@ def run_snapshot_recipe(
             stdout=_retained_stream(stdout_path, destination),
             stderr=_retained_stream(stderr_path, destination),
         )
-        recipe_document = bound_recipe.to_dict()
+        recipe_document = _bound_recipe_document(bound_recipe)
         _atomic_json(destination / "recipe.json", recipe_document)
         receipt_document = receipt.canonical_dict()
         receipt_document["receipt_digest"] = receipt.digest
@@ -308,6 +308,25 @@ def verify_snapshot_run(
             raise SnapshotReplayError("retained recipe differs from recipe in recorded Git commit")
 
     return bound_recipe, receipt
+
+
+def _bound_recipe_document(bound_recipe: BoundExecutionRecipe) -> dict[str, Any]:
+    recipe = bound_recipe.recipe
+    return {
+        "schema_version": bound_recipe.schema_version,
+        "commit_sha": bound_recipe.commit_sha,
+        "path": bound_recipe.path,
+        "recipe": {
+            "schema_version": recipe.schema_version,
+            "argv": list(recipe.argv),
+            "cwd": recipe.cwd,
+            "timeout_s": recipe.timeout_s,
+            "resources": {"cpus": recipe.cpus, "memory_mb": recipe.memory_mb},
+            "environment": dict(recipe.environment),
+            "secret_env": list(recipe.secret_env),
+        },
+        "digest": bound_recipe.digest,
+    }
 
 
 def _prepare_destination(destination: Path) -> Path:
