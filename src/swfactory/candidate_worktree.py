@@ -155,11 +155,7 @@ def freeze_candidate_worktree(
             f"candidate {worktree.candidate_id} has uncommitted tracked files; commit or discard them before freeze"
         )
     allowed = {_validate_evidence_path(item) for item in allowed_untracked}
-    untracked = {
-        item
-        for item in _git(path, "ls-files", "--others", "--exclude-standard", "-z").split("\x00")
-        if item
-    }
+    untracked = {item for item in _git(path, "ls-files", "--others", "--exclude-standard", "-z").split("\x00") if item}
     unexpected = sorted(untracked - allowed)
     if unexpected:
         raise CandidateWorktreeError(
