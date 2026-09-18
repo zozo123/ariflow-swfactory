@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from swfactory.candidate_evidence import CandidateEvidenceBundle
-from swfactory.evolution import CampaignReport, CandidateOutcome
+from swfactory.evolution import CampaignReport, CandidateOutcome, Selection, Strategy
+from swfactory.generations import Dimension, Evaluation
 
 _DIGEST_PREFIX = "sha256:"
 _ALLOWED_STATES = {"ok", "failed", "cancelled", "skipped", "refused"}
@@ -202,6 +203,58 @@ def build_campaign_decision(
     )
     manifest.validate()
     return manifest
+
+
+def build_campaign_decision_from_document(
+    document: Mapping[str, Any],
+    evidence_bundles: Mapping[str, CandidateEvidenceBundle],
+) -> CampaignDecisionManifest:
+    """Rehydrate the stored campaign report fields needed for immutable fan-in evidence."""
+
+    try:
+        outcomes = tuple(
+            CandidateOutcome(
+                logical_id=str(item["logical_id"]),
+                strategy=Strategy(str(item["strategy"])),
+                state=str(item["state"]),  # type: ignore[arg-type]
+                input_head=str(item["input_head"]),
+                output_head=str(item["output_head"]) if item.get("output_head") is not None else None,
+                evaluations=tuple(
+                    Evaluation(
+                        dimension=Dimension(str(row["dimension"])),
+                        result=str(row["result"]),
+                        evidence=str(row["evidence"]),
+                    )
+                    for row in item.get("evaluations", ())
+                ),
+                cost_usd=float(item.get("cost_usd", 0.0)),
+                duration_s=float(item.get("duration_s", 0.0)),
+                detail=str(item.get("detail", "")),
+                candidate_ref=str(item["candidate_ref"]) if item.get("candidate_ref") is not None else None,
+            )
+            for item in document["outcomes"]
+        )
+        selection_doc = document["selection"]
+        report = CampaignReport(
+            campaign_id=str(document["campaign_id"]),
+            cell_id=str(document["cell_id"]),
+            epoch=int(document["epoch"]),
+            input_head=str(document["input_head"]),
+            strategies=tuple(str(item) for item in document["strategies"]),
+            parallel=bool(document["parallel"]),
+            outcomes=outcomes,
+            selection=Selection(
+                winner=str(selection_doc["winner"]) if selection_doc.get("winner") is not None else None,
+                reason=str(selection_doc["reason"]),
+                ranking=tuple(str(item) for item in selection_doc.get("ranking", ())),
+                refusals=tuple(str(item) for item in selection_doc.get("refusals", ())),
+            ),
+            independence=tuple(str(item) for item in document.get("independence", ())),
+            cancelled=bool(document.get("cancelled", False)),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise CampaignDecisionError(f"cannot parse campaign report: {error}") from error
+    return build_campaign_decision(report, evidence_bundles)
 
 
 def write_campaign_decision(path: Path, manifest: CampaignDecisionManifest) -> None:
