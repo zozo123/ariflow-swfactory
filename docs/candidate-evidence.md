@@ -121,3 +121,41 @@ verifiable evidence.
 A bundle cannot make a candidate promotable. It records evidence for selection and review. Airflow
 still owns lifecycle scheduling; the Factory Cell owns durable work identity; candidate selection
 remains deterministic; human/branch-protection gates remain the promotion authority.
+
+## Promotion-window retention
+
+A verified bundle can be imported into the factory-owned retention store:
+
+```sh
+uv run swfactory candidate-evidence retain \
+  .factory/candidates/cand-evidence \
+  --repo . \
+  --ttl-hours 168
+```
+
+Retention is content-addressed by the bundle's canonical manifest digest:
+
+```text
+.factory/candidate-retention/
+├── objects/<manifest-sha256>/   copied candidate evidence bundle
+└── leases/<manifest-sha256>.json
+```
+
+Re-retaining the same bundle never shortens its lease. Pinning means only
+**retain these bytes**; it never means approved, selected, merged, or released.
+
+```sh
+uv run swfactory candidate-evidence pin sha256:<digest>
+uv run swfactory candidate-evidence gc --dry-run --json
+uv run swfactory candidate-evidence gc
+```
+
+GC removes only expired, unpinned objects under the factory-owned digest
+namespace. Malformed leases, missing objects, redirected/symlinked paths, and
+other ambiguous states are reported and left untouched rather than guessed
+through.
+
+This closes the storage side of the artifact-retention invariant. The capability
+remains **experimental** until release/promotion itself binds and verifies the
+retention lease in a release drill.
+\n
