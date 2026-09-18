@@ -354,9 +354,7 @@ def _extract_snapshot(archive_path: Path, destination: Path) -> None:
                 if path.is_absolute() or ".." in path.parts or not member.name:
                     raise SnapshotReplayError(f"unsafe archive member path: {member.name!r}")
                 if not (member.isdir() or member.isfile()):
-                    raise SnapshotReplayError(
-                        f"local replay refuses non-regular archive member: {member.name!r}"
-                    )
+                    raise SnapshotReplayError(f"local replay refuses non-regular archive member: {member.name!r}")
             archive.extractall(destination, members=members, filter="data")
     except (tarfile.TarError, OSError) as error:
         raise SnapshotReplayError(f"cannot extract source snapshot: {error}") from error
