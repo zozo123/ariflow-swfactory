@@ -1,28 +1,67 @@
 # Rust manager ↔ Airflow binding
 
-Airflow remains the lifecycle scheduler. The Rust manager owns factory semantics.
+The contract is deliberately asymmetric:
 
-The binding is deliberately small:
+- **Rust owns factory identity and semantics.**
+- **Airflow owns lifecycle scheduling.**
+- The bridge is public REST v2 plus a small versioned JSON document.
 
-1. Rust admits a logical factory run.
-2. Rust triggers Airflow through REST API v2 and records the scheduler binding.
-3. An Airflow task invokes one Rust manager stage with a versioned `StageInvocation`.
-4. Rust validates FactoryRun/Cell/epoch/attempt identity, executes the use case and returns a `StageReceipt`.
-5. Airflow maps the receipt to success, deferral/retry or failure. It does not reinterpret the factory state.
+## Harness entry
 
-Preferred transport is authenticated HTTP for multi-host deployments and a Unix-domain socket for a
-single-host deployment. The payload is identical on both.
+A harness talks only to the Rust binary:
 
-Python Airflow code should eventually be boring: construct the invocation from task context, call the
-manager, map the returned disposition to Airflow lifecycle behavior.
+```bash
+swf factory run research \
+  --harness codex \
+  --factory-id session-123 \
+  --issue 42 \
+  --target owner/repo \
+  --json
+```
 
-It must not contain:
-- admission policy;
-- stage implementation;
-- publication credentials;
-- retry safety logic;
-- Cell epoch decisions;
-- evidence fan-in;
-- provider-specific sandbox semantics.
+Rust derives a stable logical `FactoryRunId` from the governed harness request. That identity does
+not contain the Airflow run id.
 
-Those remain Rust application/runtime responsibilities.
+## Rust → Airflow
+
+The manager posts:
+
+```json
+{
+  "logical_date": null,
+  "conf": {
+    "issues": ["42"],
+    "targets": ["owner/repo"],
+    "_swf_manager": {
+      "api_version": 1,
+      "factory_run_id": "frun_...",
+      "harness": "codex",
+      "factory_session": "session-123"
+    }
+  }
+}
+```
+
+Only `issues` and `targets` are lifecycle inputs consumed by the DAG today.
+`_swf_manager` is binding metadata: Airflow may carry it and expose it to callbacks, but it is not
+allowed to reinterpret factory authority.
+
+The resulting `dag_id + dag_run_id` is stored/returned as `SchedulerBinding`, never as the logical
+run identity.
+
+## Airflow → Rust target
+
+The next migration slice is a tiny Airflow operator that constructs a versioned `StageInvocation`
+and calls the Rust manager over HTTP or a Unix-domain socket:
+
+```text
+Airflow task
+  -> StageInvocation
+  -> Rust manager API
+  -> swf-app stage use case
+  -> StageReceipt
+  -> Airflow maps disposition to success / defer / retry / fail
+```
+
+No admission policy, retry-safety rule, publication credential, evidence fan-in, sandbox semantics,
+or Cell-epoch decision belongs in Python.
