@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from swfactory.maintenance_incidents import IncidentIdentity, IncidentLedger, IncidentReceipt, IncidentState
+from swfactory.maintenance_incidents import DurableIncidentLedger, IncidentIdentity, IncidentLedger, IncidentReceipt, IncidentState
 
 
 def identity(evidence: str = "a" * 64) -> IncidentIdentity:
@@ -40,3 +40,37 @@ def test_observed_issue_for_another_incident_is_refused() -> None:
     ledger.mark_unknown(item)
     with pytest.raises(RuntimeError, match="another incident"):
         ledger.adopt_observed(item, IncidentReceipt(other.key, 43, "https://github.com/x/issues/43", "d" * 64))
+
+
+def test_durable_ledger_survives_restart_and_dedupes(tmp_path) -> None:
+    path = tmp_path / "incidents.json"
+    item = identity()
+
+    first = DurableIncidentLedger.load(path)
+    assert first.propose(item, {"metric": "delivery_failure_rate"})[1] is True
+    first.begin_create(item)
+    first.record_created(item, 42, "https://github.com/x/issues/42", {"metric": "delivery_failure_rate"})
+
+    second = DurableIncidentLedger.load(path)
+    assert second.states[item.key] == IncidentState.OPEN
+    assert second.receipts[item.key].issue_number == 42
+    assert second.propose(item, {"metric": "delivery_failure_rate"})[1] is False
+
+
+def test_in_doubt_creation_survives_restart_for_observation(tmp_path) -> None:
+    path = tmp_path / "incidents.json"
+    item = identity()
+
+    first = DurableIncidentLedger.load(path)
+    first.propose(item, {})
+    first.begin_create(item)
+    first.mark_unknown(item)
+
+    second = DurableIncidentLedger.load(path)
+    assert second.states[item.key] == IncidentState.IN_DOUBT
+    receipt = IncidentReceipt(item.key, 42, "https://github.com/x/issues/42", "b" * 64)
+    second.adopt_observed(item, receipt)
+
+    third = DurableIncidentLedger.load(path)
+    assert third.states[item.key] == IncidentState.OPEN
+    assert third.receipts[item.key] == receipt
