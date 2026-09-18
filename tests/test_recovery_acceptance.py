@@ -56,7 +56,7 @@ def _interrupt(
     ref: OperationRef,
     *,
     budget: RetryBudget | None = None,
-    replay_safe: bool = False,
+    replay_safe: bool | None = None,
 ) -> None:
     """Drive one external effect that dies mid-flight: committed remotely or not, nobody knows."""
 
@@ -322,3 +322,12 @@ def test_recovery_policy_cannot_be_widened_by_reusing_an_operation_key(journal: 
 
     with pytest.raises(Exception, match="divergent replay policy"):
         journal.begin(ref, replay_safe=True, max_attempts=3)
+
+
+def test_attempted_explicit_non_replay_safe_policy_cannot_be_widened(journal: OperationJournal) -> None:
+    ref = _ref()
+    _interrupt(journal, ref, replay_safe=False)
+    journal.mark_observation(ref, MutationOutcome("definitely_absent"))
+
+    with pytest.raises(Exception, match="divergent replay policy"):
+        journal.execute(ref, lambda: {"ok": True}, replay_safe=True, reconcile=lambda: MutationOutcome("definitely_absent"))
