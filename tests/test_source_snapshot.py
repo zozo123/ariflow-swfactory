@@ -7,7 +7,9 @@ import tarfile
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from swfactory.cli import app
 from swfactory.source_snapshot import (
     SourceSnapshotError,
     create_source_snapshot,
@@ -138,3 +140,21 @@ def test_resolve_commit_rejects_non_commit_object(repo: Path) -> None:
 
     with pytest.raises(SourceSnapshotError, match="cannot resolve"):
         resolve_commit(repo, blob)
+
+
+def test_cli_prints_machine_readable_snapshot(repo: Path, tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "source-snapshot",
+            str(repo),
+            "--cache-root",
+            str(tmp_path / "cli-cache"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    document = __import__("json").loads(result.stdout)
+    assert document["commit_sha"] == git(repo, "rev-parse", "HEAD")
+    assert Path(document["path"]).is_file()
