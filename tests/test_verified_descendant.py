@@ -10,6 +10,7 @@ import pytest
 from swfactory.campaign_decision import CampaignDecisionError, plan_descendant_campaign
 from swfactory.candidate_evidence import verify_candidate_evidence_bundle
 from swfactory.evolution import (
+    CampaignError,
     CandidateOutcome,
     Strategy,
     evaluation,
@@ -151,7 +152,7 @@ def test_child_identity_includes_parent_decision_digest() -> None:
 
 
 def test_invalid_parent_decision_digest_is_refused() -> None:
-    with pytest.raises(Exception, match="canonical sha256"):
+    with pytest.raises(CampaignError, match="canonical sha256"):
         plan_requests(
             campaign_id="round-1",
             cell_id="cell",
