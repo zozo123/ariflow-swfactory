@@ -1293,6 +1293,39 @@ def campaign_decision_verify(
         typer.echo(f"verified {manifest.campaign_id} {manifest.digest()}")
 
 
+@app.command("research-schedule")
+def research_schedule_cmd(
+    max_depth: Annotated[int, typer.Option(help="deepest descendant experiment round")] = 1,
+    max_candidates: Annotated[int, typer.Option(help="maximum sibling candidates per round")] = 4,
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable cooling schedule")] = False,
+) -> None:
+    """Show the deterministic exploration-width cooling schedule."""
+    from swfactory.evolution import CampaignError
+    from swfactory.research_loop import annealed_strategy_schedule
+
+    try:
+        schedule = annealed_strategy_schedule(max_depth, max_candidates=max_candidates)
+    except CampaignError as error:
+        typer.echo(f"research schedule: {error}", err=True)
+        raise typer.Exit(2) from error
+    document = {
+        "authority": "exploration-only",
+        "scheduler": "airflow",
+        "rounds": [
+            {
+                "depth": depth,
+                "strategies": [strategy.value for strategy in strategies],
+            }
+            for depth, strategies in enumerate(schedule)
+        ],
+    }
+    if json_out:
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        return
+    for round_ in document["rounds"]:
+        typer.echo(f"depth {round_['depth']}: {' '.join(round_['strategies'])}")
+
+
 @app.command("experiment-tree")
 def experiment_tree_cmd(
     reports: Annotated[
