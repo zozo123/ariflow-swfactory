@@ -16,7 +16,7 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
-from swfactory import candidate_worktree, source_snapshot
+from swfactory import candidate_worktree, snapshot_replay, source_snapshot
 from swfactory.ci_topology import Module, Topology
 from swfactory.workspace_materialization import MaterializationPlan, verify_sparse_coverage
 
@@ -106,6 +106,16 @@ def snapshot_source(repo: Path, revision: str, cache_root: Path) -> source_snaps
     """Create the immutable execution input for one recorded repository revision."""
 
     return source_snapshot.create_source_snapshot(repo, revision, cache_root)
+
+
+def replay_source_snapshot(
+    snapshot: source_snapshot.SourceSnapshot,
+    recipe: snapshot_replay.SnapshotRunRecipe,
+    destination: Path,
+) -> snapshot_replay.SnapshotRunReceipt:
+    """Replay one exact source snapshot under one explicit execution recipe."""
+
+    return snapshot_replay.run_snapshot_recipe(snapshot, recipe, destination)
 
 
 def create_candidate_workspace(
