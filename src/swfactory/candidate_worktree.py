@@ -35,6 +35,17 @@ class CandidateWorktree:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    @classmethod
+    def from_dict(cls, document: dict[str, Any]) -> CandidateWorktree:
+        return cls(
+            candidate_id=str(document["candidate_id"]),
+            input_head=str(document["input_head"]),
+            path=str(document["path"]),
+            ref=str(document["ref"]),
+            repo=str(document["repo"]),
+            schema_version=int(document.get("schema_version", 1)),
+        )
+
 
 @dataclass(frozen=True)
 class CandidateRevision:
@@ -198,6 +209,19 @@ def _remove_path(repo: Path, path: Path, *, force: bool) -> None:
     if proc.returncode != 0:
         detail = proc.stderr.strip()
         raise CandidateWorktreeError(f"could not remove candidate worktree {path}: {detail}")
+
+
+def _verify_receipt_identity(worktree: CandidateWorktree, path: Path) -> None:
+    expected_ref = candidate_ref(worktree.candidate_id)
+    if worktree.ref != expected_ref:
+        raise CandidateWorktreeError(
+            f"candidate receipt ref {worktree.ref} != deterministic ref {expected_ref}"
+        )
+    expected_name = expected_ref.rsplit("/", 1)[-1]
+    if path.name != expected_name:
+        raise CandidateWorktreeError(
+            f"candidate receipt path {path} does not match candidate identity {worktree.candidate_id}"
+        )
 
 
 def _verify_membership(repo: Path, path: Path) -> None:
