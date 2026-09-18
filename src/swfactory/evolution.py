@@ -211,6 +211,9 @@ def worktree_candidate_runner(
                     source,
                     artifacts=artifacts,
                     destination=destination,
+                    run_contract_digest=(
+                        request.run_contract.digest if request.run_contract is not None else None
+                    ),
                 )
             except Exception as error:  # noqa: BLE001 - evidence failure makes this candidate non-promotable.
                 return replace(
