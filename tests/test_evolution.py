@@ -71,6 +71,9 @@ def _outcome(
         ),
         cost_usd=cost,
         duration_s=duration,
+        candidate_ref=f"refs/swfactory/candidates/{request.logical_id}",
+        evidence_bundle_path=f"/retained/{request.logical_id}",
+        evidence_digest="sha256:" + "a" * 64,
     )
 
 

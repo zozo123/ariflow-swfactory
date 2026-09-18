@@ -396,5 +396,6 @@ acceptance standard and explain the remaining enforcement work.
 | Extend or review the factory | [Contributing](CONTRIBUTING.md), [review policy](REVIEW.md), [changelog](CHANGELOG.md) |
 
 Contribute a coherent change with an explicit invariant, failure behavior, evidence, and a plan to
-remove superseded paths. See the [repository improvement plan](https://github.com/zozo123/ariflow-swfactory/issues/2022)
-for the next convergence work. Licensed under [Apache 2.0](LICENSE).
+remove superseded paths. See the [current execution plan](https://github.com/zozo123/ariflow-swfactory/issues/2040)
+for the active backlog and dependency gates. The earlier [convergence roadmap #2022](https://github.com/zozo123/ariflow-swfactory/issues/2022)
+is retained as historical context. Licensed under [Apache 2.0](LICENSE).
