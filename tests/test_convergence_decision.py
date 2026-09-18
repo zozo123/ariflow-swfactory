@@ -1,0 +1,54 @@
+"""Deterministic convergence proofs."""
+
+from __future__ import annotations
+
+ROWS = (
+    {"logical_id": "cand_b", "evidence_digest": "sha256:" + "b" * 64},
+    {"logical_id": "cand_a", "evidence_digest": "sha256:" + "a" * 64},
+    {"logical_id": "cand_c", "evidence_digest": "sha256:" + "c" * 64},
+)
+
+
+def test_convergence_digest_is_invariant_to_completion_order() -> None:
+    from swfactory.convergence_decision import build_convergence_decision
+
+    orders = (
+        ROWS,
+        tuple(reversed(ROWS)),
+        (ROWS[1], ROWS[2], ROWS[0]),
+        (ROWS[2], ROWS[0], ROWS[1]),
+    )
+    digests = {
+        build_convergence_decision(order, winner="cand_b", required_dimensions={"evidence", "correctness"}).digest
+        for order in orders
+    }
+    assert len(digests) == 1
+
+
+def test_convergence_canonicalizes_candidates_and_dimensions() -> None:
+    from swfactory.convergence_decision import build_convergence_decision
+
+    decision = build_convergence_decision(
+        ROWS,
+        winner="cand_b",
+        required_dimensions=("evidence", "correctness", "evidence"),
+    )
+    assert decision.candidate_ids == ("cand_a", "cand_b", "cand_c")
+    assert decision.required_dimensions == ("correctness", "evidence")
+    assert decision.to_dict()["authority"] == "deterministic-fan-in"
+
+
+def test_convergence_refuses_unverifiable_decisions() -> None:
+    from swfactory.convergence_decision import build_convergence_decision
+
+    bad_cases = (
+        ((), "cand_a"),
+        (({"logical_id": "cand_a", "evidence_digest": "bad"},), "cand_a"),
+        (({"logical_id": "cand_a", "evidence_digest": "sha256:" + "a" * 64},), "missing"),
+    )
+    for rows, winner in bad_cases:
+        try:
+            build_convergence_decision(rows, winner=winner, required_dimensions=("correctness",))
+        except ValueError:
+            continue
+        raise AssertionError(f"unverifiable convergence case was accepted: {rows!r}, {winner!r}")
