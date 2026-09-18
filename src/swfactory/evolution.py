@@ -251,6 +251,10 @@ def plan_requests(
             f"campaign budget admits at most {budget.max_candidates} candidates to depth "
             f"{budget.max_depth}; asked for {len(strategies)} at depth {depth}"
         )
+    if depth == 0 and parent_candidate is not None:
+        raise CampaignError("the first experiment round cannot name a parent candidate")
+    if depth > 0 and not parent_candidate:
+        raise CampaignError("a descendant experiment round requires the previous winner as parent_candidate")
     share = round(budget.max_cost_usd / len(strategies), 6)
     return tuple(
         CandidateRequest(
