@@ -240,6 +240,11 @@ provisional, while answered revisions freeze as evidence. See
 [Candidate experiment tree](experiment-tree.md). This lineage is advisory and does not create a
 second scheduler or promotion authority.
 
+The recorded head becomes physical execution input through
+[immutable source snapshots](source-snapshots.md): the trusted host archives the exact commit,
+content-addresses the bytes, and verifies any cached object before reuse. Dirty or untracked
+workspace state is not candidate input.
+
 
 Issue count expresses coverage. PR count expresses integration boundaries. They need not match.
 
