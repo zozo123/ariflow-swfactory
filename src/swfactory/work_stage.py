@@ -364,7 +364,11 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
     spec_text = stages._read_or(ctx, f"{ctx.art}/spec.md")
     plan_text = ctx.read_artifact(f"{ctx.art}/plan.md")
     try:
-        plan = Plan.model_validate_json(ctx.read_artifact(f"{ctx.art}/plan.json"))
+        plan_text_json = ctx.read_artifact(f"{ctx.art}/plan.json")
+    except FileNotFoundError:
+        return _legacy_build(ctx, spec_text, plan_text)
+    try:
+        plan = Plan.model_validate_json(plan_text_json)
     except (ValueError, OSError) as error:
         raise StageError("policy", f"plan.json is invalid: {error}") from error
 

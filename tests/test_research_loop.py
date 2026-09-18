@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 from swfactory.cli import app
 from swfactory.evolution import CandidateOutcome, Strategy, evaluation
 from swfactory.generations import CampaignBudget, Dimension
-from swfactory.research_loop import annealed_strategy_schedule, run_annealing_loop
+from swfactory.research_loop import annealed_strategy_schedule, entropy_strategy_schedule, run_annealing_loop
 
 
 def _runner(request):
@@ -208,3 +208,17 @@ def test_cli_renders_the_cooling_schedule_without_running_candidates() -> None:
     assert document["authority"] == "exploration-only"
     assert document["scheduler"] == "airflow"
     assert [len(round_["strategies"]) for round_ in document["rounds"]] == [3, 2, 1]
+
+
+def test_entropy_schedule_randomizes_search_but_keeps_annealing_shape(monkeypatch) -> None:
+    class FixedOrder:
+        entropy_token = "fixed"
+        values = ("scratch", "repair", "rethink")
+
+    monkeypatch.setattr("swfactory.research_loop.permute_exploration", lambda values: FixedOrder())
+    order, schedule = entropy_strategy_schedule(2, max_candidates=3)
+
+    assert order.entropy_token == "fixed"
+    assert tuple(strategy.value for strategy in schedule[0]) == ("scratch", "repair", "rethink")
+    assert tuple(strategy.value for strategy in schedule[1]) == ("scratch", "repair")
+    assert tuple(strategy.value for strategy in schedule[2]) == ("scratch",)
