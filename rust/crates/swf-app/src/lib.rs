@@ -12,6 +12,7 @@ pub mod context;
 pub mod control_attention;
 pub mod control_plane;
 pub mod delivery;
+pub mod factory_manager;
 pub mod doctor;
 pub mod gates;
 pub mod logs;
