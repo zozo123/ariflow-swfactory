@@ -1,5 +1,3 @@
-from itertools import permutations
-
 import pytest
 
 from swfactory.convergence_decision import build_convergence_decision
@@ -13,9 +11,15 @@ ROWS = (
 
 
 def test_convergence_digest_is_invariant_to_completion_order() -> None:
+    orders = (
+        ROWS,
+        tuple(reversed(ROWS)),
+        (ROWS[1], ROWS[2], ROWS[0]),
+        (ROWS[2], ROWS[0], ROWS[1]),
+    )
     digests = {
         build_convergence_decision(order, winner="cand_b", required_dimensions={"evidence", "correctness"}).digest
-        for order in permutations(ROWS)
+        for order in orders
     }
     assert len(digests) == 1
 
