@@ -54,8 +54,7 @@ def build_exploration_space(
         values.append(options)
 
     variants = tuple(
-        ExplorationVariant(tuple(zip(names, combination, strict=True)))
-        for combination in itertools.product(*values)
+        ExplorationVariant(tuple(zip(names, combination, strict=True))) for combination in itertools.product(*values)
     )
     ids = tuple(variant.logical_id for variant in variants)
     order = permute_exploration(ids)
