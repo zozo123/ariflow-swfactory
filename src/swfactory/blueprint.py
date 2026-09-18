@@ -348,12 +348,13 @@ class Blueprint(BaseModel):
         return next((g for g in self.gates if g.after == stage), None)
 
     def pipeline(self) -> tuple[Stage | Gate, ...]:
-        """``STAGES[s]`` for every stage in order, each gate inserted right after its stage."""
-        from swfactory.stages import STAGES, Gate
+        """Resolve every stage through the shared registry, inserting gates after its stage."""
+        from swfactory.stage_registry import resolve as resolve_stage
+        from swfactory.stages import Gate
 
         items: list[Stage | Gate] = []
         for name in self.order:
-            items.append(STAGES[name])
+            items.append(resolve_stage(name))
             gate = self.gate_after(name)
             if gate is not None:
                 items.append(Gate(gate.after, gate.artifact, gate.mode))  # type: ignore[arg-type]

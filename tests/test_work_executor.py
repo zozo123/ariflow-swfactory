@@ -374,3 +374,63 @@ def test_cancellation_in_first_merge_prevents_remaining_merge_callbacks() -> Non
     assert merged == ["a"]
     assert [receipt.node_id for receipt in report.merges] == ["a"]
     assert report.final_head == f"{HEAD}+a"
+
+
+def test_observed_conflicts_refuse_before_any_merge_callback() -> None:
+    merged: list[str] = []
+
+    def run(request: NodeRequest) -> NodeResult:
+        touched = ("shared.py", "factory.toml") if request.node.id == "a" else ("shared.py",)
+        return NodeResult(
+            logical_id=request.logical_id,
+            node_id=request.node.id,
+            state="ok",
+            input_head=request.input_head,
+            output_head=f"{request.input_head}/{request.node.id}",
+            touched_files=touched,
+        )
+
+    def merge(result: NodeResult, target_head: str, index: int) -> MergeReceipt:
+        merged.append(result.node_id)
+        return _merger(result, target_head, index)
+
+    nodes = (
+        WorkNode(id="a", files=("a.py",), parallel_safe=True),
+        WorkNode(id="b", files=("b.py",), parallel_safe=True),
+    )
+    report = _execute(WorkExecutor(run, merge, ExecutorPolicy(protected_paths=("factory.toml",))), nodes)
+
+    assert merged == []
+    assert report.merges == ()
+    assert report.final_head == HEAD
+    assert report.cancelled
+    kinds = {(row.left, row.right, row.kind, row.files) for row in report.conflicts}
+    assert ("a", "plan", "undeclared", ("factory.toml", "shared.py")) in kinds
+    assert ("b", "plan", "undeclared", ("shared.py",)) in kinds
+    assert ("a", "policy", "protected", ("factory.toml",)) in kinds
+    assert ("a", "b", "overlap", ("shared.py",)) in kinds
+
+
+def test_candidate_with_stale_input_head_is_refused_before_merge() -> None:
+    merged: list[str] = []
+
+    def run(request: NodeRequest) -> NodeResult:
+        return NodeResult(
+            logical_id=request.logical_id,
+            node_id=request.node.id,
+            state="ok",
+            input_head="stale",
+            output_head="stale/a",
+            touched_files=request.node.files,
+        )
+
+    def merge(result: NodeResult, target_head: str, index: int) -> MergeReceipt:
+        merged.append(result.node_id)
+        return _merger(result, target_head, index)
+
+    report = _execute(WorkExecutor(run, merge), (WorkNode(id="a", files=("a.py",)),))
+
+    assert merged == []
+    assert report.cancelled
+    assert report.final_head == HEAD
+    assert [(row.kind, row.left) for row in report.conflicts] == [("stale_base", "a")]

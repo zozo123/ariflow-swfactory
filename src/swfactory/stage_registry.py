@@ -25,6 +25,9 @@ def _review(ctx: Any) -> Any:
     return review(ctx)
 
 
+_review.__name__ = "review"
+
+
 def resolve(stage: str) -> StageCallable:
     """Resolve one canonical implementation for a managed factory stage.
 

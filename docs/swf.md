@@ -92,11 +92,21 @@ is lost in the noise. The line to read is `swf-<version>-<target>.tar.gz: OK`.
 **Why bother, honestly.** A digest nobody compares is decoration — publishing it is only worth the
 bytes if someone runs the check, which is why the command is here rather than left implied. What it
 buys you is real but bounded: a truncated, corrupted or half-swapped download is caught before you
-put the file on `$PATH`. What it does **not** buy you is provenance. `SHA256SUMS` is not a
-signature, and it travels beside the file it describes, so anyone able to replace the tarball on a
-release could replace the sums with it. The defence against *that* is that the tag, not the release
-page, is the source of truth: every leg builds from the tagged tree with `--locked`, so you can
-rebuild from source (below) and compare rather than trust.
+put the file on `$PATH`. `SHA256SUMS` alone is not provenance, so releases also carry
+`provenance.json` and GitHub build-provenance attestations produced in the same release job that
+holds the exact wheel, sdist, and four Rust archives. Verify the artifact you downloaded directly:
+
+```sh
+gh attestation verify "swf-$VERSION-$TARGET.tar.gz" --repo zozo123/ariflow-swfactory
+curl -fLO "$BASE/provenance.json"
+swfactory provenance verify --manifest provenance.json --root .
+```
+
+The first command verifies GitHub's signed attestation for the downloaded archive. The second check
+recomputes the downloaded file's digest against the manifest bound to the release source SHA.
+A real publication is refused if candidate evidence or mandatory provenance is missing; the manual
+release dry-run executes the same SBOM, manifest, self-verification, and attestation graph without
+creating a GitHub Release.
 
 ### 2. Unpack it and put `swf` on `$PATH`
 

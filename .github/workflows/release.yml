@@ -129,6 +129,14 @@ jobs:
           fi
           exit "$verdict"
 
+      - name: Retain the verified candidate evidence for the publish job
+        if: steps.evidence.outputs.manifest != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate-evidence
+          path: /tmp/candidate-readiness.json
+          if-no-files-found: error
+
   release:
     needs: candidate-evidence
     runs-on: ubuntu-latest
@@ -410,12 +418,17 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.release.outputs.version }}
       TAG: ${{ needs.release.outputs.tag }}
+      DRY_RUN: ${{ needs.release.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v6
+      - name: Install Syft for release SBOMs
+        uses: anchore/sbom-action/download-syft@v0
       - uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/artifacts
@@ -433,12 +446,62 @@ jobs:
             aarch64-unknown-linux-gnu; do
             mv "$RUNNER_TEMP/artifacts/swf-$VERSION-$target.tar.gz" release/
           done
-          # SHA256SUMS is written outside the directory it describes, then moved in, so it can
-          # never end up listing itself. One file covers every asset, so a verifier runs
-          # `shasum -a 256 -c SHA256SUMS` once instead of comparing six digests by eye.
+
+          if [ -f "$RUNNER_TEMP/artifacts/candidate-readiness.json" ]; then
+            cp "$RUNNER_TEMP/artifacts/candidate-readiness.json" release/candidate-readiness.json
+          elif [ "$DRY_RUN" != "true" ]; then
+            echo "::error::real publication requires candidate-readiness.json"
+            exit 1
+          fi
+
+          syft dir:. -o spdx-json=release/swfactory.spdx.json
+          syft dir:. -o cyclonedx-json=release/swfactory.cdx.json
+
           (cd release && shasum -a 256 -- *) > "$RUNNER_TEMP/SHA256SUMS"
           mv "$RUNNER_TEMP/SHA256SUMS" release/
           cat release/SHA256SUMS
+
+      - name: Build and verify the release provenance manifest
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          WORKFLOW_ID: ${{ github.workflow }}:${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          (
+            cd release
+            PYTHONPATH=../src python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from swfactory.provenance import ReleaseProvenance, manifest, verify, write
+
+          paths = tuple(sorted((p for p in Path(".").iterdir() if p.is_file()), key=lambda p: p.name))
+          document = manifest(os.environ["SOURCE_SHA"], "github-actions", os.environ["WORKFLOW_ID"], paths)
+          document = ReleaseProvenance(
+              source_sha=document.source_sha,
+              builder=document.builder,
+              workflow=document.workflow,
+              artifacts=document.artifacts,
+              sboms=("swfactory.spdx.json", "swfactory.cdx.json"),
+          )
+          write(Path("provenance.json"), document)
+          ok, failures = verify(Path("."), document)
+          if not ok:
+              raise SystemExit("release provenance self-check failed: " + ", ".join(failures))
+          print(f"verified {len(document.artifacts)} release subjects for {document.source_sha}")
+          PY
+          )
+          test -s release/provenance.json
+
+      - name: Attest the exact downloadable binaries and Python distributions
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release/swfactory-${{ needs.release.outputs.version }}-py3-none-any.whl
+            release/swfactory-${{ needs.release.outputs.version }}.tar.gz
+            release/swf-${{ needs.release.outputs.version }}-aarch64-apple-darwin.tar.gz
+            release/swf-${{ needs.release.outputs.version }}-x86_64-apple-darwin.tar.gz
+            release/swf-${{ needs.release.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
+            release/swf-${{ needs.release.outputs.version }}-aarch64-unknown-linux-gnu.tar.gz
       - name: Re-extract the CHANGELOG section for the release body
         run: |
           set -euo pipefail
