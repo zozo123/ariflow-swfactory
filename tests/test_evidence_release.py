@@ -99,6 +99,7 @@ def test_candidate_manifest_binds_exact_source_snapshot_bytes() -> None:
         {"wheel": "b" * 64},
         source_snapshot_sha256="c" * 64,
         source_snapshot_size=4096,
+        source_snapshot_commit_sha="deadbeef",
     )
     base.validate({"test"})
     changed = CandidateManifest(
@@ -108,6 +109,7 @@ def test_candidate_manifest_binds_exact_source_snapshot_bytes() -> None:
         base.artifact_digests,
         source_snapshot_sha256="d" * 64,
         source_snapshot_size=4096,
+        source_snapshot_commit_sha="deadbeef",
     )
     assert changed.digest != base.digest
 
