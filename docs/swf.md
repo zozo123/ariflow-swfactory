@@ -333,13 +333,13 @@ everything.
 
 | Listing | Narrows by |
 | --- | --- |
-| `swf gates list` | `--dag`, `--run`, `--issue`, `--state`, `--actor`, `--limit` |
-| `swf jobs list` | `--dag`, `--run`, `--issue`, `--state`, `--attention`, `--limit` |
-| `swf runs list` | `--dag`, `--state`, `--since`, `--limit` |
+| `swf gates list` | `--dag`, `--blueprint`, `--issue`, `--gate`, `--ready`, `--limit` |
+| `swf jobs list` | `--dag`, `--issue`, `--state`, `--attention`, `--limit` |
+| `swf runs list` | `--dag`, `--state`, `--limit` |
 
 ```sh
-swf gates list --dag factory --state deferred --limit 50
-swf jobs list --issue 2034 --attention --limit 25
+swf gates list --dag factory --gate intent --ready --limit 5
+swf jobs list --dag factory --state failed --issue 2034 --attention --limit 10
 swf runs list --dag factory --state running --limit 20
 ```
 
@@ -359,8 +359,8 @@ its current readiness and anything skipped because it is arming, stale, already 
 outside the bounded `--limit`.
 
 ```sh
-swf gates approve --all --dag factory --state deferred --limit 25 --dry-run
-swf gates approve --all --dag factory --state deferred --limit 25 --yes
+swf gates approve --all --dag factory --ready --limit 25 --dry-run
+swf gates approve --all --dag factory --ready --limit 25 --yes
 ```
 
 The rule to keep is mechanical rather than a matter of judgement: **run the line with `--dry-run`,
