@@ -27,6 +27,31 @@ def test_candidate_manifest_requires_exact_producer_sha() -> None:
         broken.validate({"test"})
 
 
+def test_candidate_manifest_binds_source_snapshot_to_exact_candidate_sha() -> None:
+    manifest = CandidateManifest(
+        "deadbeef",
+        "base",
+        (producer("test", "deadbeef"),),
+        {"wheel": "b" * 64},
+        source_snapshot_sha256="c" * 64,
+        source_snapshot_size=1024,
+        source_snapshot_commit_sha="deadbeef",
+    )
+    manifest.validate({"test"})
+
+    wrong_source = CandidateManifest(
+        "deadbeef",
+        "base",
+        manifest.producers,
+        manifest.artifact_digests,
+        source_snapshot_sha256="c" * 64,
+        source_snapshot_size=1024,
+        source_snapshot_commit_sha="other",
+    )
+    with pytest.raises(RuntimeError, match="snapshot commit"):
+        wrong_source.validate({"test"})
+
+
 def test_release_attestation_binds_exact_candidate_and_artifact() -> None:
     manifest = CandidateManifest("deadbeef", "base", (producer("test", "deadbeef"),), {"wheel": "b" * 64})
     artifact = ReleaseArtifact("wheel", "deadbeef", "b" * 64, "any", "1.0.0")
