@@ -344,10 +344,7 @@ def build_campaign_decision(
 
     candidates = tuple(
         sorted(
-            (
-                _decision_candidate(outcome, evidence_bundles.get(outcome.logical_id))
-                for outcome in report.outcomes
-            ),
+            (_decision_candidate(outcome, evidence_bundles.get(outcome.logical_id)) for outcome in report.outcomes),
             key=lambda candidate: candidate.candidate_id,
         )
     )
