@@ -1,5 +1,3 @@
-import pytest
-
 from swfactory.convergence_decision import build_convergence_decision
 
 
@@ -35,14 +33,15 @@ def test_convergence_canonicalizes_candidates_and_dimensions() -> None:
     assert decision.to_dict()["authority"] == "deterministic-fan-in"
 
 
-@pytest.mark.parametrize(
-    "rows,winner",
-    [
+def test_convergence_refuses_unverifiable_decisions() -> None:
+    bad_cases = (
         ((), "cand_a"),
         (({"logical_id": "cand_a", "evidence_digest": "bad"},), "cand_a"),
         (({"logical_id": "cand_a", "evidence_digest": "sha256:" + "a" * 64},), "missing"),
-    ],
-)
-def test_convergence_refuses_unverifiable_decisions(rows, winner) -> None:
-    with pytest.raises(ValueError):
-        build_convergence_decision(rows, winner=winner, required_dimensions=("correctness",))
+    )
+    for rows, winner in bad_cases:
+        try:
+            build_convergence_decision(rows, winner=winner, required_dimensions=("correctness",))
+        except ValueError:
+            continue
+        raise AssertionError(f"unverifiable convergence case was accepted: {rows!r}, {winner!r}")
