@@ -39,6 +39,7 @@ use swf_domain::sanitize::sanitize_line;
 use tokio_util::sync::CancellationToken;
 
 use crate::attention::Attention;
+use crate::backend_context::BackendContext;
 use crate::context::{Context, ContextError};
 use crate::delivery::{Delivery, VerifyOpts};
 use crate::gates::{
@@ -409,12 +410,10 @@ impl Ops {
 
     /// The same, with the HTTP deadline `--timeout` sets. It never bounds a subprocess (§C.6).
     pub fn connect_with_timeout(mut context: Context, timeout: Duration) -> Result<Self> {
-        let backend_url =
-            std::env::var("SWF_BACKEND_URL").unwrap_or_else(|_| context.backend_url.clone());
-        context.backend_url.clone_from(&backend_url);
-        if !backend_url.is_empty() {
-            let token = std::env::var("SWF_BACKEND_TOKEN").unwrap_or_default();
-            let backend = Arc::new(FactoryApi::new(&backend_url, token, timeout)?);
+        if BackendContext::endpoint(&context).is_some() {
+            let backend_context = BackendContext::connect(&context, timeout, "factory operations")?;
+            context.backend_url = backend_context.base_url().to_string();
+            let backend = backend_context.api();
             let airflow = backend.runs(&context.airflow_url)?;
             let mut ops = Self::builder(context)
                 .runs(Arc::new(airflow))
