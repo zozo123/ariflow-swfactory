@@ -6,8 +6,16 @@ from dataclasses import replace
 
 import pytest
 
-from swfactory.evolution import CampaignError, Strategy, plan_requests, run_campaign
+from swfactory.evolution import (
+    CampaignError,
+    CandidateOutcome,
+    Strategy,
+    evaluation,
+    plan_requests,
+    run_campaign,
+)
 from swfactory.experiment_tree import ExperimentTreeError, stack_rounds
+from swfactory.generations import Dimension
 from swfactory.run_contract import RunContract, RunContractError
 
 
@@ -20,10 +28,7 @@ def _contract(*, runtime: str = "image:sha256:abc", env: str = "sha256:env-a") -
     )
 
 
-def _outcome(request, head: str):
-    from swfactory.evolution import CandidateOutcome, evaluation
-    from swfactory.generations import Dimension
-
+def _outcome(request, head: str) -> CandidateOutcome:
     return CandidateOutcome(
         logical_id=request.logical_id,
         strategy=request.strategy,
