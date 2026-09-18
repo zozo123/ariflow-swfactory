@@ -1,3 +1,7 @@
+"""Deterministic convergence proofs."""
+
+from __future__ import annotations
+
 from swfactory.convergence_decision import build_convergence_decision
 
 
