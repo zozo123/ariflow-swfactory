@@ -1038,6 +1038,86 @@ def doctor(
     raise typer.Exit(doctor_mod.exit_code(checks))
 
 
+candidate_worktree_app = typer.Typer(
+    help="Create, freeze, and remove isolated Git worktrees for candidate exploration.",
+    no_args_is_help=True,
+)
+app.add_typer(candidate_worktree_app, name="candidate-worktree")
+
+
+@candidate_worktree_app.command("create")
+def candidate_worktree_create(
+    candidate_id: Annotated[str, typer.Argument(help="stable candidate logical id")],
+    repo_path: Annotated[Path, typer.Option("--repo", help="local Git repository")] = Path("."),
+    input_head: Annotated[str, typer.Option("--input-head", help="exact input revision")] = "HEAD",
+    root: Annotated[
+        Path,
+        typer.Option(help="directory that owns disposable candidate worktrees"),
+    ] = Path(".factory/candidate-worktrees"),
+    receipt: Annotated[
+        Path | None,
+        typer.Option(help="receipt path; default is next to the candidate worktree"),
+    ] = None,
+    json_out: Annotated[bool, typer.Option("--json", help="print the receipt as JSON")] = False,
+) -> None:
+    """Create one detached candidate checkout at the exact input commit."""
+    from swfactory.candidate_worktree import CandidateWorktreeError, create_candidate_worktree
+
+    try:
+        worktree = create_candidate_worktree(repo_path, candidate_id, input_head, root=root)
+    except (OSError, CandidateWorktreeError) as error:
+        typer.echo(f"candidate worktree: {error}", err=True)
+        raise typer.Exit(2) from error
+    receipt_path = receipt or Path(worktree.path).with_suffix(".json")
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt_path.write_text(json.dumps(worktree.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if json_out:
+        typer.echo(json.dumps(worktree.to_dict(), indent=2, sort_keys=True))
+    else:
+        typer.echo(f"{receipt_path}: {worktree.candidate_id} @ {worktree.input_head}")
+        typer.echo(worktree.path)
+
+
+@candidate_worktree_app.command("freeze")
+def candidate_worktree_freeze(
+    receipt: Annotated[Path, typer.Argument(help="receipt written by candidate-worktree create")],
+    json_out: Annotated[bool, typer.Option("--json", help="print the frozen revision as JSON")] = False,
+) -> None:
+    """Freeze a clean, committed candidate answer under its immutable factory ref."""
+    from swfactory.candidate_worktree import CandidateWorktree, CandidateWorktreeError, freeze_candidate_worktree
+
+    try:
+        worktree = CandidateWorktree.from_dict(json.loads(receipt.read_text(encoding="utf-8")))
+        revision = freeze_candidate_worktree(worktree)
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, CandidateWorktreeError) as error:
+        typer.echo(f"candidate worktree: {error}", err=True)
+        raise typer.Exit(2) from error
+    frozen_receipt = receipt.with_suffix(".frozen.json")
+    frozen_receipt.write_text(json.dumps(revision.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if json_out:
+        typer.echo(json.dumps(revision.to_dict(), indent=2, sort_keys=True))
+    else:
+        typer.echo(f"{frozen_receipt}: {revision.output_head}")
+        typer.echo(revision.ref)
+
+
+@candidate_worktree_app.command("remove")
+def candidate_worktree_remove(
+    receipt: Annotated[Path, typer.Argument(help="receipt written by candidate-worktree create")],
+    force: Annotated[bool, typer.Option(help="discard dirty workspace state too")] = False,
+) -> None:
+    """Remove disposable candidate files; a frozen candidate ref is retained."""
+    from swfactory.candidate_worktree import CandidateWorktree, CandidateWorktreeError, remove_candidate_worktree
+
+    try:
+        worktree = CandidateWorktree.from_dict(json.loads(receipt.read_text(encoding="utf-8")))
+        remove_candidate_worktree(worktree, force=force)
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, CandidateWorktreeError) as error:
+        typer.echo(f"candidate worktree: {error}", err=True)
+        raise typer.Exit(2) from error
+    typer.echo(f"removed {worktree.path}; retained ref {worktree.ref} if frozen")
+
+
 @app.command("experiment-tree")
 def experiment_tree_cmd(
     reports: Annotated[
