@@ -47,7 +47,7 @@ Source snapshots do not schedule work, select candidates, merge branches, or pro
 - Factory Cells remain the durable issue x target authority.
 - The experiment tree records candidate lineage.
 - Source snapshots bind execution input bytes to one candidate revision.
-- Candidate/release evidence binds verification to the exact source snapshot.
+- Candidate/release evidence can bind verification to the exact source snapshot; paths that do not record it make no such claim.
 - Human/branch-protection gates remain the promotion authority.
 
 ## Operator inspection
