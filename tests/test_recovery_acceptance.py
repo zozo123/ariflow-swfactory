@@ -276,7 +276,6 @@ def test_an_expired_lease_is_recorded_before_the_refusal_is_raised(tmp_path: Pat
         reopened.close()
 
 
-
 def test_proven_absence_does_not_authorize_a_non_replay_safe_effect(journal: OperationJournal) -> None:
     ref = _ref()
     _interrupt(journal, ref, replay_safe=False)
