@@ -208,6 +208,35 @@ def test_candidate_receipt_cannot_be_redirected_to_sibling_symlink(repo: Path, t
     remove_candidate_worktree(right)
 
 
+def test_candidate_creation_reservation_prevents_duplicate_owner_cleanup(repo: Path, tmp_path: Path) -> None:
+    head = git(repo, "rev-parse", "HEAD")
+    root = tmp_path / "worktrees"
+    root.mkdir()
+    token = candidate_ref("candidate-race").rsplit("/", 1)[-1]
+    reservation = root / f".{token}.reserve"
+    reservation.write_text("held\n", encoding="utf-8")
+
+    with pytest.raises(CandidateWorktreeError, match="already being created"):
+        create_candidate_worktree(repo, "candidate-race", head, root=root)
+
+    assert reservation.read_text(encoding="utf-8") == "held\n"
+
+
+@pytest.mark.skipif(__import__("os").name != "posix", reason="symlink destination is POSIX-specific")
+def test_candidate_creation_refuses_preexisting_symlink_destination(repo: Path, tmp_path: Path) -> None:
+    head = git(repo, "rev-parse", "HEAD")
+    root = tmp_path / "worktrees"
+    root.mkdir()
+    token = candidate_ref("candidate-symlink-dest").rsplit("/", 1)[-1]
+    destination = root / token
+    destination.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+
+    with pytest.raises(CandidateWorktreeError, match="already exists"):
+        create_candidate_worktree(repo, "candidate-symlink-dest", head, root=root)
+
+    assert destination.is_symlink()
+
+
 def test_candidate_id_is_hashed_before_becoming_a_git_ref() -> None:
     ref = candidate_ref("../../ weird candidate / with spaces")
 
