@@ -220,3 +220,17 @@ def test_cli_builds_and_verifies_candidate_evidence(repo: Path, tmp_path: Path) 
     assert json.loads(verified.stdout)["output_head"] == revision.output_head
 
     remove_candidate_worktree(worktree)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="symlink destination test is POSIX-specific")
+def test_symlink_bundle_destination_is_refused(repo: Path, tmp_path: Path) -> None:
+    source, worktree, revision = answered_candidate(repo, tmp_path)
+    real = tmp_path / "real-bundle"
+    real.mkdir()
+    link = tmp_path / "bundle"
+    link.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(CandidateEvidenceError, match="destination is a symlink"):
+        build_candidate_evidence_bundle(repo, revision, source, artifacts={}, destination=link)
+
+    remove_candidate_worktree(worktree)
