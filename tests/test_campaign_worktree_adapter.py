@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from swfactory.candidate_evidence import verify_candidate_evidence
 from swfactory.evolution import (
     CandidateOutcome,
     Strategy,
@@ -183,3 +184,43 @@ def test_experiment_node_retains_frozen_candidate_ref_as_evidence(tmp_path: Path
 
     node = report.experiment_round.nodes[0]
     assert any(item.startswith("candidate-ref:refs/swfactory/candidates/") for item in node.evidence)
+
+
+
+def test_adapter_retains_candidate_evidence_in_context(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    requests = _request(base)
+    evidence_root = tmp_path / "candidate-evidence"
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate with evidence\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate evidence")
+        return _passing(request)
+
+    report = run_campaign(
+        worktree_candidate_runner(
+            repo,
+            tmp_path / "worktrees",
+            runner,
+            evidence_root=evidence_root,
+        ),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    outcome = report.outcomes[0]
+    assert outcome.candidate_evidence_manifest
+    assert outcome.candidate_evidence_digest
+    manifest_path = Path(outcome.candidate_evidence_manifest)
+    manifest = verify_candidate_evidence(repo, manifest_path)
+    assert manifest.digest() == outcome.candidate_evidence_digest
+    assert manifest.output_head == outcome.output_head
+    assert {item.name for item in manifest.artifacts} >= {"changes.patch", "result.json"}
+    assert not any((tmp_path / "worktrees").iterdir())
+
+    result = __import__("json").loads((manifest_path.parent / "result.json").read_text())
+    assert result["logical_id"] == requests[0].logical_id
+    assert result["candidate_ref"] == outcome.candidate_ref
+    assert result["evaluations"][0]["dimension"] == "correctness"
