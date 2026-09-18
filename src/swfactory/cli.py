@@ -1420,9 +1420,7 @@ def candidate_evidence_gc(
     if json_out:
         typer.echo(json.dumps(report.to_dict(), indent=2, sort_keys=True))
         return
-    typer.echo(
-        f"removed={len(report.removed)} retained={len(report.retained)} malformed={len(report.malformed)}"
-    )
+    typer.echo(f"removed={len(report.removed)} retained={len(report.retained)} malformed={len(report.malformed)}")
     if report.malformed:
         typer.echo("refused malformed: " + ", ".join(report.malformed), err=True)
 
