@@ -90,6 +90,27 @@ Candidate identity now includes campaign, Cell, epoch, strategy, input head, gen
 candidate parent, and depth. The same strategy asked at a different tree position is therefore a
 different question rather than an accidental replay alias.
 
+## Verified evidence-backed descent
+
+The annealing loop may choose a promising answer for the next research round without
+granting that answer release authority. Before turning that exploration choice into
+new child requests, `plan_descendant_campaign(...)` re-establishes the complete
+evidence chain:
+
+1. the exploration winner must be an answered, frozen candidate;
+2. every answered sibling's retained evidence bundle is re-verified against Git;
+3. deterministic fan-in is rebuilt from those verified bundles;
+4. the experiment-tree winner must equal the exploration winner;
+5. the tree's recorded head must equal the frozen candidate output;
+6. the resulting campaign-decision SHA-256 is bound into every child's stable identity;
+7. every child starts from that exact frozen output SHA at `depth + 1`.
+
+This means two child questions with the same apparent source SHA are still different
+questions when they descend from different verified parent decisions.
+
+The operation only plans the next sibling bush. Airflow remains the lifecycle
+scheduler, and promotion still requires the existing human/branch-protection gate.
+
 ## Authority boundary
 
 The experiment tree is advisory state.
