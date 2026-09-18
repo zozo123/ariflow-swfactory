@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from enum import StrEnum
 
 
@@ -94,3 +95,68 @@ class IncidentLedger:
 def should_roll_incident(previous: IncidentIdentity, current: IncidentIdentity) -> bool:
     """Return true only when the source evidence or policy scope describes a new regression."""
     return previous.key != current.key
+
+
+@dataclass
+class DurableIncidentLedger(IncidentLedger):
+    """JSON-backed incident ledger used across maintenance restarts.
+
+    The file is replaced atomically so a crash cannot leave a partially written identity map.
+    """
+
+    path: Path = field(default_factory=lambda: Path(".factory/maintenance-incidents.json"))
+
+    @classmethod
+    def load(cls, path: Path) -> "DurableIncidentLedger":
+        path = Path(path)
+        if not path.is_file():
+            return cls(path=path)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        states = {str(key): IncidentState(value) for key, value in data.get("states", {}).items()}
+        receipts = {
+            str(key): IncidentReceipt(
+                key=str(value["key"]),
+                issue_number=int(value["issue_number"]),
+                issue_url=str(value["issue_url"]),
+                content_digest=str(value["content_digest"]),
+            )
+            for key, value in data.get("receipts", {}).items()
+        }
+        return cls(states=states, receipts=receipts, path=path)
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": 1,
+            "states": {key: value.value for key, value in sorted(self.states.items())},
+            "receipts": {key: asdict(value) for key, value in sorted(self.receipts.items())},
+        }
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        tmp.replace(self.path)
+
+    def propose(self, identity: IncidentIdentity, content: Mapping[str, object]) -> tuple[str, bool]:
+        result = super().propose(identity, content)
+        self.save()
+        return result
+
+    def begin_create(self, identity: IncidentIdentity) -> str:
+        result = super().begin_create(identity)
+        self.save()
+        return result
+
+    def record_created(
+        self, identity: IncidentIdentity, issue_number: int, issue_url: str, content: Mapping[str, object]
+    ) -> IncidentReceipt:
+        result = super().record_created(identity, issue_number, issue_url, content)
+        self.save()
+        return result
+
+    def mark_unknown(self, identity: IncidentIdentity) -> None:
+        super().mark_unknown(identity)
+        self.save()
+
+    def adopt_observed(self, identity: IncidentIdentity, receipt: IncidentReceipt) -> IncidentReceipt:
+        result = super().adopt_observed(identity, receipt)
+        self.save()
+        return result
