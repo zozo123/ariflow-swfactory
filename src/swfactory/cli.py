@@ -1118,6 +1118,93 @@ def candidate_worktree_remove(
     typer.echo(f"removed {worktree.path}; retained ref {worktree.ref} if frozen")
 
 
+candidate_evidence_app = typer.Typer(
+    help="Build and verify candidate-local diffs, logs, and artifact evidence.",
+    no_args_is_help=True,
+)
+app.add_typer(candidate_evidence_app, name="candidate-evidence")
+
+
+@candidate_evidence_app.command("build")
+def candidate_evidence_build(
+    frozen_receipt: Annotated[Path, typer.Argument(help="candidate-worktree .frozen.json receipt")],
+    source_receipt: Annotated[Path, typer.Argument(help="JSON receipt from source-snapshot --json")],
+    destination: Annotated[Path, typer.Argument(help="empty directory for retained evidence")],
+    repo_path: Annotated[Path, typer.Option("--repo", help="local Git repository")] = Path("."),
+    artifact: Annotated[
+        list[str] | None,
+        typer.Option("--artifact", help="named evidence NAME=PATH; repeatable"),
+    ] = None,
+) -> None:
+    """Bind a frozen candidate to its source snapshot, binary diff, and named evidence files."""
+    from swfactory.candidate_evidence import CandidateEvidenceError, build_candidate_evidence_bundle
+    from swfactory.candidate_worktree import CandidateRevision, CandidateWorktreeError
+    from swfactory.source_snapshot import SourceSnapshot, SourceSnapshotError
+
+    try:
+        revision_doc = json.loads(frozen_receipt.read_text(encoding="utf-8"))
+        source_doc = json.loads(source_receipt.read_text(encoding="utf-8"))
+        revision = CandidateRevision(
+            candidate_id=str(revision_doc["candidate_id"]),
+            input_head=str(revision_doc["input_head"]),
+            output_head=str(revision_doc["output_head"]),
+            ref=str(revision_doc["ref"]),
+            schema_version=int(revision_doc.get("schema_version", 1)),
+        )
+        source = SourceSnapshot(**source_doc)
+        named: dict[str, Path] = {}
+        for value in artifact or []:
+            name, separator, path = value.partition("=")
+            if not separator or not name.strip() or not path.strip():
+                raise ValueError("--artifact must be NAME=PATH")
+            if name in named:
+                raise ValueError(f"duplicate artifact name: {name}")
+            named[name] = Path(path)
+        bundle = build_candidate_evidence_bundle(
+            repo_path,
+            revision,
+            source,
+            artifacts=named,
+            destination=destination,
+        )
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        CandidateEvidenceError,
+        CandidateWorktreeError,
+        SourceSnapshotError,
+    ) as error:
+        typer.echo(f"candidate evidence: {error}", err=True)
+        raise typer.Exit(2) from error
+    typer.echo(f"{destination / 'manifest.json'}  {bundle.digest()}")
+    typer.echo(destination / "RESULT.md")
+
+
+@candidate_evidence_app.command("verify")
+def candidate_evidence_verify(
+    destination: Annotated[Path, typer.Argument(help="candidate evidence bundle directory")],
+    repo_path: Annotated[Path, typer.Option("--repo", help="local Git repository")] = Path("."),
+    json_out: Annotated[bool, typer.Option("--json", help="print the canonical manifest")] = False,
+) -> None:
+    """Re-hash retained evidence and re-check the immutable candidate ref."""
+    from swfactory.candidate_evidence import CandidateEvidenceError, verify_candidate_evidence_bundle
+
+    try:
+        bundle = verify_candidate_evidence_bundle(destination, repo=repo_path)
+    except (OSError, CandidateEvidenceError) as error:
+        typer.echo(f"candidate evidence: {error}", err=True)
+        raise typer.Exit(2) from error
+    if json_out:
+        document = bundle.canonical_dict()
+        document["manifest_digest"] = bundle.digest()
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"verified {bundle.candidate_id} {bundle.output_head} {bundle.digest()}")
+
+
 @app.command("experiment-tree")
 def experiment_tree_cmd(
     reports: Annotated[
