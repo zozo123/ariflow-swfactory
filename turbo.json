@@ -1,0 +1,61 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "stream",
+  "noUpdateNotifier": true,
+  "futureFlags": {
+    "experimentalPythonWorkspaces": true,
+    "experimentalTaskCommand": true
+  },
+  "tasks": {
+    "//#rust-build": {
+      "command": [
+        "cargo",
+        "build",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--workspace",
+        "--locked"
+      ],
+      "inputs": [
+        "$TURBO_ROOT$/rust/Cargo.toml",
+        "$TURBO_ROOT$/rust/Cargo.lock",
+        "$TURBO_ROOT$/rust/crates/**"
+      ],
+      "outputs": [
+        "$TURBO_ROOT$/rust/target/debug/swf"
+      ]
+    },
+    "//#rust-domain-contract": {
+      "command": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "swf-domain",
+        "--test",
+        "contract",
+        "--locked"
+      ],
+      "dependsOn": [
+        "//#rust-build"
+      ],
+      "inputs": [
+        "$TURBO_ROOT$/rust/Cargo.toml",
+        "$TURBO_ROOT$/rust/Cargo.lock",
+        "$TURBO_ROOT$/rust/crates/swf-domain/**"
+      ]
+    },
+    "swfactory-python#test": {
+      "dependsOn": [
+        "//#rust-build"
+      ]
+    },
+    "//#polyglot-contract": {
+      "dependsOn": [
+        "swfactory-python#test",
+        "//#rust-domain-contract"
+      ]
+    }
+  }
+}
