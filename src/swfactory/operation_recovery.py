@@ -105,9 +105,7 @@ def plan_recovery(
     attempts = operation.get("attempts", 0)
     configured_max = operation.get("max_attempts")
     max_attempts = (
-        configured_max
-        if configured_max is not None
-        else budget_for(str(operation.get("kind") or "")).max_attempts
+        configured_max if configured_max is not None else budget_for(str(operation.get("kind") or "")).max_attempts
     )
     if type(attempts) is not int or type(max_attempts) is not int:
         return RecoveryDecision(key, RecoveryAction.DEAD, "invalid_retry_budget", target)
