@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
+from typer.testing import CliRunner
 
 from swfactory.evolution import (
     CandidateOutcome,
@@ -14,6 +18,7 @@ from swfactory.evolution import (
     select,
 )
 from swfactory.experiment_tree import ExperimentTreeError, NodeState, render, stack_rounds
+from swfactory.cli import app
 from swfactory.generations import Dimension
 
 
@@ -165,3 +170,59 @@ def test_stacked_bushes_refuse_a_second_round_from_the_wrong_parent() -> None:
 
     with pytest.raises(ExperimentTreeError, match="parent must be previous winner"):
         stack_rounds((first.experiment_round, wrong.experiment_round))
+
+
+def test_planner_refuses_descendant_without_a_selected_parent() -> None:
+    with pytest.raises(CampaignError, match="requires the previous winner"):
+        plan_requests(
+            campaign_id="round-1",
+            cell_id="cell",
+            epoch=1,
+            input_head="sha-parent",
+            strategies=(Strategy.REPAIR,),
+            depth=1,
+        )
+
+
+def test_cli_renders_stored_campaign_reports(tmp_path: Path) -> None:
+    first_requests = plan_requests(
+        campaign_id="round-0",
+        cell_id="cell",
+        epoch=1,
+        input_head="base",
+        strategies=(Strategy.REPAIR,),
+    )
+    first = run_campaign(
+        lambda request: _passing_outcome(request, "sha-round-0"),
+        first_requests,
+        human_approved=True,
+    )
+    assert first.selection.winner is not None
+
+    second_requests = plan_requests(
+        campaign_id="round-1",
+        cell_id="cell",
+        epoch=1,
+        input_head="sha-round-0",
+        strategies=(Strategy.SCRATCH,),
+        parent_candidate=first.selection.winner,
+        depth=1,
+    )
+    second = run_campaign(
+        lambda request: _passing_outcome(request, "sha-round-1"),
+        second_requests,
+        human_approved=True,
+    )
+
+    paths = []
+    for index, report in enumerate((first, second)):
+        path = tmp_path / f"round-{index}.json"
+        path.write_text(json.dumps(report.to_dict()), encoding="utf-8")
+        paths.append(path)
+
+    result = CliRunner().invoke(app, ["experiment-tree", *(str(path) for path in paths)])
+
+    assert result.exit_code == 0, result.output
+    assert "round 0  round-0" in result.output
+    assert "round 1  round-1" in result.output
+    assert "sha-round-1" in result.output
