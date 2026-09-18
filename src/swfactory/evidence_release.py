@@ -49,6 +49,8 @@ class CandidateManifest:
     base_sha: str
     producers: tuple[ProducerEvidence, ...]
     artifact_digests: Mapping[str, str]
+    source_snapshot_sha256: str | None = None
+    source_snapshot_size: int | None = None
 
     @property
     def digest(self) -> str:
@@ -57,6 +59,8 @@ class CandidateManifest:
             "base_sha": self.base_sha,
             "producers": [producer.__dict__ for producer in self.producers],
             "artifact_digests": dict(sorted(self.artifact_digests.items())),
+            "source_snapshot_sha256": self.source_snapshot_sha256,
+            "source_snapshot_size": self.source_snapshot_size,
         }
         return sha256_bytes(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=dict).encode())
 
@@ -70,6 +74,13 @@ class CandidateManifest:
             raise RuntimeError("duplicate producer evidence: " + ",".join(sorted(duplicates)))
         for producer in self.producers:
             producer.validate(self.source_sha)
+        if (self.source_snapshot_sha256 is None) != (self.source_snapshot_size is None):
+            raise RuntimeError("candidate source snapshot digest and size must be recorded together")
+        if self.source_snapshot_sha256 is not None:
+            if len(self.source_snapshot_sha256) != 64:
+                raise RuntimeError("candidate source snapshot digest is not sha256")
+            if self.source_snapshot_size is None or self.source_snapshot_size <= 0:
+                raise RuntimeError("candidate source snapshot size is invalid")
         for name, value in self.artifact_digests.items():
             if len(value) != 64:
                 raise RuntimeError(f"artifact {name} digest is not sha256")
