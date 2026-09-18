@@ -38,6 +38,7 @@ from swfactory.candidate_worktree import (
     remove_candidate_worktree,
     verify_candidate_revision,
 )
+from swfactory.execution_recipe import load_execution_recipe
 from swfactory.experiment_tree import ExperimentNode, ExperimentRound, NodeState
 from swfactory.generations import CampaignBudget, Dimension, Evaluation, promotable
 from swfactory.source_snapshot import create_source_snapshot
@@ -119,6 +120,7 @@ class CandidateOutcome:
     candidate_ref: str | None = None
     evidence_bundle_path: str | None = None
     evidence_digest: str | None = None
+    inherited_recipe_digest: str | None = None
 
     @property
     def passed(self) -> frozenset[Dimension]:
@@ -156,6 +158,7 @@ def worktree_candidate_runner(
     evidence_root: Path | None = None,
     source_cache_root: Path | None = None,
     artifact_collector: CandidateArtifactCollector | None = None,
+    inherited_recipe_path: str | None = None,
 ) -> CandidateRunner:
     """Adapt a workspace-aware runner to the ordinary campaign interface.
 
@@ -196,6 +199,11 @@ def worktree_candidate_runner(
 
             try:
                 source = create_source_snapshot(repo, revision.input_head, resolved_source_cache)
+                inherited_recipe = (
+                    load_execution_recipe(repo, revision.input_head, path=inherited_recipe_path)
+                    if inherited_recipe_path is not None
+                    else None
+                )
                 artifacts = (
                     artifact_collector(request, Path(worktree.path), outcome)
                     if artifact_collector is not None
@@ -208,6 +216,7 @@ def worktree_candidate_runner(
                     source,
                     artifacts=artifacts,
                     destination=destination,
+                    inherited_recipe=inherited_recipe,
                 )
             except Exception as error:  # noqa: BLE001 - evidence failure makes this candidate non-promotable.
                 return replace(
@@ -217,6 +226,7 @@ def worktree_candidate_runner(
                     candidate_ref=revision.ref,
                     evidence_bundle_path=None,
                     evidence_digest=None,
+                    inherited_recipe_digest=None,
                     detail=(
                         f"candidate evidence capture failed: {type(error).__name__}: {error}"
                     )[:2000],
@@ -227,6 +237,9 @@ def worktree_candidate_runner(
                 candidate_ref=revision.ref,
                 evidence_bundle_path=str(destination),
                 evidence_digest=bundle.digest(),
+                inherited_recipe_digest=(
+                    inherited_recipe.digest if inherited_recipe is not None else None
+                ),
             )
         finally:
             remove_candidate_worktree(worktree, force=True)
@@ -487,6 +500,8 @@ def _experiment_round(
             evidence += (f"candidate-ref:{outcome.candidate_ref}",)
         if outcome.evidence_digest:
             evidence += (f"candidate-evidence:{outcome.evidence_digest}",)
+        if outcome.inherited_recipe_digest:
+            evidence += (f"inherited-recipe:{outcome.inherited_recipe_digest}",)
         nodes.append(
             ExperimentNode(
                 id=outcome.logical_id,
