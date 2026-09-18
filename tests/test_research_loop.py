@@ -134,6 +134,9 @@ def test_loop_stops_when_no_candidate_has_required_evidence() -> None:
             input_head=request.input_head,
             output_head=f"{request.input_head}-{request.strategy.value}",
             evaluations=(evaluation(Dimension.CORRECTNESS, passed=True, evidence="tests"),),
+            candidate_ref=f"refs/swfactory/candidates/{request.logical_id}",
+            evidence_bundle_path=f".factory/candidate-evidence/{request.logical_id}",
+            evidence_digest=f"sha256:{'b' * 64}",
         )
 
     report = run_annealing_loop(
