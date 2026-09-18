@@ -126,7 +126,7 @@ def plan_recovery(
         return RecoveryDecision(key, RecoveryAction.OBSERVE, "must_observe_before_retry", target)
 
     replay_safe = operation.get("replay_safe")
-    if attempts > 0 and observed == "definitely_absent" and replay_safe not in {True, 1}:
+    if attempts > 0 and observed == "definitely_absent" and not bool(replay_safe):
         return RecoveryDecision(key, RecoveryAction.REFUSE, "replay_not_safe", target)
     if attempts > 0 and observed != "definitely_absent":
         return RecoveryDecision(key, RecoveryAction.OBSERVE, "must_observe_before_retry", target)
