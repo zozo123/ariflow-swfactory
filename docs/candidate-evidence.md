@@ -88,3 +88,50 @@ verifiable evidence.
 A bundle cannot make a candidate promotable. It records evidence for selection and review. Airflow
 still owns lifecycle scheduling; the Factory Cell owns durable work identity; candidate selection
 remains deterministic; human/branch-protection gates remain the promotion authority.
+
+
+## Promotion-window retention
+
+A verified bundle can be imported into the factory-owned retention store:
+
+```sh
+uv run swfactory candidate-evidence retain \
+  .factory/candidates/cand-evidence \
+  --repo . \
+  --ttl-hours 168
+```
+
+Retention is content-addressed by the bundle's canonical manifest digest. The store owns two
+namespaces:
+
+```text
+.factory/candidate-retention/
+├── objects/<manifest-sha256>/   copied candidate evidence bundle
+└── leases/<manifest-sha256>.json
+```
+
+Re-retaining the same bundle never shortens its lease. A selected or released candidate can be
+made immune to expiry collection without granting it any promotion authority:
+
+```sh
+uv run swfactory candidate-evidence pin sha256:<digest>
+```
+
+Pinning means only **retain these bytes**. It does not mean approved, selected, merged, or released.
+
+Garbage collection is explicit and inspectable:
+
+```sh
+uv run swfactory candidate-evidence gc --dry-run --json
+uv run swfactory candidate-evidence gc
+```
+
+The sweep removes only bundles whose leases are both expired and unpinned. Malformed leases,
+missing objects, redirected/symlinked object paths, and other ambiguous states are reported and
+left untouched rather than guessed through. The deletion target is reconstructed from the
+validated digest under the factory-owned object root; no persisted arbitrary path is ever used as
+a deletion authority.
+
+This closes the storage side of the Liquid artifact invariant. The capability remains
+**experimental** until the release/promotion path itself binds and checks these retention leases in
+a release drill.
