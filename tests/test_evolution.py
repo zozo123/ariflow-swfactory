@@ -316,3 +316,28 @@ def test_the_budget_splits_across_the_population() -> None:
     requests = _requests(budget=CampaignBudget(max_cost_usd=9.0))
 
     assert [request.budget_usd for request in requests] == [3.0, 3.0, 3.0]
+
+
+def test_final_ranking_ignores_cost_and_wall_clock_when_evidence_is_equal() -> None:
+    evaluations = (
+        evaluation(Dimension.CORRECTNESS, "pass", "tests"),
+        evaluation(Dimension.EVIDENCE, "pass", "bundle"),
+    )
+    slow_expensive = outcome(
+        "cand_a",
+        Strategy.REPAIR,
+        output_head="a" * 40,
+        evaluations=evaluations,
+        cost_usd=99.0,
+        duration_s=999.0,
+    )
+    fast_cheap = outcome(
+        "cand_b",
+        Strategy.RETHINK,
+        output_head="b" * 40,
+        evaluations=evaluations,
+        cost_usd=0.01,
+        duration_s=0.01,
+    )
+
+    assert rank_key(slow_expensive, REQUIRED_DIMENSIONS) < rank_key(fast_cheap, REQUIRED_DIMENSIONS)
