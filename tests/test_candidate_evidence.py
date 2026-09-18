@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from swfactory.candidate_evidence import (
     CandidateEvidenceError,
     build_candidate_evidence_bundle,
     verify_candidate_evidence_bundle,
 )
+from swfactory.cli import app
 from swfactory.candidate_worktree import (
     create_candidate_worktree,
     freeze_candidate_worktree,
@@ -178,5 +181,42 @@ def test_symlink_artifact_is_refused(repo: Path, tmp_path: Path) -> None:
             artifacts={"agent-log": link},
             destination=tmp_path / "bundle",
         )
+
+    remove_candidate_worktree(worktree)
+
+
+def test_cli_builds_and_verifies_candidate_evidence(repo: Path, tmp_path: Path) -> None:
+    source, worktree, revision = answered_candidate(repo, tmp_path)
+    frozen_receipt = tmp_path / "candidate.frozen.json"
+    source_receipt = tmp_path / "source.json"
+    frozen_receipt.write_text(json.dumps(revision.to_dict()), encoding="utf-8")
+    source_receipt.write_text(json.dumps(source.to_dict()), encoding="utf-8")
+    log = tmp_path / "agent.log"
+    log.write_text("cli evidence\n", encoding="utf-8")
+    destination = tmp_path / "cli-bundle"
+
+    built = CliRunner().invoke(
+        app,
+        [
+            "candidate-evidence",
+            "build",
+            str(frozen_receipt),
+            str(source_receipt),
+            str(destination),
+            "--repo",
+            str(repo),
+            "--artifact",
+            f"agent-log={log}",
+        ],
+    )
+
+    assert built.exit_code == 0, built.output
+    assert (destination / "manifest.json").is_file()
+    verified = CliRunner().invoke(
+        app,
+        ["candidate-evidence", "verify", str(destination), "--repo", str(repo), "--json"],
+    )
+    assert verified.exit_code == 0, verified.output
+    assert json.loads(verified.stdout)["output_head"] == revision.output_head
 
     remove_candidate_worktree(worktree)
