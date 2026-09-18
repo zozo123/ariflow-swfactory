@@ -269,7 +269,7 @@ def render(tree: ExperimentTree) -> str:
 def render_mermaid(tree: ExperimentTree) -> str:
     """Render a deterministic GitHub-compatible Mermaid view of the validated tree."""
     tree.validate()
-    lines = ['flowchart TD', f'  root["root\\n{tree.root_head}"]']
+    lines = ["flowchart TD", f'  root["root\\n{tree.root_head}"]']
     graph_ids: dict[str, str] = {}
     previous_winner_graph_id = "root"
     selected_ids: list[str] = []
