@@ -28,6 +28,7 @@ from swfactory.evolution import (
     evaluation,
     independence_findings,
     iter_completed_candidates,
+    plan_next_round,
     plan_requests,
     rank_key,
     run_campaign,
@@ -311,3 +312,113 @@ def test_the_budget_splits_across_the_population() -> None:
     requests = _requests(budget=CampaignBudget(max_cost_usd=9.0))
 
     assert [request.budget_usd for request in requests] == [3.0, 3.0, 3.0]
+
+
+
+# ------------------------------------------------------- deterministic experiment continuation
+
+
+def test_next_round_descends_only_from_the_frozen_selected_winner() -> None:
+    report = run_campaign(
+        lambda request: _outcome(
+            request,
+            cost=1.0 if request.strategy is Strategy.REPAIR else 5.0,
+        ),
+        _requests(),
+        human_approved=True,
+    )
+    winner = next(outcome for outcome in report.outcomes if outcome.logical_id == report.selection.winner)
+
+    continuation = plan_next_round(
+        report,
+        campaign_id="camp-round-1",
+        strategies=(Strategy.REPAIR, Strategy.SCRATCH),
+    )
+
+    assert continuation.previous_campaign_id == report.campaign_id
+    assert continuation.input_head == winner.output_head
+    assert continuation.parent_candidate == winner.logical_id
+    assert continuation.depth == 1
+    assert [request.input_head for request in continuation.requests] == [winner.output_head, winner.output_head]
+    assert [request.parent_candidate for request in continuation.requests] == [winner.logical_id, winner.logical_id]
+    assert [request.depth for request in continuation.requests] == [1, 1]
+    assert all(request.campaign_id == "camp-round-1" for request in continuation.requests)
+
+
+def test_next_round_can_be_reconstructed_from_stored_report_json() -> None:
+    report = run_campaign(
+        lambda request: _outcome(request),
+        _requests(Strategy.REPAIR),
+        human_approved=True,
+    )
+    stored = json.loads(json.dumps(report.to_dict()))
+
+    continuation = plan_next_round(stored, campaign_id="camp-round-1")
+
+    assert continuation.cell_id == report.cell_id
+    assert continuation.epoch == report.epoch
+    assert continuation.parent_candidate == report.selection.winner
+    assert continuation.to_dict()["requests"][0]["logical_id"] == continuation.requests[0].logical_id
+
+
+def test_next_round_refuses_a_round_without_a_selected_winner() -> None:
+    report = run_campaign(
+        lambda request: _outcome(request),
+        _requests(Strategy.REPAIR),
+        human_approved=False,
+    )
+
+    with pytest.raises(CampaignError, match="without a selected winner"):
+        plan_next_round(report, campaign_id="camp-round-1")
+
+
+def test_next_round_refuses_tampered_stored_selection() -> None:
+    report = run_campaign(
+        lambda request: _outcome(request),
+        _requests(Strategy.REPAIR),
+        human_approved=True,
+    )
+    stored = json.loads(json.dumps(report.to_dict()))
+    stored["selection"]["winner"] = "cand_forged"
+
+    with pytest.raises(CampaignError, match="selection winner"):
+        plan_next_round(stored, campaign_id="camp-round-1")
+
+
+def test_next_round_refuses_tampered_stored_input_head() -> None:
+    report = run_campaign(
+        lambda request: _outcome(request),
+        _requests(Strategy.REPAIR),
+        human_approved=True,
+    )
+    stored = json.loads(json.dumps(report.to_dict()))
+    stored["input_head"] = "forged-head"
+
+    with pytest.raises(CampaignError, match="experiment input"):
+        plan_next_round(stored, campaign_id="camp-round-1")
+
+
+def test_next_round_requires_a_fresh_campaign_identity() -> None:
+    report = run_campaign(
+        lambda request: _outcome(request),
+        _requests(Strategy.REPAIR),
+        human_approved=True,
+    )
+
+    with pytest.raises(CampaignError, match="must differ"):
+        plan_next_round(report, campaign_id=report.campaign_id)
+
+
+def test_next_round_still_obeys_campaign_depth_budget() -> None:
+    report = run_campaign(
+        lambda request: _outcome(request),
+        _requests(Strategy.REPAIR),
+        human_approved=True,
+    )
+
+    with pytest.raises(CampaignError, match="admits at most"):
+        plan_next_round(
+            report,
+            campaign_id="camp-round-1",
+            budget=CampaignBudget(max_depth=0),
+        )
