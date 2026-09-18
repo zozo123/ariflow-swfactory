@@ -1,0 +1,185 @@
+"""Campaign adapter over immutable candidate worktree revisions."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+from swfactory.evolution import (
+    CandidateOutcome,
+    Strategy,
+    evaluation,
+    plan_requests,
+    run_campaign,
+    worktree_candidate_runner,
+)
+from swfactory.generations import Dimension
+
+
+def _git(repo: Path, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return proc.stdout.strip()
+
+
+def _repo(tmp_path: Path) -> tuple[Path, str]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.name", "Factory Test")
+    _git(repo, "config", "user.email", "factory@example.test")
+    (repo / "value.txt").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "value.txt")
+    _git(repo, "commit", "-q", "-m", "base")
+    return repo, _git(repo, "rev-parse", "HEAD")
+
+
+def _request(base: str):
+    return plan_requests(
+        campaign_id="round-0",
+        cell_id="cell",
+        epoch=1,
+        input_head=base,
+        strategies=(Strategy.REPAIR,),
+    )
+
+
+def _passing(request, head: str | None = None) -> CandidateOutcome:
+    return CandidateOutcome(
+        logical_id=request.logical_id,
+        strategy=request.strategy,
+        state="ok",
+        input_head=request.input_head,
+        output_head=head,
+        evaluations=(
+            evaluation(Dimension.CORRECTNESS, passed=True, evidence="tests"),
+            evaluation(Dimension.EVIDENCE, passed=True, evidence="receipt"),
+        ),
+    )
+
+
+def test_adapter_freezes_exact_candidate_revision_then_removes_workspace(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    root = tmp_path / "worktrees"
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate")
+        return _passing(request)
+
+    report = run_campaign(
+        worktree_candidate_runner(repo, root, runner),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    outcome = report.outcomes[0]
+    assert outcome.state == "ok"
+    assert outcome.output_head and outcome.output_head != base
+    assert outcome.candidate_ref
+    assert _git(repo, "rev-parse", outcome.candidate_ref) == outcome.output_head
+    assert report.selection.winner == requests[0].logical_id
+    assert not any(root.iterdir())
+
+
+def test_dirty_success_is_failed_instead_of_becoming_candidate_evidence(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    root = tmp_path / "worktrees"
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("dirty\n", encoding="utf-8")
+        return _passing(request)
+
+    report = run_campaign(
+        worktree_candidate_runner(repo, root, runner),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    assert report.outcomes[0].state == "failed"
+    assert "uncommitted" in report.outcomes[0].detail
+    assert report.outcomes[0].candidate_ref is None
+    assert report.selection.winner is None
+    assert not any(root.iterdir())
+
+
+def test_failed_runner_does_not_freeze_candidate_ref(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    root = tmp_path / "worktrees"
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "debug.txt").write_text("partial\n", encoding="utf-8")
+        return CandidateOutcome(
+            request.logical_id,
+            request.strategy,
+            "failed",
+            request.input_head,
+            detail="agent failed",
+        )
+
+    report = run_campaign(
+        worktree_candidate_runner(repo, root, runner),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    outcome = report.outcomes[0]
+    assert outcome.state == "failed"
+    assert outcome.candidate_ref is None
+    assert "refs/swfactory/candidates/" not in _git(repo, "show-ref")
+    assert not any(root.iterdir())
+
+
+def test_worker_cannot_lie_about_frozen_output_sha(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    root = tmp_path / "worktrees"
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate")
+        return _passing(request, "f" * 40)
+
+    report = run_campaign(
+        worktree_candidate_runner(repo, root, runner),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    assert report.outcomes[0].state == "failed"
+    assert "claimed output" in report.outcomes[0].detail
+    assert report.selection.winner is None
+
+
+def test_experiment_node_retains_frozen_candidate_ref_as_evidence(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate")
+        return _passing(request)
+
+    report = run_campaign(
+        worktree_candidate_runner(repo, tmp_path / "worktrees", runner),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    node = report.experiment_round.nodes[0]
+    assert any(item.startswith("candidate-ref:refs/swfactory/candidates/") for item in node.evidence)
