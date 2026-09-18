@@ -1246,8 +1246,7 @@ def campaign_decision_build(
         document = json.loads(report.read_text(encoding="utf-8"))
         paths = _candidate_evidence_paths(candidate_evidence)
         bundles = {
-            candidate_id: verify_candidate_evidence_bundle(path, repo=repo_path)
-            for candidate_id, path in paths.items()
+            candidate_id: verify_candidate_evidence_bundle(path, repo=repo_path) for candidate_id, path in paths.items()
         }
         manifest = build_campaign_decision_from_document(document, bundles)
         write_campaign_decision(destination, manifest)
