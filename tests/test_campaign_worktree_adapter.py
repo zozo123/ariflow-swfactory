@@ -376,3 +376,34 @@ def test_required_inherited_recipe_missing_refuses_candidate(tmp_path: Path) -> 
     assert outcome.inherited_recipe_digest is None
     assert "execution recipe" in outcome.detail
     assert report.selection.winner is None
+
+
+def test_declared_workspace_evidence_does_not_allow_other_untracked_files(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    root = tmp_path / "worktrees"
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
+        (workspace / "agent.log").write_text("declared evidence\n", encoding="utf-8")
+        (workspace / "surprise.tmp").write_text("must refuse\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate")
+        return _passing(request)
+
+    def artifacts(_request, workspace: Path, _outcome: CandidateOutcome):
+        return {"agent-log": workspace / "agent.log"}
+
+    report = run_campaign(
+        worktree_candidate_runner(repo, root, runner, artifact_collector=artifacts),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    outcome = report.outcomes[0]
+    assert outcome.state == "failed"
+    assert outcome.candidate_ref is None
+    assert "surprise.tmp" in outcome.detail
+    assert report.selection.winner is None
+    assert not any(root.iterdir())
