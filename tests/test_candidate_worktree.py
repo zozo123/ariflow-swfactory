@@ -161,6 +161,52 @@ def test_remove_without_force_refuses_dirty_candidate(repo: Path, tmp_path: Path
     remove_candidate_worktree(worktree, force=True)
 
 
+def test_option_like_input_revision_is_refused(repo: Path, tmp_path: Path) -> None:
+    with pytest.raises(CandidateWorktreeError, match="invalid Git revision"):
+        create_candidate_worktree(repo, "candidate-option", "--help", root=tmp_path / "worktrees")
+
+
+def test_candidate_output_must_descend_from_recorded_input(repo: Path, tmp_path: Path) -> None:
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "--orphan", "unrelated")
+    (repo / "value.txt").write_text("unrelated\n", encoding="utf-8")
+    git(repo, "add", "value.txt")
+    git(repo, "commit", "-qm", "unrelated")
+    unrelated = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "main")
+
+    worktree = create_candidate_worktree(repo, "candidate-unrelated", base, root=tmp_path / "worktrees")
+    path = Path(worktree.path)
+    git(path, "reset", "--hard", unrelated)
+
+    with pytest.raises(CandidateWorktreeError, match="does not descend"):
+        freeze_candidate_worktree(worktree)
+
+    remove_candidate_worktree(worktree, force=True)
+
+
+@pytest.mark.skipif(__import__("os").name != "posix", reason="symlink swap is POSIX-specific")
+def test_candidate_receipt_cannot_be_redirected_to_sibling_symlink(repo: Path, tmp_path: Path) -> None:
+    head = git(repo, "rev-parse", "HEAD")
+    root = tmp_path / "worktrees"
+    left = create_candidate_worktree(repo, "candidate-left-symlink", head, root=root)
+    right = create_candidate_worktree(repo, "candidate-right-symlink", head, root=root)
+    left_path = Path(left.path)
+    right_path = Path(right.path)
+
+    # Preserve Git's administrative worktree, but replace the receipt path with a symlink to a sibling.
+    git(repo, "worktree", "remove", "--force", str(left_path))
+    left_path.symlink_to(right_path, target_is_directory=True)
+
+    with pytest.raises(CandidateWorktreeError, match="is a symlink"):
+        freeze_candidate_worktree(left)
+    with pytest.raises(CandidateWorktreeError, match="is a symlink"):
+        remove_candidate_worktree(left, force=True)
+
+    left_path.unlink()
+    remove_candidate_worktree(right)
+
+
 def test_candidate_id_is_hashed_before_becoming_a_git_ref() -> None:
     ref = candidate_ref("../../ weird candidate / with spaces")
 
