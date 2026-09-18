@@ -103,6 +103,7 @@ class ExperimentRound:
     parent_candidate: str | None
     nodes: tuple[ExperimentNode, ...]
     winner_id: str | None = None
+    contract_digest: str | None = None
 
     def validate(self) -> None:
         if not self.round_id.strip():
@@ -158,6 +159,7 @@ class ExperimentRound:
             "depth": self.depth,
             "parent_candidate": self.parent_candidate,
             "winner_id": self.winner_id,
+            "contract_digest": self.contract_digest,
             "nodes": [node.to_dict() for node in self.nodes],
         }
 
@@ -171,6 +173,9 @@ class ExperimentRound:
                 str(document["parent_candidate"]) if document.get("parent_candidate") is not None else None
             ),
             winner_id=(str(document["winner_id"]) if document.get("winner_id") is not None else None),
+            contract_digest=(
+                str(document["contract_digest"]) if document.get("contract_digest") is not None else None
+            ),
             nodes=tuple(ExperimentNode.from_dict(item) for item in document.get("nodes", ())),
         )
         round_.validate()
@@ -193,6 +198,10 @@ class ExperimentTree:
         ordered = tuple(sorted(self.rounds, key=lambda round_: (round_.depth, round_.round_id)))
         if ordered != self.rounds:
             raise ExperimentTreeError("rounds must be stored in deterministic depth order")
+
+        contract_digests = {round_.contract_digest for round_ in self.rounds}
+        if len(contract_digests) > 1:
+            raise ExperimentTreeError("experiment run contract changed between rounds")
 
         node_ids: set[str] = set()
         previous: ExperimentRound | None = None
