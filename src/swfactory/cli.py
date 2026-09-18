@@ -1066,6 +1066,33 @@ def experiment_tree_cmd(
         typer.echo(render(tree))
 
 
+@app.command("source-snapshot")
+def source_snapshot_cmd(
+    repo_path: Annotated[Path, typer.Argument(help="local Git repository to snapshot")] = Path("."),
+    revision: Annotated[str, typer.Option("--revision", "-r", help="Git revision to archive")] = "HEAD",
+    cache_root: Annotated[
+        Path,
+        typer.Option(help="content-addressed source snapshot cache"),
+    ] = Path(".factory/source-snapshots"),
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable snapshot receipt")] = False,
+) -> None:
+    """Archive the exact recorded Git commit; dirty worktree bytes are never included."""
+    from swfactory.source_snapshot import SourceSnapshotError, create_source_snapshot
+
+    try:
+        snapshot = create_source_snapshot(repo_path, revision, cache_root=cache_root)
+    except (OSError, SourceSnapshotError) as error:
+        typer.echo(f"source snapshot: {error}", err=True)
+        raise typer.Exit(2) from error
+    if json_out:
+        typer.echo(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
+        return
+    typer.echo(f"commit       {snapshot.commit_sha}")
+    typer.echo(f"sha256       {snapshot.sha256}")
+    typer.echo(f"size bytes   {snapshot.size_bytes}")
+    typer.echo(f"archive      {snapshot.path}")
+
+
 @app.command()
 def herd(
     airflow_url: Annotated[str, typer.Option(envvar="AIRFLOW_URL")] = "http://localhost:8080",
