@@ -29,6 +29,7 @@ from swfactory.cells import TERMINAL_STATES, CellIdentity
 from swfactory.cleanup_receipt import CleanupReceipt, CleanupStatus
 from swfactory.config import Config
 from swfactory.idempotency import MutationOutcome, OperationError, OperationJournal, OperationRef
+from swfactory.maintenance_incidents import DurableIncidentLedger, IncidentIdentity, _digest
 from swfactory.metrics import CREATED_KEYS, first_timestamp, load_all
 from swfactory.models import Diagnosis
 from swfactory.runtime import run_id_for
@@ -47,6 +48,8 @@ Action = Literal["log", "diagnose", "propose"]
 MIN_SAMPLES = 3
 INCIDENTS_DIR = "docs/factory/incidents"
 INCIDENT_LABELS = ("maintain", "incident")
+# Durable identity map, so a repeated pass adopts its incident instead of filing another.
+INCIDENT_LEDGER = ".factory/maintenance-incidents.json"
 SANDBOX_PREFIX = "swf-"
 # A checkout of the target repo to read metrics from (else the DAG shallow-clones the base branch).
 MAINTAIN_ROOT_ENV = "SWF_MAINTAIN_ROOT"
@@ -149,6 +152,35 @@ def detect(runs: list[dict], bands: dict) -> list[Breach]:
 # ---------------------------------------------------------------- response
 
 
+def _issue_number(url: str) -> int:
+    """The issue's number as its URL states it.
+
+    The last integer in the string, because the two SCMs spell it differently: GitHub ends
+    ``/issues/42`` and the local adapter returns ``file://issue-1.md``. Both carry a real identity;
+    only the shape differs. 0 when there is none, which `record_created` refuses -- a receipt
+    without an identity is not a receipt.
+    """
+    numbers = re.findall(r"\d+", url)
+    return int(numbers[-1]) if numbers else 0
+
+
+def _incident_identity(cfg: Config, breach: Breach, runs: list[dict], bands: Mapping[str, Any]) -> IncidentIdentity:
+    """What makes two breaches the same incident.
+
+    Keyed on the newest run in the window rather than the wall clock, so three identical passes over
+    unchanged evidence resolve to one incident while genuinely new runs roll a new one -- which is
+    what ``should_roll_incident`` means by "the source evidence describes a new regression".
+    """
+    newest = runs[0] if runs else {}
+    return IncidentIdentity(
+        repository=cfg.repo,
+        source_run=str(newest.get("run_id") or newest.get("finished") or "no-runs"),
+        evidence_digest=_digest(breach.model_dump(mode="json")),
+        metric=breach.metric,
+        policy_version=_digest(dict(bands)),
+    )
+
+
 def run(
     cfg: Config,
     *,
@@ -174,6 +206,9 @@ def run(
     runs = load_runs(root, int(bands.get("window_runs", 20)))
     breaches = detect(runs, bands)
     print(f"maintain: {len(runs)} runs in window, {len(breaches)} breach(es)")
+    # Every pass opened an issue, so three identical passes over unchanged evidence opened three
+    # identical issues: nothing asked whether this incident had already been filed.
+    ledger = DurableIncidentLedger.load(root / INCIDENT_LEDGER)
     for breach in breaches:
         print(_log_line(breach))
         if breach.action == "log":
@@ -184,18 +219,35 @@ def run(
         incident.parent.mkdir(parents=True, exist_ok=True)
         incident.write_text(record, encoding="utf-8")
         print(f"maintain: wrote {incident}")
-        if breach.action == "propose":
-            url = scm.open_issue(
-                title=f"[maintain] {breach.metric} breached the {breach.sigma}σ band",
-                body=f"{draft_intent(breach, diagnosis)}\n{record}",
-                labels=["factory"],
-            )
-        else:
-            url = scm.open_issue(
-                title=f"[incident] {breach.metric} {breach.sigma}σ",
-                body=record,
-                labels=list(INCIDENT_LABELS),
-            )
+        identity = _incident_identity(cfg, breach, runs, bands)
+        content = {"record": record, "action": str(breach.action)}
+        _, fresh = ledger.propose(identity, content)
+        if not fresh:
+            receipt = ledger.receipts.get(identity.key)
+            where = f" as {receipt.issue_url}" if receipt else ""
+            print(f"maintain: incident already filed{where}; not opening a duplicate")
+            continue
+
+        ledger.begin_create(identity)
+        try:
+            if breach.action == "propose":
+                url = scm.open_issue(
+                    title=f"[maintain] {breach.metric} breached the {breach.sigma}σ band",
+                    body=f"{draft_intent(breach, diagnosis)}\n{record}",
+                    labels=["factory"],
+                )
+            else:
+                url = scm.open_issue(
+                    title=f"[incident] {breach.metric} {breach.sigma}σ",
+                    body=record,
+                    labels=list(INCIDENT_LABELS),
+                )
+        except BaseException:
+            # The request may have landed. In doubt is the only honest state, and the one
+            # `begin_create` lets a later pass resume from.
+            ledger.mark_unknown(identity)
+            raise
+        ledger.record_created(identity, _issue_number(url), url, content)
         print(f"maintain: opened issue {url}")
     return breaches
 

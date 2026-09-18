@@ -18,6 +18,7 @@ from swfactory.maintain import (
     load_runs,
     sweep_orphans,
 )
+from swfactory.maintenance_incidents import DurableIncidentLedger, IncidentState
 from swfactory.models import AgentResult, Diagnosis
 from swfactory.runtime import run_id_for
 from swfactory.sandbox import DockerContainers
@@ -688,3 +689,77 @@ def test_sweep_sandboxes_sweeps_docker_containers_when_the_factory_runs_on_docke
     assert maintain.select_containers({}) is None
     assert maintain.select_containers({"SWF_SANDBOX": "islo"}) is None
     assert isinstance(maintain.select_containers({"SWF_SANDBOX": "docker"}), DockerContainers)
+
+
+def test_three_identical_passes_file_one_incident(tmp_path: Path) -> None:
+    """The defect #2076 names: `maintain.run` called `scm.open_issue` unconditionally, so every
+    pass over unchanged evidence opened another identical issue. A probe of three passes produced
+    three issues."""
+    root = tmp_path / "target"
+    _seed(root, 40)
+    scm = FakeScm()
+    bands = _bands_file(tmp_path)
+
+    for _ in range(3):
+        maintain.run(Config(issue="x"), scm=scm, agent=None, sb=None, bands_path=bands, root=root)
+
+    assert len(scm.issues) == 1
+
+
+def test_the_incident_receipt_survives_a_restart(tmp_path: Path) -> None:
+    """The ledger is the durable half: a fresh process must adopt the filed issue, not refile it."""
+    root = tmp_path / "target"
+    _seed(root, 40)
+    bands = _bands_file(tmp_path)
+    maintain.run(Config(issue="x"), scm=FakeScm(), agent=None, sb=None, bands_path=bands, root=root)
+
+    ledger = DurableIncidentLedger.load(root / maintain.INCIDENT_LEDGER)
+    (receipt,) = list(ledger.receipts.values())
+    assert receipt.issue_url.endswith("issue-1.md")
+
+    restarted = FakeScm()
+    maintain.run(Config(issue="x"), scm=restarted, agent=None, sb=None, bands_path=bands, root=root)
+
+    assert restarted.issues == []
+
+
+def test_new_evidence_rolls_a_new_incident(tmp_path: Path) -> None:
+    """Dedupe must not swallow a genuinely new regression: newer runs are a different incident."""
+    root = tmp_path / "target"
+    _seed(root, 40)
+    scm = FakeScm()
+    bands = _bands_file(tmp_path)
+    maintain.run(Config(issue="x"), scm=scm, agent=None, sb=None, bands_path=bands, root=root)
+
+    # A newer run lands in the window, so the breach now rests on different evidence.
+    _write_metrics(
+        root,
+        "NEWER",
+        {
+            "run_id": "newer",
+            "agent": "claude",
+            "iterations": 40,
+            "finished": datetime(2026, 6, 1, tzinfo=UTC).isoformat(),
+        },
+    )
+    maintain.run(Config(issue="x"), scm=scm, agent=None, sb=None, bands_path=bands, root=root)
+
+    assert len(scm.issues) == 2
+
+
+def test_a_failed_creation_is_left_in_doubt_rather_than_retried_blind(tmp_path: Path) -> None:
+    """The request may already have landed, so the next pass must resume from in-doubt rather than
+    assume nothing happened and open a second issue."""
+    root = tmp_path / "target"
+    _seed(root, 40)
+    bands = _bands_file(tmp_path)
+
+    class Exploding(FakeScm):
+        def open_issue(self, *, title: str, body: str, labels) -> str:
+            raise ConnectionError("socket closed after the request was sent")
+
+    with pytest.raises(ConnectionError):
+        maintain.run(Config(issue="x"), scm=Exploding(), agent=None, sb=None, bands_path=bands, root=root)
+
+    ledger = DurableIncidentLedger.load(root / maintain.INCIDENT_LEDGER)
+    assert IncidentState.IN_DOUBT in set(ledger.states.values())
