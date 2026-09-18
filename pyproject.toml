@@ -80,3 +80,15 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+# Turborepo 2.11 can treat this root project as the Python side of a polyglot
+# task graph. The name is deliberately distinct from [project].name so the
+# synthetic workspace scope is unambiguous beside Rust crate names.
+[tool.turbo]
+name = "swfactory-python"
+
+# A one-member uv workspace: the repository root itself is a workspace member.
+# Keeping this explicit lets Turbo discover the Python package without adding a
+# JavaScript workspace or package.json just to describe Python.
+[tool.uv.workspace]
+members = []
