@@ -94,9 +94,7 @@ def test_descendant_binds_to_verified_exploration_decision(tmp_path: Path) -> No
     assert plan.parent_decision_digest.startswith("sha256:")
     assert all(request.input_head == winner.output_head for request in plan.requests)
     assert all(request.parent_candidate == winner.logical_id for request in plan.requests)
-    assert all(
-        request.parent_decision_digest == plan.parent_decision_digest for request in plan.requests
-    )
+    assert all(request.parent_decision_digest == plan.parent_decision_digest for request in plan.requests)
 
 
 def test_descendant_refuses_tampered_sibling_evidence(tmp_path: Path) -> None:
