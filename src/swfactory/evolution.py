@@ -31,7 +31,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from swfactory.candidate_evidence import CandidateEvidenceError, build_candidate_evidence_bundle
+from swfactory.candidate_evidence import build_candidate_evidence_bundle
 from swfactory.candidate_worktree import (
     create_candidate_worktree,
     freeze_candidate_worktree,
@@ -40,7 +40,7 @@ from swfactory.candidate_worktree import (
 )
 from swfactory.experiment_tree import ExperimentNode, ExperimentRound, NodeState
 from swfactory.generations import CampaignBudget, Dimension, Evaluation, promotable
-from swfactory.source_snapshot import SourceSnapshotError, create_source_snapshot
+from swfactory.source_snapshot import create_source_snapshot
 from swfactory.work_executor import Cancellation
 
 CandidateState = Literal["ok", "failed", "cancelled", "skipped", "refused"]
