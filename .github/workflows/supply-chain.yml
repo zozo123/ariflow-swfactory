@@ -1,9 +1,8 @@
 name: supply-chain
 
+# Shipped release subjects are attested inline by release.yml before publication.
 on:
   workflow_dispatch:
-  release:
-    types: [published]
 
 permissions:
   contents: read
