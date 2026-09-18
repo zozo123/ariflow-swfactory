@@ -374,3 +374,73 @@ def test_cancellation_in_first_merge_prevents_remaining_merge_callbacks() -> Non
     assert merged == ["a"]
     assert [receipt.node_id for receipt in report.merges] == ["a"]
     assert report.final_head == f"{HEAD}+a"
+
+
+def test_observed_conflicts_refuse_the_wave_before_any_merge_callback() -> None:
+    merged: list[str] = []
+
+    def run(request: NodeRequest) -> NodeResult:
+        touched = ("SECURITY.md", "shared.py") if request.node.id == "a" else ("shared.py",)
+        return NodeResult(
+            logical_id=request.logical_id,
+            node_id=request.node.id,
+            state="ok",
+            input_head=request.input_head,
+            output_head=f"{request.input_head}/{request.node.id}",
+            touched_files=touched,
+        )
+
+    def merge(result: NodeResult, target_head: str, index: int) -> MergeReceipt:
+        merged.append(result.node_id)
+        return _merger(result, target_head, index)
+
+    nodes = (
+        WorkNode(id="a", files=("SECURITY.md", "shared.py"), parallel_safe=True),
+        WorkNode(id="b", files=("shared.py",), parallel_safe=True),
+    )
+    executor = WorkExecutor(run, merge, ExecutorPolicy(protected_paths=("SECURITY.md",)))
+    report = _execute(executor, nodes)
+
+    assert merged == []
+    assert report.merges == ()
+    assert report.final_head == HEAD
+    assert report.cancelled
+    kinds = {(row.left, row.right, row.kind) for row in report.conflicts}
+    assert ("a", "policy", "protected") in kinds
+    assert ("a", "b", "overlap") in kinds
+
+
+def test_undeclared_observed_path_refuses_fan_in() -> None:
+    def run(request: NodeRequest) -> NodeResult:
+        return NodeResult(
+            logical_id=request.logical_id,
+            node_id=request.node.id,
+            state="ok",
+            input_head=request.input_head,
+            output_head=f"{request.input_head}/{request.node.id}",
+            touched_files=("declared.py", "surprise.py"),
+        )
+
+    report = _execute(
+        WorkExecutor(run, _merger),
+        (WorkNode(id="a", files=("declared.py",), parallel_safe=True),),
+    )
+
+    assert report.merges == ()
+    assert report.final_head == HEAD
+    assert report.cancelled
+    assert [(row.kind, row.files) for row in report.conflicts] == [("undeclared", ("surprise.py",))]
+
+
+def test_result_input_head_is_bound_to_the_request_before_fan_in() -> None:
+    def run(request: NodeRequest) -> NodeResult:
+        return NodeResult(
+            logical_id=request.logical_id,
+            node_id=request.node.id,
+            state="ok",
+            input_head="moved-after-request",
+            output_head="candidate",
+        )
+
+    with pytest.raises(ValueError, match="wrong input head"):
+        _execute(WorkExecutor(run, _merger), (WorkNode(id="a", files=("a.py",)),))
