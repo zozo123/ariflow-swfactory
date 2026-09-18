@@ -1325,6 +1325,108 @@ def research_schedule_cmd(
         typer.echo(f"depth {round_['depth']}: {' '.join(round_['strategies'])}")
 
 
+@candidate_evidence_app.command("retain")
+def candidate_evidence_retain(
+    destination: Annotated[Path, typer.Argument(help="verified candidate evidence bundle directory")],
+    repo_path: Annotated[Path, typer.Option("--repo", help="local Git repository")] = Path("."),
+    store: Annotated[
+        Path,
+        typer.Option(help="factory-owned content-addressed retention store"),
+    ] = Path(".factory/candidate-retention"),
+    ttl_hours: Annotated[
+        int,
+        typer.Option("--ttl-hours", min=1, help="promotion-window retention lease in hours"),
+    ] = 168,
+    json_out: Annotated[bool, typer.Option("--json", help="print the retention lease")] = False,
+) -> None:
+    """Import verified evidence into the promotion-window retention store."""
+    from datetime import timedelta
+
+    from swfactory.candidate_retention import CandidateRetentionError, retain_candidate_evidence
+
+    try:
+        lease = retain_candidate_evidence(
+            destination,
+            repo=repo_path,
+            store=store,
+            ttl=timedelta(hours=ttl_hours),
+        )
+    except (OSError, CandidateRetentionError) as error:
+        typer.echo(f"candidate retention: {error}", err=True)
+        raise typer.Exit(2) from error
+    if json_out:
+        typer.echo(json.dumps(lease.to_dict(), indent=2, sort_keys=True))
+    else:
+        typer.echo(f"retained sha256:{lease.digest} until {lease.expires_at}")
+
+
+@candidate_evidence_app.command("pin")
+def candidate_evidence_pin(
+    digest: Annotated[str, typer.Argument(help="candidate evidence digest, with or without sha256:")],
+    store: Annotated[
+        Path,
+        typer.Option(help="factory-owned content-addressed retention store"),
+    ] = Path(".factory/candidate-retention"),
+) -> None:
+    """Prevent a retained candidate bundle from being collected after expiry."""
+    from swfactory.candidate_retention import CandidateRetentionError, pin_candidate_evidence
+
+    token = digest.removeprefix("sha256:")
+    try:
+        lease = pin_candidate_evidence(store, token)
+    except (OSError, CandidateRetentionError) as error:
+        typer.echo(f"candidate retention: {error}", err=True)
+        raise typer.Exit(2) from error
+    typer.echo(f"pinned sha256:{lease.digest}")
+
+
+@candidate_evidence_app.command("unpin")
+def candidate_evidence_unpin(
+    digest: Annotated[str, typer.Argument(help="candidate evidence digest, with or without sha256:")],
+    store: Annotated[
+        Path,
+        typer.Option(help="factory-owned content-addressed retention store"),
+    ] = Path(".factory/candidate-retention"),
+) -> None:
+    """Return a retained candidate bundle to ordinary promotion-window expiry."""
+    from swfactory.candidate_retention import CandidateRetentionError, unpin_candidate_evidence
+
+    token = digest.removeprefix("sha256:")
+    try:
+        lease = unpin_candidate_evidence(store, token)
+    except (OSError, CandidateRetentionError) as error:
+        typer.echo(f"candidate retention: {error}", err=True)
+        raise typer.Exit(2) from error
+    typer.echo(f"unpinned sha256:{lease.digest}; expires {lease.expires_at}")
+
+
+@candidate_evidence_app.command("gc")
+def candidate_evidence_gc(
+    store: Annotated[
+        Path,
+        typer.Option(help="factory-owned content-addressed retention store"),
+    ] = Path(".factory/candidate-retention"),
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="report expired evidence without deleting it")] = False,
+    json_out: Annotated[bool, typer.Option("--json", help="print the sweep report")] = False,
+) -> None:
+    """Sweep only expired, unpinned candidate evidence owned by the retention store."""
+    from swfactory.candidate_retention import CandidateRetentionError, sweep_candidate_evidence
+
+    try:
+        report = sweep_candidate_evidence(store, dry_run=dry_run)
+    except (OSError, CandidateRetentionError) as error:
+        typer.echo(f"candidate retention: {error}", err=True)
+        raise typer.Exit(2) from error
+    if json_out:
+        typer.echo(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+        return
+    typer.echo(
+        f"removed={len(report.removed)} retained={len(report.retained)} malformed={len(report.malformed)}"
+    )
+    if report.malformed:
+        typer.echo("refused malformed: " + ", ".join(report.malformed), err=True)
+
+
 @app.command("experiment-tree")
 def experiment_tree_cmd(
     reports: Annotated[
