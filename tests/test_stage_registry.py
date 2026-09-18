@@ -38,11 +38,11 @@ def test_blueprint_pipeline_uses_the_same_build_stage_as_managed_airflow() -> No
     assert build is resolve("build_and_test")
 
 
-def test_legacy_stage_registry_and_default_pipeline_share_managed_build() -> None:
-    from swfactory import stages
-    from swfactory.stage_registry import resolve
 
-    assert stages.STAGES["build_and_test"] is stages.build_and_test
-    assert resolve("build_and_test") is stages.build_and_test
-    assert stages.build_and_test in stages.PIPELINE
-    assert not hasattr(stages, "_legacy_build_and_test")
+def test_legacy_stage_entrypoint_delegates_without_a_second_engine() -> None:
+    from swfactory import stages
+    from swfactory.work_stage import build_and_test as managed_build
+
+    assert stages.build_and_test is stages.STAGES["build_and_test"]
+    assert stages.build_and_test is not managed_build
+    assert "_legacy_build" not in stages.build_and_test.__code__.co_names
