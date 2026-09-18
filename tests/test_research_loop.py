@@ -108,6 +108,10 @@ def test_global_cost_budget_stops_before_a_second_round() -> None:
             output_head=outcome.output_head,
             evaluations=outcome.evaluations,
             cost_usd=1.0,
+            candidate_ref=outcome.candidate_ref,
+            evidence_bundle_path=outcome.evidence_bundle_path,
+            evidence_digest=outcome.evidence_digest,
+            inherited_recipe_digest=outcome.inherited_recipe_digest,
         )
 
     report = run_annealing_loop(
