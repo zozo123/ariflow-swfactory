@@ -91,18 +91,20 @@ jobs:
         run: bash scripts/swf_e2e.sh
       - name: the Python control room answers the same gates on the same shape of run
         id: python_harness
-        if: always()
+        # A superseding push cancels this run. Do not start another long harness while cancellation
+        # is trying to free the workflow concurrency slot for the newer candidate.
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: bash scripts/stress_airflow.sh
       - name: Keep scheduler evidence when either harness fails
         if: >-
-          always() &&
+          always() && !cancelled() &&
           (steps.rust_harness.outcome != 'success' || steps.python_harness.outcome != 'success')
         run: |
           find "${TMPDIR:-/tmp}" -maxdepth 2 -name 'standalone.log' -newermt '-1 hour' \
             -exec sh -c 'echo "== $1"; tail -200 "$1"' _ {} \; 2>/dev/null || true
       - name: Propagate harness failures to the job result
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           RUST_HARNESS: ${{ steps.rust_harness.outcome }}
           PYTHON_HARNESS: ${{ steps.python_harness.outcome }}
