@@ -20,20 +20,26 @@ pub struct BackendContext {
 }
 
 impl BackendContext {
-    pub fn connect(context: &Context, timeout: Duration, feature: &str) -> Result<Self> {
+    /// Resolve the one backend endpoint policy shared by every application caller.
+    pub fn endpoint(context: &Context) -> Option<String> {
         let backend_url =
             env::var("SWF_BACKEND_URL").unwrap_or_else(|_| context.backend_url.clone());
-        if backend_url.is_empty() {
+        let backend_url = backend_url.trim().trim_end_matches('/').to_string();
+        (!backend_url.is_empty()).then_some(backend_url)
+    }
+
+    pub fn connect(context: &Context, timeout: Duration, feature: &str) -> Result<Self> {
+        let Some(backend_url) = Self::endpoint(context) else {
             return Err(OpsError::operational(format!(
                 "{feature} require the Python backend; this context is in direct mode"
             ))
             .with_hint("configure --backend-url and SWF_BACKEND_TOKEN"));
-        }
+        };
         let token = env::var("SWF_BACKEND_TOKEN").unwrap_or_default();
         let api = FactoryApi::new(&backend_url, token, timeout)?;
         Ok(Self {
             api: Arc::new(api),
-            base_url: backend_url.trim_end_matches('/').to_string(),
+            base_url: backend_url,
         })
     }
 
