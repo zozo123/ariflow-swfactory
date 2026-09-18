@@ -18,7 +18,7 @@ from typing import Literal, Protocol
 from swfactory.workgraph import WorkNode, conflict_set, deterministic_merge_order, waves
 
 NodeState = Literal["ok", "failed", "cancelled", "skipped"]
-ConflictKind = Literal["disjoint", "overlap", "stale_base", "protected"]
+ConflictKind = Literal["disjoint", "overlap", "stale_base", "protected", "undeclared"]
 
 
 @dataclass(frozen=True)
@@ -83,6 +83,7 @@ class ExecutionReport:
     merges: tuple[MergeReceipt, ...]
     final_head: str
     cancelled: bool = False
+    conflicts: tuple[ConflictReceipt, ...] = ()
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -149,6 +150,7 @@ class WorkExecutor:
         results: dict[str, NodeResult] = {}
         target_head = input_head
         merges: list[MergeReceipt] = []
+        conflicts: list[ConflictReceipt] = []
 
         for wave in waves(ordered):
             if cancellation.cancelled:
@@ -171,6 +173,12 @@ class WorkExecutor:
             for result in wave_results:
                 results[result.node_id] = result
             if cancellation.cancelled or any(result.state != "ok" for result in wave_results):
+                cancellation.cancel()
+                break
+
+            wave_conflicts = self._premerge_conflicts(wave.nodes, wave_results, expected_target_head=target_head)
+            if wave_conflicts:
+                conflicts.extend(wave_conflicts)
                 cancellation.cancel()
                 break
 
@@ -209,6 +217,7 @@ class WorkExecutor:
             merges=tuple(merges),
             final_head=target_head,
             cancelled=cancellation.cancelled,
+            conflicts=tuple(conflicts),
         )
 
     def _serial(self, requests: list[NodeRequest], cancellation: Cancellation) -> list[NodeResult]:
@@ -293,6 +302,45 @@ class WorkExecutor:
                 return result
         assert last is not None
         return last
+
+    def _premerge_conflicts(
+        self,
+        nodes: Iterable[WorkNode],
+        results: Iterable[NodeResult],
+        *,
+        expected_target_head: str,
+    ) -> tuple[ConflictReceipt, ...]:
+        """Classify observed candidate writes before any merge callback can mutate the target."""
+        node_by_id = {node.id: node for node in nodes}
+        ordered = tuple(results)
+        found: list[ConflictReceipt] = []
+        protected = set(self.policy.protected_paths)
+
+        for result in ordered:
+            node = node_by_id[result.node_id]
+            if result.input_head != expected_target_head:
+                found.append(
+                    ConflictReceipt(
+                        result.node_id,
+                        "target",
+                        "stale_base",
+                        detail=f"expected {expected_target_head}, candidate used {result.input_head}",
+                    )
+                )
+            touched = set(result.touched_files)
+            unexpected = tuple(sorted(touched.difference(node.files)))
+            if unexpected:
+                found.append(ConflictReceipt(result.node_id, "plan", "undeclared", unexpected))
+            protected_hit = tuple(sorted(touched.intersection(protected)))
+            if protected_hit:
+                found.append(ConflictReceipt(result.node_id, "policy", "protected", protected_hit))
+
+        for index, left in enumerate(ordered):
+            for right in ordered[index + 1 :]:
+                overlap = tuple(sorted(set(left.touched_files).intersection(right.touched_files)))
+                if overlap:
+                    found.append(ConflictReceipt(left.node_id, right.node_id, "overlap", overlap))
+        return tuple(found)
 
     def classify_conflicts(
         self,
