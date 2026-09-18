@@ -16,12 +16,12 @@ from swfactory.candidate_evidence import (
     build_candidate_evidence_bundle,
     verify_candidate_evidence_bundle,
 )
-from swfactory.cli import app
 from swfactory.candidate_worktree import (
     create_candidate_worktree,
     freeze_candidate_worktree,
     remove_candidate_worktree,
 )
+from swfactory.cli import app
 from swfactory.source_snapshot import create_source_snapshot
 
 IDENTITY = [
