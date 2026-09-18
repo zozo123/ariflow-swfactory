@@ -29,6 +29,9 @@ def _runner(request):
             evaluation(Dimension.EVIDENCE, passed=True, evidence="receipt"),
         ),
         cost_usd=cost,
+        candidate_ref=f"refs/swfactory/candidates/{request.logical_id}",
+        evidence_bundle_path=f"/retained/{request.logical_id}",
+        evidence_digest="sha256:" + "a" * 64,
     )
 
 
