@@ -4,8 +4,8 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from enum import StrEnum
+from pathlib import Path
 
 
 def _digest(value: object) -> str:
@@ -107,7 +107,7 @@ class DurableIncidentLedger(IncidentLedger):
     path: Path = field(default_factory=lambda: Path(".factory/maintenance-incidents.json"))
 
     @classmethod
-    def load(cls, path: Path) -> "DurableIncidentLedger":
+    def load(cls, path: Path) -> DurableIncidentLedger:
         path = Path(path)
         if not path.is_file():
             return cls(path=path)
