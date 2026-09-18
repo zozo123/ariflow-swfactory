@@ -337,7 +337,10 @@ def select_for_exploration(
         if outcome.output_head == outcome.input_head:
             refusals.append(f"{outcome.logical_id}: unchanged_output_head")
             continue
-        if outcome.candidate_ref and not outcome.evidence_digest:
+        if not outcome.candidate_ref:
+            refusals.append(f"{outcome.logical_id}: missing_frozen_candidate_ref")
+            continue
+        if not outcome.evidence_bundle_path or not outcome.evidence_digest:
             refusals.append(f"{outcome.logical_id}: missing_candidate_evidence")
             continue
         by_dimension = {item.dimension: item for item in outcome.evaluations}
