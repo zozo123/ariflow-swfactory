@@ -1205,6 +1205,84 @@ def candidate_evidence_verify(
         typer.echo(f"verified {bundle.candidate_id} {bundle.output_head} {bundle.digest()}")
 
 
+campaign_decision_app = typer.Typer(
+    help="Bind deterministic campaign fan-in to retained candidate evidence.",
+    no_args_is_help=True,
+)
+app.add_typer(campaign_decision_app, name="campaign-decision")
+
+
+def _candidate_evidence_paths(values: list[str] | None) -> dict[str, Path]:
+    paths: dict[str, Path] = {}
+    for value in values or []:
+        candidate_id, separator, path = value.partition("=")
+        if not separator or not candidate_id.strip() or not path.strip():
+            raise ValueError("--candidate-evidence must be CANDIDATE_ID=PATH")
+        if candidate_id in paths:
+            raise ValueError(f"duplicate candidate evidence: {candidate_id}")
+        paths[candidate_id] = Path(path)
+    return paths
+
+
+@campaign_decision_app.command("build")
+def campaign_decision_build(
+    report: Annotated[Path, typer.Argument(help="stored CampaignReport JSON")],
+    destination: Annotated[Path, typer.Argument(help="campaign decision manifest JSON")],
+    candidate_evidence: Annotated[
+        list[str] | None,
+        typer.Option("--candidate-evidence", help="CANDIDATE_ID=BUNDLE_DIR; repeat for every answered sibling"),
+    ] = None,
+) -> None:
+    """Cryptographically join deterministic selection to every answered sibling's retained evidence."""
+    from swfactory.campaign_decision import (
+        CampaignDecisionError,
+        build_campaign_decision_from_document,
+        write_campaign_decision,
+    )
+    from swfactory.candidate_evidence import CandidateEvidenceError, verify_candidate_evidence_bundle
+
+    try:
+        document = json.loads(report.read_text(encoding="utf-8"))
+        paths = _candidate_evidence_paths(candidate_evidence)
+        bundles = {
+            candidate_id: verify_candidate_evidence_bundle(path)
+            for candidate_id, path in paths.items()
+        }
+        manifest = build_campaign_decision_from_document(document, bundles)
+        write_campaign_decision(destination, manifest)
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, CandidateDecisionError, CandidateEvidenceError) as error:
+        typer.echo(f"campaign decision: {error}", err=True)
+        raise typer.Exit(2) from error
+    typer.echo(f"{destination}  {manifest.digest()}")
+
+
+@campaign_decision_app.command("verify")
+def campaign_decision_verify(
+    manifest_path: Annotated[Path, typer.Argument(help="campaign decision manifest JSON")],
+    candidate_evidence: Annotated[
+        list[str] | None,
+        typer.Option("--candidate-evidence", help="CANDIDATE_ID=BUNDLE_DIR; repeat for every answered sibling"),
+    ] = None,
+    json_out: Annotated[bool, typer.Option("--json", help="print the canonical verified manifest")] = False,
+) -> None:
+    """Re-hash fan-in and every bound answered-candidate evidence bundle."""
+    from swfactory.campaign_decision import CampaignDecisionError, verify_campaign_decision
+    from swfactory.candidate_evidence import CandidateEvidenceError
+
+    try:
+        paths = _candidate_evidence_paths(candidate_evidence)
+        manifest = verify_campaign_decision(manifest_path, paths)
+    except (OSError, ValueError, CampaignDecisionError, CandidateEvidenceError) as error:
+        typer.echo(f"campaign decision: {error}", err=True)
+        raise typer.Exit(2) from error
+    if json_out:
+        document = manifest.canonical_dict()
+        document["manifest_digest"] = manifest.digest()
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"verified {manifest.campaign_id} {manifest.digest()}")
+
+
 @app.command("experiment-tree")
 def experiment_tree_cmd(
     reports: Annotated[
