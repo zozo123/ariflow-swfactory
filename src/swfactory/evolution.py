@@ -266,6 +266,7 @@ class CampaignReport:
     strategies: tuple[str, ...]
     parallel: bool
     outcomes: tuple[CandidateOutcome, ...] = ()
+    exploration_selection: Selection = field(default_factory=lambda: Selection(None, "not_selected"))
     selection: Selection = field(default_factory=lambda: Selection(None, "not_selected"))
     independence: tuple[str, ...] = ()
     cancelled: bool = False
@@ -275,7 +276,7 @@ class CampaignReport:
         document = asdict(self)
         if self.experiment_round is not None:
             document["experiment_round"] = self.experiment_round.to_dict()
-        document["schema_version"] = 2
+        document["schema_version"] = 3
         document["scheduler"] = "airflow"
         return document
 
@@ -320,6 +321,48 @@ def independence_findings(outcomes: Sequence[CandidateOutcome], *, input_head: s
         if len(owners) > 1:
             findings.append(f"{', '.join(sorted(owners))}: identical output head {head}")
     return tuple(findings)
+
+
+def select_for_exploration(
+    outcomes: Sequence[CandidateOutcome],
+    *,
+    required: Iterable[Dimension] = REQUIRED_DIMENSIONS,
+) -> Selection:
+    """Choose an evidence-complete answer for more experiments, never for promotion."""
+    required = frozenset(required)
+    ordered = sorted(outcomes, key=lambda item: rank_key(item, required))
+    ranking = tuple(item.logical_id for item in ordered)
+    refusals: list[str] = []
+    for outcome in ordered:
+        if outcome.state != "ok":
+            refusals.append(f"{outcome.logical_id}: {outcome.state}")
+            continue
+        if not outcome.output_head:
+            refusals.append(f"{outcome.logical_id}: no_output_head")
+            continue
+        if outcome.output_head == outcome.input_head:
+            refusals.append(f"{outcome.logical_id}: unchanged_output_head")
+            continue
+        if outcome.candidate_ref and not outcome.evidence_digest:
+            refusals.append(f"{outcome.logical_id}: missing_candidate_evidence")
+            continue
+        by_dimension = {item.dimension: item for item in outcome.evaluations}
+        failures: list[str] = []
+        for dimension in sorted(required, key=lambda item: item.value):
+            item = by_dimension.get(dimension)
+            if item is None:
+                failures.append(f"missing:{dimension.value}")
+            elif item.result != "pass":
+                failures.append(f"{item.result}:{dimension.value}")
+        if not failures:
+            return Selection(
+                outcome.logical_id,
+                f"exploration:{outcome.strategy.value}",
+                ranking,
+                tuple(refusals),
+            )
+        refusals.append(f"{outcome.logical_id}: {','.join(failures)}")
+    return Selection(None, "no_exploration_candidate", ranking, tuple(refusals))
 
 
 def select(
@@ -466,15 +509,22 @@ def run_campaign(
         cancelled=cancellation.cancelled,
     )
     if over_budget:
-        report.selection = Selection(
+        refused = Selection(
             None,
             "campaign_exceeded_budget",
             tuple(outcome.logical_id for outcome in outcomes),
             (f"spent {spent} usd over {elapsed}s",),
         )
+        report.exploration_selection = refused
+        report.selection = refused
     else:
+        report.exploration_selection = select_for_exploration(outcomes, required=required)
         report.selection = select(outcomes, required=required, human_approved=human_approved)
-    report.experiment_round = _experiment_round(requests, outcomes, report.selection)
+    report.experiment_round = _experiment_round(
+        requests,
+        outcomes,
+        report.exploration_selection,
+    )
     return report
 
 
