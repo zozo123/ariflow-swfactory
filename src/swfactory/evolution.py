@@ -209,7 +209,7 @@ def worktree_candidate_runner(
                     artifacts=artifacts,
                     destination=destination,
                 )
-            except (CandidateEvidenceError, SourceSnapshotError, OSError, ValueError) as error:
+            except Exception as error:  # noqa: BLE001 - evidence failure makes this candidate non-promotable.
                 return replace(
                     outcome,
                     state="refused",
