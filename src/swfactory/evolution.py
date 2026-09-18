@@ -40,6 +40,7 @@ from swfactory.candidate_worktree import (
 )
 from swfactory.experiment_tree import ExperimentNode, ExperimentRound, NodeState
 from swfactory.generations import CampaignBudget, Dimension, Evaluation, promotable
+from swfactory.run_contract import RunContract
 from swfactory.source_snapshot import create_source_snapshot
 from swfactory.work_executor import Cancellation
 
@@ -84,6 +85,7 @@ class CandidateRequest:
     depth: int = 0
     budget_usd: float = 0.0
     timeout_s: int = 1800
+    run_contract: RunContract | None = None
 
     @property
     def logical_id(self) -> str:
@@ -98,6 +100,7 @@ class CandidateRequest:
                 self.parent_generation or "",
                 self.parent_candidate or "",
                 str(self.depth),
+                self.run_contract.digest if self.run_contract is not None else "",
             )
         ).encode()
         return "cand_" + hashlib.sha256(raw).hexdigest()[:24]
@@ -252,6 +255,7 @@ class CampaignReport:
     input_head: str
     strategies: tuple[str, ...]
     parallel: bool
+    run_contract: RunContract | None = None
     outcomes: tuple[CandidateOutcome, ...] = ()
     selection: Selection = field(default_factory=lambda: Selection(None, "not_selected"))
     independence: tuple[str, ...] = ()
@@ -260,9 +264,11 @@ class CampaignReport:
 
     def to_dict(self) -> dict[str, Any]:
         document = asdict(self)
+        if self.run_contract is not None:
+            document["run_contract"] = self.run_contract.to_dict()
         if self.experiment_round is not None:
             document["experiment_round"] = self.experiment_round.to_dict()
-        document["schema_version"] = 2
+        document["schema_version"] = 3
         document["scheduler"] = "airflow"
         return document
 
@@ -356,6 +362,7 @@ def plan_requests(
     parent_generation: str | None = None,
     parent_candidate: str | None = None,
     depth: int = 0,
+    run_contract: RunContract | None = None,
 ) -> tuple[CandidateRequest, ...]:
     """Turn a budget and a list of strategies into the exact questions a campaign may ask."""
     budget = budget or CampaignBudget()
@@ -373,6 +380,8 @@ def plan_requests(
         raise CampaignError("the first experiment round cannot name a parent candidate")
     if depth > 0 and not parent_candidate:
         raise CampaignError("a descendant experiment round requires the previous winner as parent_candidate")
+    if run_contract is not None:
+        run_contract.validate()
     share = round(budget.max_cost_usd / len(strategies), 6)
     return tuple(
         CandidateRequest(
@@ -386,6 +395,7 @@ def plan_requests(
             depth=depth,
             budget_usd=share,
             timeout_s=budget.max_wall_s,
+            run_contract=run_contract,
         )
         for strategy in strategies
     )
@@ -420,6 +430,11 @@ def run_campaign(
         raise CampaignError("every candidate in one campaign must have the same tree depth")
     if len({request.parent_candidate for request in requests}) != 1:
         raise CampaignError("every candidate in one campaign must have the same parent candidate")
+    contract_digests = {
+        request.run_contract.digest if request.run_contract is not None else None for request in requests
+    }
+    if len(contract_digests) != 1:
+        raise CampaignError("every candidate in one campaign must use the same run contract")
     cancellation = cancellation or Cancellation()
 
     started = time.monotonic()
@@ -448,6 +463,7 @@ def run_campaign(
         input_head=head,
         strategies=tuple(request.strategy.value for request in requests),
         parallel=concurrent,
+        run_contract=requests[0].run_contract,
         outcomes=tuple(outcomes),
         independence=independence_findings(outcomes, input_head=head),
         cancelled=cancellation.cancelled,
@@ -509,6 +525,7 @@ def _experiment_round(
         parent_candidate=requests[0].parent_candidate,
         nodes=tuple(nodes),
         winner_id=selection.winner,
+        contract_digest=(requests[0].run_contract.digest if requests[0].run_contract is not None else None),
     )
     round_.validate()
     return round_
