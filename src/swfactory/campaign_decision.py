@@ -15,9 +15,10 @@ import hashlib
 import json
 import os
 import tempfile
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from swfactory.candidate_evidence import CandidateEvidenceBundle
 from swfactory.evolution import CampaignReport, CandidateOutcome, Selection, Strategy
