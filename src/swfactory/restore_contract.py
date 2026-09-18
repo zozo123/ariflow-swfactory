@@ -990,10 +990,10 @@ def plan_reconciliation(state_root: Path) -> dict[str, Any]:
             # is the opposite of what an operator needs to see after a restore.
             decision = plan_recovery(row, current_epoch=epochs.get(str(row["cell_id"]), int(row["epoch"])))
             action, why = decision.action.value, decision.reason
-            if action == "retry" and outstanding["state"] != GATE_CLEAR:
+            if action in {"retry", "observe"} and outstanding["state"] != GATE_CLEAR:
                 # The recovery planner reasons about a factory that watched its own attempts. This
-                # one did not: the snapshot may have been taken mid-attempt, so a row that looks
-                # merely pending can already have reached the provider. Observe, never retry.
+                # one did not: the snapshot may have been taken mid-attempt, so even a row already
+                # classified for observation needs the restore-specific reason preserved.
                 action, why = "observe", "restored_state_cannot_prove_this_attempt_never_landed"
             operations.append(
                 {
