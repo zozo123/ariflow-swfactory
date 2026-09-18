@@ -11,7 +11,9 @@ import tarfile
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from swfactory.cli import app
 from swfactory.snapshot_replay import (
     SnapshotReplayError,
     SnapshotRunRecipe,
@@ -176,3 +178,58 @@ def test_recipe_refuses_escaping_cwd_and_duplicate_env() -> None:
         SnapshotRunRecipe(argv=("/bin/true",), cwd="../outside").validate()
     with pytest.raises(SnapshotReplayError, match="duplicate environment key"):
         SnapshotRunRecipe(argv=("/bin/true",), env=(("A", "1"), ("A", "2"))).validate()
+
+
+
+def test_recipe_refuses_secret_like_environment_keys() -> None:
+    with pytest.raises(SnapshotReplayError, match="secret-like"):
+        SnapshotRunRecipe(
+            argv=("/bin/true",),
+            env=(("SERVICE_API_KEY", "do-not-retain"),),
+        ).validate()
+
+
+def test_cli_runs_and_verifies_replay_capsule(tmp_path: Path) -> None:
+    _, snapshot = _repo(tmp_path)
+    source_receipt = tmp_path / "source.json"
+    source_receipt.write_text(json.dumps(snapshot.to_dict()) + "\n", encoding="utf-8")
+    recipe_path = tmp_path / "recipe.json"
+    recipe_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "argv": [sys.executable, "-c", "print('cli-replay')"],
+                "cwd": ".",
+                "env": [],
+                "timeout_s": 30,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    destination = tmp_path / "run"
+
+    runner = CliRunner()
+    run = runner.invoke(
+        app,
+        ["snapshot-replay", "run", str(source_receipt), str(recipe_path), str(destination)],
+    )
+    assert run.exit_code == 0, run.output
+    assert "timed_out=false" in run.output
+    assert (destination / "stdout.bin").read_text() == "cli-replay\n"
+
+    verify = runner.invoke(
+        app,
+        [
+            "snapshot-replay",
+            "verify",
+            str(destination),
+            "--source-receipt",
+            str(source_receipt),
+            "--json",
+        ],
+    )
+    assert verify.exit_code == 0, verify.output
+    document = json.loads(verify.stdout)
+    assert document["commit_sha"] == snapshot.commit_sha
+    assert document["receipt_digest"].startswith("sha256:")
