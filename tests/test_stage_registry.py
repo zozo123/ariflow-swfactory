@@ -38,7 +38,6 @@ def test_blueprint_pipeline_uses_the_same_build_stage_as_managed_airflow() -> No
     assert build is resolve("build_and_test")
 
 
-
 def test_legacy_stage_entrypoint_delegates_without_a_second_engine() -> None:
     from swfactory import stages
     from swfactory.work_stage import build_and_test as managed_build
