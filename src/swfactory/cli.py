@@ -1257,7 +1257,7 @@ def campaign_decision_build(
         TypeError,
         ValueError,
         json.JSONDecodeError,
-        CandidateDecisionError,
+        CampaignDecisionError,
         CandidateEvidenceError,
     ) as error:
         typer.echo(f"campaign decision: {error}", err=True)

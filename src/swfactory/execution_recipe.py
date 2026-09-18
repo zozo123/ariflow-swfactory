@@ -116,7 +116,10 @@ def parse_execution_recipe(document: Any) -> ExecutionRecipe:
             raise ExecutionRecipeError("execution recipe argv contains an invalid argument")
         argv.append(item)
 
-    cwd = _validate_repo_path(str(document.get("cwd", ".")))
+    cwd_raw = document.get("cwd", ".")
+    if not isinstance(cwd_raw, str):
+        raise ExecutionRecipeError("execution recipe cwd must be a string")
+    cwd = _validate_repo_path(cwd_raw)
 
     timeout_s = document.get("timeout_s")
     if not isinstance(timeout_s, int) or isinstance(timeout_s, bool) or not 1 <= timeout_s <= 86400:

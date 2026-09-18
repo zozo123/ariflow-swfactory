@@ -253,3 +253,20 @@ def test_cli_builds_and_verifies_campaign_fan_in(repo: Path, tmp_path: Path) -> 
     document = json.loads(verified.stdout)
     assert document["selection"]["winner"] == "cand_repair"
     assert document["manifest_digest"].startswith("sha256:")
+
+
+def test_campaign_decision_build_reports_domain_errors_instead_of_nameerror(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "bad-campaign.json"
+    report.write_text("{}", encoding="utf-8")
+    destination = tmp_path / "decision.json"
+
+    result = CliRunner().invoke(
+        app,
+        ["campaign-decision", "build", str(report), str(destination)],
+    )
+
+    assert result.exit_code == 2
+    assert "campaign decision:" in result.output
+    assert "NameError" not in result.output
