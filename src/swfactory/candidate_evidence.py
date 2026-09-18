@@ -21,7 +21,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from swfactory.candidate_worktree import CandidateRevision, verify_candidate_revision
+from swfactory.candidate_worktree import (
+    CandidateRevision,
+    CandidateWorktreeError,
+    candidate_ref,
+    verify_candidate_revision,
+)
 
 _ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -100,8 +105,7 @@ def build_candidate_evidence(
 ) -> tuple[CandidateEvidenceManifest, Path]:
     """Build or verify the immutable evidence bundle for one frozen candidate."""
     repo = repo.resolve()
-    verify_candidate_revision(repo, revision)
-    _verify_lineage(repo, revision.input_head, revision.output_head)
+    _verify_revision(repo, revision)
 
     bundle = root.resolve() / _candidate_token(revision.candidate_id)
     manifest_path = bundle / "manifest.json"
@@ -109,6 +113,7 @@ def build_candidate_evidence(
         manifest = load_candidate_evidence(manifest_path)
         verify_candidate_evidence(repo, manifest_path)
         _assert_identity(manifest, revision)
+        _assert_replay_inputs(bundle, manifest, result, artifacts or {})
         return manifest, manifest_path
     if bundle.exists():
         raise CandidateEvidenceError(f"candidate evidence directory exists without a manifest: {bundle}")
@@ -169,14 +174,19 @@ def load_candidate_evidence(manifest_path: Path) -> CandidateEvidenceManifest:
     expected = manifest.digest()
     observed = str(document.get("manifest_digest", ""))
     if observed != expected:
-        raise CandidateEvidenceError(f"candidate evidence manifest digest mismatch: expected {expected}, observed {observed}")
+        raise CandidateEvidenceError(
+            f"candidate evidence manifest digest mismatch: expected {expected}, observed {observed}"
+        )
     return manifest
 
 
 def verify_candidate_evidence(repo: Path, manifest_path: Path) -> CandidateEvidenceManifest:
     """Recompute Git identity and every retained artifact digest."""
-    manifest_path = manifest_path.resolve()
-    if manifest_path.is_symlink() or not manifest_path.is_file():
+    raw_manifest_path = manifest_path
+    if raw_manifest_path.is_symlink():
+        raise CandidateEvidenceError(f"candidate evidence manifest is not a regular file: {raw_manifest_path}")
+    manifest_path = raw_manifest_path.resolve()
+    if not manifest_path.is_file():
         raise CandidateEvidenceError(f"candidate evidence manifest is not a regular file: {manifest_path}")
     manifest = load_candidate_evidence(manifest_path)
     bundle = manifest_path.parent
@@ -187,8 +197,7 @@ def verify_candidate_evidence(repo: Path, manifest_path: Path) -> CandidateEvide
         output_head=manifest.output_head,
         ref=manifest.candidate_ref,
     )
-    verify_candidate_revision(repo.resolve(), revision)
-    _verify_lineage(repo.resolve(), manifest.input_head, manifest.output_head)
+    _verify_revision(repo.resolve(), revision)
 
     names: set[str] = set()
     for artifact in manifest.artifacts:
@@ -217,6 +226,52 @@ def verify_candidate_evidence(repo: Path, manifest_path: Path) -> CandidateEvide
     if not required.issubset(names):
         raise CandidateEvidenceError(f"candidate evidence missing required artifacts: {sorted(required - names)}")
     return manifest
+
+
+def _verify_revision(repo: Path, revision: CandidateRevision) -> None:
+    expected_ref = candidate_ref(revision.candidate_id)
+    if revision.ref != expected_ref:
+        raise CandidateEvidenceError(
+            f"candidate evidence ref {revision.ref} != deterministic ref {expected_ref}"
+        )
+    try:
+        verify_candidate_revision(repo, revision)
+    except CandidateWorktreeError as error:
+        raise CandidateEvidenceError(str(error)) from error
+    _verify_lineage(repo, revision.input_head, revision.output_head)
+
+
+def _assert_replay_inputs(
+    bundle: Path,
+    manifest: CandidateEvidenceManifest,
+    result: Mapping[str, Any],
+    artifacts: Mapping[str, Path],
+) -> None:
+    try:
+        retained_result = json.loads((bundle / "result.json").read_text(encoding="utf-8"))
+        requested_result = json.loads(
+            json.dumps(dict(result), sort_keys=True, ensure_ascii=True, allow_nan=False)
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise CandidateEvidenceError(f"candidate result cannot be replay-verified: {error}") from error
+    if retained_result != requested_result:
+        raise CandidateEvidenceError("existing candidate evidence has a different result document")
+
+    retained = {
+        item.name: item
+        for item in manifest.artifacts
+        if item.name not in {"changes.patch", "result.json"}
+    }
+    if set(retained) != set(artifacts):
+        raise CandidateEvidenceError("existing candidate evidence has a different artifact set")
+    for name, source in sorted(artifacts.items()):
+        _validate_artifact_name(name)
+        source = Path(source)
+        if source.is_symlink() or not source.is_file():
+            raise CandidateEvidenceError(f"candidate artifact {name!r} is not a regular file: {source}")
+        digest, size = _digest_file(source)
+        if retained[name].sha256 != digest or retained[name].size_bytes != size:
+            raise CandidateEvidenceError(f"existing candidate artifact {name!r} differs from replay input")
 
 
 def _assert_identity(manifest: CandidateEvidenceManifest, revision: CandidateRevision) -> None:
