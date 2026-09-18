@@ -23,3 +23,16 @@ def test_registry_preserves_unoverridden_canonical_stages() -> None:
 def test_unknown_stage_fails_closed() -> None:
     with pytest.raises(KeyError, match="unknown factory stage"):
         resolve("not-a-stage")
+
+
+def test_blueprint_pipeline_uses_the_same_build_stage_as_managed_airflow() -> None:
+    from swfactory.blueprint import load
+    from swfactory.stages import Gate
+    from swfactory.work_stage import build_and_test
+
+    pipeline = load("default").pipeline()
+    stages = [item for item in pipeline if not isinstance(item, Gate)]
+    build = next(item for item in stages if getattr(item, "__name__", "") == "build_and_test")
+
+    assert build is build_and_test
+    assert build is resolve("build_and_test")
