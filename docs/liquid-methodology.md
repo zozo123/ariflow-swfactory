@@ -233,6 +233,14 @@ inapplicable with a documented reason. It is not a requirement for ten implement
 
 ### Bound fan-out by integration capacity
 
+For bounded candidate campaigns, fan-out is recorded as a **stacked-bush experiment tree**:
+co-equal candidates are siblings from one exact input head; a later round may descend only from
+the previous round's selected answered candidate at its recorded head. Infrastructure failures stay
+provisional, while answered revisions freeze as evidence. See
+[Candidate experiment tree](experiment-tree.md). This lineage is advisory and does not create a
+second scheduler or promotion authority.
+
+
 Issue count expresses coverage. PR count expresses integration boundaries. They need not match.
 
 Before parallel work starts, each lane needs a contract, owner, file/surface boundary, expected
