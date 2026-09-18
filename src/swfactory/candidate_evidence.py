@@ -115,7 +115,10 @@ def build_candidate_evidence_bundle(
 ) -> CandidateEvidenceBundle:
     """Retain a frozen candidate's diff and named artifacts under one manifest."""
     repo = repo.resolve()
-    destination = destination.resolve()
+    raw_destination = destination
+    if raw_destination.is_symlink():
+        raise CandidateEvidenceError(f"candidate evidence destination is a symlink: {raw_destination}")
+    destination = raw_destination.resolve()
     verify_candidate_revision(repo, revision)
     verify_source_snapshot(source)
     if source.commit_sha != revision.input_head:
@@ -199,7 +202,10 @@ def load_candidate_evidence_bundle(destination: Path) -> CandidateEvidenceBundle
 
 def verify_candidate_evidence_bundle(destination: Path, *, repo: Path | None = None) -> CandidateEvidenceBundle:
     """Re-hash every retained byte and optionally re-check the immutable Git ref."""
-    destination = destination.resolve()
+    raw_destination = destination
+    if raw_destination.is_symlink():
+        raise CandidateEvidenceError(f"candidate evidence destination is a symlink: {raw_destination}")
+    destination = raw_destination.resolve()
     bundle = load_candidate_evidence_bundle(destination)
     for artifact in (bundle.diff, *bundle.artifacts):
         path = destination / artifact.path
