@@ -16,7 +16,6 @@ use std::time::Duration;
 use chrono::Utc;
 use swf_adapters::traits::DEFAULT_HTTP_TIMEOUT;
 use swf_app::cells::CellOps;
-use swf_app::BackendContext;
 use swf_app::context::{Auth, Context, ContextStore};
 use swf_app::delivery::VerifyOpts;
 use swf_app::gates::{AnswerOpts, BatchOutcome, BatchReport, Decision, GateFilter, Selection};
@@ -24,6 +23,7 @@ use swf_app::logs::LogOpts;
 use swf_app::ops::{JobFilter, Ops, OpsError, Result};
 use swf_app::stack::StackAction;
 use swf_app::submit::SubmitRequest;
+use swf_app::BackendContext;
 use swf_app::OperatorOps;
 use swf_domain::doctor;
 use swf_domain::evidence::DeliveryReport;
@@ -123,7 +123,11 @@ impl Ctx {
     pub fn backend(&self, group: &str) -> Result<Backend> {
         let context = self.context()?;
         let backend = BackendContext::connect(&context, self.timeout()?, group)?;
-        self.note(&format!("context {} -> {}", context.name, backend.base_url()));
+        self.note(&format!(
+            "context {} -> {}",
+            context.name,
+            backend.base_url()
+        ));
         Ok(Backend { backend })
     }
 }
