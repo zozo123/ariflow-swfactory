@@ -28,9 +28,15 @@ from collections.abc import Iterable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from swfactory.experiment_tree import ExperimentNode, ExperimentRound, NodeState
+from swfactory.git_worktree import (
+    create_candidate_worktree,
+    recorded_candidate_head,
+    remove_candidate_worktree,
+)
 from swfactory.generations import CampaignBudget, Dimension, Evaluation, promotable
 from swfactory.work_executor import Cancellation
 
@@ -107,6 +113,7 @@ class CandidateOutcome:
     cost_usd: float = 0.0
     duration_s: float = 0.0
     detail: str = ""
+    workspace_key: str | None = None
 
     @property
     def passed(self) -> frozenset[Dimension]:
@@ -117,6 +124,52 @@ class CandidateRunner(Protocol):
     """Run one candidate to completion in its own workspace and score it."""
 
     def __call__(self, request: CandidateRequest) -> CandidateOutcome: ...
+
+
+class WorkspaceCandidateRunner(Protocol):
+    """Run one candidate inside a factory-owned isolated Git worktree."""
+
+    def __call__(self, request: CandidateRequest, workspace: Path) -> CandidateOutcome: ...
+
+
+def worktree_candidate_runner(
+    repo: Path,
+    worktree_root: Path,
+    runner: WorkspaceCandidateRunner,
+) -> CandidateRunner:
+    """Adapt a workspace-aware runner to the campaign interface.
+
+    Every invocation starts from the request's exact input head in a detached
+    worktree. A successful candidate must leave a clean Git state; the observed
+    HEAD is authoritative and replaces any untrusted output-head claim returned
+    by the worker. The disposable worktree is removed after its receipt is
+    captured, including on runner failure.
+    """
+
+    def isolated(request: CandidateRequest) -> CandidateOutcome:
+        worktree = create_candidate_worktree(
+            repo,
+            request.logical_id,
+            request.input_head,
+            worktree_root,
+        )
+        try:
+            outcome = runner(request, Path(worktree.path))
+            observed_head = recorded_candidate_head(worktree)
+            if outcome.output_head is not None and outcome.output_head != observed_head:
+                raise CampaignError(
+                    f"candidate {request.logical_id} claimed output {outcome.output_head} "
+                    f"but worktree recorded {observed_head}"
+                )
+            return replace(
+                outcome,
+                output_head=observed_head,
+                workspace_key=worktree.workspace_key,
+            )
+        finally:
+            remove_candidate_worktree(repo, worktree, force=True)
+
+    return isolated
 
 
 @dataclass(frozen=True)
