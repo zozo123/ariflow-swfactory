@@ -22,11 +22,13 @@ use swf_app::gates::{AnswerOpts, BatchOutcome, BatchReport, Decision, GateFilter
 use swf_app::logs::LogOpts;
 use swf_app::ops::{JobFilter, Ops, OpsError, Result};
 use swf_app::stack::StackAction;
+use swf_app::factory_manager;
 use swf_app::submit::SubmitRequest;
 use swf_app::BackendContext;
 use swf_app::OperatorOps;
 use swf_domain::doctor;
 use swf_domain::evidence::DeliveryReport;
+use swf_domain::factory::{FactoryName, FactoryRunRequest};
 use swf_domain::ids::{DeliveryId, GateId, JobId, RunRef};
 use swf_domain::model::{Gate, JobRow, Run};
 use tokio_util::sync::CancellationToken;
@@ -326,12 +328,45 @@ async fn doctor_cmd(ctx: &Ctx) -> Result<Outcome> {
 async fn factory_cmd(ctx: &Ctx, cmd: &FactoryCmd) -> Result<Outcome> {
     match cmd {
         FactoryCmd::Run(args) => {
+            if args.harness.is_some() || args.factory_id.is_some() {
+                let ops = ctx.ops()?;
+                let request = FactoryRunRequest {
+                    factory: FactoryName::parse(args.factory.clone())
+                        .map_err(|error| OpsError::usage(error.to_string()))?,
+                    issues: args.issues.clone(),
+                    targets: args.targets.clone(),
+                    harness: args.harness.clone().or_else(|| nonempty_env("SWF_HARNESS")),
+                    factory_session: args
+                        .factory_id
+                        .clone()
+                        .or_else(|| nonempty_env("SWF_FACTORY_ID")),
+                };
+                let started = factory_manager::start(ops.runs()?, &request, &ctx.cancel).await?;
+                let scheduler = started
+                    .status
+                    .scheduler
+                    .as_ref()
+                    .expect("FactoryManager start always returns an Airflow binding");
+                let text = format!(
+                    "factory_run   {}\nfactory       {}\nstate         scheduled\nairflow       {}/{}\nurl           {}",
+                    started.status.run_id.as_str(),
+                    started.status.factory.as_str(),
+                    scheduler.dag_id,
+                    scheduler.dag_run_id,
+                    started.scheduler_url,
+                );
+                return Ok(Outcome::new(
+                    text,
+                    serde_json::to_value(started).unwrap_or(serde_json::Value::Null),
+                ));
+            }
+
             let compatibility = SubmitArgs {
                 issues: args.issues.clone(),
                 blueprint: args.factory.clone(),
                 targets: args.targets.clone(),
-                harness: args.harness.clone(),
-                factory_id: args.factory_id.clone(),
+                harness: None,
+                factory_id: None,
                 wait: args.wait,
             };
             submit_cmd(ctx, &compatibility).await
