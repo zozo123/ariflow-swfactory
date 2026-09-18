@@ -23,6 +23,7 @@ use swf_app::logs::LogOpts;
 use swf_app::ops::{JobFilter, Ops, OpsError, Result};
 use swf_app::stack::StackAction;
 use swf_app::submit::SubmitRequest;
+use swf_app::BackendContext;
 use swf_app::OperatorOps;
 use swf_domain::doctor;
 use swf_domain::evidence::DeliveryReport;
@@ -121,55 +122,31 @@ impl Ctx {
     /// all — which is exactly how somebody ends up believing they went through the backend.
     pub fn backend(&self, group: &str) -> Result<Backend> {
         let context = self.context()?;
-        let timeout = self.timeout()?;
-        let Some(url) = backend_endpoint(&context) else {
-            return Err(OpsError::operational(format!(
-                "{group} is served only by the factory backend, and context {:?} is explicitly \
-                 direct; swf never widens direct mode to local credentials to answer it",
-                context.name
-            ))
-            .with_hint(format!(
-                "give it a backend: swf context add {} --airflow-url {} --backend-url URL --force, \
-                 then export SWF_BACKEND_TOKEN",
-                context.name, context.airflow_url
-            )));
-        };
-        self.note(&format!("context {} -> {url}", context.name));
-        Ok(Backend { context, timeout })
+        let backend = BackendContext::connect(&context, self.timeout()?, group)?;
+        self.note(&format!(
+            "context {} -> {}",
+            context.name,
+            backend.base_url()
+        ));
+        Ok(Backend { backend })
     }
 }
 
-/// A backend the operator's configuration actually names, and the deadline to reach it with.
-///
-/// Every backend-served view is built from one of these, so the context, the credential and the
-/// timeout are settled once per process rather than once per command group.
+/// One resolved backend client shared by every backend-only command group in this invocation.
 pub struct Backend {
-    context: Context,
-    timeout: Duration,
+    backend: BackendContext,
 }
 
 impl Backend {
     /// The durable Factory Cell views.
     pub fn cells(&self) -> Result<CellOps> {
-        CellOps::connect(&self.context, self.timeout)
+        Ok(CellOps::from_backend(&self.backend))
     }
 
     /// The queue, repair-debt, fleet and compatibility views.
     pub fn operator(&self) -> Result<OperatorOps> {
-        OperatorOps::connect(&self.context, self.timeout)
+        Ok(OperatorOps::from_backend(&self.backend))
     }
-}
-
-/// The factory backend this invocation would reach, or `None` for an explicitly direct context.
-///
-/// `SWF_BACKEND_URL` overrides the stored `backend_url` for one process — the same override
-/// `swf-app` applies when it builds `Ops` — so the question has to be asked after it and not
-/// before, or an operator who exported it would be told they are in direct mode while they are
-/// demonstrably not.
-fn backend_endpoint(context: &Context) -> Option<String> {
-    let url = std::env::var("SWF_BACKEND_URL").unwrap_or_else(|_| context.backend_url.clone());
-    let url = url.trim().to_string();
-    (!url.is_empty()).then_some(url)
 }
 
 /// Who Airflow will record as the respondent, as far as this client can tell.
@@ -178,7 +155,7 @@ fn backend_endpoint(context: &Context) -> Option<String> {
 /// user and this process never decodes it. Saying "Airflow token owner" is the honest answer, and
 /// it is the same wording `herd` uses so the two control rooms echo one event the same way.
 pub fn actor(context: &Context) -> String {
-    if !context.backend_url.is_empty() {
+    if BackendContext::endpoint(context).is_some() {
         return "factory backend Airflow identity".to_string();
     }
     match &context.auth {
