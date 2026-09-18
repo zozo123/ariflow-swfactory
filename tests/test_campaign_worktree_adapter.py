@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -295,3 +296,85 @@ def test_experiment_node_retains_candidate_evidence_digest(tmp_path: Path) -> No
     assert outcome.evidence_digest
     node = report.experiment_round.nodes[0]
     assert f"candidate-evidence:{outcome.evidence_digest}" in node.evidence
+
+
+
+def test_campaign_can_require_inherited_input_recipe(tmp_path: Path) -> None:
+    repo, _ = _repo(tmp_path)
+    recipe_dir = repo / ".swfactory"
+    recipe_dir.mkdir()
+    (recipe_dir / "candidate-run.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "argv": ["uv", "run", "pytest", "-q"],
+                "cwd": ".",
+                "timeout_s": 900,
+                "resources": {"cpus": 2, "memory_mb": 4096},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "trusted candidate recipe")
+    base = _git(repo, "rev-parse", "HEAD")
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate")
+        return _passing(request)
+
+    report = run_campaign(
+        worktree_candidate_runner(
+            repo,
+            tmp_path / "worktrees",
+            runner,
+            inherited_recipe_path=".swfactory/candidate-run.json",
+        ),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    outcome = report.outcomes[0]
+    assert outcome.state == "ok"
+    assert outcome.inherited_recipe_digest
+    assert outcome.evidence_bundle_path
+    bundle = verify_candidate_evidence_bundle(Path(outcome.evidence_bundle_path), repo=repo)
+    assert bundle.inherited_recipe_sha256 == outcome.inherited_recipe_digest
+    assert bundle.inherited_recipe_commit_sha == base
+    node = report.experiment_round.nodes[0]
+    assert f"inherited-recipe:{outcome.inherited_recipe_digest}" in node.evidence
+
+
+def test_required_inherited_recipe_missing_refuses_candidate(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate")
+        return _passing(request)
+
+    report = run_campaign(
+        worktree_candidate_runner(
+            repo,
+            tmp_path / "worktrees",
+            runner,
+            inherited_recipe_path=".swfactory/candidate-run.json",
+        ),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    outcome = report.outcomes[0]
+    assert outcome.state == "refused"
+    assert outcome.candidate_ref
+    assert outcome.inherited_recipe_digest is None
+    assert "execution recipe" in outcome.detail
+    assert report.selection.winner is None

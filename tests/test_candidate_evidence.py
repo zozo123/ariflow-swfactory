@@ -22,6 +22,7 @@ from swfactory.candidate_worktree import (
     remove_candidate_worktree,
 )
 from swfactory.cli import app
+from swfactory.execution_recipe import load_execution_recipe
 from swfactory.source_snapshot import create_source_snapshot
 
 IDENTITY = [
@@ -277,6 +278,93 @@ def test_resealed_diff_cannot_claim_different_semantics(repo: Path, tmp_path: Pa
     reseal_manifest(manifest)
 
     with pytest.raises(CandidateEvidenceError, match="does not match the recorded input/output revisions"):
+        verify_candidate_evidence_bundle(destination, repo=repo)
+
+    remove_candidate_worktree(worktree)
+
+
+
+def test_bundle_binds_inherited_recipe_to_candidate_input(repo: Path, tmp_path: Path) -> None:
+    recipe_dir = repo / ".swfactory"
+    recipe_dir.mkdir()
+    recipe_path = recipe_dir / "candidate-run.json"
+    recipe_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "argv": ["uv", "run", "pytest", "-q"],
+                "cwd": ".",
+                "timeout_s": 900,
+                "resources": {"cpus": 2, "memory_mb": 4096},
+                "environment": {"PYTHONHASHSEED": "0"},
+                "secret_env": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add inherited recipe")
+
+    source, worktree, revision = answered_candidate(repo, tmp_path)
+    recipe = load_execution_recipe(repo, revision.input_head)
+    destination = tmp_path / "recipe-bundle"
+    bundle = build_candidate_evidence_bundle(
+        repo,
+        revision,
+        source,
+        artifacts={},
+        destination=destination,
+        inherited_recipe=recipe,
+    )
+
+    assert bundle.inherited_recipe_sha256 == recipe.digest
+    assert bundle.inherited_recipe_commit_sha == revision.input_head
+    assert bundle.inherited_recipe_path == ".swfactory/candidate-run.json"
+
+    recipe_path.write_text('{"schema_version":1,"argv":["dirty"]}\n', encoding="utf-8")
+    verified = verify_candidate_evidence_bundle(destination, repo=repo)
+    assert verified.inherited_recipe_sha256 == recipe.digest
+    remove_candidate_worktree(worktree)
+
+
+def test_resealed_manifest_cannot_lie_about_inherited_recipe(repo: Path, tmp_path: Path) -> None:
+    recipe_dir = repo / ".swfactory"
+    recipe_dir.mkdir()
+    (recipe_dir / "candidate-run.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "argv": ["python", "-m", "pytest"],
+                "cwd": ".",
+                "timeout_s": 600,
+                "resources": {"cpus": 1, "memory_mb": 1024},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add recipe")
+
+    source, worktree, revision = answered_candidate(repo, tmp_path)
+    recipe = load_execution_recipe(repo, revision.input_head)
+    destination = tmp_path / "recipe-bundle"
+    build_candidate_evidence_bundle(
+        repo,
+        revision,
+        source,
+        artifacts={},
+        destination=destination,
+        inherited_recipe=recipe,
+    )
+    manifest = destination / "manifest.json"
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    document["inherited_recipe_sha256"] = "0" * 64
+    manifest.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    reseal_manifest(manifest)
+
+    with pytest.raises(CandidateEvidenceError, match="recipe digest"):
         verify_candidate_evidence_bundle(destination, repo=repo)
 
     remove_candidate_worktree(worktree)

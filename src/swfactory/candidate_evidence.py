@@ -29,6 +29,7 @@ from swfactory.candidate_worktree import (
     candidate_ref,
     verify_candidate_revision,
 )
+from swfactory.execution_recipe import BoundExecutionRecipe, load_execution_recipe
 from swfactory.source_snapshot import SourceSnapshot, verify_source_snapshot
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -67,11 +68,14 @@ class CandidateEvidenceBundle:
     source_size_bytes: int
     diff: RetainedArtifact
     artifacts: tuple[RetainedArtifact, ...]
+    inherited_recipe_sha256: str | None = None
+    inherited_recipe_commit_sha: str | None = None
+    inherited_recipe_path: str | None = None
     schema_version: int = 1
 
     def canonical_dict(self) -> dict[str, Any]:
         self.validate()
-        return {
+        document = {
             "schema_version": self.schema_version,
             "candidate_id": self.candidate_id,
             "input_head": self.input_head,
@@ -82,6 +86,16 @@ class CandidateEvidenceBundle:
             "diff": asdict(self.diff),
             "artifacts": [asdict(item) for item in sorted(self.artifacts, key=lambda item: item.name)],
         }
+        recipe_fields = (
+            self.inherited_recipe_sha256,
+            self.inherited_recipe_commit_sha,
+            self.inherited_recipe_path,
+        )
+        if any(value is not None for value in recipe_fields):
+            document["inherited_recipe_sha256"] = self.inherited_recipe_sha256
+            document["inherited_recipe_commit_sha"] = self.inherited_recipe_commit_sha
+            document["inherited_recipe_path"] = self.inherited_recipe_path
+        return document
 
     def validate(self) -> None:
         if self.schema_version != 1:
@@ -105,6 +119,22 @@ class CandidateEvidenceBundle:
             raise CandidateEvidenceError("source snapshot sha256 is invalid")
         if self.source_size_bytes < 0:
             raise CandidateEvidenceError("source snapshot size is invalid")
+        recipe_fields = (
+            self.inherited_recipe_sha256,
+            self.inherited_recipe_commit_sha,
+            self.inherited_recipe_path,
+        )
+        if any(value is None for value in recipe_fields) and any(value is not None for value in recipe_fields):
+            raise CandidateEvidenceError("inherited execution recipe fields must be recorded together")
+        if self.inherited_recipe_sha256 is not None:
+            if not _DIGEST.fullmatch(self.inherited_recipe_sha256):
+                raise CandidateEvidenceError("inherited execution recipe digest is invalid")
+            if self.inherited_recipe_commit_sha != self.input_head:
+                raise CandidateEvidenceError(
+                    "inherited execution recipe commit must equal the candidate input head"
+                )
+            if not self.inherited_recipe_path:
+                raise CandidateEvidenceError("inherited execution recipe path is empty")
         self.diff.validate()
         names = [item.name for item in self.artifacts]
         if len(names) != len(set(names)):
@@ -124,6 +154,7 @@ def build_candidate_evidence_bundle(
     *,
     artifacts: Mapping[str, Path],
     destination: Path,
+    inherited_recipe: BoundExecutionRecipe | None = None,
 ) -> CandidateEvidenceBundle:
     """Retain a frozen candidate's diff and named artifacts under one manifest."""
     repo = repo.resolve()
@@ -136,6 +167,11 @@ def build_candidate_evidence_bundle(
     if source.commit_sha != revision.input_head:
         raise CandidateEvidenceError(
             f"source snapshot commit {source.commit_sha} != candidate input {revision.input_head}"
+        )
+    if inherited_recipe is not None and inherited_recipe.commit_sha != revision.input_head:
+        raise CandidateEvidenceError(
+            f"inherited execution recipe commit {inherited_recipe.commit_sha} "
+            f"!= candidate input {revision.input_head}"
         )
     if destination.exists() and not destination.is_dir():
         raise CandidateEvidenceError(f"candidate evidence destination is not a directory: {destination}")
@@ -174,6 +210,9 @@ def build_candidate_evidence_bundle(
         source_size_bytes=source.size_bytes,
         diff=diff_artifact,
         artifacts=tuple(retained),
+        inherited_recipe_sha256=inherited_recipe.digest if inherited_recipe is not None else None,
+        inherited_recipe_commit_sha=inherited_recipe.commit_sha if inherited_recipe is not None else None,
+        inherited_recipe_path=inherited_recipe.path if inherited_recipe is not None else None,
     )
     document = bundle.canonical_dict()
     document["manifest_digest"] = bundle.digest()
@@ -198,6 +237,21 @@ def load_candidate_evidence_bundle(destination: Path) -> CandidateEvidenceBundle
             source_size_bytes=int(document["source_size_bytes"]),
             diff=diff,
             artifacts=artifacts,
+            inherited_recipe_sha256=(
+                str(document["inherited_recipe_sha256"])
+                if document.get("inherited_recipe_sha256") is not None
+                else None
+            ),
+            inherited_recipe_commit_sha=(
+                str(document["inherited_recipe_commit_sha"])
+                if document.get("inherited_recipe_commit_sha") is not None
+                else None
+            ),
+            inherited_recipe_path=(
+                str(document["inherited_recipe_path"])
+                if document.get("inherited_recipe_path") is not None
+                else None
+            ),
             schema_version=int(document.get("schema_version", 1)),
         )
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
@@ -239,6 +293,21 @@ def verify_candidate_evidence_bundle(destination: Path, *, repo: Path | None = N
             verify_candidate_revision(repo, revision)
         except RuntimeError as error:
             raise CandidateEvidenceError(f"candidate ref verification failed: {error}") from error
+        if bundle.inherited_recipe_sha256 is not None:
+            try:
+                recipe = load_execution_recipe(
+                    repo,
+                    bundle.inherited_recipe_commit_sha or "",
+                    path=bundle.inherited_recipe_path or "",
+                )
+            except RuntimeError as error:
+                raise CandidateEvidenceError(
+                    f"inherited execution recipe verification failed: {error}"
+                ) from error
+            if recipe.digest != bundle.inherited_recipe_sha256:
+                raise CandidateEvidenceError(
+                    "inherited execution recipe digest does not match the recorded Git object"
+                )
         expected_diff = _git_bytes(
             repo,
             "diff",
@@ -267,6 +336,14 @@ def render_candidate_result(bundle: CandidateEvidenceBundle) -> str:
         f"- Output: `{bundle.output_head}`",
         f"- Frozen ref: `{bundle.candidate_ref}`",
         f"- Source snapshot: `sha256:{bundle.source_sha256}` ({bundle.source_size_bytes} bytes)",
+        *(
+            [
+                f"- Inherited execution recipe: `sha256:{bundle.inherited_recipe_sha256}` "
+                f"from `{bundle.inherited_recipe_commit_sha}:{bundle.inherited_recipe_path}`"
+            ]
+            if bundle.inherited_recipe_sha256 is not None
+            else []
+        ),
         f"- Evidence manifest: `{bundle.digest()}`",
         "",
         "## Retained evidence",
