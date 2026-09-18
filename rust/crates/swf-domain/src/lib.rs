@@ -13,6 +13,7 @@ pub mod doctor;
 pub mod evidence;
 pub mod factory;
 pub mod ids;
+pub mod manager_protocol;
 pub mod metrics;
 pub mod model;
 pub mod operator;
@@ -27,6 +28,10 @@ pub use factory::{
     FactorySpec, SchedulerBinding,
 };
 pub use ids::{DeliveryId, GateId, IdError, JobId, RunRef};
+pub use manager_protocol::{
+    AirflowInvocation, ManagerEnvelope, ProtocolError, StageDisposition, StageInvocation,
+    StageReceipt, MANAGER_API_VERSION,
+};
 pub use model::{
     Gate, IssueRef, JobRow, PullRequest, Run, SandboxRef, Snapshot, SourceHealth, TaskState,
 };
