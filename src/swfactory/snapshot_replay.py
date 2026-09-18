@@ -8,6 +8,7 @@ Git commit, retains stdout/stderr, and seals the observed result under digests.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 import json
 import os
 import shutil
@@ -17,7 +18,7 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping
+from typing import Any
 
 from swfactory.execution_recipe import (
     BoundExecutionRecipe,
