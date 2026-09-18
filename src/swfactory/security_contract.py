@@ -59,8 +59,7 @@ class CanonicalPolicy:
         }
 
     def digest(self) -> str:
-        payload = json.dumps(self.canonical_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False)
-        return "policy:" + hashlib.sha256(payload.encode()).hexdigest()
+        return policy_digest_for_mapping(self.canonical_dict())
 
 
 @dataclass(frozen=True)
