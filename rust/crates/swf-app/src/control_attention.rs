@@ -42,10 +42,7 @@ impl ControlAttention {
         }
 
         for row in operations.iter().filter(|row| {
-            !matches!(
-                row.state.as_str(),
-                "committed" | "definitely_absent" | "settled"
-            )
+            !matches!(row.state.as_str(), "committed" | "definitely_absent" | "settled")
         }) {
             items.push(ControlAttentionItem {
                 kind: "operation_debt".into(),
