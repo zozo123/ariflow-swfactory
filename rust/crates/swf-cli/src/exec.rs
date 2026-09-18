@@ -32,9 +32,9 @@ use swf_domain::model::{Gate, JobRow, Run};
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::{
-    AnswerArgs, Cli, Command, ContextAddArgs, ContextCmd, DeliveriesCmd, GateFilterArgs, GatesCmd,
-    JobListArgs, JobsCmd, LogsArgs, MetricsArgs, RunsCmd, SandboxesCmd, StackCmd, SubmitArgs,
-    VerifyArgs,
+    AnswerArgs, Cli, Command, ContextAddArgs, ContextCmd, DeliveriesCmd, FactoryCmd, GateFilterArgs,
+    GatesCmd, JobListArgs, JobsCmd, LogsArgs, MetricsArgs, RunsCmd, SandboxesCmd, StackCmd,
+    SubmitArgs, VerifyArgs,
 };
 use crate::exit::Outcome;
 use crate::json;
@@ -322,7 +322,6 @@ async fn doctor_cmd(ctx: &Ctx) -> Result<Outcome> {
 }
 
 // ---------------------------------------------------------------------------- factory
-
 
 async fn factory_cmd(ctx: &Ctx, cmd: &FactoryCmd) -> Result<Outcome> {
     match cmd {
