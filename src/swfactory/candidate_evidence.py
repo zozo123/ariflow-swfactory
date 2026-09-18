@@ -122,6 +122,8 @@ def build_candidate_evidence_bundle(
         raise CandidateEvidenceError(
             f"source snapshot commit {source.commit_sha} != candidate input {revision.input_head}"
         )
+    if destination.exists() and not destination.is_dir():
+        raise CandidateEvidenceError(f"candidate evidence destination is not a directory: {destination}")
     if destination.exists() and any(destination.iterdir()):
         raise CandidateEvidenceError(f"candidate evidence destination is not empty: {destination}")
     destination.mkdir(parents=True, exist_ok=True)
@@ -139,9 +141,12 @@ def build_candidate_evidence_bundle(
     for index, (name, source_path) in enumerate(sorted(artifacts.items())):
         if not name.strip():
             raise CandidateEvidenceError("artifact name must be nonempty")
-        source_path = source_path.resolve()
-        if source_path.is_symlink() or not source_path.is_file():
-            raise CandidateEvidenceError(f"artifact {name!r} is absent, not regular, or a symlink: {source_path}")
+        raw_source = Path(source_path)
+        if raw_source.is_symlink() or not raw_source.is_file():
+            raise CandidateEvidenceError(
+                f"artifact {name!r} is absent, not regular, or a symlink: {raw_source}"
+            )
+        source_path = raw_source.resolve()
         digest, _ = _digest_file(source_path)
         retained_path = artifact_dir / f"{index:03d}-{digest[:16]}"
         _copy_atomic(source_path, retained_path)
