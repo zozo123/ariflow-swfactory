@@ -29,6 +29,7 @@ from swfactory.evolution import (
     run_campaign,
 )
 from swfactory.experiment_tree import ExperimentTree, stack_rounds
+from swfactory.exploration_entropy import ExplorationOrder, permute_exploration
 from swfactory.generations import CampaignBudget, Dimension
 from swfactory.work_executor import Cancellation
 
@@ -110,6 +111,28 @@ def annealed_strategy_schedule(
 
     base = tuple(strategies[:max_candidates])
     return tuple(base[: max(1, len(base) - depth)] for depth in range(max_depth + 1))
+
+
+def entropy_strategy_schedule(
+    max_depth: int,
+    *,
+    max_candidates: int,
+    strategies: Sequence[Strategy] = DEFAULT_STRATEGIES,
+) -> tuple[ExplorationOrder, tuple[tuple[Strategy, ...], ...]]:
+    """Randomize exploration order once, then anneal width deterministically.
+
+    The entropy affects which strategy is explored first; it never changes candidate
+    scoring, final ranking, evidence requirements, or promotion authority.
+    """
+    order = permute_exploration(tuple(strategy.value for strategy in strategies))
+    by_value = {strategy.value: strategy for strategy in strategies}
+    randomized = tuple(by_value[value] for value in order.values)
+    schedule = annealed_strategy_schedule(
+        max_depth,
+        max_candidates=max_candidates,
+        strategies=randomized,
+    )
+    return order, schedule
 
 
 def run_annealing_loop(

@@ -12,6 +12,14 @@ DAG, or a repository script. Anything else is debt, and debt has to be written d
 
 `NOT_YET_WIRED` is compared for EQUALITY, not containment. A new orphan fails, and so does wiring
 one up without striking it off -- a ledger that only ever grows is a ledger nobody reads.
+
+WHAT THIS DOES NOT MEASURE, stated because an empty ledger invites the opposite reading. Reachable
+here means an import path reaches the module from an entrypoint. It is not evidence that anything
+runs. A module imported inside a CLI command counts as wired even when the code it exposes is never
+entered -- `swfactory.research_loop` is reachable by this test while `run_annealing_loop` has no
+production caller, and `evolution.CandidateRunner` has no implementation outside test fakes. An
+empty map means nothing is unimportable. It does not mean every subsystem executes, and reading it
+that way is how a whole dead limb hides behind a green check.
 """
 
 from __future__ import annotations
@@ -142,3 +150,12 @@ def reachable_from(graph: dict[str, set[str]], roots: set[str]) -> set[str]:
         seen.add(module)
         stack.extend(graph.get(module, ()))
     return seen
+
+
+def test_the_ledger_states_what_it_does_not_measure() -> None:
+    """An empty ledger reads like "everything is wired", and for execution that is false. The file
+    a person opens has to say so, not only the test module that writes it."""
+    document = json.loads(LEDGER.read_text(encoding="utf-8"))
+
+    assert document["measures"] == "import-reachability"
+    assert "execution" in document["does_not_measure"]

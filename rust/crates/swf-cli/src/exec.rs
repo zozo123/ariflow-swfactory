@@ -32,9 +32,9 @@ use swf_domain::model::{Gate, JobRow, Run};
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::{
-    AnswerArgs, Cli, Command, ContextAddArgs, ContextCmd, DeliveriesCmd, GateFilterArgs, GatesCmd,
-    JobListArgs, JobsCmd, LogsArgs, MetricsArgs, RunsCmd, SandboxesCmd, StackCmd, SubmitArgs,
-    VerifyArgs,
+    AnswerArgs, Cli, Command, ContextAddArgs, ContextCmd, DeliveriesCmd, FactoryCmd,
+    GateFilterArgs, GatesCmd, JobListArgs, JobsCmd, LogsArgs, MetricsArgs, RunsCmd, SandboxesCmd,
+    StackCmd, SubmitArgs, VerifyArgs,
 };
 use crate::exit::Outcome;
 use crate::json;
@@ -174,6 +174,7 @@ pub async fn run(ctx: &Ctx) -> Result<Outcome> {
         Command::Completions(_) => Ok(Outcome::text(String::new())),
         Command::Context(cmd) => context_cmd(ctx, cmd),
         Command::Doctor => doctor_cmd(ctx).await,
+        Command::Factory(cmd) => factory_cmd(ctx, cmd).await,
         Command::Submit(args) => submit_cmd(ctx, args).await,
         Command::Attention => attention_cmd(ctx).await,
         Command::Runs(cmd) => runs_cmd(ctx, cmd).await,
@@ -318,6 +319,25 @@ async fn doctor_cmd(ctx: &Ctx) -> Result<Outcome> {
     };
     let code = doctor::exit_code(&checks);
     Ok(Outcome::new(doctor::table(&checks), doctor::to_json_value(&checks)).with_code(code))
+}
+
+// ---------------------------------------------------------------------------- factory
+
+async fn factory_cmd(ctx: &Ctx, cmd: &FactoryCmd) -> Result<Outcome> {
+    match cmd {
+        FactoryCmd::Run(args) => {
+            let compatibility = SubmitArgs {
+                issues: args.issues.clone(),
+                blueprint: args.factory.clone(),
+                targets: args.targets.clone(),
+                harness: args.harness.clone(),
+                factory_id: args.factory_id.clone(),
+                wait: args.wait,
+            };
+            submit_cmd(ctx, &compatibility).await
+        }
+        FactoryCmd::Status { run } => runs_cmd(ctx, &RunsCmd::Inspect { run: run.clone() }).await,
+    }
 }
 
 // ---------------------------------------------------------------------------- submit

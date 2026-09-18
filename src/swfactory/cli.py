@@ -228,6 +228,8 @@ def improve(
     It proposes only. The gates and the merge button are untouched.
     """
     from swfactory import metrics as improve_metrics
+    from swfactory.improvement_annealing import evaluate as anneal
+    from swfactory.improvement_annealing import observe
     from swfactory.self_improvement import (
         assess,
         history,
@@ -251,7 +253,15 @@ def improve(
     signals = assess(where, ledger=ledger, summary=summary)
     # Only debt the factory still carries can be stalled; anything retired has already been paid.
     carried = [f"{signal.source.value}:{signal.key}" for signal in signals]
-    assessment = propose(signals, budget=budget, stalled_keys=stalled(past, present=carried))
+    stuck = stalled(past, present=carried)
+    # Annealing reads the trajectory and decides explore-vs-exploit: a loop retiring nothing widens
+    # its budget and stops sidestepping the item it keeps avoiding. It shapes the proposal only.
+    heat = anneal(
+        observe(past, carried=len(carried), stalled=len(stuck), sources=len({s.source for s in signals})),
+        base_budget=budget,
+    )
+    assessment = propose(signals, budget=heat.budget, stalled_keys=stuck, readmit_stalled=heat.readmit_stalled)
+    typer.echo(f"[{heat.phase} T={heat.temperature:.2f} budget={heat.budget}] {heat.reason}\n")
     if as_json:
         typer.echo(json.dumps(assessment.to_dict(), indent=2, sort_keys=True))
         return

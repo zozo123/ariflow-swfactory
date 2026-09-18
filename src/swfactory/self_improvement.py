@@ -50,6 +50,16 @@ class Source(StrEnum):
 
 SOURCE_ORDER = {source: index for index, source in enumerate(Source)}
 
+# Sources disagree about what "worth doing next" means, and the disagreement is real rather than a
+# wart. For dead code the biggest block is worth most: 360 unreachable lines cost more than 60. For
+# a capability claim the opposite holds -- the one nearest validation is the cheapest to close, and
+# proposing the furthest one first is how a backlog never moves.
+#
+# `weight` therefore keeps ONE meaning everywhere -- remaining distance or size -- and only the
+# ordering differs. Inverting the weight for one source instead would have inverted `delta()` with
+# it, where "shrank" must always mean progress.
+ASCENDING_SOURCES = frozenset({Source.CAPABILITY})
+
 
 class ProposalError(ValueError):
     """A proposal was asked for in a shape the loop refuses to emit."""
@@ -92,6 +102,7 @@ class WorkOrder:
     weight: float
     labels: tuple[str, ...] = ("liquid",)
     stalled: bool = False
+    demoted: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {**asdict(self), "source": self.source.value}
@@ -133,27 +144,66 @@ def ledger_signals(ledger: Mapping[str, str], sizes: Mapping[str, int]) -> list[
     ]
 
 
-def capability_signals(document: Mapping[str, Any]) -> list[Signal]:
-    """Claims the inventory cannot call validated.
+def capability_signals(document: Mapping[str, Any], *, root: Path | None = None) -> list[Signal]:
+    """Claims the inventory cannot call validated, weighted by how far each still is.
 
-    Weighted by how far the claim is from validated rather than by size: an ``experimental`` claim
-    with a live runtime is closer to done than a ``declared`` one with none, and a loop that cannot
-    tell them apart will keep proposing the hardest thing first.
+    The state name alone gave every live claim the same number: seven claims all reading
+    ``experimental``, all weight 1.0, so `rank_key` fell through to an alphabetical tiebreak and the
+    loop's ordering was arbitrary. A signal with no resolution is not a signal.
+
+    The distance is built from evidence the repository already carries, so nothing here is a new
+    opinion: does the cited test resolve to a file that exists or a CI job that is actually defined,
+    and does the stated environment need something a maintainer cannot simply run -- credentials,
+    hardware, or an unmerged upstream? A claim missing both is genuinely further from validated than
+    one missing neither, and now ranks that way.
     """
-    distance = {"declared": 3.0, "integrated": 2.0, "experimental": 1.0, "unsupported": 0.0}
+    # Imported here rather than at module scope: this module is otherwise free of swfactory
+    # dependencies, and resolving references is the only thing it needs from the inventory.
+    from swfactory.capability_inventory import ci_identifiers, references
+
+    base = {"declared": 3.0, "integrated": 2.0, "experimental": 1.0, "unsupported": 0.0}
+    # Words that mean "this cannot be closed by writing code today". Deliberately narrow: "hosted"
+    # was here and matched "GitHub-hosted Docker", scoring a claim CI already runs as if it needed
+    # provisioning. A term that loose makes every claim look blocked, which measures nothing.
+    needs_provisioning = (
+        "api key",
+        "api_key",
+        "credential",
+        "hardware",
+        "kvm",
+        "dedicated",
+        "operator-owned",
+        "unmerged",
+        "self-hosted",
+    )
+    known_ci: set[str] = set()
+    if root is not None:
+        try:
+            known_ci = ci_identifiers(root / ".github" / "workflows")
+        except (OSError, ValueError):
+            known_ci = set()
+
     signals = []
     for claim in document.get("claims", []):
         state = str(claim.get("state", ""))
         if state == "validated":
             continue
-        signals.append(
-            Signal(
-                Source.CAPABILITY,
-                str(claim.get("id", "")),
-                distance.get(state, 1.0),
-                f"state={state}, support={claim.get('support')}",
-            )
-        )
+        distance = base.get(state, 1.0)
+        detail = [f"state={state}", f"support={claim.get('support')}"]
+
+        files, jobs = references(str(claim.get("test", "")))
+        if root is not None:
+            resolved = any((root / name).exists() for name in files) or any(job in known_ci for job in jobs)
+            if not resolved:
+                distance += 1.0
+                detail.append("no resolvable test")
+
+        environment = str(claim.get("environment", "")).lower()
+        if any(word in environment for word in needs_provisioning):
+            distance += 1.0
+            detail.append("environment needs provisioning")
+
+        signals.append(Signal(Source.CAPABILITY, str(claim.get("id", "")), distance, ", ".join(detail)))
     return sorted(signals, key=lambda s: s.key)
 
 
@@ -234,13 +284,28 @@ def _order_for(signal: Signal) -> WorkOrder:
 def rank_key(order: WorkOrder) -> tuple[Any, ...]:
     """Deterministic order: nothing here reads a clock or an arrival position.
 
-    ``stalled`` leads the key, so an order that has not moved in three cycles sorts behind every
+    ``demoted`` leads the key, so an order that has not moved in three cycles sorts behind every
     order that still might -- within its own source, so demotion never silences a whole source.
+
+    A stalled order that annealing has re-admitted is NOT demoted: when the loop has stopped
+    retiring anything, the item it keeps sidestepping is usually the one in its way.
     """
-    return (SOURCE_ORDER[order.source], order.stalled, -round(order.weight, 6), order.key)
+    magnitude = round(order.weight, 6)
+    return (
+        SOURCE_ORDER[order.source],
+        order.demoted,
+        magnitude if order.source in ASCENDING_SOURCES else -magnitude,
+        order.key,
+    )
 
 
-def propose(signals: Iterable[Signal], *, budget: int = 5, stalled_keys: Iterable[str] = ()) -> Assessment:
+def propose(
+    signals: Iterable[Signal],
+    *,
+    budget: int = 5,
+    stalled_keys: Iterable[str] = (),
+    readmit_stalled: bool = False,
+) -> Assessment:
     """Rank the evidence and emit the work the factory can verify it finished.
 
     A work order whose done-condition does not name a check this repository runs is refused and
@@ -252,6 +317,10 @@ def propose(signals: Iterable[Signal], *, budget: int = 5, stalled_keys: Iterabl
     work that has already proven it will not move, and every cycle reports an identical "top
     priority", which reads like focus and is a standstill. Demoted rather than dropped, because a
     stalled item is still real debt -- it needs re-scoping by someone, not forgetting.
+
+    ``readmit_stalled`` suspends that demotion. `improvement_annealing` raises it when the loop has
+    retired nothing for several cycles: at that point avoiding the hard item is what is keeping the
+    loop stuck, so it comes back -- still marked, to be re-scoped rather than re-proposed unchanged.
     """
     if budget < 1:
         raise ProposalError("a proposal budget must admit at least one work order")
@@ -266,7 +335,8 @@ def propose(signals: Iterable[Signal], *, budget: int = 5, stalled_keys: Iterabl
         except ProposalError as error:
             refused.append(f"{signal.source.value}:{signal.key}: {error}")
             continue
-        orders.append(replace(order, stalled=f"{signal.source.value}:{signal.key}" in stuck))
+        is_stalled = f"{signal.source.value}:{signal.key}" in stuck
+        orders.append(replace(order, stalled=is_stalled, demoted=is_stalled and not readmit_stalled))
     orders.sort(key=rank_key)
     return Assessment(
         signals=ordered,
@@ -320,7 +390,7 @@ def assess(root: Path, *, ledger: Mapping[str, str], summary: Mapping[str, Any] 
     """Every signal the repository can currently produce about itself."""
     inventory = json.loads((root / "config" / "capability-inventory.json").read_text(encoding="utf-8"))
     signals = ledger_signals(ledger, module_sizes(root))
-    signals += capability_signals(inventory)
+    signals += capability_signals(inventory, root=root)
     signals += delivery_signals(summary or {})
     return signals
 
@@ -331,7 +401,9 @@ def report(orders: Sequence[WorkOrder]) -> str:
         return "no work proposed: every measured signal is at target"
     lines = []
     for index, order in enumerate(orders, start=1):
-        mark = "  [stalled: re-scope]" if order.stalled else ""
+        mark = ""
+        if order.stalled:
+            mark = "  [stalled: re-scope]" if order.demoted else "  [stalled: re-admitted to re-scope]"
         lines.append(f"{index}. [{order.source.value}] {order.title}  (weight {order.weight:g}){mark}")
         lines.append(f"     done when: {order.done_when.predicate}")
         lines.append(f"     verify:    {order.done_when.check}")

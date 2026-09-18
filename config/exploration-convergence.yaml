@@ -1,0 +1,25 @@
+schema_version: 1
+
+exploration:
+  authority: exploration-only
+  objective: maximize-useful-diversity
+  nondeterminism: encouraged
+  require_distinct_lanes: true
+  record_entropy_token: true
+  independent_workspaces: true
+  immutable_input_snapshot: true
+  max_parallelism_is_budgeted: true
+
+convergence:
+  authority: deterministic-fan-in
+  completion_order_independent: true
+  evidence_required: true
+  canonical_candidate_order: logical_id
+  canonical_serialization: json-sort-keys
+  human_promotion_boundary: true
+  single_promotion_authority: true
+  refuse_missing_evidence: true
+
+invariant: >-
+  Create as much useful entropy as the budget permits during exploration;
+  destroy timing, ordering, and implementation ambiguity before promotion.
