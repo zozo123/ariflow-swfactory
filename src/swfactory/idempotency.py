@@ -204,7 +204,15 @@ class OperationJournal:
             stored_safe = row.get("replay_safe")
             stored_max = row.get("max_attempts")
             if replay_safe is not None and stored_safe is not None and bool(stored_safe) != replay_safe:
-                raise OperationIdentityConflict(f"operation key {ref.key!r} was reused with divergent replay policy")
+                if int(row.get("attempts") or 0) == 0:
+                    raise OperationIdentityConflict(
+                        f"operation key {ref.key!r} was reused with divergent replay policy"
+                    )
+                self.db.execute(
+                    "UPDATE operations SET replay_safe=?, updated_at=? WHERE operation_key=?",
+                    (int(replay_safe), now, ref.key),
+                )
+                stored_safe = int(replay_safe)
             if max_attempts is not None and stored_max is not None and int(stored_max) != max_attempts:
                 raise OperationIdentityConflict(f"operation key {ref.key!r} was reused with divergent retry budget")
             updates: list[str] = []
