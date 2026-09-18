@@ -51,14 +51,20 @@ def _row(journal: OperationJournal, ref: OperationRef) -> dict:
     return rows[0]
 
 
-def _interrupt(journal: OperationJournal, ref: OperationRef, *, budget: RetryBudget | None = None) -> None:
+def _interrupt(
+    journal: OperationJournal,
+    ref: OperationRef,
+    *,
+    budget: RetryBudget | None = None,
+    replay_safe: bool = False,
+) -> None:
     """Drive one external effect that dies mid-flight: committed remotely or not, nobody knows."""
 
     def publish() -> dict:
         raise ConnectionError("socket closed after the request was sent")
 
     with pytest.raises(ConnectionError):
-        journal.execute(ref, publish, budget=budget)
+        journal.execute(ref, publish, budget=budget, replay_safe=replay_safe)
 
 
 def test_an_interrupted_effect_is_durably_in_doubt_and_waits_out_its_backoff(journal: OperationJournal) -> None:
@@ -102,12 +108,13 @@ def test_an_observation_that_stays_ambiguous_never_becomes_a_retry(journal: Oper
 
 def test_an_observation_proving_absence_releases_a_bounded_retry(journal: OperationJournal) -> None:
     ref = _ref()
-    _interrupt(journal, ref)
+    _interrupt(journal, ref, replay_safe=True)
     journal.mark_observation(ref, MutationOutcome("definitely_absent", detail="no pull request with that head"))
 
     row = _row(journal, ref)
     decision = plan_recovery(row, current_epoch=EPOCH, now=row["next_attempt_at"] + 1)
 
+    assert row["replay_safe"] == 1
     assert decision.action is RecoveryAction.RETRY
     assert decision.reason == "retryable_pending_operation"
 
@@ -267,3 +274,51 @@ def test_an_expired_lease_is_recorded_before_the_refusal_is_raised(tmp_path: Pat
         assert row["attempt_owner"] == owner, "the dead owner must stay visible until it is reconciled"
     finally:
         reopened.close()
+
+
+def test_proven_absence_does_not_authorize_a_non_replay_safe_effect(journal: OperationJournal) -> None:
+    ref = _ref()
+    _interrupt(journal, ref, replay_safe=False)
+    journal.mark_observation(ref, MutationOutcome("definitely_absent", detail="remote search found nothing"))
+
+    row = _row(journal, ref)
+    decision = plan_recovery(row, current_epoch=EPOCH, now=row["next_attempt_at"] + 1)
+
+    assert row["replay_safe"] == 0
+    assert decision.action is RecoveryAction.REFUSE
+    assert decision.reason == "replay_not_safe"
+
+
+def test_custom_retry_budget_survives_restart_and_drives_operator_plan(tmp_path: Path) -> None:
+    path = tmp_path / "operations.db"
+    ref = _ref("sandbox_cleanup")
+    budget = RetryBudget(max_attempts=2, base_delay_s=0.0)
+
+    first = OperationJournal(path)
+    try:
+        _interrupt(first, ref, budget=budget, replay_safe=True)
+        row = first.get(ref.key)
+        assert row["max_attempts"] == 2
+    finally:
+        first.close()
+
+    second = OperationJournal(path)
+    try:
+        row = second.get(ref.key)
+        second.mark_observation(ref, MutationOutcome("definitely_absent"))
+        row = second.get(ref.key)
+        decision = plan_recovery(row, current_epoch=EPOCH, now=(row["next_attempt_at"] or 0) + 1)
+    finally:
+        second.close()
+
+    assert row["max_attempts"] == 2
+    assert row["replay_safe"] == 1
+    assert decision.action is RecoveryAction.RETRY
+
+
+def test_recovery_policy_cannot_be_widened_by_reusing_an_operation_key(journal: OperationJournal) -> None:
+    ref = _ref()
+    journal.begin(ref, replay_safe=False, max_attempts=3)
+
+    with pytest.raises(Exception, match="divergent replay policy"):
+        journal.begin(ref, replay_safe=True, max_attempts=3)
