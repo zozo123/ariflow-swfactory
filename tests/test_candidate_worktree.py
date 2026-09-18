@@ -52,7 +52,6 @@ def test_sibling_candidates_get_physically_distinct_worktrees(repo: Path, tmp_pa
     right = create_candidate_worktree(repo, "candidate-right", head, root=root)
 
     assert left.path != right.path
-    assert Path(left.path).read_text if False else True
     (Path(left.path) / "value.txt").write_text("left only\n", encoding="utf-8")
 
     assert (Path(right.path) / "value.txt").read_text(encoding="utf-8") == "base\n"
@@ -93,7 +92,12 @@ def test_dirty_candidate_cannot_be_frozen_as_evidence(repo: Path, tmp_path: Path
     with pytest.raises(CandidateWorktreeError, match="uncommitted"):
         freeze_candidate_worktree(worktree)
 
-    assert git(repo, "show-ref", "--verify", "--quiet", worktree.ref) == ""
+    ref_check = subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", worktree.ref],
+        cwd=repo,
+        check=False,
+    )
+    assert ref_check.returncode != 0
     remove_candidate_worktree(worktree, force=True)
 
 
