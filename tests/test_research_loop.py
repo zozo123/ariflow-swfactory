@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from typer.testing import CliRunner
 
@@ -100,15 +101,7 @@ def test_human_gate_only_changes_promotion_selection_not_exploration_path() -> N
 def test_global_cost_budget_stops_before_a_second_round() -> None:
     def expensive(request):
         outcome = _runner(request)
-        return outcome.__class__(
-            logical_id=outcome.logical_id,
-            strategy=outcome.strategy,
-            state=outcome.state,
-            input_head=outcome.input_head,
-            output_head=outcome.output_head,
-            evaluations=outcome.evaluations,
-            cost_usd=1.0,
-        )
+        return replace(outcome, cost_usd=1.0)
 
     report = run_annealing_loop(
         expensive,
