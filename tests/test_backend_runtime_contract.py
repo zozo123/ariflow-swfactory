@@ -98,5 +98,5 @@ def test_default_request_bound_is_64k_and_only_scm_patch_routes_get_16m() -> Non
 def test_compose_wires_backend_callback_contract_into_airflow_workers() -> None:
     compose = Path("deploy/docker/compose.yml").read_text()
     airflow = compose.split("  airflow:", 1)[1].split("  webhook:", 1)[0]
-    assert "SWF_BACKEND_URL: http://backend:8082" in airflow
+    assert "SWF_BACKEND_URL: ${SWF_BACKEND_URL:-http://backend:8082}" in airflow
     assert "SWF_BACKEND_TOKEN: ${SWF_BACKEND_TOKEN:-}" in airflow
