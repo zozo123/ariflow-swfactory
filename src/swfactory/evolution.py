@@ -150,6 +150,8 @@ def worktree_candidate_runner(
     authoritative: workers may not substitute a different output SHA.
     """
 
+    retained_evidence_root = evidence_root or (worktree_root.parent / "candidate-evidence")
+
     def isolated(request: CandidateRequest) -> CandidateOutcome:
         worktree = create_candidate_worktree(
             repo,
@@ -180,12 +182,10 @@ def worktree_candidate_runner(
                 output_head=revision.output_head,
                 candidate_ref=revision.ref,
             )
-            if evidence_root is None:
-                return frozen
             manifest, manifest_path = build_candidate_evidence(
                 repo,
                 revision,
-                root=evidence_root,
+                root=retained_evidence_root,
                 result=_candidate_result_document(frozen),
             )
             return replace(
@@ -463,6 +463,8 @@ def _experiment_round(
         evidence = tuple(f"{item.dimension.value}:{item.result}:{item.evidence}" for item in outcome.evaluations)
         if outcome.candidate_ref:
             evidence += (f"candidate-ref:{outcome.candidate_ref}",)
+        if outcome.candidate_evidence_digest:
+            evidence += (f"candidate-evidence:{outcome.candidate_evidence_digest}",)
         nodes.append(
             ExperimentNode(
                 id=outcome.logical_id,
