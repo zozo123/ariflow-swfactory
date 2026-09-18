@@ -28,6 +28,4 @@ def test_exploration_space_respects_budget_without_collapsing_axes() -> None:
 
     assert len(variants) == 4
     assert all(dict(item.axes)["strategy"] in {"repair", "rethink", "scratch"} for item in variants)
-    assert all(
-        dict(item.axes)["review_lens"] in {"correctness", "security", "simplicity"} for item in variants
-    )
+    assert all(dict(item.axes)["review_lens"] in {"correctness", "security", "simplicity"} for item in variants)
