@@ -89,6 +89,26 @@ Candidate identity now includes campaign, Cell, epoch, strategy, input head, gen
 candidate parent, and depth. The same strategy asked at a different tree position is therefore a
 different question rather than an accidental replay alias.
 
+## Verified descent
+
+A later round should not be hand-authored from a remembered SHA. Use
+`plan_descendant_campaign(...)` to derive it from the completed parent campaign.
+
+Before emitting child requests, the planner:
+
+1. requires a selected winner and an experiment-tree winner that agree;
+2. re-verifies every answered sibling's retained candidate-evidence bundle against Git;
+3. rebuilds the immutable campaign-decision fan-in;
+4. requires the selected node's recorded head to equal the winner's frozen output;
+5. starts every child from that exact output SHA at `depth + 1`;
+6. binds the parent campaign-decision SHA-256 into each child request's stable identity.
+
+The returned `DescendantCampaignPlan` records the parent decision digest, parent candidate,
+parent evidence digest, exact input head, depth, and all child requests. Changing the parent
+selection evidence therefore changes child identity even if a coincidental output SHA is the same.
+
+This operation plans the next sibling bush only. It does not execute it or grant promotion.
+
 ## Authority boundary
 
 The experiment tree is advisory state.
