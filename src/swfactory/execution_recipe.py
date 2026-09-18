@@ -33,9 +33,7 @@ class ExecutionRecipe:
 
     @property
     def digest(self) -> str:
-        payload = json.dumps(
-            asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=True
-        ).encode()
+        payload = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
         return hashlib.sha256(payload).hexdigest()
 
     def to_dict(self) -> dict[str, Any]:
@@ -143,9 +141,7 @@ def parse_execution_recipe(document: Any) -> ExecutionRecipe:
         if not isinstance(value, str) or "\x00" in value:
             raise ExecutionRecipeError(f"environment value for {key!r} must be a string")
         if _looks_secret(key):
-            raise ExecutionRecipeError(
-                f"environment key {key!r} looks secret; record only its name in secret_env"
-            )
+            raise ExecutionRecipeError(f"environment key {key!r} looks secret; record only its name in secret_env")
         environment.append((key, value))
 
     secret_raw = document.get("secret_env", [])
