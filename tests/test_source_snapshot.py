@@ -134,7 +134,6 @@ def test_snapshot_cache_and_archive_are_private_on_posix(tmp_path: Path) -> None
     assert Path(snapshot.archive_path).stat().st_mode & 0o777 == 0o600
 
 
-
 def test_revision_that_looks_like_a_git_option_is_refused(tmp_path: Path) -> None:
     repo, _ = _repo(tmp_path)
 
