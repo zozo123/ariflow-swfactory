@@ -64,6 +64,7 @@ def create_candidate_worktree(
 ) -> CandidateWorktree:
     """Create a new detached worktree for exactly one candidate and input head."""
     _validate_candidate_id(candidate_id)
+    _validate_revision(input_head)
     repo = repo.resolve()
     if not repo.is_dir():
         raise CandidateWorktreeError(f"repository does not exist: {repo}")
@@ -110,7 +111,10 @@ def create_candidate_worktree(
 def freeze_candidate_worktree(worktree: CandidateWorktree) -> CandidateRevision:
     """Freeze one clean, changed candidate HEAD under an immutable factory ref."""
     repo = Path(worktree.repo).resolve()
-    path = Path(worktree.path).resolve()
+    raw_path = Path(worktree.path)
+    if raw_path.is_symlink():
+        raise CandidateWorktreeError(f"candidate worktree path is a symlink: {raw_path}")
+    path = raw_path.resolve()
     _verify_membership(repo, path)
 
     status = _git(path, "status", "--porcelain=v1", "--untracked-files=all")
@@ -125,6 +129,11 @@ def freeze_candidate_worktree(worktree: CandidateWorktree) -> CandidateRevision:
         raise CandidateWorktreeError("candidate input head no longer resolves to its recorded commit")
     if output_head == input_head:
         raise CandidateWorktreeError("candidate did not advance beyond its input head")
+    ancestor = _git_proc(repo, "merge-base", "--is-ancestor", input_head, output_head)
+    if ancestor.returncode != 0:
+        raise CandidateWorktreeError(
+            f"candidate output {output_head} does not descend from recorded input {input_head}"
+        )
 
     existing = _ref_head(repo, worktree.ref)
     if existing is not None:
@@ -168,7 +177,10 @@ def verify_candidate_revision(repo: Path, revision: CandidateRevision) -> None:
 def remove_candidate_worktree(worktree: CandidateWorktree, *, force: bool = False) -> None:
     """Remove disposable workspace state without deleting a frozen candidate ref."""
     repo = Path(worktree.repo).resolve()
-    path = Path(worktree.path).resolve()
+    raw_path = Path(worktree.path)
+    if raw_path.is_symlink():
+        raise CandidateWorktreeError(f"candidate worktree path is a symlink: {raw_path}")
+    path = raw_path.resolve()
     if not path.exists():
         _git(repo, "worktree", "prune")
         return
@@ -210,6 +222,11 @@ def _validate_candidate_id(candidate_id: str) -> None:
         raise CandidateWorktreeError("candidate id must be nonempty")
     if "\x00" in candidate_id or "\n" in candidate_id or "\r" in candidate_id:
         raise CandidateWorktreeError("candidate id contains a control character")
+
+
+def _validate_revision(revision: str) -> None:
+    if not revision or revision.startswith("-") or "\x00" in revision or "\n" in revision or "\r" in revision:
+        raise CandidateWorktreeError(f"invalid Git revision: {revision!r}")
 
 
 def _git(repo: Path, *args: str) -> str:
