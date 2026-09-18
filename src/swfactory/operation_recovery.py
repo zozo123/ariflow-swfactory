@@ -13,6 +13,8 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 
+from swfactory.idempotency import budget_for
+
 
 class RecoveryAction(StrEnum):
     COMMITTED = "committed"
@@ -101,7 +103,10 @@ def plan_recovery(
 
     target = _target(operation)
     attempts = operation.get("attempts", 0)
-    max_attempts = operation.get("max_attempts", 8)
+    configured_max = operation.get("max_attempts")
+    max_attempts = (
+        configured_max if configured_max is not None else budget_for(str(operation.get("kind") or "")).max_attempts
+    )
     if type(attempts) is not int or type(max_attempts) is not int:
         return RecoveryDecision(key, RecoveryAction.DEAD, "invalid_retry_budget", target)
     if attempts >= max_attempts:
@@ -116,6 +121,12 @@ def plan_recovery(
     observed = str(observation.get("status") or "").casefold() if isinstance(observation, dict) else ""
     outcome = str(operation.get("outcome") or "").casefold()
     if state in {"ambiguous", "observing", "in_doubt"} or "ambiguous" in {outcome, observed}:
+        return RecoveryDecision(key, RecoveryAction.OBSERVE, "must_observe_before_retry", target)
+
+    replay_safe = operation.get("replay_safe")
+    if attempts > 0 and observed == "definitely_absent" and not bool(replay_safe):
+        return RecoveryDecision(key, RecoveryAction.REFUSE, "replay_not_safe", target)
+    if attempts > 0 and observed != "definitely_absent":
         return RecoveryDecision(key, RecoveryAction.OBSERVE, "must_observe_before_retry", target)
     return RecoveryDecision(key, RecoveryAction.RETRY, "retryable_pending_operation", target)
 
