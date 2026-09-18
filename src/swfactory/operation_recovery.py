@@ -13,6 +13,8 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 
+from swfactory.idempotency import budget_for
+
 
 class RecoveryAction(StrEnum):
     COMMITTED = "committed"
@@ -101,7 +103,14 @@ def plan_recovery(
 
     target = _target(operation)
     attempts = operation.get("attempts", 0)
-    max_attempts = operation.get("max_attempts", 8)
+    # A row that does not carry its own budget takes the journal's, not a number invented here.
+    # This defaulted to 8 while `idempotency.DEFAULT_BUDGETS` allows 3-5, so a `github_publish` row
+    # at its fourth attempt was planned RETRY while `OperationJournal.start_attempt` would raise
+    # `RetryBudgetExhausted` on the very next try: a recovery plan telling an operator to retry
+    # something the journal refuses. A budget stated by the row still wins, and a non-integer one is
+    # still fatal -- only an ABSENT budget falls back.
+    stored = operation.get("max_attempts")
+    max_attempts = budget_for(target.kind if target else "").max_attempts if stored is None else stored
     if type(attempts) is not int or type(max_attempts) is not int:
         return RecoveryDecision(key, RecoveryAction.DEAD, "invalid_retry_budget", target)
     if attempts >= max_attempts:

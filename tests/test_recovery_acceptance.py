@@ -24,6 +24,7 @@ from swfactory.idempotency import (
     OperationRef,
     RetryBudget,
     RetryBudgetExhausted,
+    budget_for,
 )
 from swfactory.operation_recovery import RecoveryAction, plan_recovery
 
@@ -267,3 +268,74 @@ def test_an_expired_lease_is_recorded_before_the_refusal_is_raised(tmp_path: Pat
         assert row["attempt_owner"] == owner, "the dead owner must stay visible until it is reconciled"
     finally:
         reopened.close()
+
+
+def test_a_row_at_its_journal_budget_is_dead_rather_than_planned_for_a_retry_the_journal_refuses(
+    journal: OperationJournal,
+) -> None:
+    """The plan and the journal have to agree about when a row is finished.
+
+    `plan_recovery` defaulted an absent `max_attempts` to 8 while `idempotency.DEFAULT_BUDGETS`
+    allows `github_publish` only 4. A row at its fourth attempt was therefore planned RETRY, and
+    the retry it authorised would have raised `RetryBudgetExhausted` inside
+    `OperationJournal.start_attempt` — a recovery plan telling an operator to retry something the
+    journal refuses. The budget now comes from the journal whenever the row does not carry one.
+    """
+    ref = _ref("github_publish")
+    budget = budget_for("github_publish")
+
+    def die() -> dict:
+        raise ConnectionError("socket closed after the request was sent")
+
+    # Each attempt after the first has to clear the in-doubt check the way a real replay does,
+    # observing absence before it is allowed to spend another attempt.
+    _interrupt(journal, ref)
+    for _ in range(budget.max_attempts - 1):
+        with pytest.raises(ConnectionError):
+            journal.execute(
+                ref,
+                die,
+                replay_safe=True,
+                reconcile=lambda: MutationOutcome("definitely_absent", detail="no pull request"),
+            )
+    journal.mark_observation(ref, MutationOutcome("definitely_absent", detail="no pull request"))
+
+    row = _row(journal, ref)
+    assert row["attempts"] >= budget.max_attempts
+    assert "max_attempts" not in row or row["max_attempts"] is None
+
+    decision = plan_recovery(row, current_epoch=EPOCH, now=row["next_attempt_at"] + 1)
+
+    assert decision.action is RecoveryAction.DEAD
+    assert decision.reason == "retry_budget_exhausted"
+    # And the journal agrees: a replay that clears the in-doubt check still cannot spend an attempt.
+    with pytest.raises(RetryBudgetExhausted):
+        journal.execute(
+            ref,
+            lambda: {"url": "never"},
+            replay_safe=True,
+            reconcile=lambda: MutationOutcome("definitely_absent"),
+        )
+
+
+def test_a_budget_the_row_states_itself_still_wins(journal: OperationJournal) -> None:
+    """Falling back to the journal must not override a row that carries its own number."""
+    ref = _ref("github_publish")
+    _interrupt(journal, ref)
+    journal.mark_observation(ref, MutationOutcome("definitely_absent"))
+    row = {**_row(journal, ref), "attempts": 9, "max_attempts": 99}
+
+    assert plan_recovery(row, current_epoch=EPOCH, now=row["next_attempt_at"] + 1).action is RecoveryAction.RETRY
+
+
+def test_a_non_integer_budget_on_the_row_is_still_fatal(journal: OperationJournal) -> None:
+    """Only an ABSENT budget falls back; a corrupt one must not be silently replaced."""
+    ref = _ref("github_publish")
+    _interrupt(journal, ref)
+    journal.mark_observation(ref, MutationOutcome("definitely_absent"))
+    row = {**_row(journal, ref), "max_attempts": "four"}
+
+    decision = plan_recovery(row, current_epoch=EPOCH, now=row["next_attempt_at"] + 1)
+
+    assert decision.action is RecoveryAction.DEAD
+    assert decision.reason == "invalid_retry_budget"
