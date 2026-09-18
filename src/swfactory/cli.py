@@ -1251,7 +1251,15 @@ def campaign_decision_build(
         }
         manifest = build_campaign_decision_from_document(document, bundles)
         write_campaign_decision(destination, manifest)
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, CandidateDecisionError, CandidateEvidenceError) as error:
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        CandidateDecisionError,
+        CandidateEvidenceError,
+    ) as error:
         typer.echo(f"campaign decision: {error}", err=True)
         raise typer.Exit(2) from error
     typer.echo(f"{destination}  {manifest.digest()}")
