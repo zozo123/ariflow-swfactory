@@ -134,6 +134,7 @@ def entropy_strategy_schedule(
     )
     return order, schedule
 
+
 def run_annealing_loop(
     runner: CandidateRunner,
     *,
