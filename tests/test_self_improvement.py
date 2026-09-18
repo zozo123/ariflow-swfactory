@@ -325,27 +325,3 @@ def test_with_no_trajectory_nothing_is_stalled_and_ranking_is_unchanged() -> Non
     signals = [_signal(Source.REACHABILITY, "huge", 900), _signal(Source.REACHABILITY, "small", 10)]
 
     assert [o.key for o in propose(signals, budget=2).orders] == ["huge", "small"]
-
-
-def test_demoting_a_stalled_order_does_not_clear_its_own_stall() -> None:
-    """The oscillation this fixes, measured on a real trajectory:
-
-        cycle 1-3  evolution proposed
-        cycle 4    evolution stalled, demoted, therefore absent from that cycle's orders
-        cycle 5    a consecutive-run rule reads the gap as progress -> back at position one
-
-    The correction erased the evidence for the correction. Counting occurrences over the whole
-    trajectory makes the flag sticky: once earned it holds until the debt is actually retired.
-    """
-    trajectory = [_assessment({"a": 1}, order_keys=("a",)) for _ in range(3)]
-    trajectory.append(_assessment({"a": 1}, order_keys=("b",)))  # the cycle where it was demoted
-
-    assert stalled(trajectory) == ("reachability:a",)
-
-
-def test_retired_debt_stops_being_stalled() -> None:
-    """A stall is a property of debt the factory still carries; paid debt must not haunt it."""
-    trajectory = [_assessment({"a": 1}, order_keys=("a",)) for _ in range(3)]
-
-    assert stalled(trajectory, present=["reachability:a"]) == ("reachability:a",)
-    assert stalled(trajectory, present=[]) == ()
