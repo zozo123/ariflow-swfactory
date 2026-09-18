@@ -78,7 +78,12 @@ def load_execution_recipe(
     _validate_revision(revision)
     normalized_path = _validate_repo_path(path)
     commit = _git(repo, "rev-parse", "--verify", f"{revision}^{{commit}}").strip()
-    raw = _git_bytes(repo, "show", f"{commit}:{normalized_path}")
+    try:
+        raw = _git_bytes(repo, "show", f"{commit}:{normalized_path}")
+    except ExecutionRecipeError as error:
+        raise ExecutionRecipeError(
+            f"execution recipe {normalized_path!r} is unavailable at {commit}: {error}"
+        ) from error
     if len(raw) > 64 * 1024:
         raise ExecutionRecipeError("execution recipe exceeds 64 KiB")
     try:
