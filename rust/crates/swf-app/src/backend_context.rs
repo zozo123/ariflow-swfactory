@@ -20,20 +20,32 @@ pub struct BackendContext {
 }
 
 impl BackendContext {
-    pub fn connect(context: &Context, timeout: Duration, feature: &str) -> Result<Self> {
+    /// Resolve the one backend endpoint policy shared by every application caller.
+    pub fn endpoint(context: &Context) -> Option<String> {
         let backend_url =
             env::var("SWF_BACKEND_URL").unwrap_or_else(|_| context.backend_url.clone());
-        if backend_url.is_empty() {
+        let backend_url = backend_url.trim().trim_end_matches('/').to_string();
+        (!backend_url.is_empty()).then_some(backend_url)
+    }
+
+    pub fn connect(context: &Context, timeout: Duration, feature: &str) -> Result<Self> {
+        let Some(backend_url) = Self::endpoint(context) else {
             return Err(OpsError::operational(format!(
-                "{feature} require the Python backend; this context is in direct mode"
+                "{feature} are served only by the factory backend, and context {:?} is explicitly direct; \
+                 swf never widens direct mode to local credentials to answer them",
+                context.name
             ))
-            .with_hint("configure --backend-url and SWF_BACKEND_TOKEN"));
-        }
+            .with_hint(format!(
+                "give it a backend: swf context add {} --airflow-url {} --backend-url URL --force, \
+                 then export SWF_BACKEND_TOKEN",
+                context.name, context.airflow_url
+            )));
+        };
         let token = env::var("SWF_BACKEND_TOKEN").unwrap_or_default();
         let api = FactoryApi::new(&backend_url, token, timeout)?;
         Ok(Self {
             api: Arc::new(api),
-            base_url: backend_url.trim_end_matches('/').to_string(),
+            base_url: backend_url,
         })
     }
 
