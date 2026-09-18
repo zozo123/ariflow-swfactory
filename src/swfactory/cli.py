@@ -1066,6 +1066,35 @@ def experiment_tree_cmd(
         typer.echo(render(tree))
 
 
+@app.command("source-snapshot")
+def source_snapshot_cmd(
+    repo: Annotated[Path, typer.Argument(help="local Git repository to snapshot")] = Path("."),
+    revision: Annotated[str, typer.Option(help="commit-ish to resolve and archive")] = "HEAD",
+    cache_root: Annotated[
+        Path,
+        typer.Option(help="content-addressed snapshot cache"),
+    ] = Path(".factory/source-snapshots"),
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable receipt")] = False,
+) -> None:
+    """Create and verify the immutable source archive for one recorded Git revision."""
+    from swfactory.repo_runtime import snapshot_source
+    from swfactory.source_snapshot import SourceSnapshotError, verify_source_snapshot
+
+    try:
+        snapshot = snapshot_source(repo, revision, cache_root)
+        verify_source_snapshot(snapshot)
+    except (OSError, SourceSnapshotError) as error:
+        typer.echo(f"source snapshot: {error}", err=True)
+        raise typer.Exit(2) from error
+    document = snapshot.to_dict()
+    if json_out:
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        return
+    width = max(len(key) for key in document)
+    for name, value in document.items():
+        typer.echo(f"{name.replace('_', ' '):<{width}}  {value}")
+
+
 @app.command()
 def herd(
     airflow_url: Annotated[str, typer.Option(envvar="AIRFLOW_URL")] = "http://localhost:8080",
