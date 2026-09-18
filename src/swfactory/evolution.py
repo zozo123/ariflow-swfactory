@@ -31,6 +31,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from swfactory.candidate_evidence import build_candidate_evidence
 from swfactory.candidate_worktree import (
     create_candidate_worktree,
     freeze_candidate_worktree,
@@ -115,6 +116,8 @@ class CandidateOutcome:
     duration_s: float = 0.0
     detail: str = ""
     candidate_ref: str | None = None
+    candidate_evidence_manifest: str | None = None
+    candidate_evidence_digest: str | None = None
 
     @property
     def passed(self) -> frozenset[Dimension]:
@@ -137,6 +140,8 @@ def worktree_candidate_runner(
     repo: Path,
     worktree_root: Path,
     runner: WorkspaceCandidateRunner,
+    *,
+    evidence_root: Path | None = None,
 ) -> CandidateRunner:
     """Adapt a workspace-aware runner to the ordinary campaign interface.
 
@@ -170,15 +175,44 @@ def worktree_candidate_runner(
                     f"candidate {request.logical_id} claimed output {outcome.output_head} "
                     f"but frozen worktree recorded {revision.output_head}"
                 )
-            return replace(
+            frozen = replace(
                 outcome,
                 output_head=revision.output_head,
                 candidate_ref=revision.ref,
+            )
+            if evidence_root is None:
+                return frozen
+            manifest, manifest_path = build_candidate_evidence(
+                repo,
+                revision,
+                root=evidence_root,
+                result=_candidate_result_document(frozen),
+            )
+            return replace(
+                frozen,
+                candidate_evidence_manifest=str(manifest_path),
+                candidate_evidence_digest=manifest.digest(),
             )
         finally:
             remove_candidate_worktree(worktree, force=True)
 
     return isolated
+
+
+def _candidate_result_document(outcome: CandidateOutcome) -> dict[str, Any]:
+    """Stable result payload retained next to the exact candidate diff."""
+    return {
+        "logical_id": outcome.logical_id,
+        "strategy": outcome.strategy.value,
+        "state": outcome.state,
+        "input_head": outcome.input_head,
+        "output_head": outcome.output_head,
+        "candidate_ref": outcome.candidate_ref,
+        "evaluations": [asdict(item) for item in outcome.evaluations],
+        "cost_usd": outcome.cost_usd,
+        "duration_s": outcome.duration_s,
+        "detail": outcome.detail,
+    }
 
 
 @dataclass(frozen=True)
