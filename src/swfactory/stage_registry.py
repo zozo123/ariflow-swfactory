@@ -36,7 +36,7 @@ def resolve(stage: str) -> StageCallable:
     out internally, never lifecycle work. Everything else comes from the canonical stages registry.
     """
     if stage == "build_and_test":
-        from swfactory.stages import build_and_test
+        from swfactory.work_stage import build_and_test
 
         return build_and_test
     if stage == "review":
