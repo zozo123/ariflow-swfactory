@@ -374,3 +374,69 @@ def test_cancellation_in_first_merge_prevents_remaining_merge_callbacks() -> Non
     assert merged == ["a"]
     assert [receipt.node_id for receipt in report.merges] == ["a"]
     assert report.final_head == f"{HEAD}+a"
+
+
+def test_observed_sibling_overlap_refuses_before_any_merge_callback() -> None:
+    merged: list[str] = []
+
+    def runner(request: NodeRequest) -> NodeResult:
+        return NodeResult(
+            logical_id=request.logical_id,
+            node_id=request.node.id,
+            state="ok",
+            input_head=request.input_head,
+            output_head=f"{request.input_head}/{request.node.id}",
+            touched_files=("shared.py",),
+        )
+
+    def merger(result: NodeResult, target_head: str, index: int) -> MergeReceipt:
+        merged.append(result.node_id)
+        return _merger(result, target_head, index)
+
+    nodes = (
+        WorkNode(id="a", files=("a.py",), parallel_safe=True),
+        WorkNode(id="b", files=("b.py",), parallel_safe=True),
+    )
+    with pytest.raises(ValueError, match="fan-in refused before merge"):
+        _execute(WorkExecutor(runner, merger), nodes)
+
+    assert merged == []
+
+
+def test_observed_protected_path_refuses_before_merge() -> None:
+    merged: list[str] = []
+
+    def runner(request: NodeRequest) -> NodeResult:
+        return NodeResult(
+            logical_id=request.logical_id,
+            node_id=request.node.id,
+            state="ok",
+            input_head=request.input_head,
+            output_head=f"{request.input_head}/{request.node.id}",
+            touched_files=("factory.toml",),
+        )
+
+    def merger(result: NodeResult, target_head: str, index: int) -> MergeReceipt:
+        merged.append(result.node_id)
+        return _merger(result, target_head, index)
+
+    executor = WorkExecutor(runner, merger, ExecutorPolicy(protected_paths=("factory.toml",)))
+    with pytest.raises(ValueError, match="protected"):
+        _execute(executor, (WorkNode(id="a", files=("factory.toml",), parallel_safe=True),))
+
+    assert merged == []
+
+
+def test_observed_undeclared_path_refuses_before_merge() -> None:
+    def runner(request: NodeRequest) -> NodeResult:
+        return NodeResult(
+            logical_id=request.logical_id,
+            node_id=request.node.id,
+            state="ok",
+            input_head=request.input_head,
+            output_head=f"{request.input_head}/{request.node.id}",
+            touched_files=("surprise.py",),
+        )
+
+    with pytest.raises(ValueError, match="undeclared"):
+        _execute(WorkExecutor(runner, _merger), (WorkNode(id="a", files=("declared.py",), parallel_safe=True),))
