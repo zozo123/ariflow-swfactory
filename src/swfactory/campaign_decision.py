@@ -83,7 +83,9 @@ class DecisionCandidate:
             if not self.candidate_ref:
                 raise CampaignDecisionError(f"{self.candidate_id}: answered candidate has no frozen ref")
             if not _valid_digest(self.evidence_bundle_digest):
-                raise CampaignDecisionError(f"{self.candidate_id}: answered candidate has no valid evidence bundle digest")
+                raise CampaignDecisionError(
+                    f"{self.candidate_id}: answered candidate has no valid evidence bundle digest"
+                )
         elif self.evidence_bundle_digest is not None:
             raise CampaignDecisionError(
                 f"{self.candidate_id}: provisional/failed candidate cannot claim answered evidence bundle"
