@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from swfactory.maintenance_incidents import DurableIncidentLedger, IncidentIdentity, IncidentLedger, IncidentReceipt, IncidentState
+from swfactory.maintenance_incidents import (
+    DurableIncidentLedger,
+    IncidentIdentity,
+    IncidentLedger,
+    IncidentReceipt,
+    IncidentState,
+)
 
 
 def identity(evidence: str = "a" * 64) -> IncidentIdentity:
