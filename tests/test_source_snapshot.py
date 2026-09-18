@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import tarfile
 from pathlib import Path
@@ -155,6 +156,6 @@ def test_cli_prints_machine_readable_snapshot(repo: Path, tmp_path: Path) -> Non
     )
 
     assert result.exit_code == 0, result.output
-    document = __import__("json").loads(result.stdout)
+    document = json.loads(result.stdout)
     assert document["commit_sha"] == git(repo, "rev-parse", "HEAD")
     assert Path(document["path"]).is_file()
