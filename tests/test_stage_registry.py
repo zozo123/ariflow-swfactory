@@ -30,7 +30,7 @@ def test_blueprint_pipeline_uses_the_same_build_stage_as_managed_airflow() -> No
     from swfactory.stages import Gate
     from swfactory.work_stage import build_and_test
 
-    pipeline = load("default").pipeline()
+    pipeline = load("blueprints/default.toml").pipeline()
     stages = [item for item in pipeline if not isinstance(item, Gate)]
     build = next(item for item in stages if getattr(item, "__name__", "") == "build_and_test")
 
