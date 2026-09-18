@@ -253,7 +253,7 @@ jobs:
       - name: Resolve the cross-language graph without executing it
         run: |
           mkdir -p .factory/turbo
-          npx --yes turbo@2.11.1 run '//#polyglot-contract' --dry=json > .factory/turbo/plan.json
+          npx --yes turbo@2.11.1 run '//#polyglot-contract' --dry-run=json > .factory/turbo/plan.json
       - name: Execute the cross-language graph
         run: npx --yes turbo@2.11.1 run '//#polyglot-contract' --summarize
       - name: Keep Turbo planning and run-summary evidence
