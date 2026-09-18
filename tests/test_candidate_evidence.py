@@ -280,3 +280,47 @@ def test_resealed_diff_cannot_claim_different_semantics(repo: Path, tmp_path: Pa
         verify_candidate_evidence_bundle(destination, repo=repo)
 
     remove_candidate_worktree(worktree)
+
+
+
+def test_bundle_binds_optional_run_contract_digest(repo: Path, tmp_path: Path) -> None:
+    source, worktree, revision = answered_candidate(repo, tmp_path)
+    destination = tmp_path / "bundle"
+    contract_digest = "a" * 64
+
+    bundle = build_candidate_evidence_bundle(
+        repo,
+        revision,
+        source,
+        artifacts={},
+        destination=destination,
+        run_contract_digest=contract_digest,
+    )
+    verified = verify_candidate_evidence_bundle(destination, repo=repo)
+
+    assert bundle.run_contract_digest == contract_digest
+    assert verified.run_contract_digest == contract_digest
+    document = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    assert document["run_contract_digest"] == contract_digest
+
+    remove_candidate_worktree(worktree)
+
+
+def test_legacy_bundle_digest_shape_stays_backward_compatible(repo: Path, tmp_path: Path) -> None:
+    source, worktree, revision = answered_candidate(repo, tmp_path)
+    destination = tmp_path / "bundle"
+
+    bundle = build_candidate_evidence_bundle(
+        repo,
+        revision,
+        source,
+        artifacts={},
+        destination=destination,
+    )
+    document = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+
+    assert bundle.run_contract_digest is None
+    assert "run_contract_digest" not in document
+    verify_candidate_evidence_bundle(destination, repo=repo)
+
+    remove_candidate_worktree(worktree)
