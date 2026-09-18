@@ -576,11 +576,12 @@ domains:
     family: Liquid500
     bundle: liquid500-08
     owner: evidence
-    state: declared
+    state: experimental
     support: unsupported
     invariant: "Run artefacts are content-addressed and retained for the promotion window."
-    runtime_anchor: swfactory.evidence_store
-    evidence_requirement: "An artefact manifest with digests plus a retention check inside the promotion window."
+    runtime_anchor: swfactory.candidate_retention:retain_candidate_evidence
+    evidence_requirement: "A candidate evidence manifest with digests plus a live retention lease, expiry sweep, and pin proof inside the promotion window."
+    follow_up: "Bind retention leases to the promotion/release path and validate retained evidence in a release drill before claiming support."
   - id: liquid500.factory-generations
     slug: factory-generations
     family: Liquid500
