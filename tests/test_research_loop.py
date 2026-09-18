@@ -187,7 +187,6 @@ def test_report_serializes_both_exploration_and_promotion_authority() -> None:
     assert document["rounds"][0]["selection"]["winner"] is None
 
 
-
 def test_cli_renders_the_cooling_schedule_without_running_candidates() -> None:
     result = CliRunner().invoke(
         app,
