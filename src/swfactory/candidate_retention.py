@@ -11,7 +11,6 @@ this evidence"; it does not approve or publish the candidate.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
