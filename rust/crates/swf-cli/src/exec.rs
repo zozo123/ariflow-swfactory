@@ -29,6 +29,7 @@ use swf_domain::doctor;
 use swf_domain::evidence::DeliveryReport;
 use swf_domain::ids::{DeliveryId, GateId, JobId, RunRef};
 use swf_domain::model::{Gate, JobRow, Run};
+use swf_domain::{FactoryName, FactoryRunRequest};
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::{
@@ -327,15 +328,34 @@ async fn doctor_cmd(ctx: &Ctx) -> Result<Outcome> {
 async fn factory_cmd(ctx: &Ctx, cmd: &FactoryCmd) -> Result<Outcome> {
     match cmd {
         FactoryCmd::Run(args) => {
-            let compatibility = SubmitArgs {
+            let factory = FactoryName::parse(&args.factory)
+                .map_err(|error| OpsError::usage(error.to_string()))?;
+            let request = FactoryRunRequest {
+                factory,
                 issues: args.issues.clone(),
-                blueprint: args.factory.clone(),
                 targets: args.targets.clone(),
-                harness: args.harness.clone(),
-                factory_id: args.factory_id.clone(),
-                wait: args.wait,
+                harness: args.harness.clone().or_else(|| nonempty_env("SWF_HARNESS")),
+                factory_session: args
+                    .factory_id
+                    .clone()
+                    .or_else(|| nonempty_env("SWF_FACTORY_ID")),
             };
-            submit_cmd(ctx, &compatibility).await
+            let ops = ctx.ops()?;
+            let submission = swf_app::factory_manager::run(&ops, &request, &ctx.cancel).await?;
+            let run = submission.run();
+            let mut text = render::submission(&submission);
+            let mut doc = serde_json::to_value(&submission).unwrap_or(serde_json::Value::Null);
+            if args.wait {
+                let final_run = wait_for_run(ctx, &ops, &run).await?;
+                text.push_str(&format!("\nstate         {}", final_run.state));
+                if let Some(map) = doc.as_object_mut() {
+                    map.insert("state".into(), final_run.state.clone().into());
+                }
+                if final_run.state != "success" {
+                    return Ok(Outcome::new(text, doc).with_code(1));
+                }
+            }
+            Ok(Outcome::new(text, doc))
         }
         FactoryCmd::Status { run } => runs_cmd(ctx, &RunsCmd::Inspect { run: run.clone() }).await,
     }
