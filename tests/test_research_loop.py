@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
+from typer.testing import CliRunner
+
+from swfactory.cli import app
 from swfactory.evolution import CandidateOutcome, Strategy, evaluation
 from swfactory.generations import CampaignBudget, Dimension
 from swfactory.research_loop import annealed_strategy_schedule, run_annealing_loop
@@ -180,3 +185,17 @@ def test_report_serializes_both_exploration_and_promotion_authority() -> None:
     assert document["rounds"][0]["schema_version"] == 3
     assert document["rounds"][0]["exploration_selection"]["winner"]
     assert document["rounds"][0]["selection"]["winner"] is None
+
+
+
+def test_cli_renders_the_cooling_schedule_without_running_candidates() -> None:
+    result = CliRunner().invoke(
+        app,
+        ["research-schedule", "--max-depth", "2", "--max-candidates", "3", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert document["authority"] == "exploration-only"
+    assert document["scheduler"] == "airflow"
+    assert [len(round_["strategies"]) for round_ in document["rounds"]] == [3, 2, 1]
