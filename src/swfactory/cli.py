@@ -1233,6 +1233,46 @@ def experiment_tree_cmd(
         typer.echo(render(tree))
 
 
+@app.command("experiment-next")
+def experiment_next_cmd(
+    report: Annotated[Path, typer.Argument(help="validated campaign report JSON to continue")],
+    campaign_id: Annotated[str, typer.Option("--campaign-id", help="fresh identity for the next round")],
+    strategy: Annotated[
+        list[str] | None,
+        typer.Option("--strategy", help="repair | rethink | scratch; repeatable"),
+    ] = None,
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable continuation plan")] = False,
+) -> None:
+    """Plan the next sibling bush from the exact frozen winner; schedule nothing."""
+    from swfactory.evolution import DEFAULT_STRATEGIES, CampaignError, Strategy, plan_next_round
+
+    try:
+        document = json.loads(report.read_text(encoding="utf-8"))
+        if not isinstance(document, dict):
+            raise CampaignError("campaign report must be a JSON object")
+        strategies = tuple(Strategy(item) for item in strategy) if strategy else DEFAULT_STRATEGIES
+        continuation = plan_next_round(
+            document,
+            campaign_id=campaign_id,
+            strategies=strategies,
+        )
+    except (OSError, json.JSONDecodeError, ValueError, CampaignError) as error:
+        typer.echo(f"experiment next: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    planned = continuation.to_dict()
+    if json_out:
+        typer.echo(json.dumps(planned, indent=2, sort_keys=True))
+        return
+    typer.echo(
+        f"{continuation.previous_campaign_id} -> {continuation.campaign_id}: "
+        f"depth {continuation.depth} from {continuation.parent_candidate}"
+    )
+    typer.echo(f"input {continuation.input_head}")
+    for request in continuation.requests:
+        typer.echo(f"  {request.logical_id}  {request.strategy.value}  budget=USD {request.budget_usd:.2f}")
+
+
 @app.command("source-snapshot")
 def source_snapshot_cmd(
     repo: Annotated[Path, typer.Argument(help="local Git repository to snapshot")] = Path("."),
