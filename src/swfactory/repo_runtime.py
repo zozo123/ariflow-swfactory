@@ -16,7 +16,7 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
-from swfactory import source_snapshot
+from swfactory import candidate_worktree, source_snapshot
 from swfactory.ci_topology import Module, Topology
 from swfactory.workspace_materialization import MaterializationPlan, verify_sparse_coverage
 
@@ -106,6 +106,35 @@ def snapshot_source(repo: Path, revision: str, cache_root: Path) -> source_snaps
     """Create the immutable execution input for one recorded repository revision."""
 
     return source_snapshot.create_source_snapshot(repo, revision, cache_root)
+
+
+def create_candidate_workspace(
+    repo: Path,
+    candidate_id: str,
+    input_head: str,
+    root: Path,
+) -> candidate_worktree.CandidateWorktree:
+    """Create one disposable candidate-local Git worktree at an exact input revision."""
+
+    return candidate_worktree.create_candidate_worktree(repo, candidate_id, input_head, root=root)
+
+
+def freeze_candidate_workspace(
+    worktree: candidate_worktree.CandidateWorktree,
+) -> candidate_worktree.CandidateRevision:
+    """Freeze a clean candidate answer under its immutable factory-owned ref."""
+
+    return candidate_worktree.freeze_candidate_worktree(worktree)
+
+
+def remove_candidate_workspace(
+    worktree: candidate_worktree.CandidateWorktree,
+    *,
+    force: bool = False,
+) -> None:
+    """Dispose candidate workspace bytes without deleting a frozen candidate ref."""
+
+    candidate_worktree.remove_candidate_worktree(worktree, force=force)
 
 
 def discover_repository(root: Path) -> RepositoryTopology:
