@@ -278,11 +278,11 @@ class CampaignReport:
 
 
 def rank_key(outcome: CandidateOutcome, required: Iterable[Dimension]) -> tuple[Any, ...]:
-    """Order candidates by evidence, then by what they cost to obtain.
+    """Order candidates by semantic evidence, then stable logical identity.
 
-    Every component is a property of the candidate itself.  Nothing here reads a clock, a thread
-    identity or an arrival position, which is what makes the ranking reproducible from the stored
-    report alone -- and what makes :func:`select` independent of completion order.
+    Final convergence deliberately excludes wall-clock duration and observed cost from authority:
+    both remain useful telemetry, but neither should make the winning code depend on machine load,
+    provider timing, or accounting jitter. The final tie-break is the immutable logical id.
     """
     passed = outcome.passed
     required_hits = sum(1 for dimension in required if dimension in passed)
@@ -290,8 +290,6 @@ def rank_key(outcome: CandidateOutcome, required: Iterable[Dimension]) -> tuple[
         outcome.state != "ok",  # False (0) sorts first
         -required_hits,
         -len(passed),
-        round(outcome.cost_usd, 6),
-        round(outcome.duration_s, 3),
         outcome.logical_id,
     )
 
