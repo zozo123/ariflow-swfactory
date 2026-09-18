@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from swfactory.candidate_evidence import verify_candidate_evidence_bundle
 from swfactory.evolution import (
+    CampaignError,
     CandidateOutcome,
     Strategy,
     evaluation,
@@ -183,3 +188,99 @@ def test_experiment_node_retains_frozen_candidate_ref_as_evidence(tmp_path: Path
 
     node = report.experiment_round.nodes[0]
     assert any(item.startswith("candidate-ref:refs/swfactory/candidates/") for item in node.evidence)
+
+
+def test_adapter_seals_candidate_evidence_before_workspace_cleanup(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    root = tmp_path / "worktrees"
+    evidence_root = tmp_path / "candidate-evidence"
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate")
+        return _passing(request)
+
+    report = run_campaign(
+        worktree_candidate_runner(
+            repo,
+            root,
+            runner,
+            evidence_root=evidence_root,
+        ),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    outcome = report.outcomes[0]
+    assert outcome.state == "ok"
+    assert outcome.candidate_evidence_manifest
+    assert outcome.candidate_evidence_digest
+    manifest = Path(outcome.candidate_evidence_manifest)
+    assert manifest.is_file()
+    bundle = verify_candidate_evidence_bundle(manifest.parent, repo=repo)
+    assert bundle.digest() == outcome.candidate_evidence_digest
+    assert bundle.input_head == base
+    assert bundle.output_head == outcome.output_head
+    assert bundle.candidate_ref == outcome.candidate_ref
+    assert not any(root.iterdir())
+
+    retained = {item.name: manifest.parent / item.path for item in bundle.artifacts}
+    result = json.loads(retained["candidate-result"].read_text(encoding="utf-8"))
+    assert result["logical_id"] == requests[0].logical_id
+    assert result["output_head"] == outcome.output_head
+    assert {item["dimension"] for item in result["evaluations"]} == {"correctness", "evidence"}
+
+    node = report.experiment_round.nodes[0]
+    assert f"candidate-evidence:{outcome.candidate_evidence_digest}" in node.evidence
+
+
+def test_evidence_capture_failure_cannot_become_campaign_winner(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    root = tmp_path / "worktrees"
+    evidence_root = tmp_path / "candidate-evidence"
+    requests = _request(base)
+    blocked = evidence_root / requests[0].logical_id
+    blocked.mkdir(parents=True)
+    (blocked / "unexpected").write_text("preexisting\n", encoding="utf-8")
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate")
+        return _passing(request)
+
+    report = run_campaign(
+        worktree_candidate_runner(
+            repo,
+            root,
+            runner,
+            evidence_root=evidence_root,
+        ),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    outcome = report.outcomes[0]
+    assert outcome.state == "failed"
+    assert "candidate evidence destination is not empty" in outcome.detail
+    assert report.selection.winner is None
+    assert not any(root.iterdir())
+
+
+def test_source_cache_root_without_evidence_root_is_refused(tmp_path: Path) -> None:
+    repo, _ = _repo(tmp_path)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        return _passing(request)
+
+    with pytest.raises(CampaignError, match="source_cache_root requires evidence_root"):
+        worktree_candidate_runner(
+            repo,
+            tmp_path / "worktrees",
+            runner,
+            source_cache_root=tmp_path / "source-cache",
+        )
