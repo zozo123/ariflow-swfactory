@@ -219,7 +219,7 @@ SKIP_DIRECTORIES = frozenset(
     {".git", ".venv", ".ruff_cache", ".pytest_cache", "__pycache__", "node_modules", ".factory"}
 )
 # Build output only. Named by path, because ``demo/target`` is a real fixture directory.
-SKIP_PREFIXES = ("rust/target/",)
+SKIP_PREFIXES = ("target/",)
 # Files a web server hands out without any page linking to them.
 SERVED_WITHOUT_A_LINK = frozenset({"index.html", "404.html", ".nojekyll", "robots.txt", "sitemap.xml", "install.sh"})
 # Files kept on purpose that nothing links, each for a stated reason. They used to pass only because

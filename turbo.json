@@ -6,57 +6,36 @@
     "enabled": false
   },
   "futureFlags": {
+    "experimentalCargoWorkspaces": true,
     "experimentalPythonWorkspaces": true,
-    "experimentalTaskCommand": true
+    "experimentalTaskCommand": true,
+    "affectedUsingTaskInputs": true,
+    "githubActionsRemoteBaseRefFallback": true
   },
   "tasks": {
-    "//#rust-build": {
-      "command": [
-        "cargo",
-        "build",
-        "--manifest-path",
-        "rust/Cargo.toml",
-        "--workspace",
-        "--locked"
-      ],
-      "cache": false,
-      "inputs": [
-        "$TURBO_ROOT$/rust/Cargo.toml",
-        "$TURBO_ROOT$/rust/Cargo.lock",
-        "$TURBO_ROOT$/rust/crates/**"
-      ]
-    },
-    "//#rust-domain-contract": {
-      "command": [
-        "cargo",
-        "test",
-        "--manifest-path",
-        "rust/Cargo.toml",
-        "-p",
-        "swf-domain",
-        "--test",
-        "contract",
-        "--locked"
-      ],
-      "cache": false,
-      "dependsOn": [
-        "//#rust-build"
-      ],
-      "inputs": [
-        "$TURBO_ROOT$/rust/Cargo.toml",
-        "$TURBO_ROOT$/rust/Cargo.lock",
-        "$TURBO_ROOT$/rust/crates/swf-domain/**"
-      ]
-    },
     "swfactory-python#test": {
-      "dependsOn": [
-        "//#rust-build"
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!README.md",
+        "!CHANGELOG.md",
+        "!docs/**",
+        "!site/**",
+        "$TURBO_ROOT$/tests/**"
       ]
     },
-    "//#polyglot-contract": {
+    "swfactory-rust#test": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/tests/fixtures/contract/**"
+      ]
+    },
+    "swf-cli#build": {},
+    "//#polyglot-verification": {
+      "cache": false,
       "dependsOn": [
         "swfactory-python#test",
-        "//#rust-domain-contract"
+        "swfactory-rust#test",
+        "swf-cli#build"
       ]
     }
   }

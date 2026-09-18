@@ -2,9 +2,15 @@
 # over the same operations. Airflow keeps scheduling, retries, mapped jobs and HITL gates; this
 # workspace is the operator's application code, and it holds no authority of its own — every
 # decision is re-read from the API before it is acted on (docs/swf.md).
+#
+# The workspace manifest lives at repository root so Turborepo can discover Cargo crates natively.
+# Rust sources stay under rust/; moving the manifest changes build identity, not lifecycle authority.
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = ["rust/crates/*"]
+
+[workspace.metadata]
+name = "swfactory-rust"
 
 [workspace.package]
 version = "2.2.0"
@@ -15,10 +21,10 @@ repository = "https://github.com/zozo123/ariflow-swfactory"
 authors = ["swfactory contributors"]
 
 [workspace.dependencies]
-swf-domain = { path = "crates/swf-domain" }
-swf-adapters = { path = "crates/swf-adapters" }
-swf-app = { path = "crates/swf-app" }
-swf-tui = { path = "crates/swf-tui" }
+swf-domain = { path = "rust/crates/swf-domain" }
+swf-adapters = { path = "rust/crates/swf-adapters" }
+swf-app = { path = "rust/crates/swf-app" }
+swf-tui = { path = "rust/crates/swf-tui" }
 
 anyhow = "1.0"
 thiserror = "2.0"

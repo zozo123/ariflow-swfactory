@@ -83,7 +83,7 @@ jobs:
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: "rust" }
+        with: { workspaces: "." }
       - run: uv sync --group airflow
       - name: swf drives a live Airflow end to end (2 issues x 2 targets, 8 gates, 4 deliveries)
         id: rust_harness
@@ -210,14 +210,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { components: "rustfmt, clippy" }
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: "rust" }
-      - run: cargo fmt --manifest-path rust/Cargo.toml --all --check
+        with: { workspaces: "." }
+      - run: cargo fmt --all --check
       - run: >-
-          cargo clippy --manifest-path rust/Cargo.toml
+          cargo clippy --workspace
           --all-targets --all-features -- -D warnings
-      - run: cargo test --manifest-path rust/Cargo.toml --workspace
+      - run: cargo test --workspace --locked
       - name: Release build (the binary release.yml ships; --locked keeps Cargo.lock authoritative)
-        run: cargo build --manifest-path rust/Cargo.toml --release --locked
+        run: cargo build --release --locked
 
   contract-equivalence:
     if: github.event_name == 'push' || github.base_ref == 'main'
@@ -229,10 +229,10 @@ jobs:
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: "rust" }
+        with: { workspaces: "." }
       - run: uv sync
       - run: uv run pytest tests/test_contract_fixtures.py
-      - run: cargo test --manifest-path rust/Cargo.toml -p swf-domain --test contract
+      - run: cargo test -p swf-domain --test contract --locked
 
   # Turborepo 2.11 is an experimental build accelerator, not a lifecycle or promotion authority.
   # This job exercises the polyglot graph and preserves its plan/run summaries, but it is advisory
@@ -244,18 +244,30 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
       - uses: astral-sh/setup-uv@v6
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v6
         with: { node-version: "22" }
       - run: uv sync
+      - name: Prove native Cargo and uv packages are discovered
+        run: |
+          mkdir -p .factory/turbo
+          npx --yes turbo@2.11.1 ls --output=json > .factory/turbo/packages.json
+          for package in swfactory-rust swfactory-python swf-domain swf-adapters swf-app swf-cli swf-tui; do
+            grep -q "\"name\"[[:space:]]*:[[:space:]]*\"$package\"" .factory/turbo/packages.json || {
+              echo "::error::Turbo did not discover $package natively"
+              cat .factory/turbo/packages.json
+              exit 1
+            }
+          done
       - name: Resolve the cross-language graph without executing it
         run: |
           mkdir -p .factory/turbo
-          npx --yes turbo@2.11.1 run '//#polyglot-contract' --dry-run=json > .factory/turbo/plan.json
+          npx --yes turbo@2.11.1 run '//#polyglot-verification' --dry-run=json > .factory/turbo/plan.json
       - name: Execute the cross-language graph
-        run: npx --yes turbo@2.11.1 run '//#polyglot-contract' --summarize
+        run: npx --yes turbo@2.11.1 run '//#polyglot-verification' --summarize
       - name: Keep Turbo planning and run-summary evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -263,6 +275,7 @@ jobs:
           name: turbo-polyglot-graph
           path: |
             .factory/turbo/plan.json
+            .factory/turbo/packages.json
             .turbo/runs/*.json
           if-no-files-found: warn
 

@@ -66,8 +66,14 @@ protected = [
   "blueprints/",                        # gates, limits, budgets and sandbox of every line
   "dags/",                              # Airflow is the only lifecycle scheduler
   "scripts/",                           # release, e2e and stress entry points
-  "pyproject.toml",                     # the verification environment itself
+  "pyproject.toml",                     # the Python verification environment itself
   "uv.lock",
+  "Cargo.toml",                         # root Cargo workspace / native Rust graph identity
+  "Cargo.lock",                         # exact Rust dependency resolution
+  "rust-toolchain.toml",                # compiler + rustfmt/clippy component identity
+  "rustfmt.toml",                       # format gate semantics
+  "turbo.json",                         # local build graph; acceleration must not become self-editable
+
   "CLAUDE.md",                          # the knowledge page every later cell is briefed from
   "REVIEW_LIQUID.md",                   # annealed-review authority is human-maintained
   # --- the confinement itself: editing these is how a run would widen its own cage ------------
