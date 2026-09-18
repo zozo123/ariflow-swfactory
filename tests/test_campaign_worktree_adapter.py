@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from swfactory.candidate_evidence import verify_candidate_evidence_bundle
 from swfactory.evolution import (
     CandidateOutcome,
     Strategy,
@@ -84,7 +85,11 @@ def test_adapter_freezes_exact_candidate_revision_then_removes_workspace(tmp_pat
     assert outcome.state == "ok"
     assert outcome.output_head and outcome.output_head != base
     assert outcome.candidate_ref
+    assert outcome.evidence_bundle_path
+    assert outcome.evidence_digest
     assert _git(repo, "rev-parse", outcome.candidate_ref) == outcome.output_head
+    bundle = verify_candidate_evidence_bundle(Path(outcome.evidence_bundle_path), repo=repo)
+    assert bundle.digest() == outcome.evidence_digest
     assert report.selection.winner == requests[0].logical_id
     assert not any(root.iterdir())
 
@@ -183,3 +188,110 @@ def test_experiment_node_retains_frozen_candidate_ref_as_evidence(tmp_path: Path
 
     node = report.experiment_round.nodes[0]
     assert any(item.startswith("candidate-ref:refs/swfactory/candidates/") for item in node.evidence)
+
+
+
+def test_adapter_retains_workspace_artifacts_before_cleanup(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    root = tmp_path / "worktrees"
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
+        (workspace / "agent.log").write_text("proof from disposable workspace\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate")
+        return _passing(request)
+
+    def artifacts(_request, workspace: Path, _outcome: CandidateOutcome):
+        return {"agent-log": workspace / "agent.log"}
+
+    report = run_campaign(
+        worktree_candidate_runner(repo, root, runner, artifact_collector=artifacts),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    outcome = report.outcomes[0]
+    assert outcome.evidence_bundle_path
+    bundle = verify_candidate_evidence_bundle(Path(outcome.evidence_bundle_path), repo=repo)
+    retained = Path(outcome.evidence_bundle_path) / bundle.artifacts[0].path
+    assert retained.read_text(encoding="utf-8") == "proof from disposable workspace\n"
+    assert not any(root.iterdir())
+
+
+def test_evidence_capture_failure_refuses_but_retains_frozen_revision(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    root = tmp_path / "worktrees"
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate")
+        return _passing(request)
+
+    def broken_artifacts(_request, _workspace: Path, _outcome: CandidateOutcome):
+        raise RuntimeError("artifact collector unavailable")
+
+    report = run_campaign(
+        worktree_candidate_runner(repo, root, runner, artifact_collector=broken_artifacts),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    outcome = report.outcomes[0]
+    assert outcome.state == "refused"
+    assert outcome.candidate_ref
+    assert outcome.output_head
+    assert _git(repo, "rev-parse", outcome.candidate_ref) == outcome.output_head
+    assert outcome.evidence_digest is None
+    assert "evidence capture failed" in outcome.detail
+    assert report.selection.winner is None
+    assert not any(root.iterdir())
+
+
+def test_frozen_candidate_without_bundle_cannot_be_selected() -> None:
+    request = _request("a" * 40)[0]
+    outcome = CandidateOutcome(
+        logical_id=request.logical_id,
+        strategy=request.strategy,
+        state="ok",
+        input_head=request.input_head,
+        output_head="b" * 40,
+        candidate_ref="refs/swfactory/candidates/" + "c" * 24,
+        evaluations=(
+            evaluation(Dimension.CORRECTNESS, passed=True, evidence="tests"),
+            evaluation(Dimension.EVIDENCE, passed=True, evidence="claimed evidence"),
+        ),
+    )
+
+    report = run_campaign(lambda _request: outcome, (request,), parallel=False, human_approved=True)
+
+    assert report.selection.winner is None
+    assert any("missing_candidate_evidence" in item for item in report.selection.refusals)
+
+
+def test_experiment_node_retains_candidate_evidence_digest(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    requests = _request(base)
+
+    def runner(request, workspace: Path) -> CandidateOutcome:
+        (workspace / "value.txt").write_text("candidate\n", encoding="utf-8")
+        _git(workspace, "add", "value.txt")
+        _git(workspace, "commit", "-q", "-m", "candidate")
+        return _passing(request)
+
+    report = run_campaign(
+        worktree_candidate_runner(repo, tmp_path / "worktrees", runner),
+        requests,
+        parallel=False,
+        human_approved=True,
+    )
+
+    outcome = report.outcomes[0]
+    assert outcome.evidence_digest
+    node = report.experiment_round.nodes[0]
+    assert f"candidate-evidence:{outcome.evidence_digest}" in node.evidence
