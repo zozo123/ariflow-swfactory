@@ -18,9 +18,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from swfactory.candidate_worktree import CandidateRevision, verify_candidate_revision
 from swfactory.source_snapshot import SourceSnapshot, verify_source_snapshot
