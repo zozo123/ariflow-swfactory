@@ -6,6 +6,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from swfactory.execution_recipe import BoundExecutionRecipe
+
 SUPPORT_ORDER = {"unsupported": 0, "test_only": 1, "experimental": 2, "supported": 3}
 
 
@@ -52,6 +54,9 @@ class CandidateManifest:
     source_snapshot_sha256: str | None = None
     source_snapshot_size: int | None = None
     source_snapshot_commit_sha: str | None = None
+    execution_recipe_sha256: str | None = None
+    execution_recipe_commit_sha: str | None = None
+    execution_recipe_path: str | None = None
 
     @property
     def digest(self) -> str:
@@ -63,6 +68,9 @@ class CandidateManifest:
             "source_snapshot_sha256": self.source_snapshot_sha256,
             "source_snapshot_size": self.source_snapshot_size,
             "source_snapshot_commit_sha": self.source_snapshot_commit_sha,
+            "execution_recipe_sha256": self.execution_recipe_sha256,
+            "execution_recipe_commit_sha": self.execution_recipe_commit_sha,
+            "execution_recipe_path": self.execution_recipe_path,
         }
         return sha256_bytes(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=dict).encode())
 
@@ -92,9 +100,49 @@ class CandidateManifest:
                 raise RuntimeError(
                     f"candidate source snapshot commit {self.source_snapshot_commit_sha} != source {self.source_sha}"
                 )
+        recipe_fields = (
+            self.execution_recipe_sha256,
+            self.execution_recipe_commit_sha,
+            self.execution_recipe_path,
+        )
+        if any(value is None for value in recipe_fields) and any(value is not None for value in recipe_fields):
+            raise RuntimeError("candidate execution recipe digest, commit and path must be recorded together")
+        if self.execution_recipe_sha256 is not None:
+            if len(self.execution_recipe_sha256) != 64:
+                raise RuntimeError("candidate execution recipe digest is not sha256")
+            if self.execution_recipe_commit_sha != self.source_sha:
+                raise RuntimeError(
+                    f"candidate execution recipe commit {self.execution_recipe_commit_sha} != source {self.source_sha}"
+                )
+            if not self.execution_recipe_path:
+                raise RuntimeError("candidate execution recipe path is empty")
         for name, value in self.artifact_digests.items():
             if len(value) != 64:
                 raise RuntimeError(f"artifact {name} digest is not sha256")
+
+
+def bind_execution_recipe(
+    manifest: CandidateManifest,
+    recipe: BoundExecutionRecipe,
+) -> CandidateManifest:
+    """Return a manifest bound to the exact committed verification recipe."""
+
+    if recipe.commit_sha != manifest.source_sha:
+        raise RuntimeError(
+            f"execution recipe commit {recipe.commit_sha} != candidate source {manifest.source_sha}"
+        )
+    return CandidateManifest(
+        source_sha=manifest.source_sha,
+        base_sha=manifest.base_sha,
+        producers=manifest.producers,
+        artifact_digests=manifest.artifact_digests,
+        source_snapshot_sha256=manifest.source_snapshot_sha256,
+        source_snapshot_size=manifest.source_snapshot_size,
+        source_snapshot_commit_sha=manifest.source_snapshot_commit_sha,
+        execution_recipe_sha256=recipe.digest,
+        execution_recipe_commit_sha=recipe.commit_sha,
+        execution_recipe_path=recipe.path,
+    )
 
 
 @dataclass(frozen=True)
