@@ -38,6 +38,28 @@ The source archive itself is not duplicated into every evidence bundle. Its dige
 recorded, while the content-addressed source-snapshot store remains the source-byte retention
 layer.
 
+## Campaign invariant
+
+The isolated campaign adapter now seals this bundle **before** it removes a successful candidate
+worktree. That makes evidence retention part of the candidate lifecycle rather than an optional
+post-processing step:
+
+```text
+isolated worktree -> commit -> freeze immutable ref -> snapshot input -> seal evidence -> delete worktree
+                                                        |
+                                                        +-> failure => candidate refused
+```
+
+A successful frozen candidate returned by `worktree_candidate_runner` carries both
+`evidence_bundle_path` and `evidence_digest`. If source snapshotting, artifact collection, or
+bundle verification fails, the frozen ref is retained for diagnosis but the outcome becomes
+`refused` and cannot win selection. The experiment tree records the evidence digest beside the
+candidate ref.
+
+An optional artifact collector can name files inside the disposable workspace; the adapter copies
+those bytes into the bundle before cleanup. With no collector, the bundle still retains the exact
+source identity and Git diff.
+
 ## Build
 
 First freeze a candidate and capture the source-snapshot receipt. Then:
