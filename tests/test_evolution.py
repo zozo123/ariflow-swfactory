@@ -27,6 +27,7 @@ from swfactory.evolution import (
     Strategy,
     evaluation,
     independence_findings,
+    iter_completed_candidates,
     plan_requests,
     rank_key,
     run_campaign,
@@ -96,6 +97,27 @@ def test_candidates_actually_overlap_in_time() -> None:
 
     assert report.parallel is True
     assert peak >= 2, "candidates never ran at the same time"
+
+
+def test_completed_candidates_surface_first_finished_before_round_closes() -> None:
+    """Evidence can be observed on first completion without making arrival order the winner."""
+    requests = _requests(Strategy.REPAIR, Strategy.RETHINK)
+    started = threading.Barrier(2)
+    release_repair = threading.Event()
+
+    def runner(request: CandidateRequest) -> CandidateOutcome:
+        started.wait(timeout=2)
+        if request.strategy is Strategy.REPAIR:
+            assert release_repair.wait(timeout=2)
+        return _outcome(request)
+
+    completed = iter_completed_candidates(runner, requests, max_parallel=2)
+    first = next(completed)
+
+    assert first.strategy is Strategy.RETHINK
+    release_repair.set()
+    remaining = list(completed)
+    assert [outcome.strategy for outcome in remaining] == [Strategy.REPAIR]
 
 
 def test_one_losing_candidate_does_not_cancel_its_siblings() -> None:
