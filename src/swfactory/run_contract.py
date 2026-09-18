@@ -29,9 +29,9 @@ class RunContractError(ValueError):
 @dataclass(frozen=True)
 class RunContract:
     argv: tuple[str, ...]
+    runtime: str
+    env_fingerprint: str
     cwd: str = "."
-    runtime: str = "unspecified"
-    env_fingerprint: str = "unspecified"
     schema_version: int = 1
 
     def validate(self) -> None:
@@ -44,10 +44,12 @@ class RunContract:
         path = PurePosixPath(self.cwd.replace("\\", "/"))
         if path.is_absolute() or ".." in path.parts:
             raise RunContractError("run contract cwd must stay inside the repository")
-        if not self.runtime.strip():
-            raise RunContractError("run contract runtime identity must be nonempty")
-        if not self.env_fingerprint.strip():
-            raise RunContractError("run contract environment fingerprint must be nonempty")
+        if not self.runtime.strip() or any(char in self.runtime for char in ("\x00", "\n", "\r")):
+            raise RunContractError("run contract runtime identity must be nonempty and single-line")
+        if not self.env_fingerprint.strip() or any(
+            char in self.env_fingerprint for char in ("\x00", "\n", "\r")
+        ):
+            raise RunContractError("run contract environment fingerprint must be nonempty and single-line")
 
     @property
     def digest(self) -> str:
@@ -73,9 +75,9 @@ class RunContract:
     def from_dict(cls, document: dict[str, Any]) -> "RunContract":
         contract = cls(
             argv=tuple(str(item) for item in document.get("argv", ())),
+            runtime=str(document.get("runtime", "")),
+            env_fingerprint=str(document.get("env_fingerprint", "")),
             cwd=str(document.get("cwd", ".")),
-            runtime=str(document.get("runtime", "unspecified")),
-            env_fingerprint=str(document.get("env_fingerprint", "unspecified")),
             schema_version=int(document.get("schema_version", 1)),
         )
         contract.validate()
