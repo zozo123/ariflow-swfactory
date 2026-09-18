@@ -205,9 +205,7 @@ def worktree_candidate_runner(
                     else None
                 )
                 artifacts = (
-                    artifact_collector(request, Path(worktree.path), outcome)
-                    if artifact_collector is not None
-                    else {}
+                    artifact_collector(request, Path(worktree.path), outcome) if artifact_collector is not None else {}
                 )
                 destination = resolved_evidence_root / request.logical_id
                 bundle = build_candidate_evidence_bundle(
@@ -227,9 +225,7 @@ def worktree_candidate_runner(
                     evidence_bundle_path=None,
                     evidence_digest=None,
                     inherited_recipe_digest=None,
-                    detail=(
-                        f"candidate evidence capture failed: {type(error).__name__}: {error}"
-                    )[:2000],
+                    detail=(f"candidate evidence capture failed: {type(error).__name__}: {error}")[:2000],
                 )
             return replace(
                 outcome,
@@ -237,9 +233,7 @@ def worktree_candidate_runner(
                 candidate_ref=revision.ref,
                 evidence_bundle_path=str(destination),
                 evidence_digest=bundle.digest(),
-                inherited_recipe_digest=(
-                    inherited_recipe.digest if inherited_recipe is not None else None
-                ),
+                inherited_recipe_digest=(inherited_recipe.digest if inherited_recipe is not None else None),
             )
         finally:
             remove_candidate_worktree(worktree, force=True)
