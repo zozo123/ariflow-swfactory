@@ -14,17 +14,12 @@ import hmac
 import json
 import os
 import subprocess
-import sys
-import traceback
-import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from swfactory.cells import CellError
 from swfactory.control import ControlError
-from swfactory.idempotency import OperationError
 
 from .core_service import operation as core_operation
 from .scm_service import operation as scm_operation
@@ -125,13 +120,9 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
         def _compatibility(self, body: dict[str, Any]) -> tuple[int, Any]:
             mount = PREFIX + "/airflow/api/v2"
             path = self.path[len(mount) :]
-            if (
-                self.command == "POST"
-                and path.startswith("/dags/")
-                and path.endswith("/dagRuns")
-                and not factory.capabilities().get("mutation_ready")
-            ):
-                raise Refused(503, "backend is draining or not mutation-ready")
+            if self.command == "POST" and path.startswith("/dags/") and path.endswith("/dagRuns"):
+                if not factory.capabilities().get("mutation_ready"):
+                    raise Refused(503, "backend is draining or not mutation-ready")
             return factory.compatibility(self.command, path, body)
 
         def handle_api(self) -> None:
@@ -163,23 +154,8 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                 status, payload = 400, {"detail": str(error)[:500]}
             except (ControlError, OSError, subprocess.SubprocessError):
                 status, payload = 502, {"detail": "backend service unavailable; mutation outcome may be unknown"}
-            except (OperationError, CellError) as error:
-                # The durable control plane refusing a request is an answer, not a crash. Both
-                # families subclass RuntimeError, so without this they fell into the sink below and
-                # an operator was told "internal backend error" for a stale epoch, a busy Cell, a
-                # duplicate operation key or an in-doubt outcome -- conditions with a specific
-                # remedy that the message must name.
-                status, payload = 409, {"detail": str(error)[:500]}
             except Exception:
-                # Last resort. Anything reaching here is a defect, so it must leave a trace: this
-                # handler used to discard the traceback while `log_message` suppressed the access
-                # log, which produced a zero-byte backend log next to an intermittent failure and
-                # made it undiagnosable. The id ties the operator's response to the traceback.
-                error_id = uuid.uuid4().hex[:12]
-                print(f"[backend] unhandled error {error_id} on {self.command} {self.path}", file=sys.stderr)
-                traceback.print_exc(file=sys.stderr)
-                sys.stderr.flush()
-                status, payload = 500, {"detail": "internal backend error", "error_id": error_id}
+                status, payload = 500, {"detail": "internal backend error"}
             self.reply(status, payload)
 
         do_GET = handle_api
@@ -199,13 +175,6 @@ def serve(host: str = "127.0.0.1", port: int = 8082) -> None:
         state_root=Path(os.getenv("SWF_STATE_ROOT", ".factory")),
     )
     try:
-        # A restart is exactly when a lost lifecycle report is most likely (#2071): the backend was
-        # down while a worker tried to report. Nothing else pumps redelivery until the next request,
-        # and a factory with nothing queued behind it may never send one.
-        try:
-            factory.resume_dispatch()
-        except Exception as error:  # noqa: BLE001 - boot must not fail over Airflow's availability
-            print(f"swfactory backend: reconcile on start deferred: {error}", file=sys.stderr)
         with make_server(factory, host, port) as server:
             server.serve_forever()
     finally:
