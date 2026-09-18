@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from swfactory.cli import app
 from swfactory.evolution import (
+    CampaignError,
     CandidateOutcome,
     CandidateRequest,
     Strategy,
@@ -18,7 +20,6 @@ from swfactory.evolution import (
     select,
 )
 from swfactory.experiment_tree import ExperimentTreeError, NodeState, render, stack_rounds
-from swfactory.cli import app
 from swfactory.generations import Dimension
 
 
