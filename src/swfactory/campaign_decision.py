@@ -21,8 +21,17 @@ from pathlib import Path
 from typing import Any
 
 from swfactory.candidate_evidence import CandidateEvidenceBundle
-from swfactory.evolution import CampaignReport, CandidateOutcome, Selection, Strategy
-from swfactory.generations import Dimension, Evaluation
+from swfactory.evolution import (
+    DEFAULT_STRATEGIES,
+    CampaignError,
+    CampaignReport,
+    CandidateOutcome,
+    CandidateRequest,
+    Selection,
+    Strategy,
+    plan_requests,
+)
+from swfactory.generations import CampaignBudget, Dimension, Evaluation
 
 _DIGEST_PREFIX = "sha256:"
 _ALLOWED_STATES = {"ok", "failed", "cancelled", "skipped", "refused"}
@@ -112,6 +121,52 @@ class DecisionSelection:
 
 
 @dataclass(frozen=True)
+class DescendantCampaignPlan:
+    """An evidenced fork from one immutable campaign decision into the next round."""
+
+    parent_campaign_id: str
+    parent_decision_digest: str
+    parent_candidate: str
+    parent_evidence_digest: str
+    input_head: str
+    depth: int
+    requests: tuple[CandidateRequest, ...]
+    schema_version: int = 1
+
+    def canonical_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "parent_campaign_id": self.parent_campaign_id,
+            "parent_decision_digest": self.parent_decision_digest,
+            "parent_candidate": self.parent_candidate,
+            "parent_evidence_digest": self.parent_evidence_digest,
+            "input_head": self.input_head,
+            "depth": self.depth,
+            "requests": [
+                {
+                    "campaign_id": request.campaign_id,
+                    "cell_id": request.cell_id,
+                    "epoch": request.epoch,
+                    "strategy": request.strategy.value,
+                    "input_head": request.input_head,
+                    "parent_generation": request.parent_generation,
+                    "parent_candidate": request.parent_candidate,
+                    "parent_decision_digest": request.parent_decision_digest,
+                    "depth": request.depth,
+                    "budget_usd": request.budget_usd,
+                    "timeout_s": request.timeout_s,
+                    "logical_id": request.logical_id,
+                }
+                for request in self.requests
+            ],
+        }
+
+    def digest(self) -> str:
+        payload = json.dumps(self.canonical_dict(), sort_keys=True, separators=(",", ":")).encode()
+        return _DIGEST_PREFIX + hashlib.sha256(payload).hexdigest()
+
+
+@dataclass(frozen=True)
 class CampaignDecisionManifest:
     campaign_id: str
     cell_id: str
@@ -172,6 +227,97 @@ class CampaignDecisionManifest:
     def digest(self) -> str:
         payload = json.dumps(self.canonical_dict(), sort_keys=True, separators=(",", ":")).encode()
         return _DIGEST_PREFIX + hashlib.sha256(payload).hexdigest()
+
+
+def plan_descendant_campaign(
+    report: CampaignReport,
+    *,
+    repo: Path,
+    campaign_id: str,
+    strategies: tuple[Strategy, ...] = DEFAULT_STRATEGIES,
+    budget: CampaignBudget | None = None,
+    parent_generation: str | None = None,
+) -> DescendantCampaignPlan:
+    """Plan the next sibling bush only from the fully evidenced selected winner.
+
+    This function creates questions, not work. Airflow remains the scheduler and
+    the existing promotion gate remains the authority.
+    """
+
+    from swfactory.candidate_evidence import CandidateEvidenceError, verify_candidate_evidence_bundle
+
+    if report.experiment_round is None:
+        raise CampaignDecisionError("cannot descend from a campaign without an experiment round")
+    winner_id = report.selection.winner
+    if winner_id is None:
+        raise CampaignDecisionError("cannot descend from a campaign without a selected winner")
+    winners = [outcome for outcome in report.outcomes if outcome.logical_id == winner_id]
+    if len(winners) != 1:
+        raise CampaignDecisionError("selected winner must identify exactly one campaign outcome")
+    winner = winners[0]
+    if winner.state != "ok" or not winner.output_head or winner.output_head == winner.input_head:
+        raise CampaignDecisionError("selected winner is not an answered candidate")
+    if not winner.candidate_ref or not winner.evidence_bundle_path or not winner.evidence_digest:
+        raise CampaignDecisionError("selected winner is missing frozen candidate evidence")
+
+    bundles: dict[str, CandidateEvidenceBundle] = {}
+    for outcome in report.outcomes:
+        answered = outcome.state == "ok" and bool(outcome.output_head) and outcome.output_head != outcome.input_head
+        if not answered:
+            continue
+        if not outcome.evidence_bundle_path or not outcome.evidence_digest:
+            raise CampaignDecisionError(
+                f"{outcome.logical_id}: answered sibling is missing retained evidence"
+            )
+        try:
+            bundle = verify_candidate_evidence_bundle(Path(outcome.evidence_bundle_path), repo=repo)
+        except CandidateEvidenceError as error:
+            raise CampaignDecisionError(
+                f"{outcome.logical_id}: candidate evidence verification failed: {error}"
+            ) from error
+        if bundle.digest() != outcome.evidence_digest:
+            raise CampaignDecisionError(
+                f"{outcome.logical_id}: recorded evidence digest differs from retained bundle"
+            )
+        bundles[outcome.logical_id] = bundle
+
+    decision = build_campaign_decision(report, bundles)
+    parent_round = report.experiment_round
+    if parent_round.winner_id != winner_id:
+        raise CampaignDecisionError("experiment-tree winner differs from campaign selection")
+    winner_nodes = [node for node in parent_round.nodes if node.id == winner_id]
+    if len(winner_nodes) != 1:
+        raise CampaignDecisionError("experiment tree must contain exactly one selected winner node")
+    winner_node = winner_nodes[0]
+    if not winner_node.selected or winner_node.recorded_head != winner.output_head:
+        raise CampaignDecisionError("experiment-tree winner does not bind the selected output head")
+
+    parent_digest = decision.digest()
+    try:
+        requests = plan_requests(
+            campaign_id=campaign_id,
+            cell_id=report.cell_id,
+            epoch=report.epoch,
+            input_head=winner.output_head,
+            strategies=strategies,
+            budget=budget,
+            parent_generation=parent_generation,
+            parent_candidate=winner_id,
+            parent_decision_digest=parent_digest,
+            depth=parent_round.depth + 1,
+        )
+    except CampaignError as error:
+        raise CampaignDecisionError(f"descendant campaign is inadmissible: {error}") from error
+
+    return DescendantCampaignPlan(
+        parent_campaign_id=report.campaign_id,
+        parent_decision_digest=parent_digest,
+        parent_candidate=winner_id,
+        parent_evidence_digest=winner.evidence_digest,
+        input_head=winner.output_head,
+        depth=parent_round.depth + 1,
+        requests=requests,
+    )
 
 
 def build_campaign_decision(
