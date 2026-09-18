@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
@@ -212,6 +212,143 @@ class CampaignReport:
         document["schema_version"] = 2
         document["scheduler"] = "airflow"
         return document
+
+
+@dataclass(frozen=True)
+class ContinuationPlan:
+    """The only legal next sibling bush derived from one selected experiment round."""
+
+    previous_campaign_id: str
+    campaign_id: str
+    cell_id: str
+    epoch: int
+    input_head: str
+    parent_candidate: str
+    depth: int
+    requests: tuple[CandidateRequest, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "previous_campaign_id": self.previous_campaign_id,
+            "campaign_id": self.campaign_id,
+            "cell_id": self.cell_id,
+            "epoch": self.epoch,
+            "input_head": self.input_head,
+            "parent_candidate": self.parent_candidate,
+            "depth": self.depth,
+            "requests": [
+                {
+                    "logical_id": request.logical_id,
+                    "campaign_id": request.campaign_id,
+                    "cell_id": request.cell_id,
+                    "epoch": request.epoch,
+                    "strategy": request.strategy.value,
+                    "input_head": request.input_head,
+                    "parent_generation": request.parent_generation,
+                    "parent_candidate": request.parent_candidate,
+                    "depth": request.depth,
+                    "budget_usd": request.budget_usd,
+                    "timeout_s": request.timeout_s,
+                }
+                for request in self.requests
+            ],
+        }
+
+
+def plan_next_round(
+    report: CampaignReport | Mapping[str, Any],
+    *,
+    campaign_id: str,
+    strategies: Sequence[Strategy] = DEFAULT_STRATEGIES,
+    budget: CampaignBudget | None = None,
+    parent_generation: str | None = None,
+) -> ContinuationPlan:
+    """Plan, but never schedule, the next round from a validated selected winner.
+
+    The selected answered node is the sole continuation anchor. Stored reports are
+    treated as untrusted input: top-level selection, round winner, campaign identity,
+    input revision and cell identity must agree before any request is emitted.
+    """
+
+    if not campaign_id.strip():
+        raise CampaignError("next campaign id must be nonempty")
+
+    if isinstance(report, CampaignReport):
+        previous_campaign_id = report.campaign_id
+        cell_id = report.cell_id
+        epoch = report.epoch
+        input_head = report.input_head
+        selection_winner = report.selection.winner
+        round_ = report.experiment_round
+    else:
+        try:
+            previous_campaign_id = str(report["campaign_id"])
+            cell_id = str(report["cell_id"])
+            epoch = int(report["epoch"])
+            input_head = str(report["input_head"])
+            selection = report["selection"]
+            if not isinstance(selection, Mapping):
+                raise TypeError("selection must be an object")
+            raw_winner = selection.get("winner")
+            selection_winner = str(raw_winner) if raw_winner is not None else None
+            round_document = report["experiment_round"]
+            if not isinstance(round_document, Mapping):
+                raise TypeError("experiment_round must be an object")
+            round_ = ExperimentRound.from_dict(dict(round_document))
+        except (KeyError, TypeError, ValueError) as error:
+            raise CampaignError(f"invalid stored campaign report: {error}") from error
+
+    if round_ is None:
+        raise CampaignError("campaign report has no experiment round")
+    round_.validate()
+    if not previous_campaign_id.strip() or not cell_id.strip() or not input_head.strip():
+        raise CampaignError("campaign report identity fields must be nonempty")
+    if epoch < 0:
+        raise CampaignError("campaign report epoch must be nonnegative")
+    if campaign_id == previous_campaign_id:
+        raise CampaignError("next campaign id must differ from the previous campaign")
+    if round_.round_id != previous_campaign_id:
+        raise CampaignError(
+            f"experiment round {round_.round_id} != campaign report {previous_campaign_id}"
+        )
+    if round_.input_head != input_head:
+        raise CampaignError(
+            f"experiment input {round_.input_head} != campaign report input {input_head}"
+        )
+    if selection_winner is None:
+        raise CampaignError("cannot continue an experiment round without a selected winner")
+    if round_.winner_id != selection_winner:
+        raise CampaignError(
+            f"selection winner {selection_winner} != experiment winner {round_.winner_id}"
+        )
+
+    winner = round_.winner
+    if winner is None or not winner.selected or not winner.frozen or not winner.recorded_head:
+        raise CampaignError("selected experiment winner is not frozen at a recorded revision")
+
+    next_depth = round_.depth + 1
+    requests = plan_requests(
+        campaign_id=campaign_id,
+        cell_id=cell_id,
+        epoch=epoch,
+        input_head=winner.recorded_head,
+        strategies=strategies,
+        budget=budget,
+        parent_generation=parent_generation,
+        parent_candidate=winner.id,
+        depth=next_depth,
+    )
+    return ContinuationPlan(
+        previous_campaign_id=previous_campaign_id,
+        campaign_id=campaign_id,
+        cell_id=cell_id,
+        epoch=epoch,
+        input_head=winner.recorded_head,
+        parent_candidate=winner.id,
+        depth=next_depth,
+        requests=requests,
+    )
 
 
 def rank_key(outcome: CandidateOutcome, required: Iterable[Dimension]) -> tuple[Any, ...]:
