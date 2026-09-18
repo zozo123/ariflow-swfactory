@@ -23,6 +23,7 @@ Two properties matter more than throughput and are asserted rather than assumed:
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from collections.abc import Iterable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -31,6 +32,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from swfactory.candidate_evidence import build_candidate_evidence_bundle
 from swfactory.candidate_worktree import (
     create_candidate_worktree,
     freeze_candidate_worktree,
@@ -39,6 +41,7 @@ from swfactory.candidate_worktree import (
 )
 from swfactory.experiment_tree import ExperimentNode, ExperimentRound, NodeState
 from swfactory.generations import CampaignBudget, Dimension, Evaluation, promotable
+from swfactory.source_snapshot import create_source_snapshot
 from swfactory.work_executor import Cancellation
 
 CandidateState = Literal["ok", "failed", "cancelled", "skipped", "refused"]
@@ -115,6 +118,8 @@ class CandidateOutcome:
     duration_s: float = 0.0
     detail: str = ""
     candidate_ref: str | None = None
+    candidate_evidence_manifest: str | None = None
+    candidate_evidence_digest: str | None = None
 
     @property
     def passed(self) -> frozenset[Dimension]:
@@ -137,13 +142,22 @@ def worktree_candidate_runner(
     repo: Path,
     worktree_root: Path,
     runner: WorkspaceCandidateRunner,
+    *,
+    evidence_root: Path | None = None,
+    source_cache_root: Path | None = None,
 ) -> CandidateRunner:
     """Adapt a workspace-aware runner to the ordinary campaign interface.
 
     Successful candidates are frozen under the deterministic factory candidate
-    ref before their disposable worktree is removed. The frozen Git revision is
-    authoritative: workers may not substitute a different output SHA.
+    ref before their disposable worktree is removed. When evidence_root is
+    configured, the adapter also seals the exact input source snapshot, Git diff,
+    and candidate result beside that frozen revision before cleanup.
+
+    The frozen Git revision is authoritative: workers may not substitute a
+    different output SHA, and evidence-capture failures cannot become winners.
     """
+    if evidence_root is None and source_cache_root is not None:
+        raise CampaignError("source_cache_root requires evidence_root")
 
     def isolated(request: CandidateRequest) -> CandidateOutcome:
         worktree = create_candidate_worktree(
@@ -170,15 +184,62 @@ def worktree_candidate_runner(
                     f"candidate {request.logical_id} claimed output {outcome.output_head} "
                     f"but frozen worktree recorded {revision.output_head}"
                 )
-            return replace(
+            frozen = replace(
                 outcome,
                 output_head=revision.output_head,
                 candidate_ref=revision.ref,
+            )
+            if evidence_root is None:
+                return frozen
+
+            root = Path(evidence_root)
+            source_root = Path(source_cache_root) if source_cache_root is not None else root / ".source-snapshots"
+            source = create_source_snapshot(repo, request.input_head, source_root)
+            result_path = Path(worktree.path) / ".swfactory-candidate-result.json"
+            result_path.write_text(
+                json.dumps(_candidate_result_document(frozen), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            bundle_dir = root / request.logical_id
+            bundle = build_candidate_evidence_bundle(
+                repo,
+                revision,
+                source,
+                artifacts={"candidate-result": result_path},
+                destination=bundle_dir,
+            )
+            return replace(
+                frozen,
+                candidate_evidence_manifest=str(bundle_dir / "manifest.json"),
+                candidate_evidence_digest=bundle.digest(),
             )
         finally:
             remove_candidate_worktree(worktree, force=True)
 
     return isolated
+
+
+def _candidate_result_document(outcome: CandidateOutcome) -> dict[str, Any]:
+    """Stable candidate result retained inside the evidence bundle."""
+    return {
+        "logical_id": outcome.logical_id,
+        "strategy": outcome.strategy.value,
+        "state": outcome.state,
+        "input_head": outcome.input_head,
+        "output_head": outcome.output_head,
+        "candidate_ref": outcome.candidate_ref,
+        "evaluations": [
+            {
+                "dimension": item.dimension.value,
+                "result": item.result,
+                "evidence": item.evidence,
+            }
+            for item in outcome.evaluations
+        ],
+        "cost_usd": outcome.cost_usd,
+        "duration_s": outcome.duration_s,
+        "detail": outcome.detail,
+    }
 
 
 @dataclass(frozen=True)
@@ -429,6 +490,8 @@ def _experiment_round(
         evidence = tuple(f"{item.dimension.value}:{item.result}:{item.evidence}" for item in outcome.evaluations)
         if outcome.candidate_ref:
             evidence += (f"candidate-ref:{outcome.candidate_ref}",)
+        if outcome.candidate_evidence_digest:
+            evidence += (f"candidate-evidence:{outcome.candidate_evidence_digest}",)
         nodes.append(
             ExperimentNode(
                 id=outcome.logical_id,
