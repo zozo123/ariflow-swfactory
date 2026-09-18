@@ -114,16 +114,19 @@ def test_existing_verified_bundle_is_idempotently_reused(repo: Path, tmp_path: P
     revision = frozen(repo, tmp_path)
     root = tmp_path / "evidence"
     first, first_path = build_candidate_evidence(repo, revision, root=root, result={"state": "ok"})
-    second, second_path = build_candidate_evidence(
-        repo,
-        revision,
-        root=root,
-        result={"state": "different result is not allowed to rewrite evidence"},
-    )
+    second, second_path = build_candidate_evidence(repo, revision, root=root, result={"state": "ok"})
 
     assert second_path == first_path
     assert second.digest() == first.digest()
-    assert json.loads((first_path.parent / "result.json").read_text()) == {"state": "ok"}
+
+
+def test_existing_bundle_refuses_result_drift(repo: Path, tmp_path: Path) -> None:
+    revision = frozen(repo, tmp_path)
+    root = tmp_path / "evidence"
+    build_candidate_evidence(repo, revision, root=root, result={"state": "ok"})
+
+    with pytest.raises(CandidateEvidenceError, match="different result"):
+        build_candidate_evidence(repo, revision, root=root, result={"state": "changed"})
 
 
 def test_tampered_result_is_detected(repo: Path, tmp_path: Path) -> None:
@@ -151,7 +154,7 @@ def test_candidate_ref_drift_is_detected(repo: Path, tmp_path: Path) -> None:
     _, path = build_candidate_evidence(repo, revision, root=tmp_path / "evidence", result={"state": "ok"})
     subprocess.run(["git", "update-ref", "-d", revision.ref], cwd=repo, check=True)
 
-    with pytest.raises(Exception, match="candidate ref drift"):
+    with pytest.raises(CandidateEvidenceError, match="candidate ref drift"):
         verify_candidate_evidence(repo, path)
 
 
@@ -203,5 +206,5 @@ def test_bundle_refuses_a_different_revision_at_same_candidate_identity(repo: Pa
         output_head=revision.input_head,
         ref=revision.ref,
     )
-    with pytest.raises(Exception):
+    with pytest.raises(CandidateEvidenceError):
         build_candidate_evidence(repo, forged, root=root, result={"state": "ok"})
