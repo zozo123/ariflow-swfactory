@@ -59,25 +59,36 @@ def create_candidate_worktree(
     if os.name == "posix":
         root.chmod(0o700)
     path = root / f"cand-{key}"
+    reservation = root / f".cand-{key}.reserve"
     if path.exists() or path.is_symlink():
         raise CandidateWorktreeError(f"candidate workspace already exists: {path}")
 
     try:
+        fd = os.open(reservation, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as error:
+        raise CandidateWorktreeError(f"candidate workspace is already being created: {path}") from error
+    else:
+        os.close(fd)
+
+    added = False
+    try:
         _git(repo, "worktree", "add", "--detach", str(path), base_sha)
+        added = True
         observed = _git(path, "rev-parse", "HEAD").strip()
         if observed != base_sha:
             raise CandidateWorktreeError(f"worktree HEAD {observed} != requested base {base_sha}")
+        return CandidateWorktree(
+            candidate_id=candidate_id,
+            base_sha=base_sha,
+            path=str(path),
+            workspace_key=key,
+        )
     except BaseException:
-        if path.exists():
+        if added:
             _remove_registered(repo, path, force=True)
         raise
-
-    return CandidateWorktree(
-        candidate_id=candidate_id,
-        base_sha=base_sha,
-        path=str(path),
-        workspace_key=key,
-    )
+    finally:
+        reservation.unlink(missing_ok=True)
 
 
 def recorded_candidate_head(worktree: CandidateWorktree) -> str:
