@@ -44,6 +44,9 @@ def create_source_snapshot(repo: Path, revision: str, cache_root: Path) -> Sourc
     are reused only after their digest and byte size are re-verified.
     """
 
+    if not revision or revision.startswith("-") or "\x00" in revision or "\n" in revision or "\r" in revision:
+        raise SourceSnapshotError(f"invalid Git revision: {revision!r}")
+
     repo = Path(repo).resolve()
     cache_root = Path(cache_root).resolve()
     if not repo.is_dir():
@@ -87,8 +90,8 @@ def verify_source_snapshot(snapshot: SourceSnapshot) -> None:
     """Fail closed when retained snapshot bytes no longer match their receipt."""
 
     path = Path(snapshot.archive_path)
-    if not path.is_file():
-        raise SourceSnapshotError(f"source snapshot is absent: {path}")
+    if path.is_symlink() or not path.is_file():
+        raise SourceSnapshotError(f"source snapshot is absent or not a regular file: {path}")
     digest, size = _digest_file(path)
     if digest != snapshot.sha256 or size != snapshot.size_bytes:
         raise SourceSnapshotError(
