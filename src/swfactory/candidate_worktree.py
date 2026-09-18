@@ -126,6 +126,7 @@ def freeze_candidate_worktree(worktree: CandidateWorktree) -> CandidateRevision:
     if raw_path.is_symlink():
         raise CandidateWorktreeError(f"candidate worktree path is a symlink: {raw_path}")
     path = raw_path.resolve()
+    _verify_receipt_identity(worktree, path)
     _verify_membership(repo, path)
 
     status = _git(path, "status", "--porcelain=v1", "--untracked-files=all")
@@ -192,6 +193,7 @@ def remove_candidate_worktree(worktree: CandidateWorktree, *, force: bool = Fals
     if raw_path.is_symlink():
         raise CandidateWorktreeError(f"candidate worktree path is a symlink: {raw_path}")
     path = raw_path.resolve()
+    _verify_receipt_identity(worktree, path)
     if not path.exists():
         _git(repo, "worktree", "prune")
         return
