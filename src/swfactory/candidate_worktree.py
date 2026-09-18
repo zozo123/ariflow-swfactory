@@ -286,8 +286,9 @@ def _validate_revision(revision: str) -> None:
 
 
 def _validate_evidence_path(path: str) -> str:
-    value = str(path).replace("\\", "/").strip("/")
-    invalid = not value or value.startswith("../") or "/../" in f"/{value}/"
+    raw = str(path).replace("\\", "/")
+    value = raw.strip("/")
+    invalid = not value or raw.startswith("/") or value.startswith("../") or "/../" in f"/{value}/"
     if invalid or any(ch in value for ch in ("\x00", "\n", "\r")):
         raise CandidateWorktreeError(f"invalid allowed evidence path: {path!r}")
     return value
