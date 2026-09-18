@@ -201,13 +201,20 @@ def worktree_candidate_runner(
                 encoding="utf-8",
             )
             bundle_dir = root / request.logical_id
-            bundle = build_candidate_evidence_bundle(
-                repo,
-                revision,
-                source,
-                artifacts={"candidate-result": result_path},
-                destination=bundle_dir,
-            )
+            try:
+                bundle = build_candidate_evidence_bundle(
+                    repo,
+                    revision,
+                    source,
+                    artifacts={"candidate-result": result_path},
+                    destination=bundle_dir,
+                )
+            except Exception as error:  # noqa: BLE001 - frozen output is retained for evidence repair.
+                return replace(
+                    frozen,
+                    state="failed",
+                    detail=f"candidate evidence capture failed: {type(error).__name__}: {error}"[:2000],
+                )
             return replace(
                 frozen,
                 candidate_evidence_manifest=str(bundle_dir / "manifest.json"),
