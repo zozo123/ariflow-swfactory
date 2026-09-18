@@ -153,7 +153,19 @@ The command fails closed if a later round:
 - reuses a candidate identity;
 - selects a provisional node.
 
-Use `--json` to emit the combined validated tree.
+Use `--json` to emit the combined validated tree. Use `--mermaid` to emit a deterministic
+GitHub-compatible flowchart that highlights selected nodes and preserves the same validated parent
+edges:
+
+```sh
+uv run swfactory experiment-tree \
+  .factory/campaigns/round-0.json \
+  .factory/campaigns/round-1.json \
+  --mermaid
+```
+
+Because node identifiers in the Mermaid document are generated from validated depth/index positions,
+candidate-controlled strings cannot create graph edges or alter lineage semantics.
 
 ## Current support boundary
 
