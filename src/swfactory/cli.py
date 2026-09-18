@@ -26,6 +26,10 @@ from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
 from swfactory.blueprint import Blueprint
 from swfactory.config import FACTORY_ROOT, Config
 from swfactory.dispatch import DEFAULT_INBOX, DeliveryConflict, DeliveryInbox
+
+# Imported at module level, not deferred like the rest of `improve`: it is the default of a
+# typer option, which is evaluated when the command is declared. The module is stdlib-only.
+from swfactory.improvement_annealing import DEFAULT_ENROL_CAP
 from swfactory.models import RunReport, StageError
 from swfactory.runtime import build_ctx, ctx_for, job_config, job_run_dir
 from swfactory.scm import make_scm
@@ -213,6 +217,20 @@ def improve(
     as_issues: Annotated[
         bool, typer.Option("--as-issues", help="print the gh commands that would enrol these on the liquid line")
     ] = False,
+    enrolled: Annotated[
+        int,
+        typer.Option(
+            help="open work orders this loop already enrolled; count them with "
+            "`gh issue list --label liquid --state open --json number --jq length`"
+        ),
+    ] = 0,
+    enrol_cap: Annotated[
+        int, typer.Option("--enrol-cap", help="soft cap on open enrolled orders before enrolment needs an ack")
+    ] = DEFAULT_ENROL_CAP,
+    ack_queue: Annotated[
+        bool,
+        typer.Option("--ack-queue", help="acknowledge a full queue and print the enrolment commands anyway"),
+    ] = False,
     record_to: Annotated[
         Path | None, typer.Option("--record", help="append this assessment to a trajectory directory")
     ] = None,
@@ -226,6 +244,12 @@ def improve(
     whose done-condition cites no such check is refused rather than emitted.
 
     It proposes only. The gates and the merge button are untouched.
+
+    ``--enrolled`` is the loop's second observation, and it opposes the first: the annealer widens
+    the budget when nothing is retiring, and enrolment pressure narrows it when the queue the loop
+    already filed is not draining. Measurement is never suppressed -- every signal is assessed and
+    reported at any pressure -- but at the cap ``--as-issues`` refuses until ``--ack-queue`` says a
+    human has looked at the queue.
     """
     from swfactory import metrics as improve_metrics
     from swfactory.improvement_annealing import evaluate as anneal
@@ -257,7 +281,14 @@ def improve(
     # Annealing reads the trajectory and decides explore-vs-exploit: a loop retiring nothing widens
     # its budget and stops sidestepping the item it keeps avoiding. It shapes the proposal only.
     heat = anneal(
-        observe(past, carried=len(carried), stalled=len(stuck), sources=len({s.source for s in signals})),
+        observe(
+            past,
+            carried=len(carried),
+            stalled=len(stuck),
+            sources=len({s.source for s in signals}),
+            enrolled=enrolled,
+            enrol_cap=enrol_cap,
+        ),
         base_budget=budget,
     )
     assessment = propose(signals, budget=heat.budget, stalled_keys=stuck, readmit_stalled=heat.readmit_stalled)
@@ -266,6 +297,16 @@ def improve(
         typer.echo(json.dumps(assessment.to_dict(), indent=2, sort_keys=True))
         return
     if as_issues:
+        if not heat.enrol_allowed and not ack_queue:
+            # Refuse the enrolment path, not the assessment: `improve` without --as-issues still
+            # prints every signal. A loop whose queue is full has already said what it needs; what
+            # it needs next is for someone to drain it, not for it to say the same thing louder.
+            typer.echo(
+                f"{heat.enrolled} enrolled orders are still open (cap {heat.enrol_cap}). "
+                "Close or drain them, or pass --ack-queue to enrol anyway.",
+                err=True,
+            )
+            raise typer.Exit(1)
         # Printed, never run: filing is an outward effect, and the loop proposes rather than acts.
         typer.echo("\n\n".join(issue_commands(assessment.orders)))
         return
