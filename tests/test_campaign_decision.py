@@ -16,7 +16,7 @@ from swfactory.campaign_decision import (
     verify_campaign_decision,
     write_campaign_decision,
 )
-from swfactory.candidate_evidence import build_candidate_evidence_bundle
+from swfactory.candidate_evidence import CandidateEvidenceError, build_candidate_evidence_bundle
 from swfactory.candidate_worktree import (
     create_candidate_worktree,
     freeze_candidate_worktree,
@@ -198,7 +198,7 @@ def test_verification_rehashes_bound_candidate_evidence(repo: Path, tmp_path: Pa
     retained = next((evidence / "artifacts").iterdir())
     retained.write_text("tampered\n", encoding="utf-8")
 
-    with pytest.raises(Exception, match="changed"):
+    with pytest.raises(CandidateEvidenceError, match="changed"):
         verify_campaign_decision(path, paths, repo=repo)
 
 
@@ -210,7 +210,7 @@ def test_frozen_ref_drift_invalidates_campaign_decision(repo: Path, tmp_path: Pa
     loser = next(candidate for candidate in manifest.candidates if candidate.candidate_id == "cand_rethink")
     git(repo, "update-ref", loser.candidate_ref, report.input_head)
 
-    with pytest.raises(Exception, match="candidate ref"):
+    with pytest.raises(CandidateEvidenceError, match="candidate ref"):
         verify_campaign_decision(path, paths, repo=repo)
 
 
