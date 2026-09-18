@@ -22,7 +22,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from swfactory.candidate_worktree import CandidateRevision, verify_candidate_revision
+from swfactory.candidate_worktree import (
+    CandidateRevision,
+    CandidateWorktreeError,
+    candidate_ref,
+    verify_candidate_revision,
+)
 from swfactory.source_snapshot import SourceSnapshot, verify_source_snapshot
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -87,8 +92,14 @@ class CandidateEvidenceBundle:
                 raise CandidateEvidenceError(f"{label} head must be a full lowercase Git SHA")
         if self.input_head == self.output_head:
             raise CandidateEvidenceError("candidate evidence requires a distinct output head")
-        if not self.candidate_ref.startswith("refs/swfactory/candidates/"):
-            raise CandidateEvidenceError("candidate evidence has an unexpected frozen ref")
+        try:
+            expected_ref = candidate_ref(self.candidate_id)
+        except CandidateWorktreeError as error:
+            raise CandidateEvidenceError(f"candidate id is invalid: {error}") from error
+        if self.candidate_ref != expected_ref:
+            raise CandidateEvidenceError(
+                f"candidate evidence ref {self.candidate_ref!r} != deterministic ref {expected_ref!r}"
+            )
         if not _DIGEST.fullmatch(self.source_sha256):
             raise CandidateEvidenceError("source snapshot sha256 is invalid")
         if self.source_size_bytes < 0:
@@ -224,10 +235,26 @@ def verify_candidate_evidence_bundle(destination: Path, *, repo: Path | None = N
             output_head=bundle.output_head,
             ref=bundle.candidate_ref,
         )
+        repo = repo.resolve()
         try:
-            verify_candidate_revision(repo.resolve(), revision)
+            verify_candidate_revision(repo, revision)
         except RuntimeError as error:
             raise CandidateEvidenceError(f"candidate ref verification failed: {error}") from error
+        expected_diff = _git_bytes(
+            repo,
+            "diff",
+            "--binary",
+            "--full-index",
+            bundle.input_head,
+            bundle.output_head,
+        )
+        expected_digest = hashlib.sha256(expected_diff).hexdigest()
+        if expected_digest != bundle.diff.sha256 or len(expected_diff) != bundle.diff.size_bytes:
+            raise CandidateEvidenceError(
+                "retained git diff does not match the recorded input/output revisions: "
+                f"expected {expected_digest}/{len(expected_diff)}, "
+                f"manifest has {bundle.diff.sha256}/{bundle.diff.size_bytes}"
+            )
     return bundle
 
 
