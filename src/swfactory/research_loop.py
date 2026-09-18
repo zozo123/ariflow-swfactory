@@ -160,8 +160,7 @@ def run_annealing_loop(
                 raise CampaignError(f"annealing round {depth} has no strategies")
             if len(strategies) > budget.max_candidates:
                 raise CampaignError(
-                    f"annealing round {depth} has {len(strategies)} candidates; "
-                    f"budget admits {budget.max_candidates}"
+                    f"annealing round {depth} has {len(strategies)} candidates; budget admits {budget.max_candidates}"
                 )
             if len(set(strategies)) != len(strategies):
                 raise CampaignError(f"annealing round {depth} repeats a strategy")
