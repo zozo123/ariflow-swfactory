@@ -108,9 +108,7 @@ class ManagedGraph(BoundaryModel):
         for node in self.nodes:
             for parent in node.depends_on:
                 condition = f"|{node.condition}|" if node.condition else ""
-                lines.append(
-                    f"  {parent.replace(':', '_')} -->{condition} {node.id.replace(':', '_')}"
-                )
+                lines.append(f"  {parent.replace(':', '_')} -->{condition} {node.id.replace(':', '_')}")
         return "\n".join(lines) + "\n"
 
 
