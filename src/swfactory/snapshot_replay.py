@@ -23,6 +23,10 @@ from typing import Any, Mapping
 from swfactory.source_snapshot import SourceSnapshot, verify_source_snapshot
 
 _ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SECRET_ENV = re.compile(
+    r"(^|_)(TOKEN|PASSWORD|PASSWD|SECRET|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS?)(_|$)",
+    re.IGNORECASE,
+)
 
 
 class SnapshotReplayError(RuntimeError):
@@ -53,6 +57,8 @@ class SnapshotRunRecipe:
                 raise SnapshotReplayError(f"invalid environment key: {key!r}")
             if key in keys:
                 raise SnapshotReplayError(f"duplicate environment key: {key}")
+            if _SECRET_ENV.search(key):
+                raise SnapshotReplayError(f"replay recipe refuses secret-like environment key: {key}")
             if "\x00" in value:
                 raise SnapshotReplayError(f"environment value for {key} contains NUL")
             keys.add(key)
