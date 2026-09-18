@@ -330,4 +330,9 @@ def test_attempted_explicit_non_replay_safe_policy_cannot_be_widened(journal: Op
     journal.mark_observation(ref, MutationOutcome("definitely_absent"))
 
     with pytest.raises(Exception, match="divergent replay policy"):
-        journal.execute(ref, lambda: {"ok": True}, replay_safe=True, reconcile=lambda: MutationOutcome("definitely_absent"))
+        journal.execute(
+            ref,
+            lambda: {"ok": True},
+            replay_safe=True,
+            reconcile=lambda: MutationOutcome("definitely_absent"),
+        )
