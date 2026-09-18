@@ -130,8 +130,8 @@ def _install_content_addressed(
 
 
 def _verify_existing(path: Path, expected_digest: str, expected_size: int) -> None:
-    if not path.is_file():
-        raise SourceSnapshotError(f"content-addressed snapshot is not a file: {path}")
+    if path.is_symlink() or not path.is_file():
+        raise SourceSnapshotError(f"content-addressed snapshot is not a regular file: {path}")
     digest, size = _digest_file(path)
     if digest != expected_digest or size != expected_size:
         raise SourceSnapshotError(
