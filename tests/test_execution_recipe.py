@@ -108,6 +108,19 @@ def test_recipe_cwd_cannot_escape_repository(tmp_path: Path, cwd: str) -> None:
         load_execution_recipe(repo, "HEAD")
 
 
+def test_recipe_rejects_non_string_cwd(tmp_path: Path) -> None:
+    repo, _ = _repo(tmp_path)
+    recipe_path = repo / ".swfactory" / "candidate-run.json"
+    document = json.loads(recipe_path.read_text(encoding="utf-8"))
+    document["cwd"] = 123
+    recipe_path.write_text(json.dumps(document), encoding="utf-8")
+    _git(repo, "add", ".swfactory/candidate-run.json")
+    _git(repo, "commit", "-q", "-m", "bad cwd type")
+
+    with pytest.raises(ExecutionRecipeError, match="cwd must be a string"):
+        load_execution_recipe(repo, "HEAD")
+
+
 def test_recipe_rejects_unknown_fields_instead_of_silently_ignoring_policy(tmp_path: Path) -> None:
     repo, _ = _repo(tmp_path)
     path = repo / ".swfactory" / "candidate-run.json"
