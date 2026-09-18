@@ -28,8 +28,15 @@ from collections.abc import Iterable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from swfactory.candidate_worktree import (
+    create_candidate_worktree,
+    freeze_candidate_worktree,
+    remove_candidate_worktree,
+    verify_candidate_revision,
+)
 from swfactory.experiment_tree import ExperimentNode, ExperimentRound, NodeState
 from swfactory.generations import CampaignBudget, Dimension, Evaluation, promotable
 from swfactory.work_executor import Cancellation
@@ -107,6 +114,7 @@ class CandidateOutcome:
     cost_usd: float = 0.0
     duration_s: float = 0.0
     detail: str = ""
+    candidate_ref: str | None = None
 
     @property
     def passed(self) -> frozenset[Dimension]:
@@ -117,6 +125,60 @@ class CandidateRunner(Protocol):
     """Run one candidate to completion in its own workspace and score it."""
 
     def __call__(self, request: CandidateRequest) -> CandidateOutcome: ...
+
+
+class WorkspaceCandidateRunner(Protocol):
+    """Run one candidate inside a factory-owned isolated Git worktree."""
+
+    def __call__(self, request: CandidateRequest, workspace: Path) -> CandidateOutcome: ...
+
+
+def worktree_candidate_runner(
+    repo: Path,
+    worktree_root: Path,
+    runner: WorkspaceCandidateRunner,
+) -> CandidateRunner:
+    """Adapt a workspace-aware runner to the ordinary campaign interface.
+
+    Successful candidates are frozen under the deterministic factory candidate
+    ref before their disposable worktree is removed. The frozen Git revision is
+    authoritative: workers may not substitute a different output SHA.
+    """
+
+    def isolated(request: CandidateRequest) -> CandidateOutcome:
+        worktree = create_candidate_worktree(
+            repo,
+            request.logical_id,
+            request.input_head,
+            root=worktree_root,
+        )
+        try:
+            outcome = runner(request, Path(worktree.path))
+            if (
+                outcome.logical_id != request.logical_id
+                or outcome.strategy != request.strategy
+                or outcome.input_head != request.input_head
+            ):
+                raise CampaignError("workspace runner returned an outcome for a different request")
+            if outcome.state != "ok":
+                return outcome
+
+            revision = freeze_candidate_worktree(worktree)
+            verify_candidate_revision(repo, revision)
+            if outcome.output_head is not None and outcome.output_head != revision.output_head:
+                raise CampaignError(
+                    f"candidate {request.logical_id} claimed output {outcome.output_head} "
+                    f"but frozen worktree recorded {revision.output_head}"
+                )
+            return replace(
+                outcome,
+                output_head=revision.output_head,
+                candidate_ref=revision.ref,
+            )
+        finally:
+            remove_candidate_worktree(worktree, force=True)
+
+    return isolated
 
 
 @dataclass(frozen=True)
@@ -365,6 +427,8 @@ def _experiment_round(
         request = request_by_id[outcome.logical_id]
         answered = outcome.state == "ok" and bool(outcome.output_head) and outcome.output_head != outcome.input_head
         evidence = tuple(f"{item.dimension.value}:{item.result}:{item.evidence}" for item in outcome.evaluations)
+        if outcome.candidate_ref:
+            evidence += (f"candidate-ref:{outcome.candidate_ref}",)
         nodes.append(
             ExperimentNode(
                 id=outcome.logical_id,
