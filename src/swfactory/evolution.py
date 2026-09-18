@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
@@ -306,11 +306,17 @@ def run_campaign(
 
     started = time.monotonic()
     concurrent = parallel and max_parallel > 1 and len(requests) > 1
-    outcomes = (
-        _concurrent(runner, requests, max_parallel, cancellation)
-        if concurrent
-        else _sequential(runner, requests, cancellation)
+    completed = iter_completed_candidates(
+        runner,
+        requests,
+        max_parallel=max_parallel,
+        parallel=concurrent,
+        cancellation=cancellation,
     )
+    by_id = {outcome.logical_id: outcome for outcome in completed}
+    # Reports and selection never encode arrival order. Completion order is an observation surface,
+    # while request order remains the durable representation used for deterministic replay.
+    outcomes = [by_id[request.logical_id] for request in requests]
 
     spent = round(sum(outcome.cost_usd for outcome in outcomes), 6)
     elapsed = int(time.monotonic() - started)
@@ -386,10 +392,41 @@ def _experiment_round(
     return round_
 
 
+def iter_completed_candidates(
+    runner: CandidateRunner,
+    requests: Sequence[CandidateRequest],
+    *,
+    max_parallel: int = 3,
+    parallel: bool = True,
+    cancellation: Cancellation | None = None,
+) -> Iterator[CandidateOutcome]:
+    """Yield candidate evidence as soon as each independent attempt finishes.
+
+    This is an observation surface, not a scheduler or selection policy. Airflow still owns the
+    campaign lifecycle and :func:`run_campaign` still waits for the bounded sibling set before
+    ranking it. Consumers may persist/render early evidence, but arrival order never participates
+    in the final winner calculation.
+    """
+    cancellation = cancellation or Cancellation()
+    if not requests:
+        return
+    if not parallel or max_parallel <= 1 or len(requests) <= 1:
+        for request in requests:
+            yield _guarded(runner, request, cancellation)
+        return
+
+    with ThreadPoolExecutor(max_workers=min(max_parallel, len(requests)), thread_name_prefix="swf-cand") as pool:
+        futures: dict[Future[CandidateOutcome], CandidateRequest] = {
+            pool.submit(_guarded, runner, request, cancellation): request for request in requests
+        }
+        for future in as_completed(futures):
+            yield future.result()
+
+
 def _sequential(
     runner: CandidateRunner, requests: Sequence[CandidateRequest], cancellation: Cancellation
 ) -> list[CandidateOutcome]:
-    return [_guarded(runner, request, cancellation) for request in requests]
+    return list(iter_completed_candidates(runner, requests, max_parallel=1, parallel=False, cancellation=cancellation))
 
 
 def _concurrent(
@@ -398,14 +435,14 @@ def _concurrent(
     max_parallel: int,
     cancellation: Cancellation,
 ) -> list[CandidateOutcome]:
-    collected: dict[str, CandidateOutcome] = {}
-    with ThreadPoolExecutor(max_workers=min(max_parallel, len(requests)), thread_name_prefix="swf-cand") as pool:
-        futures: dict[Future[CandidateOutcome], CandidateRequest] = {
-            pool.submit(_guarded, runner, request, cancellation): request for request in requests
-        }
-        for future in as_completed(futures):
-            request = futures[future]
-            collected[request.logical_id] = future.result()
+    completed = iter_completed_candidates(
+        runner,
+        requests,
+        max_parallel=max_parallel,
+        parallel=True,
+        cancellation=cancellation,
+    )
+    collected = {outcome.logical_id: outcome for outcome in completed}
     # Restore request order so the stored report does not encode who finished first.
     return [collected[request.logical_id] for request in requests]
 

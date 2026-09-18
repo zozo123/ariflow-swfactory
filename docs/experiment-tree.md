@@ -172,3 +172,20 @@ candidate-controlled strings cannot create graph edges or alter lineage semantic
 This feature strengthens the **experimental candidate-campaign/generation model**. It does not mean
 the default managed build stage now launches recursive provider forks. Provider-native fork
 execution remains governed by the existing capability inventory and lifecycle contracts.
+
+
+## Completion-driven observation
+
+A wide round should not hide useful evidence until its slowest sibling finishes. The evolution
+kernel exposes `iter_completed_candidates(...)`, which yields each independent candidate as soon
+as that candidate completes.
+
+This deliberately does **not** make "first finished" the winner:
+
+1. Airflow still owns the bounded campaign lifecycle.
+2. Completion order is an observation surface for logs, evidence, UI, and follow-up planning.
+3. `run_campaign` consumes the completed set and restores durable request order.
+4. Selection ranks only stored candidate properties; wall-clock arrival order is never an input.
+
+That gives the factory the useful OpenResearch-style "wait for the next result and inspect it"
+workflow without turning timing into policy or introducing a second scheduler.
