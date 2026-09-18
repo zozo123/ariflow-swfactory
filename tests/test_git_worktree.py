@@ -194,3 +194,22 @@ def test_candidate_cannot_lie_about_recorded_output_head(tmp_path: Path) -> None
     assert report.outcomes[0].state == "failed"
     assert "claimed output" in report.outcomes[0].detail
     assert report.selection.winner is None
+
+
+
+def test_duplicate_candidate_cannot_reuse_live_workspace_path(tmp_path: Path) -> None:
+    repo, base = _repo(tmp_path)
+    root = tmp_path / "worktrees"
+    first = create_candidate_worktree(repo, "same-candidate", base, root)
+
+    try:
+        try:
+            create_candidate_worktree(repo, "same-candidate", base, root)
+        except CandidateWorktreeError as error:
+            assert "already exists" in str(error) or "already being created" in str(error)
+        else:
+            raise AssertionError("duplicate candidate reused a live worktree")
+        assert Path(first.path).is_dir()
+        assert recorded_candidate_head(first) == base
+    finally:
+        remove_candidate_worktree(repo, first, force=True)
