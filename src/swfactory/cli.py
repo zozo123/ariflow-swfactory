@@ -1228,6 +1228,7 @@ def _candidate_evidence_paths(values: list[str] | None) -> dict[str, Path]:
 def campaign_decision_build(
     report: Annotated[Path, typer.Argument(help="stored CampaignReport JSON")],
     destination: Annotated[Path, typer.Argument(help="campaign decision manifest JSON")],
+    repo_path: Annotated[Path, typer.Option("--repo", help="local Git repository")] = Path("."),
     candidate_evidence: Annotated[
         list[str] | None,
         typer.Option("--candidate-evidence", help="CANDIDATE_ID=BUNDLE_DIR; repeat for every answered sibling"),
@@ -1245,7 +1246,7 @@ def campaign_decision_build(
         document = json.loads(report.read_text(encoding="utf-8"))
         paths = _candidate_evidence_paths(candidate_evidence)
         bundles = {
-            candidate_id: verify_candidate_evidence_bundle(path)
+            candidate_id: verify_candidate_evidence_bundle(path, repo=repo_path)
             for candidate_id, path in paths.items()
         }
         manifest = build_campaign_decision_from_document(document, bundles)
@@ -1259,6 +1260,7 @@ def campaign_decision_build(
 @campaign_decision_app.command("verify")
 def campaign_decision_verify(
     manifest_path: Annotated[Path, typer.Argument(help="campaign decision manifest JSON")],
+    repo_path: Annotated[Path, typer.Option("--repo", help="local Git repository")] = Path("."),
     candidate_evidence: Annotated[
         list[str] | None,
         typer.Option("--candidate-evidence", help="CANDIDATE_ID=BUNDLE_DIR; repeat for every answered sibling"),
@@ -1271,7 +1273,7 @@ def campaign_decision_verify(
 
     try:
         paths = _candidate_evidence_paths(candidate_evidence)
-        manifest = verify_campaign_decision(manifest_path, paths)
+        manifest = verify_campaign_decision(manifest_path, paths, repo=repo_path)
     except (OSError, ValueError, CampaignDecisionError, CandidateEvidenceError) as error:
         typer.echo(f"campaign decision: {error}", err=True)
         raise typer.Exit(2) from error
