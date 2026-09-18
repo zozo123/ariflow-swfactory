@@ -227,9 +227,7 @@ def _remove_path(repo: Path, path: Path, *, force: bool) -> None:
 def _verify_receipt_identity(worktree: CandidateWorktree, path: Path) -> None:
     expected_ref = candidate_ref(worktree.candidate_id)
     if worktree.ref != expected_ref:
-        raise CandidateWorktreeError(
-            f"candidate receipt ref {worktree.ref} != deterministic ref {expected_ref}"
-        )
+        raise CandidateWorktreeError(f"candidate receipt ref {worktree.ref} != deterministic ref {expected_ref}")
     expected_name = expected_ref.rsplit("/", 1)[-1]
     if path.name != expected_name:
         raise CandidateWorktreeError(
