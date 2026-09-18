@@ -20,3 +20,6 @@ airflow_home/
 
 # Rust: the swf operator binary builds here (rust/README.md).
 rust/target/
+
+# Turborepo local task cache and run summaries
+.turbo/
