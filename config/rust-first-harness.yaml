@@ -1,0 +1,37 @@
+schema_version: 1
+harness_entrypoint: rust-swf-cli
+factory_runtime: rust
+lifecycle_scheduler: apache-airflow
+
+binding:
+  protocol: swf-domain::manager_protocol
+  transports:
+    - http
+    - unix-socket
+  airflow_metadata_db_access: forbidden
+
+python:
+  allowed:
+    - dag-composition
+    - airflow-native-hitl-waits
+    - temporary-migration-shims
+  forbidden:
+    - factory-state-machine-authority
+    - provider-credential-ownership
+    - publication-authority
+    - independent-recovery-policy
+
+rust:
+  crates:
+    domain: swf-domain
+    application: swf-app
+    adapters: swf-adapters
+    cli: swf-cli
+    tui: swf-tui
+
+invariants:
+  single_scheduler: true
+  single_factory_authority: true
+  versioned_stage_protocol: true
+  cli_is_public_harness: true
+  in_doubt_never_auto_retried_by_airflow_shim: true
