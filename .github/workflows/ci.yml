@@ -271,9 +271,16 @@ jobs:
           mkdir -p .factory/turbo
           npx --yes turbo@2.11.1 run '//#polyglot-verification' --dry-run=json > .factory/turbo/plan.json
       - name: Execute the cross-language graph
-        run: npx --yes turbo@2.11.1 run '//#polyglot-verification' --summarize
+        run: |
+          npx --yes turbo@2.11.1 run '//#polyglot-verification' --summarize
+          compgen -G ".turbo/runs/*.json" >/dev/null || {
+            echo "::error::Turbo did not produce a run summary"
+            exit 1
+          }
       - name: Measure affectedness, cold/warm cache, and verdict equivalence
-        run: uv run python scripts/polyglot_benchmark.py --out .factory/turbo/benchmark.json
+        run: |
+          uv run python scripts/polyglot_benchmark.py --out .factory/turbo/benchmark.json
+          cat .factory/turbo/benchmark.json
       - name: Keep Turbo planning and run-summary evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -284,7 +291,7 @@ jobs:
             .factory/turbo/packages.json
             .factory/turbo/benchmark.json
             .turbo/runs/*.json
-          if-no-files-found: warn
+          if-no-files-found: error
 
   # One blocking fan-in check for the supported release surface. It records the PR head, base and
   # tested checkout (GitHub's PR merge candidate) together with a digest of every required job's
