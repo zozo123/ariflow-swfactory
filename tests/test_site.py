@@ -118,6 +118,7 @@ def test_homepage_is_small_static_and_content_first() -> None:
 
 
 def test_homepage_explains_the_actual_algorithm_and_authorities() -> None:
+    """Require the homepage to describe the algorithm and authority boundary."""
     source, _ = parse_page("index.html")
 
     assert "Issue in. Verified PR out." in source

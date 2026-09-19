@@ -38,6 +38,7 @@ def _run(
     cwd: Path = ROOT,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    """Run a command and optionally raise with bounded diagnostic output."""
     result = subprocess.run(
         list(argv),
         cwd=cwd,
@@ -54,6 +55,7 @@ def _run(
 
 
 def _affected_names(worktree: Path) -> tuple[str, ...]:
+    """Return the sorted Turbo task names affected in a benchmark worktree."""
     result = _run((*TURBO, "query", TASK_QUERY), cwd=worktree)
     document = json.loads(result.stdout)
     node: Any = document.get("data", document)
@@ -72,6 +74,7 @@ def _affected_names(worktree: Path) -> tuple[str, ...]:
 
 
 def _modify(path: Path, scenario: str) -> None:
+    """Apply the synthetic source change for an affectedness scenario."""
     if scenario == "contract":
         candidates = sorted(path.joinpath("tests/fixtures/contract").glob("*.json"))
         if not candidates:
@@ -90,6 +93,7 @@ def _modify(path: Path, scenario: str) -> None:
 
 
 def affectedness_matrix() -> dict[str, list[str]]:
+    """Measure affected Turbo tasks for each representative change type."""
     baseline = _run(("git", "rev-parse", "HEAD")).stdout.strip()
     with tempfile.TemporaryDirectory(prefix="swf-polyglot-affected-") as tmp:
         worktree = Path(tmp) / "repo"
@@ -111,6 +115,7 @@ def affectedness_matrix() -> dict[str, list[str]]:
 
 
 def _assert_affectedness(matrix: dict[str, list[str]]) -> None:
+    """Validate that affected tasks preserve the polyglot graph boundaries."""
     docs = set(matrix["docs"])
     if docs:
         raise RuntimeError(f"docs-only change unexpectedly selected verification tasks: {sorted(docs)}")
@@ -139,11 +144,13 @@ def _assert_affectedness(matrix: dict[str, list[str]]) -> None:
 
 
 def _usage() -> tuple[float, float]:
+    """Return cumulative child-process user and system CPU time."""
     usage = resource.getrusage(resource.RUSAGE_CHILDREN)
     return usage.ru_utime, usage.ru_stime
 
 
 def _timed(argv: tuple[str, ...]) -> dict[str, object]:
+    """Run a command and capture its exit status, timing, and output tails."""
     before_user, before_sys = _usage()
     started = time.perf_counter()
     result = _run(argv, check=False)
@@ -161,6 +168,7 @@ def _timed(argv: tuple[str, ...]) -> dict[str, object]:
 
 
 def _latest_summary() -> Path:
+    """Return the newest Turbo run-summary file."""
     summaries = sorted(
         (ROOT / ".turbo" / "runs").glob("*.json"),
         key=lambda path: path.stat().st_mtime_ns,
@@ -171,6 +179,7 @@ def _latest_summary() -> Path:
 
 
 def _execution(summary: Path) -> dict[str, object]:
+    """Extract normalized execution counters from a Turbo run summary."""
     document = json.loads(summary.read_text(encoding="utf-8"))
     execution = document.get("execution")
     if not isinstance(execution, dict):
@@ -190,6 +199,7 @@ def _execution(summary: Path) -> dict[str, object]:
 
 
 def verification_benchmark() -> dict[str, object]:
+    """Compare baseline verification with cold and warm Turbo executions."""
     baseline_commands = (
         ("uv", "run", "--active", "--frozen", "--all-packages", "pytest"),
         ("cargo", "test", "--workspace", "--locked"),
@@ -208,9 +218,7 @@ def verification_benchmark() -> dict[str, object]:
     turbo_ok = cold_run["exit_code"] == 0 and warm_run["exit_code"] == 0
     equivalent = baseline_ok == turbo_ok
     if not equivalent:
-        raise RuntimeError(
-            f"Turbo changed the verification verdict: baseline={baseline_ok} turbo={turbo_ok}"
-        )
+        raise RuntimeError(f"Turbo changed the verification verdict: baseline={baseline_ok} turbo={turbo_ok}")
     if turbo_ok and int(warm_summary["cache_hits"]) <= int(cold_summary["cache_hits"]):
         raise RuntimeError(
             "warm verification produced no additional local Turbo cache hits; "
@@ -239,6 +247,7 @@ def verification_benchmark() -> dict[str, object]:
 
 
 def main() -> int:
+    """Generate the affectedness and verification benchmark report."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, default=Path(".factory/turbo/benchmark.json"))
     args = parser.parse_args()

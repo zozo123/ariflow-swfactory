@@ -10,10 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _turbo() -> dict[str, object]:
+    """Load the repository's Turbo task-graph configuration."""
     return json.loads((ROOT / "turbo.json").read_text(encoding="utf-8"))
 
 
 def test_turbo_is_an_accelerator_not_an_authority_layer() -> None:
+    """Keep Turbo local, uncached, and limited to verification work."""
     turbo = _turbo()
 
     assert turbo["remoteCache"] == {"enabled": False}
@@ -35,6 +37,7 @@ def test_turbo_is_an_accelerator_not_an_authority_layer() -> None:
 
 
 def test_root_cargo_workspace_is_native_and_single() -> None:
+    """Require one native Cargo workspace rooted at the repository."""
     root = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
 
     assert not (ROOT / "rust" / "Cargo.toml").exists()
@@ -49,6 +52,7 @@ def test_root_cargo_workspace_is_native_and_single() -> None:
 
 
 def test_uv_workspace_has_a_real_contract_member_and_stable_aggregate_identity() -> None:
+    """Require native uv members and stable Turbo package identities."""
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     member = tomllib.loads((ROOT / "tests/fixtures/contract/pyproject.toml").read_text(encoding="utf-8"))
     lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
@@ -60,6 +64,7 @@ def test_uv_workspace_has_a_real_contract_member_and_stable_aggregate_identity()
 
 
 def test_polyglot_job_is_advisory_and_never_part_of_candidate_readiness() -> None:
+    """Keep the polyglot CI job advisory and outside promotion readiness."""
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     candidate = workflow.split("  candidate-readiness:", 1)[1]
 
@@ -70,6 +75,7 @@ def test_polyglot_job_is_advisory_and_never_part_of_candidate_readiness() -> Non
 
 
 def test_turbo_does_not_enter_airflow_or_promotion_authority() -> None:
+    """Prevent Turbo from entering lifecycle or promotion authority paths."""
     authority_paths = [
         ROOT / "src/swfactory/candidate_readiness.py",
         ROOT / "scripts/promotion_policy.py",
@@ -81,6 +87,7 @@ def test_turbo_does_not_enter_airflow_or_promotion_authority() -> None:
 
 
 def test_turbo_cache_environment_cannot_change_candidate_evidence(monkeypatch, tmp_path: Path) -> None:
+    """Prove Turbo cache settings cannot alter candidate evidence."""
     from swfactory.candidate_readiness import build_manifest
 
     artifact = tmp_path / "required.txt"
@@ -105,6 +112,7 @@ def test_turbo_cache_environment_cannot_change_candidate_evidence(monkeypatch, t
 
 
 def test_workspace_graph_inputs_are_protected_even_when_tests_are_writable() -> None:
+    """Protect graph inputs without changing stage-level test permissions."""
     from swfactory.config import TargetContract, protected_for
 
     contract = TargetContract.parse((ROOT / "factory.toml").read_text(encoding="utf-8"))
