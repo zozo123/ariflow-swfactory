@@ -958,7 +958,7 @@ def review(ctx: Ctx) -> StageResult:
             ctx,
             diff=diff,
             base_sha=base,
-            head_sha=_workspace_head(ctx),
+            head_sha=_assert_workspace_head(ctx, "review context"),
         )
         review_diff = packed_diff.prompt_text if packed_diff is not None else diff
         if packed_diff is not None:
