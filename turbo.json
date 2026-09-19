@@ -16,32 +16,26 @@
     "swfactory-python#test": {
       "inputs": [
         "$TURBO_DEFAULT$",
-        "!rust/**",
-        "!Cargo.toml",
-        "!Cargo.lock",
-        "!rust-toolchain.toml",
-        "!rustfmt.toml",
-        "!README.md",
-        "!CHANGELOG.md",
-        "!docs/**",
-        "!site/**",
-        "$TURBO_ROOT$/src/swfactory/**",
-        "$TURBO_ROOT$/tests/**",
-        "$TURBO_ROOT$/blueprints/**",
-        "$TURBO_ROOT$/config/**",
-        "$TURBO_ROOT$/dags/**",
-        "$TURBO_ROOT$/factory.toml",
-        "$TURBO_ROOT$/pyproject.toml",
-        "$TURBO_ROOT$/uv.lock"
+        "!$TURBO_ROOT$/rust/**/*.rs"
       ]
     },
     "swfactory-rust#test": {
       "inputs": [
-        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/Cargo.toml",
+        "$TURBO_ROOT$/Cargo.lock",
+        "$TURBO_ROOT$/rust-toolchain.toml",
+        "$TURBO_ROOT$/rust/crates/**",
         "$TURBO_ROOT$/tests/fixtures/contract/**"
       ]
     },
-    "swf-cli#build": {},
+    "swf-cli#build": {
+      "inputs": [
+        "$TURBO_ROOT$/Cargo.toml",
+        "$TURBO_ROOT$/Cargo.lock",
+        "$TURBO_ROOT$/rust-toolchain.toml",
+        "$TURBO_ROOT$/rust/crates/**"
+      ]
+    },
     "//#polyglot-verification": {
       "cache": false,
       "dependsOn": [
@@ -49,7 +43,9 @@
         "swfactory-rust#test",
         "swf-cli#build"
       ],
-      "inputs": []
+      "inputs": [
+        "$TURBO_ROOT$/turbo.json"
+      ]
     }
   }
 }
