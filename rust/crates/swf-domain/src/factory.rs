@@ -4,6 +4,7 @@
 //! before it is scheduled and keeps the same identity if the scheduler binding is recreated.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -63,6 +64,43 @@ impl FactoryRunId {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Stable logical identity for one governed outer-harness request.
+    ///
+    /// Airflow run identity is intentionally absent: retries may create a new scheduler binding
+    /// while the logical factory run remains the same.
+    pub fn for_request(request: &FactoryRunRequest) -> Result<Self, FactoryError> {
+        request.validate()?;
+        let harness = request.harness.as_deref().ok_or_else(|| {
+            FactoryError::InvalidRequest(
+                "stable FactoryRunId derivation requires harness + factory_session".into(),
+            )
+        })?;
+        let session = request.factory_session.as_deref().ok_or_else(|| {
+            FactoryError::InvalidRequest(
+                "stable FactoryRunId derivation requires harness + factory_session".into(),
+            )
+        })?;
+
+        let mut issues = request.issues.clone();
+        issues.sort();
+        let mut targets = request.targets.clone();
+        targets.sort();
+
+        let mut hasher = Sha256::new();
+        for value in [
+            request.factory.as_str(),
+            harness,
+            session,
+            &issues.join("\u{0}"),
+            &targets.join("\u{0}"),
+        ] {
+            hasher.update((value.len() as u64).to_be_bytes());
+            hasher.update(value.as_bytes());
+        }
+        let digest = format!("{:x}", hasher.finalize());
+        Self::parse(format!("frun_{}", &digest[..32]))
     }
 }
 
@@ -234,6 +272,24 @@ mod tests {
         };
         assert_eq!(status.run_id.as_str(), "frun_0123456789abcdef");
         assert!(!status.state.terminal());
+    }
+
+    #[test]
+    fn governed_harness_request_has_scheduler_independent_identity() {
+        let a = FactoryRunRequest {
+            factory: FactoryName::parse("research").unwrap(),
+            issues: vec!["42".into(), "17".into()],
+            targets: vec!["owner/repo".into()],
+            harness: Some("codex".into()),
+            factory_session: Some("session-7".into()),
+        };
+        let mut b = a.clone();
+        b.issues.reverse();
+
+        let first = FactoryRunId::for_request(&a).unwrap();
+        let second = FactoryRunId::for_request(&b).unwrap();
+        assert_eq!(first, second);
+        assert!(first.as_str().starts_with("frun_"));
     }
 
     #[test]
