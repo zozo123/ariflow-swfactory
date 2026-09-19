@@ -42,14 +42,17 @@ class FakeCtx:
 
 def test_small_failure_keeps_the_existing_prompt_contract(tmp_path: Path) -> None:
     ctx = FakeCtx(tmp_path)
-    assert pack_failure_observation(
-        ctx,
-        command="pytest -q",
-        exit_code=1,
-        timed_out=False,
-        stdout="one failed\n",
-        stderr="",
-    ) is None
+    assert (
+        pack_failure_observation(
+            ctx,
+            command="pytest -q",
+            exit_code=1,
+            timed_out=False,
+            stdout="one failed\n",
+            stderr="",
+        )
+        is None
+    )
     assert ctx.sb.files == {}
 
 
