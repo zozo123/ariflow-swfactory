@@ -6,11 +6,14 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
-- Add an advisory Turborepo 2.11.1 polyglot verification graph: the root uv project is discovered
-  natively, Python tests wait on an explicit nested-Rust build task, the Rust contract test joins the
-  same graph, remote Turbo cache is disabled, and the graph stays outside candidate-readiness. The
-  README and `docs/polyglot-task-graph.md` define the boundary as build acceleration inside a stage,
-  never a second lifecycle or promotion authority.
+- Add an advisory Turborepo 2.11.1 polyglot verification graph with native repository-root Cargo
+  and uv discovery. Cargo's manifest, lockfile, toolchain, and target identity now live at the
+  repository root while crates remain under `rust/crates/`; uv exposes the shared contract corpus
+  as a virtual member and a stable `swfactory-python` aggregate. The factory attaches an explicit
+  `swfactory-python#verify` task to that native aggregate so Rust-source affectedness is narrower
+  than Turbo's intentionally repository-wide generic root pytest task. Remote Turbo cache remains
+  disabled, the root fan-in is uncached and advisory, and affectedness/cold-warm evidence is retained
+  without joining candidate-readiness.
 
 - Fail SmolVM doctor preflight when the configured daemon is unreachable, unhealthy, or not
   ready, using read-only health/readiness requests under one five-second deadline.
