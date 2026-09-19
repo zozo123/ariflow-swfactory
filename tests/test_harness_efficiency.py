@@ -108,3 +108,101 @@ def test_compaction_has_no_remote_model_client() -> None:
     assert "httpx." not in text
     assert "anthropic" not in text.lower()
     assert "openai" not in text.lower()
+
+
+
+def _trial(
+    mechanism: str,
+    *,
+    sha: str = "a" * 40,
+    authority: str = "sha256:" + "b" * 64,
+    evidence: str = "sha256:" + "c" * 64,
+    prompt: int = 1000,
+    cost: int = 1000,
+    wall: int = 1000,
+    turns: int = 10,
+    complete: bool = True,
+    passed: bool = True,
+):
+    from swfactory.harness_efficiency import HarnessTrial
+
+    return HarnessTrial(
+        mechanism=mechanism,
+        candidate_sha=sha,
+        authority_digest=authority,
+        evidence_digest=evidence,
+        prompt_bytes=prompt,
+        cost_microusd=cost,
+        wall_ms=wall,
+        model_turns=turns,
+        evidence_complete=complete,
+        verifier_passed=passed,
+    )
+
+
+def test_harness_selection_refuses_speedups_that_change_the_answer() -> None:
+    from swfactory.harness_efficiency import select_harness_trials
+
+    baseline = _trial("baseline")
+    fast_wrong_sha = _trial("fast-wrong-sha", sha="d" * 40, prompt=10, cost=10, wall=10, turns=1)
+    fast_wrong_authority = _trial(
+        "fast-wrong-authority",
+        authority="sha256:" + "e" * 64,
+        prompt=10,
+        cost=10,
+        wall=10,
+        turns=1,
+    )
+
+    selected = select_harness_trials(baseline, (fast_wrong_sha, fast_wrong_authority))
+
+    assert selected.survivors == ()
+    assert any("candidate_sha_changed" in item for item in selected.refusals)
+    assert any("authority_digest_changed" in item for item in selected.refusals)
+
+
+def test_harness_selection_refuses_incomplete_or_red_evidence() -> None:
+    from swfactory.harness_efficiency import select_harness_trials
+
+    baseline = _trial("baseline")
+    incomplete = _trial("incomplete", complete=False, prompt=1)
+    red = _trial("red", passed=False, prompt=1)
+
+    selected = select_harness_trials(baseline, (incomplete, red))
+
+    assert selected.survivors == ()
+    assert any("evidence_incomplete" in item for item in selected.refusals)
+    assert any("verifier_failed" in item for item in selected.refusals)
+
+
+def test_harness_selection_uses_pareto_survival_not_fake_weighted_scoring() -> None:
+    from swfactory.harness_efficiency import select_harness_trials
+
+    baseline = _trial("baseline", prompt=1000, cost=1000, wall=1000, turns=10)
+    strictly_better = _trial("strictly-better", prompt=800, cost=900, wall=900, turns=8)
+    token_specialist = _trial("token-specialist", prompt=600, cost=1100, wall=1000, turns=9)
+    dominated = _trial("dominated", prompt=900, cost=1000, wall=1000, turns=10)
+
+    selected = select_harness_trials(
+        baseline,
+        (dominated, token_specialist, strictly_better),
+    )
+
+    assert selected.survivors == ("strictly-better", "token-specialist")
+    assert selected.dominated == ("dominated",)
+
+
+def test_harness_selection_is_completion_order_independent() -> None:
+    from swfactory.harness_efficiency import select_harness_trials
+
+    baseline = _trial("baseline")
+    trials = (
+        _trial("a", prompt=800, cost=900, wall=900, turns=9),
+        _trial("b", prompt=700, cost=1100, wall=900, turns=9),
+        _trial("c", prompt=900, cost=1200, wall=1100, turns=12),
+    )
+
+    first = select_harness_trials(baseline, trials)
+    second = select_harness_trials(baseline, tuple(reversed(trials)))
+
+    assert first == second
