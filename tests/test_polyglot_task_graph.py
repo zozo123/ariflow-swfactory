@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+POLYGLOT_WORKFLOW = ROOT / ".github" / "workflows" / "polyglot-task-graph.yml"
 
 
 def _turbo() -> dict[str, object]:
@@ -89,14 +90,17 @@ def test_uv_workspace_has_a_real_contract_member_and_stable_aggregate_identity()
 
 
 def test_polyglot_job_is_advisory_and_never_part_of_candidate_readiness() -> None:
-    """Keep the polyglot CI job advisory and outside promotion readiness."""
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    candidate = workflow.split("  candidate-readiness:", 1)[1]
+    """Keep accelerator evidence in its own advisory workflow and outside promotion readiness."""
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    polyglot = POLYGLOT_WORKFLOW.read_text(encoding="utf-8")
+    candidate = ci.split("  candidate-readiness:", 1)[1]
 
-    assert "  polyglot-task-graph:" in workflow
-    polyglot = workflow.split("  polyglot-task-graph:", 1)[1].split("  candidate-readiness:", 1)[0]
+    assert "name: polyglot-task-graph" in polyglot
+    assert "  polyglot-task-graph:" in polyglot
     assert "continue-on-error: true" in polyglot
+    assert "tests/test_polyglot_task_graph.py" in polyglot
     assert "polyglot-task-graph" not in candidate.split("steps:", 1)[0]
+    assert "  polyglot-task-graph:" not in ci
 
 
 def test_turbo_does_not_enter_airflow_or_promotion_authority() -> None:
