@@ -49,9 +49,7 @@ def test_factory_job_projection_excludes_issue_identity_but_binds_authority_shap
     assert first.metadata == (("line", "factory"),)
     assert first.digest() == second.digest()
     assert first.digest() != CanonicalPolicy.for_factory_job("hotfix", base).digest()
-    assert first.digest() != CanonicalPolicy.for_factory_job(
-        "factory", {**base, "base_branch": "release"}
-    ).digest()
+    assert first.digest() != CanonicalPolicy.for_factory_job("factory", {**base, "base_branch": "release"}).digest()
 
 
 def test_policy_digest_family_marks_legacy_authority_and_mutations_refuse_it() -> None:
@@ -78,9 +76,7 @@ def test_policy_digest_has_one_hash_construction_site() -> None:
 
 
 def test_python_matches_the_shared_policy_digest_fixture() -> None:
-    document = json.loads(
-        (ROOT / "tests/fixtures/contract/policy_digest.json").read_text(encoding="utf-8")
-    )
+    document = json.loads((ROOT / "tests/fixtures/contract/policy_digest.json").read_text(encoding="utf-8"))
     assert document["function"] == "policy_digest"
     for case in document["cases"]:
         assert policy_digest_for_mapping(case["input"]) == case["expected"]
