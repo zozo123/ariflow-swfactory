@@ -27,8 +27,8 @@ _CONTEXT_LINES = 2
 _TAIL_LINES = 24
 _HEAD_LINES = 5
 _ERROR_RE = re.compile(
-    r"(?i)(traceback|assertionerror|\\bfailed\\b|\\bfailure\\b|\\berror\\b|\\bpanic\\b|"
-    r"\\bexception\\b|caused by|##\\[error\\]|^E\\s+|^error:)"
+    r"(?i)(traceback|assertionerror|\bfailed\b|\bfailure\b|\berror\b|\bpanic\b|"
+    r"\bexception\b|caused by|##\[error\]|^E\s+|^error:)"
 )
 
 
@@ -88,13 +88,13 @@ def _sha256(text: str) -> str:
 def _source(stdout: str, stderr: str) -> str:
     """One exact, unambiguous text source for both process streams."""
 
-    return f"=== stdout ===\\n{stdout}\\n=== stderr ===\\n{stderr}"
+    return f"=== stdout ===\n{stdout}\n=== stderr ===\n{stderr}"
 
 
 def _legacy_tail(stdout: str, stderr: str) -> str:
     """The pre-ObservationPack repair context, retained as the fallback contract."""
 
-    return (stdout[-_STDOUT_TAIL:] + "\\n" + stderr[-_STDERR_TAIL:]).strip()
+    return (stdout[-_STDOUT_TAIL:] + "\n" + stderr[-_STDERR_TAIL:]).strip()
 
 
 def _archive(ctx: Ctx, source: str) -> ObservationRef:
@@ -128,7 +128,7 @@ def exact_page(source: str, *, start_line: int = 1, limit: int = 200) -> str:
     if start_line < 1 or limit < 1:
         raise ValueError("start_line and limit must be positive")
     lines = source.splitlines()
-    return "\\n".join(lines[start_line - 1 : start_line - 1 + limit])
+    return "\n".join(lines[start_line - 1 : start_line - 1 + limit])
 
 
 def verify_quotes(source: str, quotes: tuple[Quote, ...]) -> None:
@@ -140,7 +140,7 @@ def verify_quotes(source: str, quotes: tuple[Quote, ...]) -> None:
             raise ObservationIntegrityError(
                 f"quote range {quote.start_line}-{quote.end_line} is outside a {len(lines)} line observation"
             )
-        exact = "\\n".join(lines[quote.start_line - 1 : quote.end_line])
+        exact = "\n".join(lines[quote.start_line - 1 : quote.end_line])
         if exact != quote.text:
             raise ObservationIntegrityError(
                 f"quote range {quote.start_line}-{quote.end_line} does not match archived source"
@@ -184,7 +184,7 @@ def _quote_ranges(source: str) -> tuple[Quote, ...]:
     for start, end in candidates:
         if start >= end:
             continue
-        text = "\\n".join(lines[start:end])
+        text = "\n".join(lines[start:end])
         cost = len(text.encode("utf-8")) + 48
         if cost > _PROMPT_BUDGET_BYTES:
             continue
@@ -194,7 +194,7 @@ def _quote_ranges(source: str) -> tuple[Quote, ...]:
         used += cost
 
     quotes = tuple(
-        Quote(start_line=start + 1, end_line=end, text="\\n".join(lines[start:end]))
+        Quote(start_line=start + 1, end_line=end, text="\n".join(lines[start:end]))
         for start, end in _merge(selected)
     )
     verify_quotes(source, quotes)
@@ -203,16 +203,16 @@ def _quote_ranges(source: str) -> tuple[Quote, ...]:
 
 def _reduced_prompt(ref: ObservationRef, quotes: tuple[Quote, ...]) -> str:
     header = (
-        "TEST OUTPUT COMPACTED LOCALLY; THE ARCHIVE IS AUTHORITATIVE.\\n"
-        f"handle: {ref.handle}\\n"
-        f"exact source: {ref.sandbox_path}\\n"
-        f"sha256: {ref.sha256}\\n"
-        f"source: {ref.size_bytes} bytes, {ref.lines} lines\\n"
+        "TEST OUTPUT COMPACTED LOCALLY; THE ARCHIVE IS AUTHORITATIVE.\n"
+        f"handle: {ref.handle}\n"
+        f"exact source: {ref.sandbox_path}\n"
+        f"sha256: {ref.sha256}\n"
+        f"source: {ref.size_bytes} bytes, {ref.lines} lines\n"
         "Use Read on the exact source with an offset/limit when an omitted line matters. "
-        "Every excerpt below was verified byte-for-byte against that source.\\n"
+        "Every excerpt below was verified byte-for-byte against that source.\n"
     )
     blocks = [
-        f"\\n[exact lines {quote.start_line}-{quote.end_line}]\\n{quote.text}"
+        f"\n[exact lines {quote.start_line}-{quote.end_line}]\n{quote.text}"
         for quote in quotes
     ]
     return (header + "".join(blocks)).strip()
@@ -237,7 +237,7 @@ def pack_failure_observation(ctx: Ctx, *, stdout: str, stderr: str) -> PackedObs
     if not reduced or len(reduced.encode("utf-8")) >= len(legacy.encode("utf-8")):
         prompt = (
             f"FULL TEST OUTPUT ARCHIVED AS {ref.handle} AT {ref.sandbox_path} "
-            f"(sha256:{ref.sha256}). Use Read for omitted context.\\n\\n{legacy}"
+            f"(sha256:{ref.sha256}). Use Read for omitted context.\n\n{legacy}"
         ).strip()
         mode: Literal["reduced", "legacy-with-handle"] = "legacy-with-handle"
     else:
@@ -264,7 +264,7 @@ def pack_failure_observation(ctx: Ctx, *, stdout: str, stderr: str) -> PackedObs
     }
     ctx.state.write_artifact(
         f"harness/observations/{ref.sha256}.receipt.json",
-        json.dumps(internal, indent=2, sort_keys=True) + "\\n",
+        json.dumps(internal, indent=2, sort_keys=True) + "\n",
     )
 
     public = {
@@ -283,6 +283,6 @@ def pack_failure_observation(ctx: Ctx, *, stdout: str, stderr: str) -> PackedObs
     }
     ctx.write_artifact(
         f"{ctx.art}/harness-observations/{ref.sha256}.json",
-        json.dumps(public, indent=2, sort_keys=True) + "\\n",
+        json.dumps(public, indent=2, sort_keys=True) + "\n",
     )
     return packed
