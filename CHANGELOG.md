@@ -6,6 +6,10 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Make Factory Cell policy identity singular and versioned: `CanonicalPolicy` and structured
+  mappings now share one `policy:v1:<sha256>` constructor and one canonical job projection,
+  Python and Rust are pinned to the same golden fixture, live epochs refuse a different digest
+  before write, and epoch advancement clears inherited policy authority before rebinding.
 - Fail SmolVM doctor preflight when the configured daemon is unreachable, unhealthy, or not
   ready, using read-only health/readiness requests under one five-second deadline.
 - Rebuild demo source bytecode before tests so rapid same-size fixes cannot reuse stale Python

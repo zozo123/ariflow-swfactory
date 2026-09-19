@@ -214,3 +214,30 @@ def test_old_epoch_receipt_is_refused_after_a_takeover_on_another_connection(tmp
     finally:
         writer.close()
         taker.close()
+
+
+def test_new_epoch_clears_inherited_policy_authority(tmp_path: Path) -> None:
+    store = CellStore(tmp_path / "cells.sqlite3")
+    identity = identity_for_job(_job())
+    digest = "policy:v1:" + "a" * 64
+    try:
+        cell = store.activate(identity, actor="one")
+        cell = store.patch(cell["cell_id"], int(cell["epoch"]), "policy:one", policy_digest=digest)
+        cell = store.patch(cell["cell_id"], int(cell["epoch"]), "done:one", state="success")
+
+        next_cell = store.activate(identity, actor="two")
+        assert next_cell["epoch"] == 2
+        assert next_cell["policy_digest"] is None
+
+        rebound = store.patch(
+            next_cell["cell_id"],
+            int(next_cell["epoch"]),
+            "policy:two",
+            policy_digest=digest,
+        )
+        assert rebound["policy_digest"] == digest
+        epoch = store.take_epoch(rebound["cell_id"], int(rebound["epoch"]), actor="takeover")
+        assert epoch == 3
+        assert store.get(rebound["cell_id"])["policy_digest"] is None
+    finally:
+        store.close()

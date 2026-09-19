@@ -36,6 +36,7 @@ from swfactory.control import (
 )
 from swfactory.herd import job_index, parse_issues, snapshot_data, stage_progress
 from swfactory.metrics import summarize
+from swfactory.security_contract import policy_digest_for_mapping
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "contract"
 
@@ -177,6 +178,10 @@ def _call_snapshot_json(data: dict) -> Any:
     return snapshot_data(_snapshot(data["snapshot"]))
 
 
+def _call_policy_digest(data: dict) -> Any:
+    return policy_digest_for_mapping(data)
+
+
 DISPATCH = {
     "job_state": _call_job_state,
     "group_jobs": _call_group_jobs,
@@ -186,6 +191,7 @@ DISPATCH = {
     "job_index": _call_job_index,
     "summarize": _call_summarize,
     "snapshot_json": _call_snapshot_json,
+    "policy_digest": _call_policy_digest,
 }
 
 

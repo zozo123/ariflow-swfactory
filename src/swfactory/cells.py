@@ -164,7 +164,7 @@ class CellStore:
             cur = self.db.execute(
                 """UPDATE cells SET
                     epoch=?, state='dispatching', airflow_dag_id=NULL, airflow_run_id=NULL,
-                    map_index=NULL, compute_json=NULL, cleanup_json=NULL, updated_at=?
+                    map_index=NULL, policy_digest=NULL, compute_json=NULL, cleanup_json=NULL, updated_at=?
                     WHERE cell_id=? AND epoch=? AND state=?""",
                 (next_epoch, now, cell_id, current["epoch"], current["state"]),
             )
@@ -237,7 +237,7 @@ class CellStore:
         now = time.time()
         with self.lock, self.db:
             cur = self.db.execute(
-                "UPDATE cells SET epoch=?, updated_at=? WHERE cell_id=? AND epoch=?",
+                "UPDATE cells SET epoch=?, policy_digest=NULL, updated_at=? WHERE cell_id=? AND epoch=?",
                 (next_epoch, now, cell_id, expected_epoch),
             )
             if cur.rowcount != 1:

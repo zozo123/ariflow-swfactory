@@ -1338,3 +1338,32 @@ def test_an_unhandled_error_is_logged_with_the_id_the_operator_is_given(
     logged = capfd.readouterr().err
     assert error_id in logged, "the id handed to the operator does not appear in the log"
     assert "ZeroDivisionError" in logged and "a genuine defect" in logged
+
+
+def test_live_epoch_policy_mismatch_is_refused_before_the_row_is_overwritten(
+    factory: Factory,
+) -> None:
+    """A digest mismatch is a fence, not a compare-after-write diagnostic."""
+
+    from swfactory.cell_runtime import identity_for_job
+
+    job = {"issue": "991", "repo": REPO, "dir": "", "base_branch": "main", "job_idx": 0}
+    cell = factory.cell_store.activate(identity_for_job(job), actor="test")
+    legacy = "policy:" + "a" * 64
+    cell = factory.cell_store.patch(
+        cell["cell_id"],
+        int(cell["epoch"]),
+        "policy:legacy-test",
+        policy_digest=legacy,
+    )
+    desired = factory._policy_digest(LINE, job)
+
+    with pytest.raises(service_mod.Refused, match="reactivate it at a new epoch"):
+        factory._bind_cell_policy(
+            cell,
+            operation_key="policy:new-family-test",
+            policy_digest=desired,
+            generation="stable",
+        )
+
+    assert factory.cell_store.get(cell["cell_id"])["policy_digest"] == legacy

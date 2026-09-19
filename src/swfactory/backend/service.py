@@ -57,7 +57,7 @@ from swfactory.lifecycle_evidence import TraceContext
 from swfactory.product_surface import build_preview, capability_document
 from swfactory.restore_contract import GATE_PENDING as RESTORE_PENDING
 from swfactory.restore_contract import RestoreGate
-from swfactory.security_contract import MutationEnvelope, policy_digest_for_mapping
+from swfactory.security_contract import CanonicalPolicy, MutationEnvelope, policy_digest_for_mapping
 from swfactory.store_schema import StoreSchemaError, assert_compatible
 from swfactory.trust_evidence import TrustedEvidence
 from swfactory.webhook import _NoRedirect, _safe_airflow_base
@@ -237,16 +237,7 @@ class Factory:
         return payload
 
     def _policy_digest(self, line_name: str, job: dict[str, Any]) -> str:
-        return policy_digest_for_mapping(
-            {
-                "line": line_name,
-                "repo": str(job["repo"]),
-                "issue": str(job["issue"]),
-                "target_dir": str(job.get("dir", "")),
-                "base_branch": str(job.get("base_branch", "main")),
-                "sandbox": str(job.get("sandbox", "configured")),
-            }
-        )
+        return CanonicalPolicy.for_factory_job(line_name, job).digest()
 
     def _desired_epoch(self, job: dict[str, Any]) -> int:
         cell_id = identity_for_job(job).stable_id()
@@ -708,18 +699,12 @@ class Factory:
                 raise Refused(500, "work order member has no job in its immutable payload")
             policy_digest = str(job["policy_digest"])
             cell = self._member_cell(intent, member, job, actor)
-            try:
-                cell = self.cell_store.patch(
-                    cell["cell_id"],
-                    int(cell["epoch"]),
-                    f"policy:{intent.work_id}:{member.job_idx}",
-                    policy_digest=policy_digest,
-                    factory_generation=generation,
-                )
-            except DuplicateOperation:
-                cell = self.cell_store.get(cell["cell_id"])
-            if cell.get("policy_digest") != policy_digest:
-                raise Refused(409, "active Factory Cell policy differs from retried submission")
+            cell = self._bind_cell_policy(
+                cell,
+                operation_key=f"policy:{intent.work_id}:{member.job_idx}",
+                policy_digest=policy_digest,
+                generation=generation,
+            )
             bindings.append(
                 {
                     "job_idx": member.job_idx,
@@ -732,6 +717,37 @@ class Factory:
                 }
             )
         return bindings
+
+    def _bind_cell_policy(
+        self,
+        cell: dict[str, Any],
+        *,
+        operation_key: str,
+        policy_digest: str,
+        generation: str,
+    ) -> dict[str, Any]:
+        """Bind policy once per Cell epoch; never overwrite live authority before comparing it."""
+
+        existing = cell.get("policy_digest")
+        if existing not in {None, policy_digest}:
+            raise Refused(
+                409,
+                "active Factory Cell already carries a different policy digest; "
+                "reactivate it at a new epoch before rebinding policy authority",
+            )
+        try:
+            bound = self.cell_store.patch(
+                cell["cell_id"],
+                int(cell["epoch"]),
+                operation_key,
+                policy_digest=policy_digest,
+                factory_generation=generation,
+            )
+        except DuplicateOperation:
+            bound = self.cell_store.get(cell["cell_id"])
+        if bound.get("policy_digest") != policy_digest:
+            raise Refused(409, "active Factory Cell policy differs from retried submission")
+        return bound
 
     def _member_cell(
         self,

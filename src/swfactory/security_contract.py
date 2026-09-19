@@ -16,6 +16,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 POLICY_SCHEMA_VERSION = 1
+POLICY_DIGEST_FAMILY = f"v{POLICY_SCHEMA_VERSION}"
+POLICY_DIGEST_PREFIX = f"policy:{POLICY_DIGEST_FAMILY}:"
 MUTATION_SCHEMA_VERSION = 1
 REDACTION_SCHEMA_VERSION = 1
 REDACTED = "[REDACTED]"
@@ -58,9 +60,33 @@ class CanonicalPolicy:
             "metadata": {key: value for key, value in sorted(self.metadata)},
         }
 
+    @classmethod
+    def for_factory_job(cls, line_name: str, job: Mapping[str, Any]) -> CanonicalPolicy:
+        """Project one scheduled factory job into the single Cell policy coordinate system.
+
+        Issue identity is deliberately absent: the Factory Cell id already binds issue x repo x
+        target. Policy describes what authority that Cell may exercise at its epoch, not which
+        issue caused the work.
+        """
+
+        line = str(line_name).strip()
+        repo = str(job.get("repo", "")).strip()
+        directory = str(job.get("dir", "")).strip() or "."
+        base_branch = str(job.get("base_branch", "main")).strip() or "main"
+        sandbox = str(job.get("sandbox", "configured")).strip() or "configured"
+        if not line:
+            raise ValueError("factory policy line must be nonempty")
+        if not repo:
+            raise ValueError("factory policy repo must be nonempty")
+        return cls(
+            repo=repo,
+            target=f"{directory}@{base_branch}",
+            sandbox_provider=sandbox,
+            metadata=(("line", line),),
+        )
+
     def digest(self) -> str:
-        payload = json.dumps(self.canonical_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False)
-        return "policy:" + hashlib.sha256(payload.encode()).hexdigest()
+        return policy_digest_for_mapping(self.canonical_dict())
 
 
 @dataclass(frozen=True)
@@ -80,8 +106,7 @@ class MutationEnvelope:
             raise ValueError("mutation epoch must be positive")
         if not self.operation_key or len(self.operation_key) > 256:
             raise ValueError("operation key must be nonempty and bounded")
-        if not self.policy_digest.startswith("policy:"):
-            raise ValueError("mutation requires canonical policy digest")
+        require_current_policy_digest(self.policy_digest)
         if not self.trace_id or len(self.trace_id) > 128:
             raise ValueError("trace id must be nonempty and bounded")
         if not self.actor.strip() or len(self.actor) > 128:
@@ -179,14 +204,43 @@ def assert_publication_credentials_backend_only(
 
 
 def policy_digest_for_mapping(policy: Mapping[str, Any]) -> str:
-    """Canonical digest helper for callers that already have structured policy data."""
+    """Return the only current policy digest family.
+
+    The version is in both the visible family marker and the hashed domain separator. The marker
+    makes legacy rows distinguishable without trusting the bytes they contain; the domain separator
+    prevents a future family from accidentally reusing a v1 digest.
+    """
+
     payload = json.dumps(
         _canonical_value(policy),
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
     )
-    return "policy:" + hashlib.sha256(f"v{POLICY_SCHEMA_VERSION}\0{payload}".encode()).hexdigest()
+    digest = hashlib.sha256(f"{POLICY_DIGEST_FAMILY}\0{payload}".encode()).hexdigest()
+    return POLICY_DIGEST_PREFIX + digest
+
+
+def policy_digest_family(digest: str) -> int:
+    """Return 0 for the unmarked legacy family, or the explicit current schema version."""
+
+    if re.fullmatch(r"policy:[0-9a-f]{64}", digest):
+        return 0
+    match = re.fullmatch(r"policy:v([1-9][0-9]*):[0-9a-f]{64}", digest)
+    if match is None:
+        raise ValueError("invalid Factory Cell policy digest")
+    return int(match.group(1))
+
+
+def require_current_policy_digest(digest: str) -> None:
+    """Refuse legacy/future policy authority at a mutation boundary."""
+
+    family = policy_digest_family(digest)
+    if family != POLICY_SCHEMA_VERSION:
+        raise ValueError(
+            f"mutation requires policy digest family v{POLICY_SCHEMA_VERSION}; "
+            f"got {'legacy' if family == 0 else f'v{family}'}; reactivate the Cell at a new epoch"
+        )
 
 
 def _canonical_value(value: Any) -> Any:
