@@ -30,6 +30,10 @@ _ERROR_RE = re.compile(
     r"(?i)(traceback|assertionerror|\bfailed\b|\bfailure\b|\berror\b|\bpanic\b|"
     r"\bexception\b|caused by|##\[error\]|^E\s+|^error:)"
 )
+_GENERIC_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)(api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|passwd|private[_-]?key)"
+    r"\s*[:=]\s*[^\s]{8,}"
+)
 
 
 class ObservationIntegrityError(ValueError):
@@ -44,7 +48,8 @@ class ObservationRef:
     exit_code: int
     timed_out: bool
     state_path: str
-    sandbox_path: str
+    sandbox_path: str | None
+    sensitivity_kinds: tuple[str, ...]
     size_bytes: int
     lines: int
 
@@ -106,6 +111,17 @@ def _legacy_tail(stdout: str, stderr: str) -> str:
     return (stdout[-_STDOUT_TAIL:] + "\n" + stderr[-_STDERR_TAIL:]).strip()
 
 
+def _sensitivity_kinds(text: str) -> tuple[str, ...]:
+    """Conservative local classifier for whether raw diagnostics may be agent-readable."""
+
+    from swfactory.scm import scan_secrets
+
+    kinds = set(scan_secrets(text.encode("utf-8")))
+    if _GENERIC_SECRET_ASSIGNMENT.search(text):
+        kinds.add("generic-secret-assignment")
+    return tuple(sorted(kinds))
+
+
 def _archive(
     ctx: Ctx,
     source: str,
@@ -126,7 +142,12 @@ def _archive(
         if _sha256(existing) != digest or existing != source:
             raise ObservationIntegrityError(f"observation archive collision for sha256:{digest}")
 
-    ctx.sb.write(sandbox_path, source)
+    sensitivity = _sensitivity_kinds(source)
+    agent_path: str | None = None
+    if not sensitivity:
+        ctx.sb.write(sandbox_path, source)
+        agent_path = sandbox_path
+
     lines = len(source.splitlines())
     return ObservationRef(
         handle=f"obs:sha256:{digest}",
@@ -135,7 +156,8 @@ def _archive(
         exit_code=exit_code,
         timed_out=timed_out,
         state_path=state_path,
-        sandbox_path=sandbox_path,
+        sandbox_path=agent_path,
+        sensitivity_kinds=sensitivity,
         size_bytes=len(source.encode("utf-8")),
         lines=lines,
     )
@@ -220,14 +242,19 @@ def _quote_ranges(source: str) -> tuple[Quote, ...]:
 
 
 def _reduced_prompt(ref: ObservationRef, quotes: tuple[Quote, ...]) -> str:
-    header = (
-        "TEST OUTPUT COMPACTED LOCALLY; THE ARCHIVE IS AUTHORITATIVE.\n"
-        f"handle: {ref.handle}\n"
+    recall = (
         f"exact source: {ref.sandbox_path}\n"
+        "Use Read on the exact source with an offset/limit when an omitted line matters. "
+        if ref.sandbox_path
+        else "full source: host-only because the local secret classifier matched; raw recall is disabled. "
+    )
+    header = (
+        "TEST OUTPUT COMPACTED LOCALLY; THE HOST ARCHIVE IS AUTHORITATIVE.\n"
+        f"handle: {ref.handle}\n"
+        f"{recall}\n"
         f"sha256: {ref.sha256}\n"
         f"source: {ref.size_bytes} bytes, {ref.lines} lines\n"
-        "Use Read on the exact source with an offset/limit when an omitted line matters. "
-        "Every excerpt below was verified byte-for-byte against that source.\n"
+        "Every excerpt below was verified byte-for-byte against that source before exposure.\n"
     )
     blocks = [
         f"\n[exact lines {quote.start_line}-{quote.end_line}]\n{quote.text}"
@@ -269,15 +296,22 @@ def pack_failure_observation(
         timed_out=timed_out,
     )
     legacy = _legacy_tail(stdout, stderr)
-    quotes = _quote_ranges(source)
-    reduced = _reduced_prompt(ref, quotes) if quotes else ""
+    verified_quotes = _quote_ranges(source)
+    quotes = tuple(quote for quote in verified_quotes if not _sensitivity_kinds(quote.text))
+    reduced = _reduced_prompt(ref, quotes)
 
-    if not reduced or len(reduced.encode("utf-8")) >= len(legacy.encode("utf-8")):
+    if ref.sensitivity_kinds:
+        # Never widen exposure beyond the legacy tail when any secret-shaped material exists.
+        # The exact source remains host-owned; only independently safe verified excerpts cross
+        # the agent boundary.
+        prompt = reduced
+        mode: Literal["reduced", "legacy-with-handle"] = "reduced"
+    elif len(reduced.encode("utf-8")) >= len(legacy.encode("utf-8")):
         prompt = (
             f"FULL TEST OUTPUT ARCHIVED AS {ref.handle} AT {ref.sandbox_path} "
             f"(sha256:{ref.sha256}). Use Read for omitted context.\n\n{legacy}"
         ).strip()
-        mode: Literal["reduced", "legacy-with-handle"] = "legacy-with-handle"
+        mode = "legacy-with-handle"
     else:
         prompt = reduced
         mode = "reduced"
@@ -312,6 +346,8 @@ def pack_failure_observation(
         "command_sha256": ref.command_sha256,
         "exit_code": ref.exit_code,
         "timed_out": ref.timed_out,
+        "sensitive": bool(ref.sensitivity_kinds),
+        "sensitivity_kinds": list(ref.sensitivity_kinds),
         "size_bytes": ref.size_bytes,
         "lines": ref.lines,
         "mode": packed.mode,
