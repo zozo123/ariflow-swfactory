@@ -48,7 +48,8 @@
         "swfactory-python#test",
         "swfactory-rust#test",
         "swf-cli#build"
-      ]
+      ],
+      "inputs": []
     }
   }
 }
