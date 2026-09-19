@@ -13,12 +13,6 @@
     "githubActionsRemoteBaseRefFallback": true
   },
   "tasks": {
-    "swfactory-python#test": {
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "!$TURBO_ROOT$/rust/**/*.rs"
-      ]
-    },
     "swfactory-rust#test": {
       "inputs": [
         "$TURBO_ROOT$/Cargo.toml",
@@ -39,12 +33,26 @@
     "//#polyglot-verification": {
       "cache": false,
       "dependsOn": [
-        "swfactory-python#test",
+        "swfactory-python#verify",
         "swfactory-rust#test",
         "swf-cli#build"
       ],
       "inputs": [
         "$TURBO_ROOT$/turbo.json"
+      ]
+    },
+    "swfactory-python#verify": {
+      "command": [
+        "uv",
+        "run",
+        "--active",
+        "--frozen",
+        "--all-packages",
+        "pytest"
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!$TURBO_ROOT$/rust/**/*.rs"
       ]
     }
   }
