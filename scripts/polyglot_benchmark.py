@@ -117,8 +117,11 @@ def affectedness_matrix() -> dict[str, list[str]]:
 def _assert_affectedness(matrix: dict[str, list[str]]) -> None:
     """Validate that affected tasks preserve the polyglot graph boundaries."""
     docs = set(matrix["docs"])
-    if docs:
-        raise RuntimeError(f"docs-only change unexpectedly selected verification tasks: {sorted(docs)}")
+    required_docs = {"swfactory-python#test", "//#polyglot-verification"}
+    if not required_docs <= docs:
+        raise RuntimeError(f"docs-only change missed Python/site verification: {sorted(docs)}")
+    if any(name.startswith("swf-") or name.startswith("swfactory-rust#") for name in docs):
+        raise RuntimeError(f"docs-only change selected Rust work: {sorted(docs)}")
 
     python = set(matrix["python"])
     if "swfactory-python#test" not in python or "//#polyglot-verification" not in python:
