@@ -433,9 +433,9 @@ def _dominates(left: HarnessTrial, right: HarnessTrial) -> bool:
     """Pareto dominance without an invented weighted score."""
 
     lvec, rvec = left.efficiency_vector, right.efficiency_vector
-    return all(a <= b for a, b in zip(lvec, rvec, strict=True)) and any(
-        a < b for a, b in zip(lvec, rvec, strict=True)
-    )
+    no_worse = all(a <= b for a, b in zip(lvec, rvec, strict=True))
+    strictly_better = any(a < b for a, b in zip(lvec, rvec, strict=True))
+    return no_worse and strictly_better
 
 
 def select_harness_trials(
