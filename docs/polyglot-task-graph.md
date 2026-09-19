@@ -85,17 +85,17 @@ Turborepo and the factory both use content-derived identity, but they make diffe
 
 A Turbo cache hit may reduce latency. It can never authorize a transition.
 
-Remote Turbo cache is disabled in `turbo.json`. The Python native task may use the local
-content-addressed cache. The explicit Rust tasks are currently `cache: false` because, until Cargo
-is natively discovered, their task hash would not automatically include the complete Rust compiler
-identity and Cargo dependency semantics.
+Remote Turbo cache is disabled in `turbo.json`. Native Cargo and uv package tasks may use the
+local content-addressed cache; Turborepo derives their toolchain and dependency identity from the
+root workspace manifests and lockfiles. The repo-wide `//#polyglot-verification` fan-in stays
+`cache: false` because it is an execution barrier, not evidence.
 
 ## Promotion rule
 
 The experiment graduates from advisory to required only after all of these are true:
 
-1. the root-Cargo migration is complete;
-2. Turbo's native Cargo and uv graphs match the existing CI dependency intent;
+1. Turbo's native Cargo and uv graphs match the existing CI dependency intent;
+2. affectedness is proven for Python-only, Rust-only, docs-only, and shared-contract changes;
 3. cold and warm runs are benchmarked on representative changes;
 4. candidate evidence still comes from the factory's independent verification path;
 5. disabling Turbo produces the same promotion decision, only more slowly.
