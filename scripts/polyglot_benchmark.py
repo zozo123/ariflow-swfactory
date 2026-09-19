@@ -24,7 +24,7 @@ query {
   affectedTasks(
     base: "HEAD^"
     head: "HEAD"
-    tasks: ["build", "test", "polyglot-verification"]
+    tasks: ["build", "test"]
   ) {
     items { fullName }
   }
@@ -117,21 +117,18 @@ def affectedness_matrix() -> dict[str, list[str]]:
 def _assert_affectedness(matrix: dict[str, list[str]]) -> None:
     """Validate that affected tasks preserve the polyglot graph boundaries."""
     docs = set(matrix["docs"])
-    required_docs = {"swfactory-python#test", "//#polyglot-verification"}
-    if not required_docs <= docs:
+    if "swfactory-python#test" not in docs:
         raise RuntimeError(f"docs-only change missed Python/site verification: {sorted(docs)}")
     if any(name.startswith("swf-") or name.startswith("swfactory-rust#") for name in docs):
         raise RuntimeError(f"docs-only change selected Rust work: {sorted(docs)}")
 
     python = set(matrix["python"])
-    if "swfactory-python#test" not in python or "//#polyglot-verification" not in python:
-        raise RuntimeError(f"python-only change missed Python/root verification tasks: {sorted(python)}")
+    if "swfactory-python#test" not in python:
+        raise RuntimeError(f"python-only change missed Python verification: {sorted(python)}")
     if any(name.startswith("swf-") or name.startswith("swfactory-rust#") for name in python):
         raise RuntimeError(f"python-only change selected Rust work: {sorted(python)}")
 
     rust = set(matrix["rust"])
-    if "//#polyglot-verification" not in rust:
-        raise RuntimeError(f"rust-only change missed root verification fan-in: {sorted(rust)}")
     if "swfactory-python#test" in rust:
         raise RuntimeError(f"rust-only change selected Python verification: {sorted(rust)}")
     if not any(name.startswith("swf-") or name.startswith("swfactory-rust#") for name in rust):
@@ -140,8 +137,6 @@ def _assert_affectedness(matrix: dict[str, list[str]]) -> None:
     contract = set(matrix["contract"])
     if "swfactory-python#test" not in contract:
         raise RuntimeError(f"shared-contract change missed Python verification: {sorted(contract)}")
-    if "//#polyglot-verification" not in contract:
-        raise RuntimeError(f"shared-contract change missed root fan-in: {sorted(contract)}")
     if not any(name.startswith("swf-") or name.startswith("swfactory-rust#") for name in contract):
         raise RuntimeError(f"shared-contract change missed Rust verification: {sorted(contract)}")
 
@@ -262,7 +257,10 @@ def main() -> int:
         "schema_version": 1,
         "turbo_version": "2.11.1",
         "authority": "advisory-execution-only",
-        "affectedness": matrix,
+        "affectedness": {
+            "selection_scope": "native-leaf-build-and-test-tasks",
+            "matrix": matrix,
+        },
         "benchmark": benchmark,
     }
     output = args.out if args.out.is_absolute() else ROOT / args.out
