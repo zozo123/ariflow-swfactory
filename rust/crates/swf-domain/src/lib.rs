@@ -6,6 +6,7 @@
 //! state is rolled up is a divergence in what the factory *is*, so it has to be caught by a test
 //! and not by an operator at 2 a.m.
 
+pub mod advisory;
 pub mod blueprint;
 pub mod cell;
 pub mod control_plane;
