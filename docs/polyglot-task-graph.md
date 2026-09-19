@@ -126,12 +126,12 @@ uv run python scripts/polyglot_benchmark.py --out .factory/turbo/benchmark.json
 ```
 
 The script creates detached local worktrees and measures four synthetic changes without touching the
-candidate checkout. Affectedness is measured against the three tasks the executable fan-in actually depends on:
-`swfactory-python#verify`, `swfactory-rust#test`, and `swf-cli#build`. The query may observe
-other native tasks that Turborepo synthesizes, including its intentionally repository-wide root
-pytest task, but those are not part of this factory graph and are filtered from the contract.
-That distinction matters: incremental evidence must describe the graph we execute, not every task
-available in the repository.
+candidate checkout. Affectedness queries only the three full-name tasks the executable fan-in
+actually depends on: `swfactory-python#verify`, `swfactory-rust#test`, and `swf-cli#build`.
+This matters because Turbo's `affectedTasks` resolver also schedules prerequisites of whatever
+affected tasks it selects; including the root fan-in in the query would therefore make unchanged
+sibling leaves appear in the execution set. Generic native tasks, including Turbo's intentionally
+repository-wide root pytest task, remain available but are outside this factory graph's contract.
 
 - Python-only: Python verification must be affected; Rust work must not be.
 - Rust-only: Rust work must be affected; Python verification must not be.
