@@ -48,6 +48,9 @@ mod tests {
     fn object_key_order_never_changes_policy_identity() {
         let left: Value = serde_json::from_str(r#"{"b":2,"a":{"y":2,"x":1}}"#).unwrap();
         let right: Value = serde_json::from_str(r#"{"a":{"x":1,"y":2},"b":2}"#).unwrap();
-        assert_eq!(policy_digest(&left).unwrap(), policy_digest(&right).unwrap());
+        assert_eq!(
+            policy_digest(&left).unwrap(),
+            policy_digest(&right).unwrap()
+        );
     }
 }

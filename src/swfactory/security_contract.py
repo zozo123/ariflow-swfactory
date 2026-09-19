@@ -61,7 +61,7 @@ class CanonicalPolicy:
         }
 
     @classmethod
-    def for_factory_job(cls, line_name: str, job: Mapping[str, Any]) -> "CanonicalPolicy":
+    def for_factory_job(cls, line_name: str, job: Mapping[str, Any]) -> CanonicalPolicy:
         """Project one scheduled factory job into the single Cell policy coordinate system.
 
         Issue identity is deliberately absent: the Factory Cell id already binds issue x repo x

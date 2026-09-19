@@ -1,6 +1,14 @@
 {
   "function": "policy_digest",
+  "doc": "Pins the versioned canonical JSON bytes and SHA-256 identity shared by Python and Rust policy authority.",
   "cases": [
+    {
+      "name": "minimal",
+      "input": {
+        "schema_version": 1
+      },
+      "expected": "policy:v1:9098449cb6b6977a0c779effe53ee3feaa98a76225ec4dfcf1f460b5bb7b4a06"
+    },
     {
       "name": "canonical-factory-policy-v1",
       "input": {
@@ -23,6 +31,83 @@
         }
       },
       "expected": "policy:v1:6f152863b41a8c8a64d493c7b6d0f4dfda21a7642b280dbc32d528360c6e7e42"
+    },
+    {
+      "name": "object-key-order",
+      "input": {
+        "z": 0,
+        "a": {
+          "y": 2,
+          "x": 1
+        },
+        "m": true
+      },
+      "expected": "policy:v1:76ef18238dff847d0dbb9b732879caabd7c0e270afa5e710db9827df5fee60c9"
+    },
+    {
+      "name": "empty-values",
+      "input": {
+        "repo": "",
+        "target": "",
+        "paths": [],
+        "provider": null,
+        "enabled": false
+      },
+      "expected": "policy:v1:d987d0dde0bab47608581773c3a10d8e0c260d3acc1f06a7a1c1f2dec587bccd"
+    },
+    {
+      "name": "ordered-array",
+      "input": {
+        "items": [
+          "b",
+          "a",
+          "b"
+        ],
+        "nested": [
+          {
+            "k": 2
+          },
+          {
+            "k": 1
+          }
+        ]
+      },
+      "expected": "policy:v1:0ec6c9a91a7739768c69e9aaf45b80b85d025a0c59091a19ade8eb4b89e07aa7"
+    },
+    {
+      "name": "numbers",
+      "input": {
+        "zero": 0,
+        "one": 1,
+        "negative": -7,
+        "ratio": 1.5
+      },
+      "expected": "policy:v1:13b6d14b9182d52ecaaa721a8bb742289aaa752fa993974c4f2637a5aefef7e1"
+    },
+    {
+      "name": "nested-mapping",
+      "input": {
+        "outer": {
+          "beta": {
+            "v": 2
+          },
+          "alpha": {
+            "v": 1
+          }
+        },
+        "flag": true
+      },
+      "expected": "policy:v1:a8db5e33784a6c6eea9ac8c005eb17c1a7c5bfa65d5a042c4c90a3d72003e9a4"
+    },
+    {
+      "name": "escaped-ascii",
+      "input": {
+        "path": "src\\module",
+        "quote": "a\"b",
+        "newline": "a\nb",
+        "tab": "a\tb"
+      },
+      "expected": "policy:v1:c6ab0f9d2e09b8312cde007f3b8c3cade22f88dd848048763bbfbfd6381c04be"
     }
   ]
 }
