@@ -145,9 +145,7 @@ AIRFLOW_WORKER_FORBIDDEN_ACTIONS = frozenset(
         "inject_secret_env",
     }
 )
-AIRFLOW_WORKER_FORBIDDEN_ENV = frozenset(
-    {"GH_TOKEN", "GITHUB_TOKEN", "SWF_BACKEND_TOKEN", "ISLO_API_KEY"}
-)
+AIRFLOW_WORKER_FORBIDDEN_ENV = frozenset({"GH_TOKEN", "GITHUB_TOKEN", "SWF_BACKEND_TOKEN", "ISLO_API_KEY"})
 
 
 def assert_airflow_worker_boundary(*, action: str, env: dict[str, str] | None = None) -> None:
