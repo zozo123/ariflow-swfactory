@@ -131,9 +131,9 @@ microstates while searching, then remove degrees of freedom until only one promo
 
 That last row matters. Turborepo 2.11 can put uv and Cargo work into one content-addressed task
 graph. In this repository it is an **experimental accelerator inside the verification layer**, not a
-second lifecycle scheduler. The native uv root participates directly; the nested Rust workspace is
-represented by explicit uncached root tasks until a separate root-Cargo migration can make native
-Cargo discovery honest.
+second lifecycle scheduler. Cargo now has a real repository-root workspace, uv exposes a real
+workspace aggregate plus the shared contract-fixture member, and both toolchains participate through
+Turborepo's native discovery rather than compatibility shim tasks.
 
 ```text
              exploration                         convergence
@@ -151,7 +151,7 @@ second is an authority boundary. A cache hit can save time. It cannot approve a 
 ambiguous mutation, publish a PR, or promote a candidate.
 
 See [polyglot task graph: motion, not authority](docs/polyglot-task-graph.md) for the executable
-graph, current nested-Cargo limitation, cache policy, and graduation criteria.
+native graph, cache policy, authority boundary, and graduation criteria.
 
 ## Architecture and lifecycle
 
