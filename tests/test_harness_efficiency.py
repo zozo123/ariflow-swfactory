@@ -42,15 +42,15 @@ class FakeCtx:
 
 def test_small_failure_keeps_the_existing_prompt_contract(tmp_path: Path) -> None:
     ctx = FakeCtx(tmp_path)
-    assert pack_failure_observation(ctx, stdout="one failed\\n", stderr="") is None
+    assert pack_failure_observation(ctx, stdout="one failed\n", stderr="") is None
     assert ctx.sb.files == {}
 
 
 def test_long_failure_is_archived_exactly_and_compacted_with_stable_handle(tmp_path: Path) -> None:
     ctx = FakeCtx(tmp_path)
-    stdout = "EARLY-EVIDENCE\\n" + "".join(f"noise {i:04d} lorem ipsum dolor sit amet\\n" for i in range(600))
-    stdout += "FAILED tests/test_widget.py::test_edge - AssertionError: expected 7\\n"
-    stderr = "Traceback (most recent call last):\\n  line 1\\nAssertionError: expected 7\\n"
+    stdout = "EARLY-EVIDENCE\n" + "".join(f"noise {i:04d} lorem ipsum dolor sit amet\n" for i in range(600))
+    stdout += "FAILED tests/test_widget.py::test_edge - AssertionError: expected 7\n"
+    stderr = "Traceback (most recent call last):\n  line 1\nAssertionError: expected 7\n"
 
     packed = pack_failure_observation(ctx, stdout=stdout, stderr=stderr)
 
@@ -76,7 +76,7 @@ def test_long_failure_is_archived_exactly_and_compacted_with_stable_handle(tmp_p
 
 def test_same_observation_has_same_handle_and_archive_identity(tmp_path: Path) -> None:
     ctx = FakeCtx(tmp_path)
-    stdout = "x" * 7000 + "\\nFAILED deterministic\\n"
+    stdout = "x" * 7000 + "\nFAILED deterministic\n"
 
     first = pack_failure_observation(ctx, stdout=stdout, stderr="")
     second = pack_failure_observation(ctx, stdout=stdout, stderr="")
@@ -87,7 +87,7 @@ def test_same_observation_has_same_handle_and_archive_identity(tmp_path: Path) -
 
 
 def test_quote_verifier_refuses_wrong_text() -> None:
-    source = "one\\ntwo\\nthree"
+    source = "one\ntwo\nthree"
     quote = Quote(start_line=2, end_line=2, text="TWO")
 
     with pytest.raises(ObservationIntegrityError, match="does not match"):
@@ -95,8 +95,8 @@ def test_quote_verifier_refuses_wrong_text() -> None:
 
 
 def test_exact_page_is_one_based_and_lossless() -> None:
-    source = "\\n".join(f"line-{i}" for i in range(1, 21))
-    assert exact_page(source, start_line=7, limit=3) == "line-7\\nline-8\\nline-9"
+    source = "\n".join(f"line-{i}" for i in range(1, 21))
+    assert exact_page(source, start_line=7, limit=3) == "line-7\nline-8\nline-9"
     with pytest.raises(ValueError):
         exact_page(source, start_line=0, limit=3)
 
