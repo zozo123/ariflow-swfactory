@@ -139,8 +139,10 @@ repository-wide root pytest task, remain available but are outside this factory 
   Rust work must not be selected.
 - Shared contract fixture: both Python and Rust verification must be affected.
 
-It then runs the verification once without Turbo, clears the local Turbo cache, runs a cold native
-polyglot verification, and immediately repeats it warm. The JSON report retains wall/CPU time,
+It then removes the repository Rust `target/`, runs verification once without Turbo, removes
+`target/` again plus the local Turbo cache, runs a cold native polyglot verification, and
+immediately repeats it as the no-op warm run. Tool download/registry caches stay warm on both sides,
+so the cold comparison resets build outputs rather than benchmarking the network. The JSON report retains wall/CPU time,
 attempted tasks, cache hits, executed-task count, summary sizes, and the verdict-equivalence result.
 Remote cache stays disabled.
 
