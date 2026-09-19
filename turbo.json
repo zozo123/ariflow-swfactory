@@ -33,7 +33,7 @@
     "//#polyglot-verification": {
       "cache": false,
       "dependsOn": [
-        "swfactory-python#verify",
+        "//#python-verify",
         "swfactory-rust#test",
         "swf-cli#build"
       ],
@@ -41,7 +41,7 @@
         "$TURBO_ROOT$/turbo.json"
       ]
     },
-    "swfactory-python#verify": {
+    "//#python-verify": {
       "command": [
         "uv",
         "run",
@@ -52,7 +52,7 @@
       ],
       "inputs": [
         "$TURBO_DEFAULT$",
-        "!$TURBO_ROOT$/rust/**/*.rs"
+        "!rust/**/*.rs"
       ]
     }
   }
