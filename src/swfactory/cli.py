@@ -278,6 +278,96 @@ def improve(
         typer.echo(f"refused: {refusal}", err=True)
 
 
+@app.command("triage-shadow")
+def triage_shadow(
+    proposal: Annotated[Path, typer.Argument(help="JSON work item proposed by the factory")],
+    existing: Annotated[Path, typer.Argument(help="JSON list of existing work items")],
+    advisories: Annotated[
+        Path | None,
+        typer.Option(help="optional JSON map of issue key to untrusted advisory result"),
+    ] = None,
+    limit: Annotated[int, typer.Option(min=1, max=50, help="maximum related items to display")] = 5,
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable shadow view")] = False,
+) -> None:
+    """Show related work and advisory hints without changing backlog or execution authority."""
+
+    from swfactory.jev_triage import Advisory, WorkItem, related_issues, shadow_view
+
+    def item(document: dict[str, Any]) -> WorkItem:
+        key = str(document.get("key", "")).strip()
+        title = str(document.get("title", "")).strip()
+        criteria = document.get("acceptance_criteria", [])
+        if not key or not title:
+            raise ValueError("work item requires nonempty key and title")
+        if not isinstance(criteria, list) or not all(isinstance(value, str) for value in criteria):
+            raise ValueError("acceptance_criteria must be a list of strings")
+        return WorkItem(key=key, title=title, acceptance_criteria=tuple(criteria))
+
+    try:
+        proposal_doc = json.loads(proposal.read_text(encoding="utf-8"))
+        existing_doc = json.loads(existing.read_text(encoding="utf-8"))
+        advisory_doc = json.loads(advisories.read_text(encoding="utf-8")) if advisories is not None else {}
+        if not isinstance(proposal_doc, dict):
+            raise ValueError("proposal JSON must be an object")
+        if not isinstance(existing_doc, list) or not all(isinstance(value, dict) for value in existing_doc):
+            raise ValueError("existing JSON must be a list of work-item objects")
+        if not isinstance(advisory_doc, dict):
+            raise ValueError("advisories JSON must be an object keyed by issue")
+        proposal_item = item(proposal_doc)
+        existing_items = [item(value) for value in existing_doc]
+        parsed_advisories: dict[str, Advisory | None] = {}
+        for key, value in advisory_doc.items():
+            if value is None:
+                parsed_advisories[str(key)] = None
+                continue
+            if not isinstance(value, dict):
+                raise ValueError(f"advisory for {key!r} must be an object or null")
+            parsed_advisories[str(key)] = Advisory(
+                existing_issue=int(value["existing_issue"]),
+                relationship=str(value["relationship"]),
+                confidence=float(value["confidence"]),
+                probability=float(value["probability"]),
+                needs_review=bool(value.get("needs_review", False)),
+                available=bool(value.get("available", True)),
+                rationale=str(value.get("rationale", "")),
+            )
+        view = shadow_view(
+            proposal_item,
+            related_issues(proposal_item, existing_items, limit=limit),
+            parsed_advisories,
+        )
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        typer.echo(f"triage shadow: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    if json_out:
+        typer.echo(json.dumps(view, indent=2, sort_keys=True))
+        return
+
+    proposal_view = view["proposal"]
+    typer.echo(f"proposal: {proposal_view['title']} ({proposal_view['key']})")
+    if proposal_view["acceptance_criteria_missing"]:
+        typer.echo("  acceptance criteria: MISSING - operator review required")
+    else:
+        typer.echo("  acceptance criteria:")
+        for criterion in proposal_view["acceptance_criteria"]:
+            typer.echo(f"    - {criterion}")
+    typer.echo("related work:")
+    for row in view["related"]:
+        advisory = row["advisory"]
+        review = " REVIEW" if advisory["needs_review"] else ""
+        typer.echo(
+            f"  {row['issue']} {row['title']} "
+            f"[{advisory['relationship']} confidence={advisory['confidence']:.2f}{review}]"
+        )
+        if row["acceptance_criteria_missing"]:
+            typer.echo("    acceptance criteria: MISSING")
+        else:
+            for criterion in row["acceptance_criteria"]:
+                typer.echo(f"    - {criterion}")
+    typer.echo("operator decision required; advisory authority=none")
+
+
 provenance_app = typer.Typer(help="Release artifact provenance: record digests, and verify downloads against them.")
 
 

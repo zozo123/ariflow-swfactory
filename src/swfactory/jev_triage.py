@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import asdict, dataclass
 from collections.abc import Iterable
+from dataclasses import asdict, dataclass
 
 _TOKEN = re.compile(r"[a-z0-9_]+")
 
