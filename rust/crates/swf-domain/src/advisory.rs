@@ -157,7 +157,6 @@ pub fn enforce_review_guard(
     })
 }
 
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelatedIssue {
     pub issue: ExistingIssue,
@@ -498,4 +497,3 @@ mod tests {
         assert_eq!(view.proposal.id, "proposal-1");
     }
 }
-

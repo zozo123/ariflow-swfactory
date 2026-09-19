@@ -10,9 +10,7 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use swf_domain::advisory::{
-    AdvisoryRelation, AdvisoryRequest, AdvisorySuggestion, ExistingIssue,
-};
+use swf_domain::advisory::{AdvisoryRelation, AdvisoryRequest, AdvisorySuggestion, ExistingIssue};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{AdapterError, Result};
@@ -33,8 +31,8 @@ impl JevApi {
     }
 
     fn build(endpoint: &str, token: String, timeout: Duration) -> Result<Self> {
-        let url = url::Url::parse(endpoint)
-            .map_err(|_| AdapterError::refused("invalid Jev endpoint"))?;
+        let url =
+            url::Url::parse(endpoint).map_err(|_| AdapterError::refused("invalid Jev endpoint"))?;
         if url.scheme() != "https"
             || !url.username().is_empty()
             || url.password().is_some()
@@ -231,18 +229,25 @@ fn parse_response(
         {
             return Err(AdapterError::Decode {
                 what: "Jev advisory".into(),
-                detail: format!("invalid probability distribution for issue #{}", issue.number),
+                detail: format!(
+                    "invalid probability distribution for issue #{}",
+                    issue.number
+                ),
             });
         }
-        let relation = serde_json::from_value::<AdvisoryRelation>(Value::String(answer.choice.clone()))
-            .map_err(|_| AdapterError::Decode {
-                what: "Jev advisory".into(),
-                detail: format!("unknown relationship for issue #{}", issue.number),
-            })?;
+        let relation =
+            serde_json::from_value::<AdvisoryRelation>(Value::String(answer.choice.clone()))
+                .map_err(|_| AdapterError::Decode {
+                    what: "Jev advisory".into(),
+                    detail: format!("unknown relationship for issue #{}", issue.number),
+                })?;
         if !answer.probabilities.contains_key(&answer.choice) {
             return Err(AdapterError::Decode {
                 what: "Jev advisory".into(),
-                detail: format!("selected relationship has no probability for issue #{}", issue.number),
+                detail: format!(
+                    "selected relationship has no probability for issue #{}",
+                    issue.number
+                ),
             });
         }
 
