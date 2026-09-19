@@ -46,6 +46,27 @@ matches a known token shape or a conservative secret-assignment pattern, the ful
 host-only and the agent receives no raw recall path. This deliberately prefers a false-positive
 loss of debugging context over expanding the remote-model trust boundary.
 
+## Implemented: packed review context
+
+Large code diffs are another repeated-context boundary. Ordinary review sends one diff; Liquid
+review sends the same diff to three independent specialist lanes in each round. For diffs above
+12 KB, the factory now:
+
+1. archives the exact patch in host-owned run state;
+2. refuses the optimization when the diff matches the local secret-shape classifier, preserving
+   the prior full-diff behavior without creating another raw scratch copy;
+3. mirrors clean patches into ignored `.factory/observations/` scratch behind a
+   `diff:sha256:<digest>` handle;
+4. replaces the injected full diff with a deterministic file/hunk/add/delete index;
+5. tells the read-only reviewer that the index is navigation only and requires it to page the exact
+   patch or changed files before making findings;
+6. records only digest, source/head identity, file statistics, prompt bytes, and fan-out savings in
+   the committed receipt.
+
+Small diffs keep the previous prompt exactly. Liquid computes the pack once per review round and
+reuses the same exact handle across all three lanes, so the optimization reduces repeated context
+without giving any lane a different candidate view.
+
 ## Constrained harness research
 
 Harness auto-research is useful only if efficiency is subordinate to the factory invariants.
@@ -77,9 +98,9 @@ verification inside one bounded Airflow build stage, but it does not grant autho
 model-selected shell commands merely to reduce turns. A future fused editing tool should execute
 only an approved validation recipe and should retain both mutation and validation evidence.
 
-Online Context Compact is less directly applicable because Claude invocations currently use
-no-session-persistence. The factory-controlled context is what crosses agent calls, so compacting
-large verification observations is the useful boundary today.
+Online Context Compact maps to the factory-controlled context that crosses otherwise stateless
+agent calls. Failed-test ObservationPack and packed review diffs now cover the two largest repeated
+payloads under factory control; provider session state remains disabled.
 
 ObservationPack is the cleanest fit because the factory already has host-owned evidence and an
 ignored scratch namespace. Stable handles let compute remain disposable while diagnostic identity
