@@ -92,7 +92,6 @@ def test_long_failure_is_archived_exactly_and_compacted_with_stable_handle(tmp_p
     assert all("text" not in quote for quote in public["quotes"])
 
 
-
 def test_sensitive_full_log_stays_host_only_and_never_enters_agent_prompt(tmp_path: Path) -> None:
     ctx = FakeCtx(tmp_path)
     token = "ghp_" + "a" * 36
@@ -120,6 +119,7 @@ def test_sensitive_full_log_stays_host_only_and_never_enters_agent_prompt(tmp_pa
     assert public["sensitive"] is True
     assert public["sensitivity_kinds"] == ["github-token"]
     assert public["raw_log_committed"] is False
+
 
 def test_same_observation_has_same_handle_and_archive_identity(tmp_path: Path) -> None:
     ctx = FakeCtx(tmp_path)
