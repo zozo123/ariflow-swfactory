@@ -1,0 +1,28 @@
+{
+  "function": "policy_digest",
+  "cases": [
+    {
+      "name": "canonical-factory-policy-v1",
+      "input": {
+        "schema_version": 1,
+        "repo": "acme/repo",
+        "target": "src@main",
+        "protected_paths": [
+          ".github/",
+          "factory.toml"
+        ],
+        "allowed_domains": [
+          "api.github.com",
+          "github.com"
+        ],
+        "sandbox_provider": "islo",
+        "sandbox_credentials": [],
+        "publication_backend_only": true,
+        "metadata": {
+          "line": "factory"
+        }
+      },
+      "expected": "policy:v1:6f152863b41a8c8a64d493c7b6d0f4dfda21a7642b280dbc32d528360c6e7e42"
+    }
+  ]
+}

@@ -20,7 +20,7 @@ use serde::Deserialize;
 use serde_json::{json, Number, Value};
 
 use swf_domain::model::{Run, Snapshot, TaskState};
-use swf_domain::{blueprint, doctor, metrics, rollup, snapshot};
+use swf_domain::{blueprint, doctor, metrics, policy, rollup, snapshot};
 
 /// One fixture file: every case for one ported function.
 #[derive(Debug, Deserialize)]
@@ -292,6 +292,10 @@ fn apply(function: &str, input: &Value) -> Outcome {
         "doctor_table" => doctor_table(input),
         "doctor_to_json" => doctor_to_json(input),
         "blueprint_loads" | "blueprint_from_toml" => blueprint_from_toml(input),
+        "policy_digest" => match policy::policy_digest(input) {
+            Ok(digest) => Outcome::Value(json!(digest)),
+            Err(error) => Outcome::Error(format!("policy did not canonicalize: {error}")),
+        },
         _ => Outcome::Unhandled,
     }
 }

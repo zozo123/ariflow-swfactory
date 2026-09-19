@@ -17,6 +17,7 @@ pub mod manager_protocol;
 pub mod metrics;
 pub mod model;
 pub mod operator;
+pub mod policy;
 pub mod rollup;
 pub mod sanitize;
 pub mod snapshot;

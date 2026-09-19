@@ -1757,6 +1757,7 @@ version = "2.2.0"
 dependencies = [
  "chrono",
  "insta",
+ "ring",
  "serde",
  "serde_json",
  "thiserror",
