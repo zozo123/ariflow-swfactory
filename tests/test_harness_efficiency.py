@@ -42,7 +42,14 @@ class FakeCtx:
 
 def test_small_failure_keeps_the_existing_prompt_contract(tmp_path: Path) -> None:
     ctx = FakeCtx(tmp_path)
-    assert pack_failure_observation(ctx, stdout="one failed\n", stderr="") is None
+    assert pack_failure_observation(
+        ctx,
+        command="pytest -q",
+        exit_code=1,
+        timed_out=False,
+        stdout="one failed\n",
+        stderr="",
+    ) is None
     assert ctx.sb.files == {}
 
 
@@ -52,7 +59,14 @@ def test_long_failure_is_archived_exactly_and_compacted_with_stable_handle(tmp_p
     stdout += "FAILED tests/test_widget.py::test_edge - AssertionError: expected 7\n"
     stderr = "Traceback (most recent call last):\n  line 1\nAssertionError: expected 7\n"
 
-    packed = pack_failure_observation(ctx, stdout=stdout, stderr=stderr)
+    packed = pack_failure_observation(
+        ctx,
+        command="pytest -q",
+        exit_code=1,
+        timed_out=False,
+        stdout=stdout,
+        stderr=stderr,
+    )
 
     assert packed is not None
     assert packed.ref.handle == f"obs:sha256:{packed.ref.sha256}"
@@ -70,6 +84,9 @@ def test_long_failure_is_archived_exactly_and_compacted_with_stable_handle(tmp_p
     )
     assert public["remote_model_used"] is False
     assert public["raw_log_committed"] is False
+    assert public["command_sha256"] == packed.ref.command_sha256
+    assert public["exit_code"] == 1
+    assert public["timed_out"] is False
     assert public["saved_bytes"] == packed.saved_bytes
     assert all("text" not in quote for quote in public["quotes"])
 
@@ -78,8 +95,22 @@ def test_same_observation_has_same_handle_and_archive_identity(tmp_path: Path) -
     ctx = FakeCtx(tmp_path)
     stdout = "x" * 7000 + "\nFAILED deterministic\n"
 
-    first = pack_failure_observation(ctx, stdout=stdout, stderr="")
-    second = pack_failure_observation(ctx, stdout=stdout, stderr="")
+    first = pack_failure_observation(
+        ctx,
+        command="pytest -q",
+        exit_code=1,
+        timed_out=False,
+        stdout=stdout,
+        stderr="",
+    )
+    second = pack_failure_observation(
+        ctx,
+        command="pytest -q",
+        exit_code=1,
+        timed_out=False,
+        stdout=stdout,
+        stderr="",
+    )
 
     assert first is not None and second is not None
     assert first.ref == second.ref
@@ -108,7 +139,6 @@ def test_compaction_has_no_remote_model_client() -> None:
     assert "httpx." not in text
     assert "anthropic" not in text.lower()
     assert "openai" not in text.lower()
-
 
 
 def _trial(
