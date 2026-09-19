@@ -1,0 +1,23 @@
+schema_version: 1
+scheduler: airflow
+harness_entrypoint: rust-swf
+target_runtime: rust
+
+stages:
+  fan_out: python-orchestration
+  setup: python-migrating
+  intent: python-migrating
+  plan: python-migrating
+  build_and_test: python-migrating
+  review: python-migrating
+  deliver: python-migrating
+  metrics: python-migrating
+  teardown: python-migrating
+  record_gate: python-migrating
+
+rules:
+  rust_is_terminal_owner: true
+  no_python_fallback_after_rust: true
+  airflow_remains_scheduler: true
+  python_dag_registration_allowed: true
+  python_business_logic_target: zero
