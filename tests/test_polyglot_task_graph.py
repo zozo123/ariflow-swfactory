@@ -15,7 +15,7 @@ def _turbo() -> dict[str, object]:
 
 
 def test_turbo_is_an_accelerator_not_an_authority_layer() -> None:
-    """Keep Turbo local, uncached, and limited to verification work."""
+    """Keep Turbo local-cacheable, with an uncached fan-in and no authority role."""
     turbo = _turbo()
 
     assert turbo["remoteCache"] == {"enabled": False}
@@ -29,6 +29,9 @@ def test_turbo_is_an_accelerator_not_an_authority_layer() -> None:
     tasks = turbo["tasks"]
     assert not any(name.startswith("//#rust-") for name in tasks)
     assert tasks["//#polyglot-verification"]["cache"] is False
+    assert tasks["swfactory-rust#test"].get("cache", True) is True
+    assert tasks["swf-cli#build"].get("cache", True) is True
+    assert tasks["swfactory-python#test"].get("cache", True) is True
     assert set(tasks["//#polyglot-verification"]["dependsOn"]) == {
         "swfactory-python#test",
         "swfactory-rust#test",
