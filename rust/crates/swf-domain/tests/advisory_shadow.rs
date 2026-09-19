@@ -26,7 +26,7 @@ struct Expected {
 #[test]
 fn jev_shadow_regressions_preserve_ambiguity_and_operator_review() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../../tests/fixtures/advisory/jev_shadow_cases.json");
+        .join("../../../tests/fixtures/advisory/jev_shadow_cases.json");
     let fixture: Fixture = serde_json::from_str(&std::fs::read_to_string(path).expect("fixture"))
         .expect("valid fixture");
 
