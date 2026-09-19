@@ -25,10 +25,11 @@ Airflow lifecycle + Cell authority
       |                                          |
       |  local polyglot task graph               |
       |                                          |
-      |  Rust build ----+                         |
-      |                 +--> Python tests         |
-      |  Rust contract -+                         |
-      |                                          |
+      |  native Cargo tasks ----+                 |
+      |                        |                   |
+      |  native uv package ----+--> verification  |
+      |       + factory verify |    fan-in         |
+      |                        |                   |
       +------------------------------------------+
       |
       v
@@ -48,31 +49,44 @@ decision, not a truth decision.
 
 ## Current graph
 
-The repository root is a uv project, so `pyproject.toml` now declares a uv workspace and gives the
-synthetic Turbo workspace package the stable name `swfactory-python`.
+Cargo is a real repository-root workspace: `Cargo.toml`, `Cargo.lock`,
+`rust-toolchain.toml`, and `rustfmt.toml` share one root identity while crate sources remain
+under `rust/crates/`. `[workspace.metadata] name = "swfactory-rust"` gives the native Cargo
+aggregate a stable Turbo package identity.
 
-The Rust workspace still lives at `Cargo.toml`. Turborepo 2.11 native Cargo discovery requires
-the Cargo workspace at the repository root, so this change deliberately does **not** pretend the
-nested workspace is native. Instead, Rust is represented by explicit root tasks:
+uv is also discovered natively. The root `pyproject.toml` names the synthetic workspace package
+`swfactory-python`, and `tests/fixtures/contract` is a real virtual uv member named
+`swfactory-contract-fixtures`.
+
+One subtlety matters for affectedness: Turborepo intentionally treats its native **root pytest**
+task as repository-wide because pytest controls collection. That is correct for the generic native
+`swfactory-python#verify` task, but too conservative for this factory's incremental verification
+contract. The factory therefore defines `swfactory-python#verify` on the same native uv aggregate.
+It runs the same frozen all-packages pytest command, but its file inputs are explicit and exclude
+Rust `.rs` source. This is task semantics, not a second package or a second scheduler.
 
 ```text
-swf-cli#build
-      |
-      +---------------------> swfactory-python#test
-      |
-      +--> swfactory-rust#test
-                    |
-                    +--------> //#polyglot-verification
-swfactory-python#test -------+
+swfactory-python#verify ----+
+                           |
+swfactory-rust#test --------+----> //#polyglot-verification
+                           |
+swf-cli#build --------------+
 ```
+
+The Rust tasks are native Cargo tasks. The Python verification task is an explicit task attached to
+the native uv workspace package. The root fan-in is uncached and has no authority outside this
+local execution graph.
 
 Run the graph with Turborepo 2.11.1:
 
 ```sh
-npx --yes turbo@2.11.1 run '//#polyglot-verification'
+npx --yes turbo@2.11.1 ls
+npx --yes turbo@2.11.1 run '//#polyglot-verification' --dry-run=json
+npx --yes turbo@2.11.1 run '//#polyglot-verification' --summarize
 ```
 
-The CI integration is advisory while Turborepo's Rust/Python support is experimental.
+The CI integration remains advisory while the native Rust/Python support and affectedness policy
+are being proven.
 
 ## Hashes have two jobs here
 
