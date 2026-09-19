@@ -232,10 +232,15 @@ def _quote_ranges(source: str) -> tuple[Quote, ...]:
         selected.append((start, end))
         used += cost
 
-    quote_rows = [
-        Quote(start_line=start + 1, end_line=end, text="\n".join(lines[start:end]))
-        for start, end in _merge(selected)
-    ]
+    quote_rows: list[Quote] = []
+    for start, end in _merge(selected):
+        quote_rows.append(
+            Quote(
+                start_line=start + 1,
+                end_line=end,
+                text="\n".join(lines[start:end]),
+            )
+        )
     quotes = tuple(quote_rows)
     verify_quotes(source, quotes)
     return quotes
