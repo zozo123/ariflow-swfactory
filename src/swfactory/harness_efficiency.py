@@ -583,6 +583,9 @@ def pack_review_diff(
 
     if fanout < 1:
         raise ValueError("review diff fanout must be positive")
+    for label, sha in (("base_sha", base_sha), ("head_sha", head_sha)):
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ValueError(f"{label} must be a full lowercase git SHA")
     source_bytes = len(diff.encode("utf-8"))
     if source_bytes <= _REVIEW_DIFF_THRESHOLD_BYTES or _sensitivity_kinds(diff):
         return None
