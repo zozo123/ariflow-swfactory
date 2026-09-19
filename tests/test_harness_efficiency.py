@@ -92,6 +92,35 @@ def test_long_failure_is_archived_exactly_and_compacted_with_stable_handle(tmp_p
     assert all("text" not in quote for quote in public["quotes"])
 
 
+
+def test_sensitive_full_log_stays_host_only_and_never_enters_agent_prompt(tmp_path: Path) -> None:
+    ctx = FakeCtx(tmp_path)
+    token = "ghp_" + "a" * 36
+    stdout = f"token={token}\n" + "noise\n" * 1800
+    stdout += "FAILED tests/test_widget.py::test_edge - AssertionError: expected 7\n"
+
+    packed = pack_failure_observation(
+        ctx,
+        command="pytest -q",
+        exit_code=1,
+        timed_out=False,
+        stdout=stdout,
+        stderr="",
+    )
+
+    assert packed is not None
+    assert packed.ref.sandbox_path is None
+    assert packed.ref.sensitivity_kinds == ("github-token",)
+    assert token in ctx.state.read_artifact(packed.ref.state_path)
+    assert token not in packed.prompt_text
+    assert "host-only" in packed.prompt_text
+    assert not any(path.startswith(".factory/observations/") for path in ctx.sb.files)
+
+    public = json.loads(ctx.state.read_artifact(f"{ctx.art}/harness-observations/{packed.ref.sha256}.json"))
+    assert public["sensitive"] is True
+    assert public["sensitivity_kinds"] == ["github-token"]
+    assert public["raw_log_committed"] is False
+
 def test_same_observation_has_same_handle_and_archive_identity(tmp_path: Path) -> None:
     ctx = FakeCtx(tmp_path)
     stdout = "x" * 7000 + "\nFAILED deterministic\n"
