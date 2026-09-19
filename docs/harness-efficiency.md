@@ -15,11 +15,12 @@ last 2000 characters of stderr for the next repair call. Earlier diagnostic outp
 When either stream exceeds that old bound, swfactory now:
 
 1. archives the complete sandbox result in host-owned run state;
-2. mirrors it into ignored .factory/observations scratch for exact agent recall;
-3. assigns a content-addressed obs:sha256:<digest> handle;
-4. selects bounded failure windows plus small head/tail context;
-5. verifies every selected line range against the archived source;
-6. passes the repair call the smaller verified observation plus the recall path.
+2. runs the repository's deterministic secret-shape scan plus a conservative secret-assignment check;
+3. mirrors the exact source into ignored .factory/observations scratch only when that classifier is clean;
+4. assigns a content-addressed obs:sha256:<digest> handle;
+5. selects bounded failure windows plus small head/tail context;
+6. verifies every selected line range against the archived source and drops any sensitive excerpt;
+7. passes the repair call the smaller verified observation and, only for a clean source, the recall path.
 
 Small failures keep the previous prompt contract exactly.
 
@@ -40,7 +41,10 @@ Raw diagnostic text is not automatically committed. The delivery artifact carrie
 - whether a remote reducer was used;
 - whether raw logs were committed.
 
-Today both final flags are false. There is intentionally no remote reducer integration.
+Today both final flags are false. There is intentionally no remote reducer integration. If a log
+matches a known token shape or a conservative secret-assignment pattern, the full source remains
+host-only and the agent receives no raw recall path. This deliberately prefers a false-positive
+loss of debugging context over expanding the remote-model trust boundary.
 
 ## Constrained harness research
 
