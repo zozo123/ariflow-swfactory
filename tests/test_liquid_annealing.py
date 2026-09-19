@@ -208,6 +208,53 @@ def _stage_harness(monkeypatch: Any) -> None:
     monkeypatch.setattr(liquid_annealing, "_initial_tests_green", lambda _ctx: True)
 
 
+def test_liquid_packs_review_context_once_per_round_and_reuses_it_across_lanes(monkeypatch: Any) -> None:
+    from swfactory import harness_efficiency
+
+    ctx = _Ctx(max_review_fixes=0)
+    _stage_harness(monkeypatch)
+    packed = SimpleNamespace(
+        prompt_text="PACKED REVIEW CONTEXT",
+        source_bytes=20_000,
+        prompt_bytes=1_000,
+        estimated_replayed_bytes_avoided=57_000,
+        handle="diff:sha256:" + "a" * 64,
+        fanout=len(LANES),
+    )
+    pack_calls: list[tuple[str, str, int]] = []
+    round_diffs: list[str] = []
+
+    def fake_pack(_ctx: Any, *, diff: str, base_sha: str, head_sha: str, fanout: int) -> Any:
+        assert diff == "diff"
+        assert base_sha == "base-sha"
+        assert head_sha == "head"
+        pack_calls.append((base_sha, head_sha, fanout))
+        return packed
+
+    def fake_round(
+        _ctx: Any,
+        *,
+        round_index: int,
+        diff: str,
+        **_kwargs: Any,
+    ) -> tuple[list[Finding], int, list[dict[str, object]]]:
+        assert round_index == 0
+        round_diffs.append(diff)
+        return [], 0, _lanes()
+
+    monkeypatch.setattr(harness_efficiency, "pack_review_diff", fake_pack)
+    monkeypatch.setattr(liquid_annealing, "_round", fake_round)
+
+    result = liquid_annealing._run_annealed_review(ctx)  # type: ignore[arg-type]
+
+    assert result.status == "ok"
+    assert pack_calls == [("base-sha", "head", len(LANES))]
+    assert round_diffs == ["PACKED REVIEW CONTEXT"]
+    assert result.numbers["review_context_source_bytes"] == 20_000
+    assert result.numbers["review_context_prompt_bytes"] == 1_000
+    assert result.numbers["review_context_replayed_bytes_avoided"] == 57_000
+
+
 def test_stage_relaxes_major_retests_and_crystallizes(monkeypatch: Any) -> None:
     ctx = _Ctx(max_review_fixes=1)
     _stage_harness(monkeypatch)

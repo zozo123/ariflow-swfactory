@@ -266,12 +266,32 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
 
     for round_index in range(ctx.cfg.max_review_fixes + 1):
         diff = stages._sh(ctx, f"git diff {base}..HEAD -- . {stages._exclude(ctx)}")
+        from swfactory.harness_efficiency import pack_review_diff
+
+        packed_diff = pack_review_diff(
+            ctx,
+            diff=diff,
+            base_sha=base,
+            head_sha=stages._assert_workspace_head(ctx, "review context"),
+            fanout=len(LANES),
+        )
+        review_diff = packed_diff.prompt_text if packed_diff is not None else diff
+        if packed_diff is not None:
+            numbers["review_context_source_bytes"] = numbers.get("review_context_source_bytes", 0.0) + float(
+                packed_diff.source_bytes
+            )
+            numbers["review_context_prompt_bytes"] = numbers.get("review_context_prompt_bytes", 0.0) + float(
+                packed_diff.prompt_bytes
+            )
+            numbers["review_context_replayed_bytes_avoided"] = numbers.get(
+                "review_context_replayed_bytes_avoided", 0.0
+            ) + float(packed_diff.estimated_replayed_bytes_avoided)
         findings, dropped, lane_records = _round(
             ctx,
             round_index=round_index,
             spec=spec,
             plan=plan,
-            diff=diff,
+            diff=review_diff,
         )
         findings.extend(stages._plan_fidelity(ctx, base))
         if tests_blocker is not None:
@@ -309,6 +329,16 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
                 "round": round_index,
                 "lanes": lane_records,
                 "findings": [item.model_dump() for item in findings],
+                "review_context": (
+                    {
+                        "handle": packed_diff.handle,
+                        "source_bytes": packed_diff.source_bytes,
+                        "prompt_bytes": packed_diff.prompt_bytes,
+                        "fanout": packed_diff.fanout,
+                    }
+                    if packed_diff is not None
+                    else {"mode": "full-diff"}
+                ),
                 "state": final_state.as_dict(),
             }
         )

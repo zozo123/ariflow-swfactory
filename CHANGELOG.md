@@ -14,6 +14,11 @@ All notable changes to this project will be documented here. The format follows
   candidate SHA, promotion-authority digest, complete evidence, and a passing verifier before
   efficiency is considered; survivors are a deterministic Pareto frontier rather than a weighted
   score. The selector has no promotion or lifecycle action.
+- Pack review diffs above 12 KB behind content-addressed local recall handles. The prompt carries a
+  deterministic file/hunk index instead of replaying the full patch; ordinary review uses one pack
+  and Liquid reuses it across all three specialist lanes. Small or secret-shaped diffs keep the
+  previous full-diff behavior, raw patches are not committed, and the receipt records only identity
+  and measured context-byte savings.
 - Fail SmolVM doctor preflight when the configured daemon is unreachable, unhealthy, or not
   ready, using read-only health/readiness requests under one five-second deadline.
 - Rebuild demo source bytecode before tests so rapid same-size fixes cannot reuse stale Python
