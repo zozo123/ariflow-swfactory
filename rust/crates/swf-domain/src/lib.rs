@@ -23,6 +23,7 @@ pub mod rollup;
 pub mod sanitize;
 pub mod snapshot;
 pub mod states;
+pub mod task_runtime;
 pub mod worker;
 
 pub use factory::{
@@ -41,4 +42,5 @@ pub use operator::{
     BackendCapabilities, ContractVersions, FleetSummary, LimitingDimension, OperationDebt,
     QueueEntry, QueuePressure, QueueSnapshot,
 };
+pub use task_runtime::{TaskInvocation, TaskInvocationError};
 pub use worker::{WorkerBatch, WorkerReceipt, WorkerRole, MAX_WORKERS};
