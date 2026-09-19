@@ -19,13 +19,16 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 TURBO = ("npx", "--yes", "turbo@2.11.1")
+FACTORY_LEAVES = frozenset(
+    {
+        "swfactory-python#verify",
+        "swfactory-rust#test",
+        "swf-cli#build",
+    }
+)
 TASK_QUERY = """
 query {
-  affectedTasks(
-    base: "HEAD^"
-    head: "HEAD"
-    tasks: ["build", "verify", "test"]
-  ) {
+  affectedTasks(base: "HEAD^", head: "HEAD") {
     items { fullName }
   }
 }
@@ -69,7 +72,9 @@ def _affected_names(worktree: Path) -> tuple[str, ...]:
     for item in items:
         if not isinstance(item, dict) or not isinstance(item.get("fullName"), str):
             raise RuntimeError(f"turbo query returned invalid task item: {item!r}")
-        names.append(item["fullName"])
+        full_name = item["fullName"]
+        if full_name in FACTORY_LEAVES:
+            names.append(full_name)
     return tuple(sorted(names))
 
 
@@ -258,7 +263,7 @@ def main() -> int:
         "turbo_version": "2.11.1",
         "authority": "advisory-execution-only",
         "affectedness": {
-            "selection_scope": "native-leaf-build-and-test-tasks",
+            "selection_scope": "factory-fan-in-leaves",
             "matrix": matrix,
         },
         "benchmark": benchmark,
