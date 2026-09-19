@@ -101,3 +101,30 @@ The experiment graduates from advisory to required only after all of these are t
 5. disabling Turbo produces the same promotion decision, only more slowly.
 
 That last condition is the invariant: **an accelerator may change time-to-answer, never the answer.**
+
+
+## Reproducible benchmark and affectedness evidence
+
+The advisory CI job also runs:
+
+```sh
+uv run python scripts/polyglot_benchmark.py --out .factory/turbo/benchmark.json
+```
+
+The script creates detached local worktrees and measures four synthetic changes without touching the
+candidate checkout:
+
+- Python-only: Python verification and the root fan-in must be affected; Rust work must not be.
+- Rust-only: Rust work and the root fan-in must be affected; Python verification must not be.
+- Docs-only: no verification task may be affected.
+- Shared contract fixture: both Python and Rust verification plus the root fan-in must be affected.
+
+It then runs the verification once without Turbo, clears the local Turbo cache, runs a cold native
+polyglot verification, and immediately repeats it warm. The JSON report retains wall/CPU time,
+attempted tasks, cache hits, executed-task count, summary sizes, and the verdict-equivalence result.
+Remote cache stays disabled.
+
+The benchmark fails if the non-Turbo and Turbo verification verdicts differ or if the warm run
+produces no additional local Turbo cache hits. This is still advisory evidence: it is deliberately
+absent from candidate readiness until the graph and measurements are stable across representative
+changes.
