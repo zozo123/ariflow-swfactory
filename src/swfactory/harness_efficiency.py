@@ -261,10 +261,9 @@ def _reduced_prompt(ref: ObservationRef, quotes: tuple[Quote, ...]) -> str:
         f"source: {ref.size_bytes} bytes, {ref.lines} lines\n"
         "Every excerpt below was verified byte-for-byte against that source before exposure.\n"
     )
-    blocks = [
-        f"\n[exact lines {quote.start_line}-{quote.end_line}]\n{quote.text}"
-        for quote in quotes
-    ]
+    blocks: list[str] = []
+    for quote in quotes:
+        blocks.append(f"\n[exact lines {quote.start_line}-{quote.end_line}]\n{quote.text}")
     return (header + "".join(blocks)).strip()
 
 
