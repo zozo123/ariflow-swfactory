@@ -51,25 +51,25 @@ decision, not a truth decision.
 The repository root is a uv project, so `pyproject.toml` now declares a uv workspace and gives the
 synthetic Turbo workspace package the stable name `swfactory-python`.
 
-The Rust workspace still lives at `rust/Cargo.toml`. Turborepo 2.11 native Cargo discovery requires
+The Rust workspace still lives at `Cargo.toml`. Turborepo 2.11 native Cargo discovery requires
 the Cargo workspace at the repository root, so this change deliberately does **not** pretend the
 nested workspace is native. Instead, Rust is represented by explicit root tasks:
 
 ```text
-//#rust-build
+swf-cli#build
       |
       +---------------------> swfactory-python#test
       |
-      +--> //#rust-domain-contract
+      +--> swfactory-rust#test
                     |
-                    +--------> //#polyglot-contract
+                    +--------> //#polyglot-verification
 swfactory-python#test -------+
 ```
 
 Run the graph with Turborepo 2.11.1:
 
 ```sh
-npx --yes turbo@2.11.1 run '//#polyglot-contract'
+npx --yes turbo@2.11.1 run '//#polyglot-verification'
 ```
 
 The CI integration is advisory while Turborepo's Rust/Python support is experimental.
@@ -89,22 +89,6 @@ Remote Turbo cache is disabled in `turbo.json`. The Python native task may use t
 content-addressed cache. The explicit Rust tasks are currently `cache: false` because, until Cargo
 is natively discovered, their task hash would not automatically include the complete Rust compiler
 identity and Cargo dependency semantics.
-
-## Why not move Cargo to the root in this change?
-
-That is the clean end state for native multi-language discovery, but it changes a much larger
-surface:
-
-- every `--manifest-path rust/Cargo.toml` call;
-- CI and release scripts;
-- contributor documentation;
-- Rust cache paths;
-- packaging and release assumptions;
-- any code that treats `rust/` as a protected subtree.
-
-The migration should be measured as its own change. Once it lands, enable
-`experimentalCargoWorkspaces`, delete the explicit Rust root tasks, and let Turborepo derive Cargo
-inputs and toolchain identity natively.
 
 ## Promotion rule
 
