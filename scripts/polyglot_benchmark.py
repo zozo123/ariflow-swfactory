@@ -206,15 +206,20 @@ def _execution(summary: Path) -> dict[str, object]:
 
 
 def verification_benchmark() -> dict[str, object]:
-    """Compare baseline verification with cold and warm Turbo executions."""
+    """Compare equivalent clean verification with a no-op warm Turbo repeat."""
     baseline_commands = (
         ("uv", "run", "--active", "--frozen", "--all-packages", "pytest"),
         ("cargo", "test", "--workspace", "--locked"),
         ("cargo", "build", "-p", "swf-cli", "--locked"),
     )
+
+    # Keep tool download/registry caches warm on purpose, but make compiler outputs identical:
+    # both the no-Turbo baseline and Turbo-cold begin without a repository target directory.
+    shutil.rmtree(ROOT / "target", ignore_errors=True)
     baseline_runs = [_timed(command) for command in baseline_commands]
     baseline_ok = all(run["exit_code"] == 0 for run in baseline_runs)
 
+    shutil.rmtree(ROOT / "target", ignore_errors=True)
     shutil.rmtree(ROOT / ".turbo", ignore_errors=True)
     cold_run = _timed((*TURBO, "run", "//#polyglot-verification", "--summarize", "--log-order=grouped"))
     cold_summary = _execution(_latest_summary())
@@ -248,6 +253,12 @@ def verification_benchmark() -> dict[str, object]:
             **warm_summary,
         },
         "verification_verdict_equivalent": equivalent,
+        "cold_start_contract": {
+            "baseline_target_removed": True,
+            "turbo_target_removed": True,
+            "turbo_local_cache_removed": True,
+            "tool_download_caches_preserved": True,
+        },
         "remote_cache_enabled": False,
         "run_summary_count": len(list((ROOT / ".turbo" / "runs").glob("*.json"))),
     }
