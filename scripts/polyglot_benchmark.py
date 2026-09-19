@@ -28,7 +28,11 @@ FACTORY_LEAVES = frozenset(
 )
 TASK_QUERY = """
 query {
-  affectedTasks(base: "HEAD^", head: "HEAD") {
+  affectedTasks(
+    base: "HEAD^"
+    head: "HEAD"
+    tasks: ["swfactory-python#verify", "swfactory-rust#test", "swf-cli#build"]
+  ) {
     items { fullName }
   }
 }
