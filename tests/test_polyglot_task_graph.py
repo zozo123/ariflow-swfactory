@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 import tomllib
 from pathlib import Path
 
@@ -50,6 +51,14 @@ def test_turbo_is_an_accelerator_not_an_authority_layer() -> None:
         "swfactory-rust#test",
         "swf-cli#build",
     }
+
+
+def test_benchmark_measures_exactly_the_fan_in_leaves() -> None:
+    """Prevent affectedness evidence from drifting away from the executable graph."""
+    tasks = _turbo()["tasks"]
+    benchmark = runpy.run_path(str(ROOT / "scripts/polyglot_benchmark.py"))
+
+    assert set(benchmark["FACTORY_LEAVES"]) == set(tasks["//#polyglot-verification"]["dependsOn"])
 
 
 def test_root_cargo_workspace_is_native_and_single() -> None:
