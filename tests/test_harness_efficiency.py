@@ -164,12 +164,7 @@ def test_exact_page_is_one_based_and_lossless() -> None:
 
 
 def _large_review_diff() -> str:
-    header = (
-        "diff --git a/src/widget.py b/src/widget.py\n"
-        "--- a/src/widget.py\n"
-        "+++ b/src/widget.py\n"
-        "@@ -1,2 +1,602 @@\n"
-    )
+    header = "diff --git a/src/widget.py b/src/widget.py\n--- a/src/widget.py\n+++ b/src/widget.py\n@@ -1,2 +1,602 @@\n"
     body = "".join(f"+generated review line {i:04d} with deterministic content\n" for i in range(600))
     second = (
         "diff --git a/tests/test_widget.py b/tests/test_widget.py\n"
