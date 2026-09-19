@@ -505,7 +505,7 @@ def _stamped(ctx, gate: str, **overrides) -> Approval:
     ("overrides", "expected"),
     [
         ({"cell_epoch": 2}, "/2, not"),
-        ({"cell_id": "cell_someone_else"}, "Cell"),
+        ({"cell_id": "cell_1e4e4e33da6427ea2280a815"}, "Cell"),
         ({"mode": "auto", "actor": "auto"}, "auto"),
         ({"mode": "replay", "actor": "replay:smoke"}, "replay"),
     ],

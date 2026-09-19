@@ -53,7 +53,13 @@ class FakeTI:
 
 
 def _job(idx: int = 0, *, managed: bool = True) -> dict[str, Any]:
-    return {"cell_managed": managed, "cell_id": "cell_abc", "cell_epoch": 2, "job_idx": idx, "issue": "1"}
+    return {
+        "cell_managed": managed,
+        "cell_id": "cell_555aa0b670e50aef10c1f7fd",
+        "cell_epoch": 2,
+        "job_idx": idx,
+        "issue": "1",
+    }
 
 
 def _context(ti: FakeTI, *, task_ids: list[str] | None = None) -> dict[str, Any]:
@@ -135,7 +141,9 @@ def test_a_report_that_cannot_reach_the_backend_records_its_debt_and_fails_close
     ti = FakeTI("job.deliver", try_number=2)
     with pytest.raises(CellCallbackError, match="unavailable"):
         cell_callback.report(_job(), "success", _context(ti), "delivered")
-    assert _debts(ti) == [CallbackDebt("cell_abc", 2, "swf__run", "job.deliver", "success", attempt=2)]
+    assert _debts(ti) == [
+        CallbackDebt("cell_555aa0b670e50aef10c1f7fd", 2, "swf__run", "job.deliver", "success", attempt=2)
+    ]
 
 
 def test_a_refused_report_records_its_debt(backend: Backend) -> None:
@@ -159,7 +167,9 @@ def test_report_failure_records_the_failed_debt_without_raising(no_backend: str)
     ti = FakeTI("job.build", map_index=1)
     ti.store[("fan_out", -1, "return_value")] = [_job(0), _job(1)]
     cell_callback.report_failure(_context(ti))
-    assert _debts(ti) == [CallbackDebt("cell_abc", 2, "swf__run", "job.build", "failed", attempt=1)]
+    assert _debts(ti) == [
+        CallbackDebt("cell_555aa0b670e50aef10c1f7fd", 2, "swf__run", "job.build", "failed", attempt=1)
+    ]
 
 
 def test_report_failure_leaves_unmanaged_and_unknown_jobs_alone(no_backend: str) -> None:
@@ -185,7 +195,7 @@ def test_report_failure_lets_a_programming_error_reach_the_airflow_log(no_backen
 
 
 def _owed(ti: FakeTI, desired: str = "failed", *, task_id: str = "job.build", epoch: int = 2) -> CallbackDebt:
-    debt = CallbackDebt("cell_abc", epoch, "swf__run", task_id, desired, attempt=1)
+    debt = CallbackDebt("cell_555aa0b670e50aef10c1f7fd", epoch, "swf__run", task_id, desired, attempt=1)
     ti.store[(task_id, ti.map_index, DEBT_XCOM_KEY)] = [debt.__dict__]
     return debt
 
@@ -193,7 +203,10 @@ def _owed(ti: FakeTI, desired: str = "failed", *, task_id: str = "job.build", ep
 def test_outstanding_debt_is_replayed_before_the_next_report_while_the_cell_is_live(backend: Backend) -> None:
     """Teardown always runs; its report is where a job's earlier lost ``failed`` gets delivered."""
     backend.echo_transitions()
-    backend.routes["/v1/cells/inspect"] = lambda body: (200, {"cell_id": "cell_abc", "epoch": 2, "state": "running"})
+    backend.routes["/v1/cells/inspect"] = lambda body: (
+        200,
+        {"cell_id": "cell_555aa0b670e50aef10c1f7fd", "epoch": 2, "state": "running"},
+    )
     ti = FakeTI("job.teardown")
     debt = _owed(ti, "failed")
     cell_callback.report(_job(), "cleaned", _context(ti), "teardown")
@@ -207,9 +220,18 @@ def test_outstanding_debt_is_replayed_before_the_next_report_while_the_cell_is_l
 @pytest.mark.parametrize(
     ("answer", "why"),
     [
-        ((200, {"cell_id": "cell_abc", "epoch": 2, "state": "failed"}), "the report already landed (ADOPT)"),
-        ((200, {"cell_id": "cell_abc", "epoch": 3, "state": "running"}), "the epoch moved on (REFUSE)"),
-        ((200, {"cell_id": "cell_abc", "epoch": 2, "state": "success"}), "the Cell ended differently (REFUSE)"),
+        (
+            (200, {"cell_id": "cell_555aa0b670e50aef10c1f7fd", "epoch": 2, "state": "failed"}),
+            "the report already landed (ADOPT)",
+        ),
+        (
+            (200, {"cell_id": "cell_555aa0b670e50aef10c1f7fd", "epoch": 3, "state": "running"}),
+            "the epoch moved on (REFUSE)",
+        ),
+        (
+            (200, {"cell_id": "cell_555aa0b670e50aef10c1f7fd", "epoch": 2, "state": "success"}),
+            "the Cell ended differently (REFUSE)",
+        ),
         ((404, {"detail": "no Factory Cell"}), "the Cell is gone (REFUSE)"),
     ],
 )
@@ -236,10 +258,13 @@ def test_a_debt_that_cannot_be_settled_fails_the_report_closed_and_is_itself_rec
 
 def test_debt_is_scoped_to_the_job_group_and_map_index(backend: Backend) -> None:
     backend.echo_transitions()
-    backend.routes["/v1/cells/inspect"] = lambda body: (200, {"cell_id": "cell_abc", "epoch": 2, "state": "running"})
+    backend.routes["/v1/cells/inspect"] = lambda body: (
+        200,
+        {"cell_id": "cell_555aa0b670e50aef10c1f7fd", "epoch": 2, "state": "running"},
+    )
     ti = FakeTI("job.teardown", map_index=1)
     other = FakeTI("job.build", map_index=0)
-    other_debt = CallbackDebt("cell_other", 2, "swf__run", "job.build", "failed", attempt=1)
+    other_debt = CallbackDebt("cell_4ce269b99ed3c09c564e4735", 2, "swf__run", "job.build", "failed", attempt=1)
     ti.store[("job.build", 0, DEBT_XCOM_KEY)] = [other_debt.__dict__]
     ti.store[("fan_out", -1, DEBT_XCOM_KEY)] = [_owed(other, "failed").__dict__]  # outside the group
     cell_callback.report(_job(1), "cleaned", _context(ti), "teardown")

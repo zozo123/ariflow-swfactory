@@ -26,6 +26,7 @@ from swfactory.cells import (
     DuplicateOperation,
     Mutation,
     StaleEpoch,
+    is_cell_id,
     operation_key,
 )
 from swfactory.idempotency import MutationOutcome, OperationJournal, OperationRef, RetryBudget
@@ -61,7 +62,7 @@ class AirflowBinding:
     map_index: int | None = None
 
     def validate(self) -> None:
-        if not self.cell_id.startswith("cell_"):
+        if not is_cell_id(self.cell_id):
             raise ValueError("Airflow binding requires a Factory Cell id")
         if self.epoch < 1:
             raise ValueError("Airflow binding epoch must be positive")

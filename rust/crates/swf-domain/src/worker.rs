@@ -69,7 +69,7 @@ impl WorkerBatch {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if !self.cell_id.starts_with("cell_") {
+        if !crate::cell::is_cell_id(&self.cell_id) {
             return Err("worker batch must reference a Factory Cell".to_string());
         }
         if self.epoch == 0 {

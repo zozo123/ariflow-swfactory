@@ -15,6 +15,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from swfactory.cells import is_cell_id
+
 POLICY_SCHEMA_VERSION = 1
 POLICY_DIGEST_FAMILY = f"v{POLICY_SCHEMA_VERSION}"
 POLICY_DIGEST_PREFIX = f"policy:{POLICY_DIGEST_FAMILY}:"
@@ -101,7 +103,7 @@ class MutationEnvelope:
     schema_version: int = MUTATION_SCHEMA_VERSION
 
     def validate(self) -> None:
-        if not self.cell_id.startswith("cell_") or len(self.cell_id) != 29:
+        if not is_cell_id(self.cell_id):
             raise ValueError("invalid Factory Cell id")
         if self.epoch < 1:
             raise ValueError("mutation epoch must be positive")

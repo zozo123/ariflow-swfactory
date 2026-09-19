@@ -43,7 +43,7 @@ pub struct StageInvocation {
 
 impl StageInvocation {
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        if !self.cell_id.starts_with("cell_") {
+        if !crate::cell::is_cell_id(&self.cell_id) {
             return Err(ProtocolError::InvalidCellId);
         }
         if self.epoch == 0 {
@@ -161,5 +161,15 @@ mod tests {
     fn envelope_is_versioned_for_http_or_unix_socket_transport() {
         let envelope = ManagerEnvelope::new("airflow-task-1", invocation()).unwrap();
         assert_eq!(envelope.api_version, MANAGER_API_VERSION);
+    }
+
+    #[test]
+    fn a_prefix_only_cell_id_is_refused() {
+        // Before the shared contract this passed: StageInvocation checked only `starts_with`.
+        let mut bad = invocation();
+        bad.cell_id = "cell_zzz".into();
+        assert_eq!(bad.validate(), Err(ProtocolError::InvalidCellId));
+        bad.cell_id = "cell_0123456789ABCDEF01234567".into();
+        assert_eq!(bad.validate(), Err(ProtocolError::InvalidCellId));
     }
 }

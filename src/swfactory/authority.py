@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 
+from swfactory.cells import is_cell_id
+
 
 class AuthorityViolation(RuntimeError):
     """A mutation or snapshot violates the single-authority contract."""
@@ -67,7 +69,7 @@ class MutationAuthority:
         owner = allowed_actor or rule_for(self.resource).owner
         if self.actor != owner:
             raise AuthorityViolation(f"{self.resource.value} mutations belong to {owner}, not {self.actor}")
-        if not self.cell_id.startswith("cell_"):
+        if not is_cell_id(self.cell_id):
             raise AuthorityViolation("mutation must carry a Factory Cell id")
         if not self.operation_key.strip():
             raise AuthorityViolation("mutation must carry an operation key")
@@ -109,7 +111,7 @@ def check_snapshot(snapshot: dict[str, list[dict[str, Any]]]) -> tuple[str, ...]
     for cell in snapshot.get("cells", []):
         cell_id = str(cell.get("cell_id", ""))
         epoch = cell.get("epoch")
-        if not cell_id.startswith("cell_"):
+        if not is_cell_id(cell_id):
             failures.append(f"invalid_cell_id:{cell_id or '<missing>'}")
         if type(epoch) is not int or epoch < 1:
             failures.append(f"invalid_cell_epoch:{cell_id}")

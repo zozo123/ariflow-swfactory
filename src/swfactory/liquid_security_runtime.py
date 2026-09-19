@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from swfactory.cells import is_cell_id
+
 
 class Capability(StrEnum):
     READ_SOURCE = "read_source"
@@ -29,7 +31,7 @@ class SecurityContext:
     def validate(self) -> None:
         if not self.tenant.strip():
             raise ValueError("tenant is required")
-        if not self.cell_id.startswith("cell_"):
+        if not is_cell_id(self.cell_id):
             raise ValueError("invalid cell id")
         if self.epoch < 1:
             raise ValueError("epoch must be positive")
