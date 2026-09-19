@@ -423,7 +423,7 @@ tar xzf swf-2.1.0-aarch64-apple-darwin.tar.gz
 install -m 0755 swf-2.1.0-aarch64-apple-darwin/swf ~/.local/bin/swf
 ```
 
-From a checkout instead: `cargo build --release --manifest-path rust/Cargo.toml`. Full instructions,
+From a checkout instead: `cargo build --release --locked`. Full instructions,
 including completions and the macOS quarantine flag, are in
 [docs/swf.md](docs/swf.md#install).
 
@@ -523,7 +523,7 @@ fourth needs a live Airflow, so it is run by hand before a release.
 | Check | Re-derive it with | Result |
 |---|---|---|
 | Python suite | `uv run pytest -q` | 617 passed, 1 skipped |
-| Rust suite | `cargo test --manifest-path rust/Cargo.toml --workspace` | 452 passed |
+| Rust suite | `cargo test --workspace --locked` | 452 passed |
 | Contract equivalence | `cargo test -p swf-domain --test contract -- --nocapture` | 123 cases over 8 fixture files, asserted in both languages |
 | Live acceptance | `scripts/swf_e2e.sh` | 2 issues × 2 targets, 8 approval gates, 4 deliveries verified from a fresh clone |
 
