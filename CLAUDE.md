@@ -25,6 +25,11 @@ in `stages.py`. Details: README + docs/*.md.
   run these after ANY change to `blueprints/*.toml`, backend HTTP shapes or CLI surfaces, not only
   to `rust/`: the crates are a second reader of those contracts (`deny_unknown_fields`, and a test
   that parses every shipped blueprint), and two PRs went red in CI for skipping them.
+  Run the format check as `cd rust && cargo fmt --all -- --check`. `cargo fmt --manifest-path
+  rust/Cargo.toml --check` checks NOTHING: `--check` is a rustfmt option, so cargo-fmt takes it as
+  an unknown argument, prints its help and exits 0. It is a green check that ran no check, and it
+  passed locally on three PRs whose `rust` job then failed on formatting alone -- which also fails
+  `candidate-readiness`, because that treats `rust` as mandatory.
   the `swf` operator binary in `rust/` (docs/swf.md). It drives the same Airflow/`gh`/`islo`
   interfaces as `control.py` only in explicit `--direct` mode. Normally it connects to the Python
   `backend.py` API; service credentials and work-order validation live there. It runs no stage. `contract-equivalence` CI asserts both languages
