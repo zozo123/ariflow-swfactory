@@ -7,9 +7,9 @@ All notable changes to this project will be documented here. The format follows
 ## [Unreleased]
 
 - Preserve long failed-test evidence while reducing repair-context replay: output that exceeded the
-  previous repair-prompt tail is archived in host-owned run state, mirrored into ignored sandbox
-  scratch behind a stable content handle, and compacted only through exact source-verified excerpts.
-  Raw diagnostics are not committed and no remote reducer model is used.
+  previous repair-prompt tail is archived in host-owned run state and compacted only through exact
+  source-verified excerpts. Clean diagnostics get an ignored sandbox recall handle; secret-shaped
+  logs remain host-only. Raw diagnostics are not committed and no remote reducer model is used.
 - Add constrained harness-research selection: experimental mechanisms must preserve the exact
   candidate SHA, promotion-authority digest, complete evidence, and a passing verifier before
   efficiency is considered; survivors are a deterministic Pareto frontier rather than a weighted
