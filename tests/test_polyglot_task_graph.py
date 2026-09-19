@@ -119,5 +119,5 @@ def test_workspace_graph_inputs_are_protected_even_when_tests_are_writable() -> 
     for stage in ("build", "fix"):
         protected = set(protected_for(contract, stage))
         assert always_protected <= protected
-    assert "tests/" not in set(protected_for(contract, "build"))
-    assert "tests/" in set(protected_for(contract, "fix"))
+    assert "tests" not in set(protected_for(contract, "build"))
+    assert "tests" in set(protected_for(contract, "fix"))
