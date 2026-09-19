@@ -82,9 +82,7 @@ def test_long_failure_is_archived_exactly_and_compacted_with_stable_handle(tmp_p
     assert packed.prompt_bytes < packed.legacy_bytes
     verify_quotes(source, packed.quotes)
 
-    public = json.loads(
-        ctx.state.read_artifact(f"{ctx.art}/harness-observations/{packed.ref.sha256}.json")
-    )
+    public = json.loads(ctx.state.read_artifact(f"{ctx.art}/harness-observations/{packed.ref.sha256}.json"))
     assert public["remote_model_used"] is False
     assert public["raw_log_committed"] is False
     assert public["command_sha256"] == packed.ref.command_sha256
