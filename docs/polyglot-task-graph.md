@@ -149,8 +149,9 @@ npx --yes turbo@2.11.1 run '//#polyglot-verification' --dry-run=json
 npx --yes turbo@2.11.1 run '//#polyglot-verification' --summarize
 ```
 
-The CI integration remains advisory while the native Rust/Python support and affectedness policy
-are being proven.
+The dedicated `.github/workflows/polyglot-task-graph.yml` workflow remains advisory while the
+native Rust/Python support and affectedness policy are being proven. It has its own concurrency lane
+and is deliberately separate from the required `ci.yml` candidate-readiness fan-in.
 
 ## Hashes have two jobs here
 
@@ -183,7 +184,7 @@ That last condition is the invariant: **an accelerator may change time-to-answer
 
 ## Reproducible benchmark and affectedness evidence
 
-The advisory CI job also runs:
+The dedicated advisory workflow also runs:
 
 ```sh
 uv run python scripts/polyglot_benchmark.py --out .factory/turbo/benchmark.json
