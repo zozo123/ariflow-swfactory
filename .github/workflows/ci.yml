@@ -272,6 +272,8 @@ jobs:
           npx --yes turbo@2.11.1 run '//#polyglot-verification' --dry-run=json > .factory/turbo/plan.json
       - name: Execute the cross-language graph
         run: npx --yes turbo@2.11.1 run '//#polyglot-verification' --summarize
+      - name: Measure affectedness, cold/warm cache, and verdict equivalence
+        run: uv run python scripts/polyglot_benchmark.py --out .factory/turbo/benchmark.json
       - name: Keep Turbo planning and run-summary evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -280,6 +282,7 @@ jobs:
           path: |
             .factory/turbo/plan.json
             .factory/turbo/packages.json
+            .factory/turbo/benchmark.json
             .turbo/runs/*.json
           if-no-files-found: warn
 
