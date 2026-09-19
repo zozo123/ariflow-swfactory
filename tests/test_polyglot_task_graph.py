@@ -29,6 +29,11 @@ def test_turbo_is_an_accelerator_not_an_authority_layer() -> None:
     tasks = turbo["tasks"]
     assert not any(name.startswith("//#rust-") for name in tasks)
     assert tasks["//#polyglot-verification"]["cache"] is False
+    assert tasks["//#polyglot-verification"]["inputs"] == ["$TURBO_ROOT$/turbo.json"]
+    assert "!$TURBO_ROOT$/rust/**/*.rs" in tasks["swfactory-python#test"]["inputs"]
+    assert not any("docs" in item and item.startswith("!") for item in tasks["swfactory-python#test"]["inputs"])
+    assert "$TURBO_ROOT$/rust/crates/**" in tasks["swfactory-rust#test"]["inputs"]
+    assert "$TURBO_ROOT$/rust/crates/**" in tasks["swf-cli#build"]["inputs"]
     assert tasks["swfactory-rust#test"].get("cache", True) is True
     assert tasks["swf-cli#build"].get("cache", True) is True
     assert tasks["swfactory-python#test"].get("cache", True) is True
