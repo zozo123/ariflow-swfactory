@@ -272,7 +272,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
             ctx,
             diff=diff,
             base_sha=base,
-            head_sha=stages._workspace_head(ctx),
+            head_sha=stages._assert_workspace_head(ctx, "review context"),
             fanout=len(LANES),
         )
         review_diff = packed_diff.prompt_text if packed_diff is not None else diff
