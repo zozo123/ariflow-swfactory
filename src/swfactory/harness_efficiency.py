@@ -188,9 +188,7 @@ def _quote_ranges(source: str) -> tuple[Quote, ...]:
     error_ranges: list[tuple[int, int]] = []
     for index, line in enumerate(lines):
         if _ERROR_RE.search(line):
-            error_ranges.append(
-                (max(0, index - _CONTEXT_LINES), min(len(lines), index + _CONTEXT_LINES + 1))
-            )
+            error_ranges.append((max(0, index - _CONTEXT_LINES), min(len(lines), index + _CONTEXT_LINES + 1)))
 
     candidates = list(reversed(_merge(error_ranges)))
     candidates += [
