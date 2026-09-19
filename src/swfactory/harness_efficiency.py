@@ -604,10 +604,7 @@ def pack_review_diff(
 
     files = _review_diff_files(diff)
     shown = files[:_REVIEW_MAX_FILES]
-    file_lines = [
-        f"- {item.path}: {item.hunks} hunk(s), +{item.added}/-{item.deleted}"
-        for item in shown
-    ]
+    file_lines = [f"- {item.path}: {item.hunks} hunk(s), +{item.added}/-{item.deleted}" for item in shown]
     if len(files) > len(shown):
         file_lines.append(f"- ... {len(files) - len(shown)} more file(s); page the exact patch")
 
@@ -622,8 +619,7 @@ def pack_review_diff(
         f"{sum(item.hunks for item in files)} hunk(s)\n"
         "Use Read on the exact patch with offset/limit, and Read/Grep the changed files, before "
         "making findings. Do not approve from this index alone.\n\n"
-        "Changed files:\n"
-        + ("\n".join(file_lines) if file_lines else "(none)")
+        "Changed files:\n" + ("\n".join(file_lines) if file_lines else "(none)")
     ).strip()
     prompt_bytes = len(prompt.encode("utf-8"))
     if prompt_bytes >= source_bytes:
