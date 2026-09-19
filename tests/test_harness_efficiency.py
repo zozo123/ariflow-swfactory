@@ -12,6 +12,7 @@ from swfactory.harness_efficiency import (
     Quote,
     exact_page,
     pack_failure_observation,
+    pack_review_diff,
     verify_quotes,
 )
 from swfactory.state import RunState
@@ -160,6 +161,118 @@ def test_exact_page_is_one_based_and_lossless() -> None:
     assert exact_page(source, start_line=7, limit=3) == "line-7\nline-8\nline-9"
     with pytest.raises(ValueError):
         exact_page(source, start_line=0, limit=3)
+
+
+def _large_review_diff() -> str:
+    header = (
+        "diff --git a/src/widget.py b/src/widget.py\n"
+        "--- a/src/widget.py\n"
+        "+++ b/src/widget.py\n"
+        "@@ -1,2 +1,602 @@\n"
+    )
+    body = "".join(f"+generated review line {i:04d} with deterministic content\n" for i in range(600))
+    second = (
+        "diff --git a/tests/test_widget.py b/tests/test_widget.py\n"
+        "--- a/tests/test_widget.py\n"
+        "+++ b/tests/test_widget.py\n"
+        "@@ -1 +1,3 @@\n"
+        "+def test_widget():\n"
+        "+    assert True\n"
+    )
+    return header + body + second
+
+
+def test_small_review_diff_keeps_the_existing_prompt_contract(tmp_path: Path) -> None:
+    ctx = FakeCtx(tmp_path)
+    diff = "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+new\n"
+
+    assert (
+        pack_review_diff(
+            ctx,
+            diff=diff,
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            fanout=3,
+        )
+        is None
+    )
+    assert ctx.sb.files == {}
+
+
+def test_large_review_diff_is_exactly_archived_and_packed_once_for_fanout(tmp_path: Path) -> None:
+    ctx = FakeCtx(tmp_path)
+    diff = _large_review_diff()
+
+    packed = pack_review_diff(
+        ctx,
+        diff=diff,
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+        fanout=3,
+    )
+
+    assert packed is not None
+    assert packed.handle == f"diff:sha256:{packed.sha256}"
+    assert ctx.state.read_artifact(packed.state_path) == diff
+    assert ctx.sb.files[packed.sandbox_path] == diff
+    assert packed.prompt_bytes < packed.source_bytes
+    assert packed.estimated_replayed_bytes_avoided == packed.saved_bytes_per_prompt * 3
+    assert [item.path for item in packed.files] == ["src/widget.py", "tests/test_widget.py"]
+    assert packed.files[0].hunks == 1
+    assert packed.files[0].added == 600
+    assert "navigation, not evidence" in packed.prompt_text.lower()
+    assert packed.sandbox_path in packed.prompt_text
+
+    public = json.loads(ctx.state.read_artifact(f"{ctx.art}/harness-review-context/{packed.sha256}.json"))
+    assert public["authority"] == "review-navigation-only"
+    assert public["raw_diff_committed"] is False
+    assert public["remote_model_used"] is False
+    assert public["fanout"] == 3
+    assert public["estimated_replayed_bytes_avoided"] == packed.estimated_replayed_bytes_avoided
+    assert "generated review line" not in json.dumps(public)
+
+
+def test_review_diff_handle_is_stable_and_archive_is_reused(tmp_path: Path) -> None:
+    ctx = FakeCtx(tmp_path)
+    diff = _large_review_diff()
+
+    first = pack_review_diff(
+        ctx,
+        diff=diff,
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+        fanout=3,
+    )
+    second = pack_review_diff(
+        ctx,
+        diff=diff,
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+        fanout=3,
+    )
+
+    assert first is not None and second is not None
+    assert first.handle == second.handle
+    assert first.prompt_text == second.prompt_text
+    assert first.files == second.files
+
+
+def test_secret_shaped_review_diff_is_not_copied_into_recall_scratch(tmp_path: Path) -> None:
+    ctx = FakeCtx(tmp_path)
+    token = "ghp_" + "a" * 36
+    diff = _large_review_diff() + f"\n+token={token}\n"
+
+    packed = pack_review_diff(
+        ctx,
+        diff=diff,
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+        fanout=3,
+    )
+
+    assert packed is None
+    assert not any(path.startswith(".factory/observations/review-diff-") for path in ctx.sb.files)
+    assert not any("harness-review-context" in path for path in ctx.sb.files)
 
 
 def test_compaction_has_no_remote_model_client() -> None:
