@@ -116,7 +116,8 @@ candidate checkout:
 
 - Python-only: Python verification and the root fan-in must be affected; Rust work must not be.
 - Rust-only: Rust work and the root fan-in must be affected; Python verification must not be.
-- Docs-only: no verification task may be affected.
+- Docs-only: Python verification and the root fan-in must run because the shipped site/doc contract
+  is part of the pytest suite; Rust work must not be selected.
 - Shared contract fixture: both Python and Rust verification plus the root fan-in must be affected.
 
 It then runs the verification once without Turbo, clears the local Turbo cache, runs a cold native
