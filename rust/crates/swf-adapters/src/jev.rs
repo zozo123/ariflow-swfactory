@@ -317,7 +317,11 @@ fn parse_build_response(
                 detail: format!("invalid confidence for build axis {:?}", declared.name),
             });
         }
-        if !declared.options.iter().any(|option| option == &answer.choice) {
+        if !declared
+            .options
+            .iter()
+            .any(|option| option == &answer.choice)
+        {
             return Err(AdapterError::Decode {
                 what: "Jev build exploration".into(),
                 detail: format!("unknown selected option for build axis {:?}", declared.name),
@@ -655,7 +659,6 @@ mod tests {
         assert!(matches!(error, AdapterError::Auth { .. }));
         assert!(!error.to_string().contains(TOKEN));
     }
-
 
     fn build_request() -> BuildExplorationRequest {
         BuildExplorationRequest::new(

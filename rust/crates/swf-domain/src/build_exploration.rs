@@ -94,8 +94,7 @@ impl AxisDistribution {
         if self.axis != declared.name {
             return Err(BuildExplorationError::UnknownAxis);
         }
-        let declared_values: BTreeSet<&str> =
-            declared.options.iter().map(String::as_str).collect();
+        let declared_values: BTreeSet<&str> = declared.options.iter().map(String::as_str).collect();
         let provided_values: BTreeSet<&str> =
             self.probabilities.keys().map(String::as_str).collect();
         if declared_values != provided_values {
@@ -127,10 +126,7 @@ pub struct BuildDistribution {
 }
 
 impl BuildDistribution {
-    pub fn validate(
-        &self,
-        request: &BuildExplorationRequest,
-    ) -> Result<(), BuildExplorationError> {
+    pub fn validate(&self, request: &BuildExplorationRequest) -> Result<(), BuildExplorationError> {
         request.validate()?;
         if self.schema_version != BUILD_EXPLORATION_SCHEMA_VERSION {
             return Err(BuildExplorationError::UnsupportedSchema);
@@ -193,8 +189,7 @@ pub struct BuildHypothesisReceipt {
 
 impl BuildHypothesisReceipt {
     pub fn digest(&self) -> Result<String, BuildExplorationError> {
-        let payload =
-            serde_json::to_vec(self).map_err(|_| BuildExplorationError::Serialization)?;
+        let payload = serde_json::to_vec(self).map_err(|_| BuildExplorationError::Serialization)?;
         Ok(format!("buildsample:v1:{}", sha256_hex(&payload)))
     }
 }
@@ -213,12 +208,7 @@ pub fn sample_build_hypothesis(
     let mut choices = BTreeMap::new();
 
     for (axis_index, (axis, weights)) in request.axes.iter().zip(&normalized.axes).enumerate() {
-        let draw = deterministic_draw(
-            entropy_token,
-            &distribution_digest,
-            axis_index,
-            &axis.name,
-        );
+        let draw = deterministic_draw(entropy_token, &distribution_digest, axis_index, &axis.name);
         let mut cumulative = 0.0;
         let mut chosen = axis
             .options
@@ -420,10 +410,8 @@ mod tests {
             ("scratch".into(), 1.0),
         ]);
 
-        let repair_sample =
-            sample_build_hypothesis(&request(), &repair, "same-entropy").unwrap();
-        let scratch_sample =
-            sample_build_hypothesis(&request(), &scratch, "same-entropy").unwrap();
+        let repair_sample = sample_build_hypothesis(&request(), &repair, "same-entropy").unwrap();
+        let scratch_sample = sample_build_hypothesis(&request(), &scratch, "same-entropy").unwrap();
 
         assert_eq!(repair_sample.choices["strategy"], "repair");
         assert_eq!(scratch_sample.choices["strategy"], "scratch");

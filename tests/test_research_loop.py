@@ -228,6 +228,7 @@ def test_entropy_schedule_randomizes_search_but_keeps_annealing_shape(monkeypatc
     assert tuple(strategy.value for strategy in schedule[1]) == ("scratch", "repair")
     assert tuple(strategy.value for strategy in schedule[2]) == ("scratch",)
 
+
 def test_jev_build_receipt_selects_an_actual_candidate_lane_without_promotion() -> None:
     seen: list[Strategy] = []
 
