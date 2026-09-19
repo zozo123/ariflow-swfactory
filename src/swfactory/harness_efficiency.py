@@ -40,6 +40,9 @@ class ObservationIntegrityError(ValueError):
 class ObservationRef:
     handle: str
     sha256: str
+    command_sha256: str
+    exit_code: int
+    timed_out: bool
     state_path: str
     sandbox_path: str
     size_bytes: int
@@ -85,10 +88,16 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _source(stdout: str, stderr: str) -> str:
-    """One exact, unambiguous text source for both process streams."""
+def _source(*, command: str, exit_code: int, timed_out: bool, stdout: str, stderr: str) -> str:
+    """One exact, unambiguous source for the execution metadata and both process streams."""
 
-    return f"=== stdout ===\n{stdout}\n=== stderr ===\n{stderr}"
+    return (
+        "=== execution ===\n"
+        f"command: {json.dumps(command, ensure_ascii=True)}\n"
+        f"exit_code: {exit_code}\n"
+        f"timed_out: {str(timed_out).lower()}\n"
+        f"=== stdout ===\n{stdout}\n=== stderr ===\n{stderr}"
+    )
 
 
 def _legacy_tail(stdout: str, stderr: str) -> str:
@@ -97,7 +106,14 @@ def _legacy_tail(stdout: str, stderr: str) -> str:
     return (stdout[-_STDOUT_TAIL:] + "\n" + stderr[-_STDERR_TAIL:]).strip()
 
 
-def _archive(ctx: Ctx, source: str) -> ObservationRef:
+def _archive(
+    ctx: Ctx,
+    source: str,
+    *,
+    command: str,
+    exit_code: int,
+    timed_out: bool,
+) -> ObservationRef:
     digest = _sha256(source)
     state_path = f"harness/observations/{digest}.txt"
     sandbox_path = f".factory/observations/{digest}.txt"
@@ -115,6 +131,9 @@ def _archive(ctx: Ctx, source: str) -> ObservationRef:
     return ObservationRef(
         handle=f"obs:sha256:{digest}",
         sha256=digest,
+        command_sha256=_sha256(command),
+        exit_code=exit_code,
+        timed_out=timed_out,
         state_path=state_path,
         sandbox_path=sandbox_path,
         size_bytes=len(source.encode("utf-8")),
@@ -218,7 +237,15 @@ def _reduced_prompt(ref: ObservationRef, quotes: tuple[Quote, ...]) -> str:
     return (header + "".join(blocks)).strip()
 
 
-def pack_failure_observation(ctx: Ctx, *, stdout: str, stderr: str) -> PackedObservation | None:
+def pack_failure_observation(
+    ctx: Ctx,
+    *,
+    command: str,
+    exit_code: int,
+    timed_out: bool,
+    stdout: str,
+    stderr: str,
+) -> PackedObservation | None:
     """Archive a truncated failure and return a smaller, exactly-recallable repair observation.
 
     Small failures retain the legacy behavior exactly and return None. The optimization engages
@@ -228,8 +255,20 @@ def pack_failure_observation(ctx: Ctx, *, stdout: str, stderr: str) -> PackedObs
     if len(stdout) <= _STDOUT_TAIL and len(stderr) <= _STDERR_TAIL:
         return None
 
-    source = _source(stdout, stderr)
-    ref = _archive(ctx, source)
+    source = _source(
+        command=command,
+        exit_code=exit_code,
+        timed_out=timed_out,
+        stdout=stdout,
+        stderr=stderr,
+    )
+    ref = _archive(
+        ctx,
+        source,
+        command=command,
+        exit_code=exit_code,
+        timed_out=timed_out,
+    )
     legacy = _legacy_tail(stdout, stderr)
     quotes = _quote_ranges(source)
     reduced = _reduced_prompt(ref, quotes) if quotes else ""
@@ -271,6 +310,9 @@ def pack_failure_observation(ctx: Ctx, *, stdout: str, stderr: str) -> PackedObs
         "schema_version": 1,
         "handle": ref.handle,
         "sha256": ref.sha256,
+        "command_sha256": ref.command_sha256,
+        "exit_code": ref.exit_code,
+        "timed_out": ref.timed_out,
         "size_bytes": ref.size_bytes,
         "lines": ref.lines,
         "mode": packed.mode,
