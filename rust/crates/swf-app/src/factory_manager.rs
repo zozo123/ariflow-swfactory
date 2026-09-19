@@ -4,6 +4,7 @@
 //! returns the scheduler binding as data rather than treating dag_run_id as the product identity.
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use swf_adapters::traits::Runs;
 use swf_domain::factory::{
     FactoryRunId, FactoryRunRequest, FactoryRunState, FactoryRunStatus, SchedulerBinding,
@@ -30,13 +31,6 @@ pub async fn start(
         .validate()
         .map_err(|error| OpsError::usage(error.to_string()))?;
 
-    if !request.targets.is_empty() {
-        return Err(OpsError::usage(
-            "Rust FactoryManager target overrides are not wired to Airflow conf yet",
-        )
-        .with_hint("use a factory/blueprint whose targets are already declared"));
-    }
-
     let logical_id =
         FactoryRunId::for_request(request).map_err(|error| OpsError::usage(error.to_string()))?;
     let harness = request.harness.clone().ok_or_else(|| {
@@ -47,7 +41,17 @@ pub async fn start(
     })?;
 
     let dag_id = request.factory.as_str().to_string();
-    let dag_run_id = runs.trigger(&dag_id, &request.issues, cancel).await?;
+    let conf = json!({
+        "issues": request.issues,
+        "targets": request.targets,
+        "_swf_manager": {
+            "api_version": 1,
+            "factory_run_id": logical_id.as_str(),
+            "harness": harness,
+            "factory_session": factory_session,
+        }
+    });
+    let dag_run_id = runs.trigger_factory(&dag_id, &conf, cancel).await?;
     let run_ref = RunRef::new(dag_id.clone(), dag_run_id.clone());
 
     Ok(StartedFactoryRun {

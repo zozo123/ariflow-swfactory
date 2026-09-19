@@ -186,6 +186,28 @@ pub trait Runs: Send + Sync {
         cancel: &CancellationToken,
     ) -> Result<String>;
 
+    /// Trigger one scheduler run with an explicit factory conf document.
+    ///
+    /// The default keeps existing test adapters source-compatible by delegating to `trigger`
+    /// when the document carries the legacy `issues` shape. The real Airflow adapter overrides
+    /// this method and sends the complete conf unchanged through REST v2.
+    async fn trigger_factory(
+        &self,
+        dag_id: &str,
+        conf: &Value,
+        cancel: &CancellationToken,
+    ) -> Result<String> {
+        let issues = conf
+            .get("issues")
+            .and_then(Value::as_array)
+            .ok_or_else(|| crate::error::AdapterError::refused("factory trigger conf needs issues"))?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        self.trigger(dag_id, &issues, cancel).await
+    }
+
     /// Mark the run failed.
     ///
     /// This is all Airflow offers, and the name says it: nothing is killed, no sandbox is cleaned

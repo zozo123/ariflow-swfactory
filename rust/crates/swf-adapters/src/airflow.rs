@@ -914,6 +914,41 @@ impl Runs for AirflowApi {
         Ok(run_id.to_string())
     }
 
+    async fn trigger_factory(
+        &self,
+        dag_id: &str,
+        conf: &Value,
+        cancel: &CancellationToken,
+    ) -> Result<String> {
+        let issues = conf
+            .get("issues")
+            .and_then(Value::as_array)
+            .ok_or_else(|| AdapterError::refused("factory trigger conf needs issues"))?;
+        if issues.is_empty() || issues.iter().any(|item| item.as_str().is_none_or(|value| value.trim().is_empty())) {
+            return Err(AdapterError::refused(
+                "factory trigger conf needs at least one nonempty issue",
+            ));
+        }
+        if !conf.is_object() {
+            return Err(AdapterError::refused("factory trigger conf must be an object"));
+        }
+
+        let path = format!("/dags/{}/dagRuns", seg(dag_id));
+        let body = json!({"logical_date": Value::Null, "conf": conf});
+        let data = self
+            .api(Method::POST, &path, &[], Some(&body), cancel)
+            .await?
+            .unwrap_or(Value::Null);
+        let run_id = or_str(&data, &["dag_run_id", "run_id"]);
+        if run_id.is_empty() {
+            return Err(AdapterError::Decode {
+                what: format!("trigger {dag_id}"),
+                detail: "response carried no dag_run_id".to_string(),
+            });
+        }
+        Ok(run_id.to_string())
+    }
+
     async fn stop_run(&self, run: &RunRef, cancel: &CancellationToken) -> Result<()> {
         let path = format!("/dags/{}/dagRuns/{}", seg(&run.dag_id), seg(&run.run_id));
         // Only the keys present in the body are applied, so `update_mask` is omitted on purpose
