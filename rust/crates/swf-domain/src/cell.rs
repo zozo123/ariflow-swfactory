@@ -6,6 +6,31 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// `cell_` plus the first 96 bits of the identity digest, lowercase hex.
+pub const CELL_ID_PREFIX: &str = "cell_";
+pub const CELL_ID_DIGEST_LEN: usize = 24;
+pub const CELL_ID_LEN: usize = CELL_ID_PREFIX.len() + CELL_ID_DIGEST_LEN;
+
+/// One answer to "is this a Factory Cell id", for every reader in this workspace.
+///
+/// Python's `CellIdentity.stable_id` is the only minter and it produces `cell_` plus 24 lowercase
+/// hex characters. That was previously checked ten different ways across the two languages: the
+/// operator surface here already required the full shape, while `StageInvocation` and the worker
+/// batch tested only the prefix, and the Python readers split between prefix-only and prefix-plus-
+/// length. So `cell_`, `cell_zzz` and `cell_` followed by two hundred characters were each valid to
+/// some readers and invalid to others -- on the identity every epoch fence is keyed to.
+///
+/// Lowercase only, deliberately: `is_ascii_hexdigit` would also admit `cell_ABC…`, which the minter
+/// cannot produce and which Python's `[0-9a-f]` rejects. A case the two languages disagree about is
+/// exactly what the ABI gate in #2256 exists to prevent.
+pub fn is_cell_id(value: &str) -> bool {
+    value.len() == CELL_ID_LEN
+        && value.starts_with(CELL_ID_PREFIX)
+        && value[CELL_ID_PREFIX.len()..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// One durable issue×target lifecycle projection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CellRecord {
@@ -58,4 +83,59 @@ pub struct CellEvent {
     pub kind: String,
     pub payload: Value,
     pub created_at: f64,
+}
+
+#[cfg(test)]
+mod cell_id_tests {
+    use super::*;
+
+    /// The shape Python's `CellIdentity.stable_id` actually mints.
+    const MINTED: &str = "cell_2d711642b726b04401627ca9";
+
+    #[test]
+    fn a_minted_id_is_accepted() {
+        assert!(is_cell_id(MINTED));
+        assert_eq!(MINTED.len(), CELL_ID_LEN);
+    }
+
+    #[test]
+    fn the_shapes_the_prefix_only_check_used_to_admit_are_refused() {
+        // Each of these passed `starts_with("cell_")` and was refused by Python. That split is the
+        // whole reason this function exists; if any of them starts passing again the two languages
+        // have diverged on cell identity, which is what #2256 is open about.
+        for probe in [
+            "cell_",
+            "cell_1",
+            "cell_zzz",
+            "cell_abcdefabcdefabcdefabcdefabcdef",
+            "cell_0123456789abcdef0123456",   // 23 -- one short
+            "cell_0123456789abcdef012345678", // 25 -- one long
+        ] {
+            assert!(
+                probe.starts_with(CELL_ID_PREFIX),
+                "probe must test the tightening"
+            );
+            assert!(!is_cell_id(probe), "{probe} must be refused");
+        }
+    }
+
+    #[test]
+    fn the_alphabet_is_lowercase_hex_and_nothing_else() {
+        // `is_ascii_hexdigit` would admit the uppercase form; Python's `[0-9a-f]` does not, and the
+        // minter cannot produce it. Admitting it here would be a silent cross-language disagreement.
+        assert!(!is_cell_id("cell_0123456789ABCDEF01234567"));
+        assert!(!is_cell_id("cell_0123456789abcdef0123456g"));
+        assert!(!is_cell_id("cell_0123456789abcdef0123456-"));
+        assert!(!is_cell_id("CELL_0123456789abcdef01234567"));
+    }
+
+    #[test]
+    fn a_prefix_only_implementation_would_fail_these_tests() {
+        // Guards the guard: if someone replaces the body with the old check, this is what breaks.
+        let prefix_only = |v: &str| v.starts_with(CELL_ID_PREFIX);
+        let disagreements = ["cell_", "cell_zzz", "cell_0123456789ABCDEF01234567"];
+        for probe in disagreements {
+            assert!(prefix_only(probe) && !is_cell_id(probe));
+        }
+    }
 }

@@ -65,7 +65,7 @@ def test_candidate_readiness_is_bound_to_exact_head_base_and_artifact(tmp_path: 
 
 def test_operation_key_cannot_be_reused_for_different_intent(tmp_path: Path) -> None:
     journal = OperationJournal(tmp_path / "ops.db")
-    ref = OperationRef("cell_one", 1, "github_publish", "publish:one")
+    ref = OperationRef("cell_4ff2c575b36d145c3301561f", 1, "github_publish", "publish:one")
     try:
         result = journal.execute(ref, lambda: {"url": "one"}, intent_digest=_digest("a"))
         assert result == {"url": "one"}
@@ -73,7 +73,7 @@ def test_operation_key_cannot_be_reused_for_different_intent(tmp_path: Path) -> 
         with pytest.raises(OperationIdentityConflict, match="divergent intent"):
             journal.execute(ref, lambda: {"url": "two"}, intent_digest=_digest("b"))
 
-        stale_identity = OperationRef("cell_other", 1, "github_publish", "publish:one")
+        stale_identity = OperationRef("cell_4ce269b99ed3c09c564e4735", 1, "github_publish", "publish:one")
         with pytest.raises(OperationIdentityConflict, match="already bound"):
             journal.execute(stale_identity, lambda: {"url": "other"}, intent_digest=_digest("a"))
     finally:
@@ -82,7 +82,7 @@ def test_operation_key_cannot_be_reused_for_different_intent(tmp_path: Path) -> 
 
 def test_ambiguous_effect_becomes_committed_only_after_observation(tmp_path: Path) -> None:
     journal = OperationJournal(tmp_path / "ops.db")
-    ref = OperationRef("cell_one", 1, "github_issue", "issue:one")
+    ref = OperationRef("cell_4ff2c575b36d145c3301561f", 1, "github_issue", "issue:one")
     try:
         with pytest.raises(RuntimeError, match="lost response"):
             journal.execute(

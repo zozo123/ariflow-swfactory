@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -38,6 +39,28 @@ class CellBusy(CellError):
     pass
 
 
+# A Factory Cell id is `cell_` + 24 lowercase hex characters -- the first 96 bits of the identity
+# digest. `CellIdentity.stable_id` is the ONLY minter, so the alphabet is not a convention: it is
+# what the minter can produce. It was previously checked ten different ways. Eight sites tested the
+# prefix alone, two also tested the length, none tested the alphabet, and the Rust readers tested
+# the prefix alone -- so `cell_`, `cell_zzz` and `cell_` + 200 characters were each valid to some
+# readers and invalid to others, on the identity every epoch fence is keyed to.
+CELL_ID_PREFIX = "cell_"
+CELL_ID_DIGEST_LEN = 24
+CELL_ID_LEN = len(CELL_ID_PREFIX) + CELL_ID_DIGEST_LEN
+_CELL_ID = re.compile(rf"^{CELL_ID_PREFIX}[0-9a-f]{{{CELL_ID_DIGEST_LEN}}}$")
+
+
+def is_cell_id(value: object) -> bool:
+    """One answer to 'is this a Factory Cell id', for every reader in both languages.
+
+    Kept a predicate rather than a raiser because the call sites disagree about what to raise --
+    `StageError("policy", ...)` in the runtime, `CoreCapabilityError` in the kernel, `ValueError` in
+    the stores. They may disagree about the exception; they may not disagree about the answer.
+    """
+    return isinstance(value, str) and _CELL_ID.match(value) is not None
+
+
 @dataclass(frozen=True)
 class CellIdentity:
     repo: str
@@ -46,7 +69,7 @@ class CellIdentity:
 
     def stable_id(self) -> str:
         raw = f"{self.repo}\0{self.target}\0{self.issue}".encode()
-        return "cell_" + hashlib.sha256(raw).hexdigest()[:24]
+        return CELL_ID_PREFIX + hashlib.sha256(raw).hexdigest()[:CELL_ID_DIGEST_LEN]
 
 
 @dataclass(frozen=True)

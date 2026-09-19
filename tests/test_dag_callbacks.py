@@ -49,14 +49,20 @@ def test_the_failure_callback_records_the_lost_report_instead_of_swallowing_it(m
         probe.bind(("127.0.0.1", 0))
         monkeypatch.setenv("SWF_BACKEND_URL", f"http://127.0.0.1:{probe.getsockname()[1]}")
     monkeypatch.setenv("SWF_BACKEND_TOKEN", "b" * 40)
-    job = {"cell_managed": True, "cell_id": "cell_abc", "cell_epoch": 1, "job_idx": 0, "issue": "1"}
+    job = {
+        "cell_managed": True,
+        "cell_id": "cell_555aa0b670e50aef10c1f7fd",
+        "cell_epoch": 1,
+        "job_idx": 0,
+        "issue": "1",
+    }
     ti = _TI([job])
     context = {"ti": ti, "dag_run": SimpleNamespace(run_id="swf__run"), "dag": SimpleNamespace(task_ids=["job.build"])}
 
     _blueprints()._failure_callback(context)  # must not raise: Airflow's own verdict is unchanged
 
     assert ti.pushed.get(DEBT_XCOM_KEY) == [
-        CallbackDebt("cell_abc", 1, "swf__run", "job.build", "failed", attempt=1).__dict__
+        CallbackDebt("cell_555aa0b670e50aef10c1f7fd", 1, "swf__run", "job.build", "failed", attempt=1).__dict__
     ], "the undelivered failure report must be written down as debt"
 
 

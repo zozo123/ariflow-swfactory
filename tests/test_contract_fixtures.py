@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from swfactory.cells import is_cell_id
 from swfactory.control import (
     NO_ISSUE,
     Gate,
@@ -182,6 +183,10 @@ def _call_policy_digest(data: dict) -> Any:
     return policy_digest_for_mapping(data)
 
 
+def _call_is_cell_id(data: dict) -> Any:
+    return is_cell_id(data["value"])
+
+
 DISPATCH = {
     "job_state": _call_job_state,
     "group_jobs": _call_group_jobs,
@@ -192,6 +197,7 @@ DISPATCH = {
     "summarize": _call_summarize,
     "snapshot_json": _call_snapshot_json,
     "policy_digest": _call_policy_digest,
+    "is_cell_id": _call_is_cell_id,
 }
 
 

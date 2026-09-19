@@ -1,0 +1,149 @@
+{
+  "function": "is_cell_id",
+  "doc": "A Factory Cell id is `cell_` followed by exactly 24 lowercase hexadecimal characters -- the first 96 bits of the identity digest. `CellIdentity.stable_id` is the only minter, so this is not a convention: it is the set of ids that can exist. The rule was previously checked ten different ways across the two languages. Eight Python sites tested the prefix alone, two also tested the length, none tested the alphabet; in Rust the operator surface tested the full shape while StageInvocation and the worker batch tested the prefix alone. So `cell_`, `cell_zzz` and `cell_` plus two hundred characters were each valid to some readers and invalid to others -- on the identity every epoch fence is keyed to.",
+  "prefix": "cell_",
+  "digest_len": 24,
+  "total_len": 29,
+  "cases": [
+    {
+      "name": "accept-2d711642",
+      "input": {
+        "value": "cell_2d711642b726b04401627ca9"
+      },
+      "expected": true
+    },
+    {
+      "name": "accept-01234567",
+      "input": {
+        "value": "cell_0123456789abcdef01234567"
+      },
+      "expected": true
+    },
+    {
+      "name": "accept-00000000",
+      "input": {
+        "value": "cell_000000000000000000000000"
+      },
+      "expected": true
+    },
+    {
+      "name": "accept-ffffffff",
+      "input": {
+        "value": "cell_ffffffffffffffffffffffff"
+      },
+      "expected": true
+    },
+    {
+      "name": "refuse-prefix-alone",
+      "input": {
+        "value": "cell_"
+      },
+      "expected": false,
+      "why": "prefix alone; passed every prefix-only reader"
+    },
+    {
+      "name": "refuse-one-hex-character",
+      "input": {
+        "value": "cell_1"
+      },
+      "expected": false,
+      "why": "one hex character"
+    },
+    {
+      "name": "refuse-short-and-not-hex",
+      "input": {
+        "value": "cell_zzz"
+      },
+      "expected": false,
+      "why": "short and not hex; passed every prefix-only reader"
+    },
+    {
+      "name": "refuse-23-characters",
+      "input": {
+        "value": "cell_0123456789abcdef0123456"
+      },
+      "expected": false,
+      "why": "23 characters -- one short"
+    },
+    {
+      "name": "refuse-25-characters",
+      "input": {
+        "value": "cell_0123456789abcdef012345678"
+      },
+      "expected": false,
+      "why": "25 characters -- one long"
+    },
+    {
+      "name": "refuse-30-hex-characters",
+      "input": {
+        "value": "cell_abcdefabcdefabcdefabcdefabcdef"
+      },
+      "expected": false,
+      "why": "30 hex characters"
+    },
+    {
+      "name": "refuse-uppercase-hex",
+      "input": {
+        "value": "cell_0123456789ABCDEF01234567"
+      },
+      "expected": false,
+      "why": "uppercase hex; is_ascii_hexdigit would admit it, the minter cannot produce it, and Python's [0-9a-f] refuses it"
+    },
+    {
+      "name": "refuse-g-is-not-hexadecimal",
+      "input": {
+        "value": "cell_0123456789abcdef0123456g"
+      },
+      "expected": false,
+      "why": "g is not hexadecimal"
+    },
+    {
+      "name": "refuse-punctuation-in-the-digest",
+      "input": {
+        "value": "cell_0123456789abcdef0123456-"
+      },
+      "expected": false,
+      "why": "punctuation in the digest"
+    },
+    {
+      "name": "refuse-uppercase-prefix",
+      "input": {
+        "value": "CELL_0123456789abcdef01234567"
+      },
+      "expected": false,
+      "why": "uppercase prefix"
+    },
+    {
+      "name": "refuse-leading-whitespace",
+      "input": {
+        "value": " cell_0123456789abcdef01234567"
+      },
+      "expected": false,
+      "why": "leading whitespace"
+    },
+    {
+      "name": "refuse-trailing-whitespace",
+      "input": {
+        "value": "cell_0123456789abcdef01234567 "
+      },
+      "expected": false,
+      "why": "trailing whitespace"
+    },
+    {
+      "name": "refuse-right-length,-wrong-namespace",
+      "input": {
+        "value": "run_0123456789abcdef012345678"
+      },
+      "expected": false,
+      "why": "right length, wrong namespace"
+    },
+    {
+      "name": "refuse-empty",
+      "input": {
+        "value": ""
+      },
+      "expected": false,
+      "why": "empty"
+    }
+  ]
+}

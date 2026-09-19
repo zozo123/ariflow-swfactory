@@ -66,7 +66,7 @@ def test_direct_binding_is_descriptive_not_managed() -> None:
 def test_binding_rejects_wrong_cell_epoch_or_repo() -> None:
     cell = {"cell_id": identity_for_job(_job()).stable_id(), "epoch": 1}
     with pytest.raises(ValueError, match="binding mismatch"):
-        bind_jobs([_job()], [_binding({**cell, "cell_id": "cell_wrong"}, _job())])
+        bind_jobs([_job()], [_binding({**cell, "cell_id": "cell_ac033819c0bddf1937c57dd1"}, _job())])
     with pytest.raises(ValueError, match="epoch must be positive"):
         bind_jobs([_job()], [_binding({**cell, "epoch": 0}, _job())])
     with pytest.raises(ValueError, match="binding mismatch"):

@@ -55,10 +55,9 @@ impl CellOps {
 }
 
 pub fn validate_cell_id(cell_id: &str) -> Result<()> {
-    let valid = cell_id.len() == 29
-        && cell_id.starts_with("cell_")
-        && cell_id[5..].bytes().all(|b| b.is_ascii_hexdigit());
-    if valid {
+    // Delegates rather than restating the rule: this surface already required the full shape while
+    // the domain types accepted a bare prefix, which is how the two drifted apart.
+    if swf_domain::cell::is_cell_id(cell_id) {
         Ok(())
     } else {
         Err(OpsError::usage(

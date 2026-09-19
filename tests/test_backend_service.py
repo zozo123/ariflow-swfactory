@@ -1306,7 +1306,7 @@ def test_a_control_plane_refusal_reaches_the_operator_instead_of_a_500(
     from swfactory.idempotency import OperationInDoubt
 
     for error, expected in (
-        (StaleEpoch("cell_x: expected epoch 2, current 3"), "expected epoch 2"),
+        (StaleEpoch("cell_de82b525b3cd53851a53d6cc: expected epoch 2, current 3"), "expected epoch 2"),
         (OperationInDoubt("publish:abc", "attempt_in_progress"), "attempt_in_progress"),
     ):
 

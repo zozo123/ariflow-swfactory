@@ -41,7 +41,7 @@ BASE = "base_head"
 def _requests(*strategies: Strategy, budget: CampaignBudget | None = None) -> tuple[CandidateRequest, ...]:
     return plan_requests(
         campaign_id="camp",
-        cell_id="cell_1",
+        cell_id="cell_7cb2f608ee524068af1a75ad",
         epoch=3,
         input_head=BASE,
         strategies=strategies or DEFAULT_STRATEGIES,
@@ -280,7 +280,7 @@ def test_a_campaign_deeper_than_its_budget_is_refused() -> None:
     with pytest.raises(CampaignError, match="admits at most"):
         plan_requests(
             campaign_id="camp",
-            cell_id="cell_1",
+            cell_id="cell_7cb2f608ee524068af1a75ad",
             epoch=3,
             input_head=BASE,
             budget=CampaignBudget(max_depth=1),

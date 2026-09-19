@@ -70,7 +70,7 @@ def _runner(*, fail: str | None = None, detail: str = "node failed", record: lis
 
 def _execute(executor: WorkExecutor, nodes: tuple[WorkNode, ...], *, supports_fork: bool = True, **kwargs):
     return executor.execute(
-        cell_id="cell_1",
+        cell_id="cell_7cb2f608ee524068af1a75ad",
         epoch=1,
         input_head=HEAD,
         nodes=nodes,

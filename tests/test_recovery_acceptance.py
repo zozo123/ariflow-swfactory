@@ -27,7 +27,7 @@ from swfactory.idempotency import (
 )
 from swfactory.operation_recovery import RecoveryAction, plan_recovery
 
-CELL = "cell_acceptance"
+CELL = "cell_54efded3634e9cf7edd9f65f"
 EPOCH = 1
 
 
@@ -253,7 +253,7 @@ def test_an_expired_lease_is_recorded_before_the_refusal_is_raised(tmp_path: Pat
     anyone had noticed, which is how an ambiguous remote effect turns back into a blind retry.
     """
     db = tmp_path / "ops.db"
-    ref = OperationRef("cell_1", 1, "github_publish", "publish:lease")
+    ref = OperationRef("cell_7cb2f608ee524068af1a75ad", 1, "github_publish", "publish:lease")
 
     first = OperationJournal(db)
     first.begin(ref)

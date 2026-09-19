@@ -22,7 +22,7 @@ def test_two_independent_journals_execute_one_provider_effect(tmp_path: Path) ->
     db = tmp_path / "operations.sqlite3"
     first = OperationJournal(db)
     second = OperationJournal(db)
-    ref = OperationRef("cell_concurrent", 1, "github_publish", "publish:concurrent")
+    ref = OperationRef("cell_0769b1604171d921fa6d6ffa", 1, "github_publish", "publish:concurrent")
     entered = threading.Event()
     release = threading.Event()
     calls: list[str] = []
@@ -75,7 +75,7 @@ def test_two_independent_journals_execute_one_provider_effect(tmp_path: Path) ->
 
 def test_committed_receipt_is_immutable(tmp_path: Path) -> None:
     journal = OperationJournal(tmp_path / "operations.sqlite3")
-    ref = OperationRef("cell_receipt", 1, "github_publish", "publish:receipt")
+    ref = OperationRef("cell_ee2550270c96338fbda79bc3", 1, "github_publish", "publish:receipt")
     try:
         journal.begin(ref, intent_digest=_digest("b"))
         journal.commit(ref, {"url": "one"})
@@ -89,7 +89,7 @@ def test_committed_receipt_is_immutable(tmp_path: Path) -> None:
 
 def test_expired_attempt_stays_in_doubt_until_observed(tmp_path: Path) -> None:
     journal = OperationJournal(tmp_path / "operations.sqlite3")
-    ref = OperationRef("cell_expired", 1, "github_publish", "publish:expired")
+    ref = OperationRef("cell_8174ac31fd027b79ab1ef018", 1, "github_publish", "publish:expired")
     try:
         journal.begin(ref, intent_digest=_digest("c"))
         attempt, owner = journal.start_attempt(ref, lease_s=1.0)

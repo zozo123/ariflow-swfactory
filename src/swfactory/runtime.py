@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from swfactory import accepted_inputs
+from swfactory.cells import is_cell_id
 from swfactory.config import FACTORY_ROOT, Config, protected_globs
 from swfactory.models import StageError
 from swfactory.paths import (
@@ -89,7 +90,7 @@ def _cell_binding(job: dict[str, Any]) -> dict[str, Any] | None:
     if raw_id in (None, ""):
         return None
     cell_id = str(raw_id).strip()
-    if not cell_id.startswith("cell_") or len(cell_id) != 29:
+    if not is_cell_id(cell_id):
         raise StageError("policy", "mapped job carries an invalid Factory Cell id")
     epoch = job.get("cell_epoch")
     if type(epoch) is not int or epoch < 1:
