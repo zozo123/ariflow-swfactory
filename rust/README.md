@@ -27,8 +27,9 @@ implementation. That is why `swf-app` exists as its own crate.
 
 ## Build and test
 
-The workspace root is `rust/` because the repository root is the Python package, so every command
-either runs from here or carries `--manifest-path rust/Cargo.toml`.
+The Cargo workspace manifest, lockfile, toolchain and rustfmt configuration live at the repository
+root. Rust sources stay under `rust/`. This lets Cargo, CI, release tooling, and Turborepo resolve
+one compiler/dependency identity while keeping the operator source tree grouped under `rust/`.
 
 ```sh
 cargo build --release                                   # target/release/swf
@@ -58,7 +59,7 @@ same gates — and the difference is who drives.
 ```sh
 scripts/swf_e2e.sh                                      # from the repository root
 SWF_E2E_KEEP=1 scripts/swf_e2e.sh                       # keep the work dir for a post-mortem
-SWF_BIN=rust/target/release/swf scripts/swf_e2e.sh      # skip the build, use one you already have
+SWF_BIN=target/release/swf scripts/swf_e2e.sh      # skip the build, use one you already have
 ```
 
 It exits non-zero if a gate could not be answered through `swf`, a job's evidence is missing, a
@@ -92,4 +93,4 @@ No `unwrap()` or `expect()` outside tests. No `panic!` on data that came from a 
 names are sentences stating the invariant — `fn removing_a_foreign_sandbox_surfaces_permission_error()`
 — not `fn test_remove()`.
 
-`rust/target/` is gitignored; nothing in it is ever committed.
+`target/` is gitignored; nothing in it is ever committed.

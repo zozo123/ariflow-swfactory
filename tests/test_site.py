@@ -118,6 +118,7 @@ def test_homepage_is_small_static_and_content_first() -> None:
 
 
 def test_homepage_explains_the_actual_algorithm_and_authorities() -> None:
+    """Require the homepage to describe the algorithm and authority boundary."""
     source, _ = parse_page("index.html")
 
     assert "Issue in. Verified PR out." in source
@@ -127,6 +128,9 @@ def test_homepage_explains_the_actual_algorithm_and_authorities() -> None:
     assert "one durable Factory Cell" in source
     assert "(cell_id, epoch, operation_key)" in source
     assert "Humans keep final merge authority" in source
+    assert "Matter, motion, and authority" in source
+    assert "accelerate motion != mint authority" in source
+    assert "an accelerator may change time-to-answer, never the answer" in source
 
 
 def test_sandbox_table_is_complete_and_honest() -> None:
@@ -216,7 +220,7 @@ SKIP_DIRECTORIES = frozenset(
     {".git", ".venv", ".ruff_cache", ".pytest_cache", "__pycache__", "node_modules", ".factory"}
 )
 # Build output only. Named by path, because ``demo/target`` is a real fixture directory.
-SKIP_PREFIXES = ("rust/target/",)
+SKIP_PREFIXES = ("target/",)
 # Files a web server hands out without any page linking to them.
 SERVED_WITHOUT_A_LINK = frozenset({"index.html", "404.html", ".nojekyll", "robots.txt", "sitemap.xml", "install.sh"})
 # Files kept on purpose that nothing links, each for a stated reason. They used to pass only because

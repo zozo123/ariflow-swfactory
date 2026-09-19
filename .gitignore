@@ -18,5 +18,8 @@ dist/
 # airflow standalone (AIRFLOW_HOME)
 airflow_home/
 
-# Rust: the swf operator binary builds here (rust/README.md).
-rust/target/
+# Rust workspace output. demo/target is a committed fixture, so ignore only the root target.
+target/
+
+# Turborepo local task cache and run summaries
+.turbo/

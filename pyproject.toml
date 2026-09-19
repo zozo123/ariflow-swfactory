@@ -80,3 +80,16 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+# Turborepo 2.11 can treat this root project as the Python side of a polyglot
+# task graph. The name is deliberately distinct from [project].name so the
+# synthetic workspace scope is unambiguous beside Rust crate names.
+[tool.turbo]
+name = "swfactory-python"
+
+# Turborepo 2.11 synthesizes the root Python workspace package only when uv has
+# at least one explicit member. The shared Rust/Python contract corpus is a real
+# virtual member: it owns no runtime code, but makes the cross-language ABI input
+# explicit without inventing another application package.
+[tool.uv.workspace]
+members = ["tests/fixtures/contract"]

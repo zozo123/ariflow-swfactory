@@ -6,6 +6,16 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Add an advisory Turborepo 2.11.1 polyglot verification graph with native repository-root Cargo
+  and uv discovery. Cargo's manifest, lockfile, toolchain, and target identity now live at the
+  repository root while crates remain under `rust/crates/`; uv exposes the shared contract corpus
+  as a virtual member and a stable `swfactory-python` aggregate. Turbo's native root pytest task
+  remains available with its intentionally repository-wide semantics; the factory fan-in uses an
+  explicit root `//#python-verify` task that runs the same frozen uv workspace while excluding only
+  Rust `.rs` source from incremental affectedness. Remote Turbo cache remains
+  disabled, the root fan-in is uncached and advisory, and affectedness/cold-warm evidence is retained
+  without joining candidate-readiness.
+
 - Fail SmolVM doctor preflight when the configured daemon is unreachable, unhealthy, or not
   ready, using read-only health/readiness requests under one five-second deadline.
 - Rebuild demo source bytecode before tests so rapid same-size fixes cannot reuse stale Python
