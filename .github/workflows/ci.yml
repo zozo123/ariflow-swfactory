@@ -242,6 +242,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 20
+    env:
+      UV_NO_CONFIG: "1"
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
@@ -250,12 +252,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v6
         with: { node-version: "22" }
-      - run: uv sync
+      - name: Lockfile still describes the native uv workspace
+        run: uv lock --check
+      - run: uv sync --locked
       - name: Prove native Cargo and uv packages are discovered
         run: |
           mkdir -p .factory/turbo
           npx --yes turbo@2.11.1 ls --output=json > .factory/turbo/packages.json
-          for package in swfactory-rust swfactory-python swf-domain swf-adapters swf-app swf-cli swf-tui; do
+          for package in swfactory-rust swfactory-python swfactory-contract-fixtures swf-domain swf-adapters swf-app swf-cli swf-tui; do
             grep -q "\"name\"[[:space:]]*:[[:space:]]*\"$package\"" .factory/turbo/packages.json || {
               echo "::error::Turbo did not discover $package natively"
               cat .factory/turbo/packages.json

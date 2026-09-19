@@ -16,11 +16,23 @@
     "swfactory-python#test": {
       "inputs": [
         "$TURBO_DEFAULT$",
+        "!rust/**",
+        "!Cargo.toml",
+        "!Cargo.lock",
+        "!rust-toolchain.toml",
+        "!rustfmt.toml",
         "!README.md",
         "!CHANGELOG.md",
         "!docs/**",
         "!site/**",
-        "$TURBO_ROOT$/tests/**"
+        "$TURBO_ROOT$/src/swfactory/**",
+        "$TURBO_ROOT$/tests/**",
+        "$TURBO_ROOT$/blueprints/**",
+        "$TURBO_ROOT$/config/**",
+        "$TURBO_ROOT$/dags/**",
+        "$TURBO_ROOT$/factory.toml",
+        "$TURBO_ROOT$/pyproject.toml",
+        "$TURBO_ROOT$/uv.lock"
       ]
     },
     "swfactory-rust#test": {

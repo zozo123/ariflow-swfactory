@@ -1,0 +1,6 @@
+[project]
+name = "swfactory-contract-fixtures"
+version = "0.0.0"
+description = "Virtual uv member for the shared Rust/Python contract fixture corpus."
+requires-python = ">=3.12,<3.13"
+dependencies = []

@@ -89,5 +89,6 @@ protected = [
   "src/swfactory/worker_security.py",
   # --- fix the code, not the gate --------------------------------------------------------------
   "tests/",                             # removed for build, re-added for fix by protected_for
+  "tests/fixtures/contract/pyproject.toml", # uv/Turbo workspace identity; protected even during build
   "rust/",                              # the operator's client is out of scope for a cell
 ]
