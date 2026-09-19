@@ -286,3 +286,126 @@ def pack_failure_observation(ctx: Ctx, *, stdout: str, stderr: str) -> PackedObs
         json.dumps(public, indent=2, sort_keys=True) + "\n",
     )
     return packed
+
+
+# ---------------------------------------------------------------- research-loop selection
+
+
+@dataclass(frozen=True)
+class HarnessTrial:
+    """One verifier-driven harness experiment.
+
+    authority_digest is a canonical projection of promotion-relevant facts, not a cache key.
+    candidate_sha is explicit because an accelerator that changes the accepted bytes changed the
+    answer. evidence_digest may differ: an experimental mechanism is allowed to retain additional
+    diagnostic evidence as long as that evidence is complete and independently verifiable.
+    """
+
+    mechanism: str
+    candidate_sha: str
+    authority_digest: str
+    evidence_digest: str
+    prompt_bytes: int
+    cost_microusd: int
+    wall_ms: int
+    model_turns: int
+    evidence_complete: bool = True
+    verifier_passed: bool = True
+
+    def validate(self) -> None:
+        if not self.mechanism.strip():
+            raise ValueError("harness mechanism name is required")
+        if not re.fullmatch(r"[0-9a-f]{40}", self.candidate_sha):
+            raise ValueError("candidate_sha must be a full lowercase git SHA")
+        for label, digest in (
+            ("authority_digest", self.authority_digest),
+            ("evidence_digest", self.evidence_digest),
+        ):
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                raise ValueError(f"{label} must be a canonical sha256 digest")
+        for label, value in (
+            ("prompt_bytes", self.prompt_bytes),
+            ("cost_microusd", self.cost_microusd),
+            ("wall_ms", self.wall_ms),
+            ("model_turns", self.model_turns),
+        ):
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{label} must be a non-negative integer")
+
+    @property
+    def efficiency_vector(self) -> tuple[int, int, int, int]:
+        return self.prompt_bytes, self.cost_microusd, self.wall_ms, self.model_turns
+
+
+@dataclass(frozen=True)
+class HarnessSelection:
+    baseline: str
+    survivors: tuple[str, ...]
+    refusals: tuple[str, ...]
+    dominated: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+def _dominates(left: HarnessTrial, right: HarnessTrial) -> bool:
+    """Pareto dominance without an invented weighted score."""
+
+    lvec, rvec = left.efficiency_vector, right.efficiency_vector
+    return all(a <= b for a, b in zip(lvec, rvec, strict=True)) and any(
+        a < b for a, b in zip(lvec, rvec, strict=True)
+    )
+
+
+def select_harness_trials(
+    baseline: HarnessTrial,
+    candidates: tuple[HarnessTrial, ...],
+) -> HarnessSelection:
+    """Keep only authority-equivalent, verifier-complete, non-dominated mechanisms.
+
+    This function is research-only selection. It returns no promotion decision and has no callback
+    into Airflow, GitHub, approvals, or candidate readiness. A faster harness with a different
+    candidate SHA or authority projection is a refusal, not an optimization.
+    """
+
+    baseline.validate()
+    if not baseline.evidence_complete or not baseline.verifier_passed:
+        raise ValueError("baseline must have complete passing verifier evidence")
+
+    names = [baseline.mechanism, *(trial.mechanism for trial in candidates)]
+    if len(names) != len(set(names)):
+        raise ValueError("harness trial mechanism names must be unique")
+
+    admissible: list[HarnessTrial] = []
+    refusals: list[str] = []
+    for trial in candidates:
+        trial.validate()
+        reasons: list[str] = []
+        if trial.candidate_sha != baseline.candidate_sha:
+            reasons.append("candidate_sha_changed")
+        if trial.authority_digest != baseline.authority_digest:
+            reasons.append("authority_digest_changed")
+        if not trial.evidence_complete:
+            reasons.append("evidence_incomplete")
+        if not trial.verifier_passed:
+            reasons.append("verifier_failed")
+        if reasons:
+            refusals.append(f"{trial.mechanism}: {','.join(reasons)}")
+            continue
+        admissible.append(trial)
+
+    pool = [baseline, *admissible]
+    survivors: list[str] = []
+    dominated: list[str] = []
+    for trial in admissible:
+        if any(other.mechanism != trial.mechanism and _dominates(other, trial) for other in pool):
+            dominated.append(trial.mechanism)
+        else:
+            survivors.append(trial.mechanism)
+
+    return HarnessSelection(
+        baseline=baseline.mechanism,
+        survivors=tuple(sorted(survivors)),
+        refusals=tuple(sorted(refusals)),
+        dominated=tuple(sorted(dominated)),
+    )
