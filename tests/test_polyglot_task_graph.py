@@ -31,7 +31,7 @@ def test_turbo_is_an_accelerator_not_an_authority_layer() -> None:
     assert not any(name.startswith("//#rust-") for name in tasks)
     assert tasks["//#polyglot-verification"]["cache"] is False
     assert tasks["//#polyglot-verification"]["inputs"] == ["$TURBO_ROOT$/turbo.json"]
-    assert tasks["swfactory-python#verify"]["command"] == [
+    assert tasks["//#python-verify"]["command"] == [
         "uv",
         "run",
         "--active",
@@ -39,15 +39,15 @@ def test_turbo_is_an_accelerator_not_an_authority_layer() -> None:
         "--all-packages",
         "pytest",
     ]
-    assert "!$TURBO_ROOT$/rust/**/*.rs" in tasks["swfactory-python#verify"]["inputs"]
-    assert not any("docs" in item and item.startswith("!") for item in tasks["swfactory-python#verify"]["inputs"])
+    assert tasks["//#python-verify"]["inputs"] == ["$TURBO_DEFAULT$", "!rust/**/*.rs"]
+    assert not any("docs" in item and item.startswith("!") for item in tasks["//#python-verify"]["inputs"])
     assert "$TURBO_ROOT$/rust/crates/**" in tasks["swfactory-rust#test"]["inputs"]
     assert "$TURBO_ROOT$/rust/crates/**" in tasks["swf-cli#build"]["inputs"]
     assert tasks["swfactory-rust#test"].get("cache", True) is True
     assert tasks["swf-cli#build"].get("cache", True) is True
-    assert tasks["swfactory-python#verify"].get("cache", True) is True
+    assert tasks["//#python-verify"].get("cache", True) is True
     assert set(tasks["//#polyglot-verification"]["dependsOn"]) == {
-        "swfactory-python#verify",
+        "//#python-verify",
         "swfactory-rust#test",
         "swf-cli#build",
     }
