@@ -131,9 +131,10 @@ microstates while searching, then remove degrees of freedom until only one promo
 
 That last row matters. Turborepo 2.11 can put uv and Cargo work into one content-addressed task
 graph. In this repository it is an **experimental accelerator inside the verification layer**, not a
-second lifecycle scheduler. Cargo now has a real repository-root workspace, uv exposes a real
-workspace aggregate plus the shared contract-fixture member, and both toolchains participate through
-Turborepo's native discovery rather than compatibility shim tasks.
+second lifecycle scheduler. Cargo now has a real repository-root workspace, and uv exposes a real workspace aggregate plus the
+shared contract-fixture member through native discovery. Native Cargo tasks execute the Rust side;
+the factory's Python verifier is an explicit root uv task because Turbo's generic native root pytest
+is intentionally repository-wide and would over-invalidate Rust-source changes.
 
 ```text
              exploration                         convergence
