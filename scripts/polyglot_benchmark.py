@@ -240,6 +240,9 @@ def verification_benchmark() -> dict[str, object]:
     return {
         "baseline": {
             "verdict": "pass" if baseline_ok else "fail",
+            "wall_ms": sum(int(run["wall_ms"]) for run in baseline_runs),
+            "cpu_user_s": round(sum(float(run["cpu_user_s"]) for run in baseline_runs), 6),
+            "cpu_system_s": round(sum(float(run["cpu_system_s"]) for run in baseline_runs), 6),
             "commands": baseline_runs,
         },
         "turbo_cold": {
