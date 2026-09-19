@@ -78,18 +78,24 @@ impl ManagerApi {
         }
 
         let send = async {
-            let response = request.send().await.map_err(|error| match AdapterError::from_reqwest(&url, &error) {
-                AdapterError::Timeout { what, .. } => AdapterError::Timeout {
-                    what,
-                    after: self.timeout,
-                },
-                other => other,
-            })?;
+            let response =
+                request.send().await.map_err(|error| {
+                    match AdapterError::from_reqwest(&url, &error) {
+                        AdapterError::Timeout { what, .. } => AdapterError::Timeout {
+                            what,
+                            after: self.timeout,
+                        },
+                        other => other,
+                    }
+                })?;
             let status = response.status();
-            let text = response.text().await.map_err(|error| AdapterError::Decode {
-                what: url.clone(),
-                detail: truncate(&error.to_string()),
-            })?;
+            let text = response
+                .text()
+                .await
+                .map_err(|error| AdapterError::Decode {
+                    what: url.clone(),
+                    detail: truncate(&error.to_string()),
+                })?;
             if !status.is_success() {
                 return Err(AdapterError::from_status(
                     status.as_u16(),
@@ -149,9 +155,7 @@ fn excerpt(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swf_domain::{
-        AirflowInvocation, FactoryName, FactoryRunId, StageDisposition,
-    };
+    use swf_domain::{AirflowInvocation, FactoryName, FactoryRunId, StageDisposition};
 
     fn invocation() -> StageInvocation {
         StageInvocation {
