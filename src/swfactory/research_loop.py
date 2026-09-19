@@ -13,7 +13,7 @@ human gate. Only exploration_selection drives the next experiment round.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -135,6 +135,46 @@ def entropy_strategy_schedule(
     return order, schedule
 
 
+def strategy_schedule_from_build_hypotheses(
+    max_depth: int,
+    *,
+    max_candidates: int,
+    hypotheses: Sequence[Mapping[str, Any]],
+    strategies: Sequence[Strategy] = DEFAULT_STRATEGIES,
+) -> tuple[tuple[Strategy, ...], ...]:
+    """Let replayable exploration receipts bias which real build lanes run.
+
+    Receipts can only reorder/select already-declared Strategy values. They do not create a new
+    strategy, change candidate scoring, or participate in promotion.
+    """
+    if not hypotheses:
+        raise CampaignError("build hypotheses must contain at least one receipt")
+    allowed = {strategy.value: strategy for strategy in strategies}
+    ordered: list[Strategy] = []
+    for index, receipt in enumerate(hypotheses):
+        if receipt.get("authority") != "exploration-only":
+            raise CampaignError(f"build hypothesis {index} is not exploration-only")
+        choices = receipt.get("choices")
+        if not isinstance(choices, Mapping):
+            raise CampaignError(f"build hypothesis {index} has no choices mapping")
+        value = choices.get("strategy")
+        if not isinstance(value, str) or value not in allowed:
+            raise CampaignError(f"build hypothesis {index} has an unknown strategy")
+        strategy = allowed[value]
+        if strategy not in ordered:
+            ordered.append(strategy)
+
+    # Jev changes the front of the exploration order. Unmentioned declared strategies remain
+    # available behind it, so a narrow budget can exploit the model while a broad budget still
+    # preserves diversity.
+    ordered.extend(strategy for strategy in strategies if strategy not in ordered)
+    return annealed_strategy_schedule(
+        max_depth,
+        max_candidates=max_candidates,
+        strategies=tuple(ordered),
+    )
+
+
 def run_annealing_loop(
     runner: CandidateRunner,
     *,
@@ -144,6 +184,7 @@ def run_annealing_loop(
     input_head: str,
     budget: CampaignBudget | None = None,
     strategy_schedule: Sequence[Sequence[Strategy]] | None = None,
+    build_hypotheses: Sequence[Mapping[str, Any]] | None = None,
     max_parallel: int = 3,
     parallel: bool = True,
     human_approved: bool = False,
@@ -167,10 +208,20 @@ def run_annealing_loop(
     if budget.max_cost_usd < 0 or budget.max_wall_s < 0:
         raise CampaignError("annealing budget has a negative cost or wall limit")
 
+    if strategy_schedule is not None and build_hypotheses is not None:
+        raise CampaignError("explicit strategy_schedule and build_hypotheses are mutually exclusive")
     if strategy_schedule is None:
-        schedule = annealed_strategy_schedule(
-            budget.max_depth,
-            max_candidates=budget.max_candidates,
+        schedule = (
+            strategy_schedule_from_build_hypotheses(
+                budget.max_depth,
+                max_candidates=budget.max_candidates,
+                hypotheses=build_hypotheses,
+            )
+            if build_hypotheses is not None
+            else annealed_strategy_schedule(
+                budget.max_depth,
+                max_candidates=budget.max_candidates,
+            )
         )
     else:
         schedule = tuple(tuple(round_strategies) for round_strategies in strategy_schedule)

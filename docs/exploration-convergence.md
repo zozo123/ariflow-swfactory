@@ -51,3 +51,23 @@ high-entropy exploration
   -> explicit human/policy gate
   -> one promoted state
 ```
+
+
+## Stochastic build oracle
+
+Jev may be used as an **exploration oracle**, not as a builder-of-record or a promotion judge.
+
+The factory first declares a finite search space such as strategy, review lens, implementation
+shape, or tool profile. The pinned Jev model may return probability mass over those declared
+values. It cannot add an axis or value. The factory normalizes the distribution and samples locally
+from a recorded entropy token.
+
+The retained receipt binds the model, rubric, normalized distribution digest, entropy token, and
+sampled hypothesis. Replaying the same distribution and entropy reproduces the same hypothesis.
+Changing the Jev distribution can therefore change **what gets tried**, while ordinary candidate
+verification, retained evidence, deterministic fan-in, and the human/policy promotion gate remain
+unchanged.
+
+If the provider is unavailable or its response is malformed, exploration falls back to a local
+uniform distribution over the same declared search space. Provider quality may affect search
+efficiency; it may not affect build liveness or authority.

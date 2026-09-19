@@ -8,6 +8,7 @@
 
 pub mod advisory;
 pub mod blueprint;
+pub mod build_exploration;
 pub mod cell;
 pub mod control_plane;
 pub mod doctor;

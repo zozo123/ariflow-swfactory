@@ -112,3 +112,20 @@ scheduler. Airflow still decides when the governed stage runs, retries, times ou
 
 This preserves the Liquid rule: create entropy inside a bounded execution phase, then destroy that
 entropy before promotion.
+
+
+## Jev-weighted stochastic build lanes
+
+The current Python campaign runtime can consume the replayable build-hypothesis receipt emitted by
+the Rust exploration contract. This is a migration bridge, not a second Jev implementation:
+Python never calls the provider and never interprets probability vectors.
+
+A receipt whose `choices.strategy` is `repair`, `rethink`, or `scratch` moves that declared
+strategy to the front of the campaign schedule. With a narrow candidate budget this changes which
+real candidate build runs; with a wider budget the remaining declared strategies stay behind it so
+diversity is preserved.
+
+The bridge refuses receipts that are not `authority=exploration-only`, refuses unknown strategy
+values, and refuses simultaneous ownership by an explicit strategy schedule. Candidate evaluation,
+evidence requirements, `exploration_selection`, the human gate, and promotion selection are
+unchanged.
