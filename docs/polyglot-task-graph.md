@@ -112,13 +112,16 @@ uv run python scripts/polyglot_benchmark.py --out .factory/turbo/benchmark.json
 ```
 
 The script creates detached local worktrees and measures four synthetic changes without touching the
-candidate checkout:
+candidate checkout. Affectedness is measured on native leaf `build`/`test` work, separately from
+the full `//#polyglot-verification` barrier. That distinction matters: deliberately invoking the
+full fan-in executes its prerequisites by definition, while an incremental planner should select
+only leaf work made stale by the change.
 
-- Python-only: Python verification and the root fan-in must be affected; Rust work must not be.
-- Rust-only: Rust work and the root fan-in must be affected; Python verification must not be.
-- Docs-only: Python verification and the root fan-in must run because the shipped site/doc contract
-  is part of the pytest suite; Rust work must not be selected.
-- Shared contract fixture: both Python and Rust verification plus the root fan-in must be affected.
+- Python-only: Python verification must be affected; Rust work must not be.
+- Rust-only: Rust work must be affected; Python verification must not be.
+- Docs-only: Python verification must run because the shipped site/doc contract is part of pytest;
+  Rust work must not be selected.
+- Shared contract fixture: both Python and Rust verification must be affected.
 
 It then runs the verification once without Turbo, clears the local Turbo cache, runs a cold native
 polyglot verification, and immediately repeats it warm. The JSON report retains wall/CPU time,
