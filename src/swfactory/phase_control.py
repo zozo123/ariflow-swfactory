@@ -220,9 +220,10 @@ def _signals(observation: PhaseObservation) -> PhaseSignals:
     )
     transition_pressure = min(
         1.0,
-        0.55 * observation.verifier_disagreement
-        + 0.25 * abs(observation.queue_acceleration)
-        + 0.20 * min(observation.branching_ratio / 1.5, 1.0),
+        0.50 * observation.verifier_disagreement
+        + 0.20 * abs(observation.queue_acceleration)
+        + 0.20 * min(observation.branching_ratio / 1.5, 1.0)
+        + 0.10 * observation.context_pressure,
     )
     return PhaseSignals(
         order_parameter=round(order_parameter, 6),
@@ -333,7 +334,7 @@ def _mode(phase: Phase, observation: PhaseObservation, signals: PhaseSignals) ->
     return ControlMode.COORDINATE
 
 
-def _recommend(mode: ControlMode) -> PhaseRecommendation:
+def _recommend(mode: ControlMode, observation: PhaseObservation) -> PhaseRecommendation:
     table: dict[ControlMode, PhaseRecommendation] = {
         ControlMode.DIVERGE: PhaseRecommendation(
             mode, SpawnDirective.INCREASE, TrajectoryMode.ISOLATED, ContextDirective.FRESH,
@@ -342,19 +343,22 @@ def _recommend(mode: ControlMode) -> PhaseRecommendation:
             "High diversity and weak coherence: widen independent search while keeping trajectories decorrelated.",
         ),
         ControlMode.COORDINATE: PhaseRecommendation(
-            mode, SpawnDirective.HOLD, TrajectoryMode.SPECIALIST, ContextDirective.RETAIN,
+            mode, SpawnDirective.HOLD, TrajectoryMode.SPECIALIST,
+            ContextDirective.COMPACT if observation.context_pressure >= 0.85 else ContextDirective.RETAIN,
             CandidateDirective.COORDINATE, QueueDirective.ADMIT, VerificationDirective.NORMAL,
             AttentionClass.ROUTINE, True,
             "Productive liquid regime: keep specialist lanes mobile without adding another scheduler.",
         ),
         ControlMode.MEASURE: PhaseRecommendation(
-            mode, SpawnDirective.STOP, TrajectoryMode.SPECIALIST, ContextDirective.RETAIN,
+            mode, SpawnDirective.STOP, TrajectoryMode.SPECIALIST,
+            ContextDirective.COMPACT if observation.context_pressure >= 0.80 else ContextDirective.RETAIN,
             CandidateDirective.FREEZE, QueueDirective.HOLD, VerificationDirective.INCREASE,
             AttentionClass.EXCEPTION, False,
             "Near a transition: stop widening implementation space and spend budget on independent measurement.",
         ),
         ControlMode.ANNEAL: PhaseRecommendation(
-            mode, SpawnDirective.DECREASE, TrajectoryMode.FORKED, ContextDirective.RETAIN,
+            mode, SpawnDirective.DECREASE, TrajectoryMode.FORKED,
+            ContextDirective.COMPACT if observation.context_pressure >= 0.80 else ContextDirective.RETAIN,
             CandidateDirective.PRUNE, QueueDirective.HOLD, VerificationDirective.INCREASE,
             AttentionClass.EXCEPTION, False,
             "Evidence and order are rising: reduce candidate count while increasing verifier independence.",
@@ -394,5 +398,5 @@ def assess(observation: PhaseObservation, *, previous_phase: Phase | None = None
         raw_phase=raw,
         phase=phase,
         signals=signals,
-        recommendation=_recommend(mode),
+        recommendation=_recommend(mode, observation),
     )
