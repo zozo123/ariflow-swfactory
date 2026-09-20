@@ -22,6 +22,7 @@ in `stages.py`. Details: README + docs/*.md.
 - `uv run swfactory approve <dag_run_id> intent|plan [--reject] [--map-index <j>]`; `doctor
   [--json]` (exit 1 per red row, with a `fix:`); `metrics|maintain --root .`; `herd`; `webhook`.
 - `cargo test --manifest-path rust/Cargo.toml --workspace`, `cargo fmt`/`clippy -- -D warnings` —
+  Run the format check as `cd rust && cargo fmt --all -- --check`. `--check` is a rustfmt option and must be passed after `--`.
   run these after ANY change to `blueprints/*.toml`, backend HTTP shapes or CLI surfaces, not only
   to `rust/`: the crates are a second reader of those contracts (`deny_unknown_fields`, and a test
   that parses every shipped blueprint), and two PRs went red in CI for skipping them.
