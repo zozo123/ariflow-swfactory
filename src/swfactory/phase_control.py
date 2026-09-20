@@ -239,9 +239,7 @@ def _signals(observation: PhaseObservation) -> PhaseSignals:
 
 
 def _raw_phase(observation: PhaseObservation, signals: PhaseSignals) -> Phase:
-    if signals.jam_pressure >= 0.72 or (
-        observation.branching_ratio >= 1.25 and observation.queue_pressure >= 0.65
-    ):
+    if signals.jam_pressure >= 0.72 or (observation.branching_ratio >= 1.25 and observation.queue_pressure >= 0.65):
         return "jammed"
     if (
         signals.order_parameter >= 0.85
@@ -300,10 +298,10 @@ def _with_hysteresis(
         and signals.jam_pressure < 0.70
     ):
         return "glass"
-    if previous_phase == "gas" and raw == "liquid" and (
-        observation.candidate_entropy >= 0.58
-        and observation.coherence <= 0.50
-        and signals.jam_pressure < 0.55
+    if (
+        previous_phase == "gas"
+        and raw == "liquid"
+        and (observation.candidate_entropy >= 0.58 and observation.coherence <= 0.50 and signals.jam_pressure < 0.55)
     ):
         return "gas"
     if previous_phase == "critical" and raw == "liquid" and signals.transition_pressure >= 0.40:
@@ -342,54 +340,92 @@ def _mode(phase: Phase, observation: PhaseObservation, signals: PhaseSignals) ->
 def _recommend(mode: ControlMode, observation: PhaseObservation) -> PhaseRecommendation:
     table: dict[ControlMode, PhaseRecommendation] = {
         ControlMode.DIVERGE: PhaseRecommendation(
-            mode, SpawnDirective.INCREASE, TrajectoryMode.ISOLATED, ContextDirective.FRESH,
-            CandidateDirective.EXPAND, QueueDirective.ADMIT, VerificationDirective.NORMAL,
-            AttentionClass.ROUTINE, True,
+            mode,
+            SpawnDirective.INCREASE,
+            TrajectoryMode.ISOLATED,
+            ContextDirective.FRESH,
+            CandidateDirective.EXPAND,
+            QueueDirective.ADMIT,
+            VerificationDirective.NORMAL,
+            AttentionClass.ROUTINE,
+            True,
             "High diversity and weak coherence: widen independent search while keeping trajectories decorrelated.",
         ),
         ControlMode.COORDINATE: PhaseRecommendation(
-            mode, SpawnDirective.HOLD, TrajectoryMode.SPECIALIST,
+            mode,
+            SpawnDirective.HOLD,
+            TrajectoryMode.SPECIALIST,
             ContextDirective.COMPACT if observation.context_pressure >= 0.85 else ContextDirective.RETAIN,
-            CandidateDirective.COORDINATE, QueueDirective.ADMIT, VerificationDirective.NORMAL,
-            AttentionClass.ROUTINE, True,
+            CandidateDirective.COORDINATE,
+            QueueDirective.ADMIT,
+            VerificationDirective.NORMAL,
+            AttentionClass.ROUTINE,
+            True,
             "Productive liquid regime: keep specialist lanes mobile without adding another scheduler.",
         ),
         ControlMode.MEASURE: PhaseRecommendation(
-            mode, SpawnDirective.STOP, TrajectoryMode.SPECIALIST,
+            mode,
+            SpawnDirective.STOP,
+            TrajectoryMode.SPECIALIST,
             ContextDirective.COMPACT if observation.context_pressure >= 0.80 else ContextDirective.RETAIN,
-            CandidateDirective.FREEZE, QueueDirective.HOLD, VerificationDirective.INCREASE,
-            AttentionClass.EXCEPTION, False,
+            CandidateDirective.FREEZE,
+            QueueDirective.HOLD,
+            VerificationDirective.INCREASE,
+            AttentionClass.EXCEPTION,
+            False,
             "Near a transition: stop widening implementation space and spend budget on independent measurement.",
         ),
         ControlMode.ANNEAL: PhaseRecommendation(
-            mode, SpawnDirective.DECREASE, TrajectoryMode.FORKED,
+            mode,
+            SpawnDirective.DECREASE,
+            TrajectoryMode.FORKED,
             ContextDirective.COMPACT if observation.context_pressure >= 0.80 else ContextDirective.RETAIN,
-            CandidateDirective.PRUNE, QueueDirective.HOLD, VerificationDirective.INCREASE,
-            AttentionClass.EXCEPTION, False,
+            CandidateDirective.PRUNE,
+            QueueDirective.HOLD,
+            VerificationDirective.INCREASE,
+            AttentionClass.EXCEPTION,
+            False,
             "Evidence and order are rising: reduce candidate count while increasing verifier independence.",
         ),
         ControlMode.VERIFY: PhaseRecommendation(
-            mode, SpawnDirective.STOP, TrajectoryMode.NONE, ContextDirective.COMPACT,
-            CandidateDirective.VERIFY, QueueDirective.HOLD, VerificationDirective.MAXIMUM,
-            AttentionClass.AUTHORITY_BOUNDARY, False,
+            mode,
+            SpawnDirective.STOP,
+            TrajectoryMode.NONE,
+            ContextDirective.COMPACT,
+            CandidateDirective.VERIFY,
+            QueueDirective.HOLD,
+            VerificationDirective.MAXIMUM,
+            AttentionClass.AUTHORITY_BOUNDARY,
+            False,
             "A low-entropy candidate exists: create no new implementation lanes; verify exact bytes before authority.",
         ),
         ControlMode.PERTURB: PhaseRecommendation(
-            mode, SpawnDirective.LIMITED, TrajectoryMode.ISOLATED, ContextDirective.FRESH,
-            CandidateDirective.RESET, QueueDirective.HOLD, VerificationDirective.INCREASE,
-            AttentionClass.EXCEPTION, True,
+            mode,
+            SpawnDirective.LIMITED,
+            TrajectoryMode.ISOLATED,
+            ContextDirective.FRESH,
+            CandidateDirective.RESET,
+            QueueDirective.HOLD,
+            VerificationDirective.INCREASE,
+            AttentionClass.EXCEPTION,
+            True,
             "Low mobility without sufficient evidence indicates a glassy local minimum: "
             "inject a bounded fresh trajectory.",
         ),
         ControlMode.DRAIN: PhaseRecommendation(
-            mode, SpawnDirective.STOP, TrajectoryMode.NONE, ContextDirective.COMPACT,
-            CandidateDirective.HOLD, QueueDirective.DRAIN, VerificationDirective.MAXIMUM,
-            AttentionClass.EXCEPTION, False,
+            mode,
+            SpawnDirective.STOP,
+            TrajectoryMode.NONE,
+            ContextDirective.COMPACT,
+            CandidateDirective.HOLD,
+            QueueDirective.DRAIN,
+            VerificationDirective.MAXIMUM,
+            AttentionClass.EXCEPTION,
+            False,
             "Queue/resource/debt pressure dominates: stop creating work, drain debt, reclaim resources, and recover.",
         ),
     }
     return table[mode]
-
 
 def assess(observation: PhaseObservation, *, previous_phase: Phase | None = None) -> PhaseAssessment:
     """Classify a snapshot and return a search-only recommendation."""
