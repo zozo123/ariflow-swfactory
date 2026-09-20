@@ -198,7 +198,7 @@ pub async fn run(ctx: &Ctx) -> Result<Outcome> {
 
 
 fn phase_cmd(args: &PhaseArgs) -> Result<Outcome> {
-    use swf_domain::phase_control::{assess, FactoryPhase, PhaseObservation};
+    use swf_domain::phase_control::{assess, PhaseObservation};
 
     let raw = std::fs::read_to_string(&args.input)
         .map_err(|error| OpsError::usage(format!("phase input {}: {error}", args.input.display())))?;
