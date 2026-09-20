@@ -55,5 +55,8 @@
         "!rust/**/*.rs"
       ]
     }
-  }
+  },
+  "globalDependencies": [
+    "tests/fixtures/contract/**"
+  ]
 }
