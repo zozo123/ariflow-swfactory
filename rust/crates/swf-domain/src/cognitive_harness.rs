@@ -526,7 +526,11 @@ pub fn classify_self_improvement(
 fn stable_digest<T: Serialize>(value: &T) -> Result<String, CognitiveError> {
     let payload = serde_json::to_vec(value)?;
     let hash = digest(&SHA256, &payload);
-    Ok(hash.as_ref().iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(hash
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 pub fn quantity_kind(name: &str) -> QuantityKind {
@@ -667,9 +671,7 @@ pub fn plan_cognition(
     memory_evidence: Option<&MemoryEvidence>,
     human_attention_pressure: f64,
 ) -> Result<CognitivePlan, CognitiveError> {
-    if !human_attention_pressure.is_finite()
-        || !(0.0..=1.0).contains(&human_attention_pressure)
-    {
+    if !human_attention_pressure.is_finite() || !(0.0..=1.0).contains(&human_attention_pressure) {
         return Err(CognitiveError::InvalidNumber("human_attention_pressure"));
     }
 
@@ -787,8 +789,10 @@ pub fn make_receipt(
     };
 
     let phase_assessment_digest = stable_digest(phase)?;
-    let invariant_worlds: Vec<InvariantObservables<'_>> =
-        worlds.iter().map(WorldCandidate::invariant_observables).collect();
+    let invariant_worlds: Vec<InvariantObservables<'_>> = worlds
+        .iter()
+        .map(WorldCandidate::invariant_observables)
+        .collect();
 
     Ok(CognitiveReceipt {
         schema_version: COGNITIVE_HARNESS_SCHEMA_VERSION,
