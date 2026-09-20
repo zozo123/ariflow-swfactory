@@ -300,7 +300,45 @@ fn apply(function: &str, input: &Value) -> Outcome {
             Some(value) => Outcome::Value(json!(swf_domain::cell::is_cell_id(value))),
             None => Outcome::Error("is_cell_id case has no string `value`".to_string()),
         },
+        "phase_control" => phase_control(input),
         _ => Outcome::Unhandled,
+    }
+}
+
+fn phase_control(input: &Value) -> Outcome {
+    use swf_domain::phase_control::{assess, FactoryPhase, PhaseObservation};
+
+    let observation = match serde_json::from_value::<PhaseObservation>(
+        pick(input, &["observation"]).clone(),
+    ) {
+        Ok(observation) => observation,
+        Err(error) => return Outcome::Error(format!("invalid phase observation: {error}")),
+    };
+    let previous_phase = match input.get("previous_phase") {
+        None | Some(Value::Null) => None,
+        Some(value) => match serde_json::from_value::<FactoryPhase>(value.clone()) {
+            Ok(phase) => Some(phase),
+            Err(error) => return Outcome::Error(format!("invalid previous phase: {error}")),
+        },
+    };
+    match assess(&observation, previous_phase) {
+        Ok(assessment) => {
+            let recommendation = &assessment.recommendation;
+            Outcome::Value(json!({
+                "raw_phase": assessment.raw_phase,
+                "phase": assessment.phase,
+                "mode": recommendation.mode,
+                "spawn": recommendation.spawn,
+                "trajectory": recommendation.trajectory,
+                "context": recommendation.context,
+                "candidates": recommendation.candidates,
+                "queue": recommendation.queue,
+                "verification": recommendation.verification,
+                "attention": recommendation.attention,
+                "allow_new_implementation_lanes": recommendation.allow_new_implementation_lanes,
+            }))
+        }
+        Err(error) => Outcome::Error(format!("phase assessment failed: {error}")),
     }
 }
 
