@@ -49,6 +49,7 @@ const PATHS: &[&[&str]] = &[
     &["operations", "inspect"],
     &["fleet"],
     &["compatibility"],
+    &["phase"],
     &["logs"],
     &["gates"],
     &["gates", "list"],
@@ -109,6 +110,7 @@ const GROUPS: &[&str] = &[
     "operations",
     "fleet",
     "compatibility",
+    "phase",
     "logs",
     "gates",
     "deliveries",
@@ -799,3 +801,39 @@ fn an_explicitly_direct_context_is_told_why_and_never_quietly_widened() {
         );
     }
 }
+
+#[test]
+fn phase_assessment_needs_no_context_or_backend() {
+    let home = TempDir::new().expect("tempdir");
+    let input = home.path().join("phase.json");
+    std::fs::write(
+        &input,
+        r#"{
+          "candidate_entropy": 0.10,
+          "coherence": 0.95,
+          "mobility": 0.20,
+          "queue_pressure": 0.10,
+          "queue_acceleration": -0.10,
+          "resource_pressure": 0.10,
+          "branching_ratio": 0.20,
+          "evidence_completeness": 0.96,
+          "context_pressure": 0.40,
+          "debt_pressure": 0.05,
+          "verifier_disagreement": 0.05
+        }"#,
+    )
+    .expect("write phase input");
+
+    let output = swf(&home)
+        .arg("phase")
+        .arg(&input)
+        .arg("--json")
+        .output()
+        .expect("phase runs");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let value = document(&output.stdout);
+    assert_eq!(value["phase"], "crystal");
+    assert_eq!(value["recommendation"]["mode"], "verify");
+    assert_eq!(value["authority"], "search-only");
+}
+
