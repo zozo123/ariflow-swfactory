@@ -1,20 +1,24 @@
 {
+  "function": "phase_control",
+  "doc": "Pins the factory-wide phase classifier and its complete search-only posture across Python and Rust; phase is observed state, mode is reversible control posture, never authority.",
   "schema_version": 1,
   "cases": [
     {
       "name": "gas-divergent-search",
-      "observation": {
-        "candidate_entropy": 0.9,
-        "coherence": 0.2,
-        "mobility": 0.9,
-        "queue_pressure": 0.1,
-        "queue_acceleration": 0,
-        "resource_pressure": 0.1,
-        "branching_ratio": 0.3,
-        "evidence_completeness": 0.25,
-        "context_pressure": 0.4,
-        "debt_pressure": 0.1,
-        "verifier_disagreement": 0.2
+      "input": {
+        "observation": {
+          "candidate_entropy": 0.9,
+          "coherence": 0.2,
+          "mobility": 0.9,
+          "queue_pressure": 0.1,
+          "queue_acceleration": 0,
+          "resource_pressure": 0.1,
+          "branching_ratio": 0.3,
+          "evidence_completeness": 0.25,
+          "context_pressure": 0.4,
+          "debt_pressure": 0.1,
+          "verifier_disagreement": 0.2
+        }
       },
       "expected": {
         "raw_phase": "gas",
@@ -32,18 +36,20 @@
     },
     {
       "name": "liquid-specialist-flow",
-      "observation": {
-        "candidate_entropy": 0.55,
-        "coherence": 0.55,
-        "mobility": 0.8,
-        "queue_pressure": 0.2,
-        "queue_acceleration": 0,
-        "resource_pressure": 0.2,
-        "branching_ratio": 0.5,
-        "evidence_completeness": 0.55,
-        "context_pressure": 0.45,
-        "debt_pressure": 0.1,
-        "verifier_disagreement": 0.2
+      "input": {
+        "observation": {
+          "candidate_entropy": 0.55,
+          "coherence": 0.55,
+          "mobility": 0.8,
+          "queue_pressure": 0.2,
+          "queue_acceleration": 0,
+          "resource_pressure": 0.2,
+          "branching_ratio": 0.5,
+          "evidence_completeness": 0.55,
+          "context_pressure": 0.45,
+          "debt_pressure": 0.1,
+          "verifier_disagreement": 0.2
+        }
       },
       "expected": {
         "raw_phase": "liquid",
@@ -61,18 +67,20 @@
     },
     {
       "name": "critical-freeze-and-measure",
-      "observation": {
-        "candidate_entropy": 0.45,
-        "coherence": 0.55,
-        "mobility": 0.7,
-        "queue_pressure": 0.25,
-        "queue_acceleration": 0.6,
-        "resource_pressure": 0.25,
-        "branching_ratio": 0.8,
-        "evidence_completeness": 0.55,
-        "context_pressure": 0.55,
-        "debt_pressure": 0.15,
-        "verifier_disagreement": 0.7
+      "input": {
+        "observation": {
+          "candidate_entropy": 0.45,
+          "coherence": 0.55,
+          "mobility": 0.7,
+          "queue_pressure": 0.25,
+          "queue_acceleration": 0.6,
+          "resource_pressure": 0.25,
+          "branching_ratio": 0.8,
+          "evidence_completeness": 0.55,
+          "context_pressure": 0.55,
+          "debt_pressure": 0.15,
+          "verifier_disagreement": 0.7
+        }
       },
       "expected": {
         "raw_phase": "critical",
@@ -90,18 +98,20 @@
     },
     {
       "name": "liquid-ready-to-anneal",
-      "observation": {
-        "candidate_entropy": 0.35,
-        "coherence": 0.72,
-        "mobility": 0.65,
-        "queue_pressure": 0.2,
-        "queue_acceleration": -0.1,
-        "resource_pressure": 0.2,
-        "branching_ratio": 0.5,
-        "evidence_completeness": 0.82,
-        "context_pressure": 0.5,
-        "debt_pressure": 0.1,
-        "verifier_disagreement": 0.15
+      "input": {
+        "observation": {
+          "candidate_entropy": 0.35,
+          "coherence": 0.72,
+          "mobility": 0.65,
+          "queue_pressure": 0.2,
+          "queue_acceleration": -0.1,
+          "resource_pressure": 0.2,
+          "branching_ratio": 0.5,
+          "evidence_completeness": 0.82,
+          "context_pressure": 0.5,
+          "debt_pressure": 0.1,
+          "verifier_disagreement": 0.15
+        }
       },
       "expected": {
         "raw_phase": "liquid",
@@ -119,18 +129,20 @@
     },
     {
       "name": "crystal-exact-candidate",
-      "observation": {
-        "candidate_entropy": 0.1,
-        "coherence": 0.95,
-        "mobility": 0.25,
-        "queue_pressure": 0.1,
-        "queue_acceleration": -0.1,
-        "resource_pressure": 0.1,
-        "branching_ratio": 0.2,
-        "evidence_completeness": 0.96,
-        "context_pressure": 0.4,
-        "debt_pressure": 0.05,
-        "verifier_disagreement": 0.05
+      "input": {
+        "observation": {
+          "candidate_entropy": 0.1,
+          "coherence": 0.95,
+          "mobility": 0.25,
+          "queue_pressure": 0.1,
+          "queue_acceleration": -0.1,
+          "resource_pressure": 0.1,
+          "branching_ratio": 0.2,
+          "evidence_completeness": 0.96,
+          "context_pressure": 0.4,
+          "debt_pressure": 0.05,
+          "verifier_disagreement": 0.05
+        }
       },
       "expected": {
         "raw_phase": "crystal",
@@ -148,18 +160,20 @@
     },
     {
       "name": "glass-local-minimum",
-      "observation": {
-        "candidate_entropy": 0.25,
-        "coherence": 0.5,
-        "mobility": 0.1,
-        "queue_pressure": 0.15,
-        "queue_acceleration": 0,
-        "resource_pressure": 0.15,
-        "branching_ratio": 0.3,
-        "evidence_completeness": 0.45,
-        "context_pressure": 0.8,
-        "debt_pressure": 0.1,
-        "verifier_disagreement": 0.2
+      "input": {
+        "observation": {
+          "candidate_entropy": 0.25,
+          "coherence": 0.5,
+          "mobility": 0.1,
+          "queue_pressure": 0.15,
+          "queue_acceleration": 0,
+          "resource_pressure": 0.15,
+          "branching_ratio": 0.3,
+          "evidence_completeness": 0.45,
+          "context_pressure": 0.8,
+          "debt_pressure": 0.1,
+          "verifier_disagreement": 0.2
+        }
       },
       "expected": {
         "raw_phase": "glass",
@@ -177,18 +191,20 @@
     },
     {
       "name": "jammed-drain",
-      "observation": {
-        "candidate_entropy": 0.6,
-        "coherence": 0.5,
-        "mobility": 0.2,
-        "queue_pressure": 0.95,
-        "queue_acceleration": 0.8,
-        "resource_pressure": 0.9,
-        "branching_ratio": 1.3,
-        "evidence_completeness": 0.4,
-        "context_pressure": 0.9,
-        "debt_pressure": 0.9,
-        "verifier_disagreement": 0.4
+      "input": {
+        "observation": {
+          "candidate_entropy": 0.6,
+          "coherence": 0.5,
+          "mobility": 0.2,
+          "queue_pressure": 0.95,
+          "queue_acceleration": 0.8,
+          "resource_pressure": 0.9,
+          "branching_ratio": 1.3,
+          "evidence_completeness": 0.4,
+          "context_pressure": 0.9,
+          "debt_pressure": 0.9,
+          "verifier_disagreement": 0.4
+        }
       },
       "expected": {
         "raw_phase": "jammed",
@@ -206,18 +222,20 @@
     },
     {
       "name": "supercritical-branching",
-      "observation": {
-        "candidate_entropy": 0.55,
-        "coherence": 0.5,
-        "mobility": 0.7,
-        "queue_pressure": 0.2,
-        "queue_acceleration": 0.1,
-        "resource_pressure": 0.2,
-        "branching_ratio": 1.1,
-        "evidence_completeness": 0.5,
-        "context_pressure": 0.5,
-        "debt_pressure": 0.1,
-        "verifier_disagreement": 0.2
+      "input": {
+        "observation": {
+          "candidate_entropy": 0.55,
+          "coherence": 0.5,
+          "mobility": 0.7,
+          "queue_pressure": 0.2,
+          "queue_acceleration": 0.1,
+          "resource_pressure": 0.2,
+          "branching_ratio": 1.1,
+          "evidence_completeness": 0.5,
+          "context_pressure": 0.5,
+          "debt_pressure": 0.1,
+          "verifier_disagreement": 0.2
+        }
       },
       "expected": {
         "raw_phase": "critical",
@@ -235,19 +253,21 @@
     },
     {
       "name": "crystal-hysteresis",
-      "previous_phase": "crystal",
-      "observation": {
-        "candidate_entropy": 0.3,
-        "coherence": 0.82,
-        "mobility": 0.4,
-        "queue_pressure": 0.15,
-        "queue_acceleration": 0,
-        "resource_pressure": 0.15,
-        "branching_ratio": 0.3,
-        "evidence_completeness": 0.85,
-        "context_pressure": 0.45,
-        "debt_pressure": 0.1,
-        "verifier_disagreement": 0.1
+      "input": {
+        "observation": {
+          "candidate_entropy": 0.3,
+          "coherence": 0.82,
+          "mobility": 0.4,
+          "queue_pressure": 0.15,
+          "queue_acceleration": 0,
+          "resource_pressure": 0.15,
+          "branching_ratio": 0.3,
+          "evidence_completeness": 0.85,
+          "context_pressure": 0.45,
+          "debt_pressure": 0.1,
+          "verifier_disagreement": 0.1
+        },
+        "previous_phase": "crystal"
       },
       "expected": {
         "raw_phase": "liquid",
