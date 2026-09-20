@@ -89,7 +89,8 @@ mod tests {
 
     #[test]
     fn unicode_and_del_use_utf8_json_bytes() {
-        let unicode: Value = serde_json::from_str(r#"{"schema_version":1,"target":"src@früh"}"#).unwrap();
+        let unicode: Value =
+            serde_json::from_str(r#"{"schema_version":1,"target":"src@früh"}"#).unwrap();
         assert_eq!(
             policy_digest(&unicode).unwrap(),
             "policy:v1:1a980255174b80d62ed78b13ef57bf458480f5bbf254af514a6f6e3fc2d4a39d"
