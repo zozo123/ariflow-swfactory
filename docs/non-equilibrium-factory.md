@@ -39,7 +39,10 @@ as an **entropy-production proxy**, not literal joules per kelvin. Persistent ne
 model/sign-convention alarm: inspect the chosen affinities rather than pretending the second law was
 violated by a CI system.
 
-Status: research only. There is no implementation in the product path; see [docs/research/](research/).
+Status: the **general many-current controller remains research only**. One bounded slice is now
+implemented experimentally: [phase-aware control](phase-control.md) turns measurable order parameters
+into a read-only phase -> mode recommendation in Python and Rust. It does not implement
+sigma_proxy, model mixing, Jarzynski/Crooks, Onsager response, or autonomous authority.
 
 ## 2. Max entropy is a default for uncertainty, not an excuse for randomness
 
@@ -99,7 +102,7 @@ biases, never lifecycle authority.
 | `gas` | very high dispersion, weak coupling, many independent exploratory states | increase structure; stabilize useful clusters |
 | `liquid` | high mobility with adaptive structure | normal productive mode; preserve flow |
 | `critical` | large accelerations near a transition boundary | observe carefully; verify and bound rates |
-| `crystal` | low entropy, low defects, repeatable structure | verify, seal evidence, promote |
+| `crystal` | low entropy, low defects, repeatable structure | verify exact bytes, seal evidence, then request the ordinary promotion authority |
 | `glass` | low mobility but still disordered; metastable local minimum | perturb/recover; avoid mistaking stasis for stability |
 | `jammed` | blockage or cleanup/resource debt dominates | stop feeding pressure; reclaim and recover |
 
@@ -112,9 +115,11 @@ history, not only the instantaneous scalar metric.
 
 ### Order parameters
 
-A phase label must be derived from observable order parameters. Current implementation uses a
-bounded combination of configurational entropy, failures, blocked work, evidence gaps, security
-refusals, mobility, acceleration, and cleanup debt. New order parameters require evidence and tests.
+A phase label must be derived from observable order parameters. The experimental product slice uses
+candidate entropy, coherence, mobility, queue pressure/acceleration, resource pressure, branching
+ratio, evidence completeness, context pressure, debt pressure and verifier disagreement. The formulas
+and hysteresis bands are versioned in config/phase-control.yaml and independently implemented in
+Python/Rust. New order parameters require evidence and cross-language tests.
 
 Relevant lineage: Landau-style order parameters and phase transitions; glassy dynamics and
 metastability for disordered low-mobility states.
