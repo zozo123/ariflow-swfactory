@@ -66,7 +66,7 @@ case "$os:$arch" in
   *)
     die "no published build for $os $arch.
     swf ships for macOS (arm64, x86_64) and Linux (x86_64, aarch64).
-    Build it from source instead: cargo build --release --manifest-path rust/Cargo.toml"
+    Build it from source instead: cargo build --release --locked"
     ;;
 esac
 

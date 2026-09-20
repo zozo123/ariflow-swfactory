@@ -1,0 +1,59 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "ui": "stream",
+  "noUpdateNotifier": true,
+  "remoteCache": {
+    "enabled": false
+  },
+  "futureFlags": {
+    "experimentalCargoWorkspaces": true,
+    "experimentalPythonWorkspaces": true,
+    "experimentalTaskCommand": true,
+    "affectedUsingTaskInputs": true,
+    "githubActionsRemoteBaseRefFallback": true
+  },
+  "tasks": {
+    "swfactory-rust#test": {
+      "inputs": [
+        "$TURBO_ROOT$/Cargo.toml",
+        "$TURBO_ROOT$/Cargo.lock",
+        "$TURBO_ROOT$/rust-toolchain.toml",
+        "$TURBO_ROOT$/rust/crates/**",
+        "$TURBO_ROOT$/tests/fixtures/contract/**"
+      ]
+    },
+    "swf-cli#build": {
+      "inputs": [
+        "$TURBO_ROOT$/Cargo.toml",
+        "$TURBO_ROOT$/Cargo.lock",
+        "$TURBO_ROOT$/rust-toolchain.toml",
+        "$TURBO_ROOT$/rust/crates/**"
+      ]
+    },
+    "//#polyglot-verification": {
+      "cache": false,
+      "dependsOn": [
+        "//#python-verify",
+        "swfactory-rust#test",
+        "swf-cli#build"
+      ],
+      "inputs": [
+        "$TURBO_ROOT$/turbo.json"
+      ]
+    },
+    "//#python-verify": {
+      "command": [
+        "uv",
+        "run",
+        "--active",
+        "--frozen",
+        "--all-packages",
+        "pytest"
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!rust/**/*.rs"
+      ]
+    }
+  }
+}

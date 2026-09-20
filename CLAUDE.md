@@ -21,7 +21,7 @@ in `stages.py`. Details: README + docs/*.md.
   backend-managed Cell, or `--scm github`. `SWF_APPROVE=auto` can no longer satisfy a human gate.
 - `uv run swfactory approve <dag_run_id> intent|plan [--reject] [--map-index <j>]`; `doctor
   [--json]` (exit 1 per red row, with a `fix:`); `metrics|maintain --root .`; `herd`; `webhook`.
-- `cargo test --manifest-path rust/Cargo.toml --workspace`, `cargo fmt`/`clippy -- -D warnings` —
+- `cargo test --workspace --locked`, `cargo fmt`/`clippy -- -D warnings` —
   Run the format check as `cd rust && cargo fmt --all -- --check`. `--check` is a rustfmt option and must be passed after `--`.
   run these after ANY change to `blueprints/*.toml`, backend HTTP shapes or CLI surfaces, not only
   to `rust/`: the crates are a second reader of those contracts (`deny_unknown_fields`, and a test
@@ -67,7 +67,7 @@ in `stages.py`. Details: README + docs/*.md.
 - Release = push tag `v<pyproject version>` (a mismatch fails the gate before anything builds) and
   a `## [X.Y.Z]` CHANGELOG section, which IS the body. `workflow_dispatch` dry-runs every leg and
   publishes nothing. Assets: `swf-<v>-<target>.tar.gz` x4 + wheel + sdist + one `SHA256SUMS`;
-  completions come from the built binary, whose `--version` must equal `rust/Cargo.toml`'s
+  completions come from the built binary, whose `--version` must equal `Cargo.toml`'s
   `[workspace.package]` — bump both. Install: docs/swf.md#install.
 
 ## Conventions

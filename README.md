@@ -13,7 +13,7 @@ plan, human approval, implementation, tests, review, and retained evidence. Apac
 managed lifecycle; isolated coding workers perform the work; the trusted factory publishes the result.
 People decide what reaches `main`.
 
-[Quickstart](#quickstart) · [Liquid methodology](#the-liquid-methodology) ·
+[Quickstart](#quickstart) · [Liquid methodology](#the-liquid-methodology) · [Physics](#physics-of-the-factory) ·
 [Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
 [Illustrated walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Agent skills](#agent-skills)
 
@@ -113,6 +113,46 @@ This is the development method, not a claim that the default executor launches c
 forks. The [full methodology](docs/liquid-methodology.md) defines the seven ownership roles, ten
 concerns, recovery cases, capability boundaries, evidence requirements, factory generations, and
 completion criteria. It also records the Liquid500 + Liquid400 fan-in and its verification limits.
+
+## Physics of the factory
+
+A useful way to reason about this system is as a non-equilibrium process: create many possible
+microstates while searching, then remove degrees of freedom until only one promotable state remains.
+
+| Physics lens | Factory meaning |
+| --- | --- |
+| Matter | Durable Cell identity, accepted digests, evidence, and publication state |
+| Motion | Agents, sandboxes, worktrees, builds, tests, and task executors |
+| Entropy | The number of plausible implementation states still alive |
+| Annealing | Review and repair that remove defects and collapse alternatives |
+| Measurement | Evidence bound to the exact candidate that produced it |
+| Conservation law | A worker may spend compute; it cannot mint authority |
+| Catalyst | Caches and local task graphs can shorten the path without changing what is accepted |
+
+That last row matters. Turborepo 2.11 can put uv and Cargo work into one content-addressed task
+graph. In this repository it is an **experimental accelerator inside the verification layer**, not a
+second lifecycle scheduler. Cargo now has a real repository-root workspace, and uv exposes a real workspace aggregate plus the
+shared contract-fixture member through native discovery. Native Cargo tasks execute the Rust side;
+the factory's Python verifier is an explicit root uv task because Turbo's generic native root pytest
+is intentionally repository-wide and would over-invalidate Rust-source changes.
+
+```text
+             exploration                         convergence
+ high entropy ----------------------------------------------> low entropy
+
+ disposable compute     local task graph      digest-bound evidence
+ agents / VMs / cache  ------------------>   approvals / candidate SHA
+        |                                             |
+        +---------------- Airflow + Cell authority ---+
+```
+
+Turbo asks, "have these bytes already done this work?" The factory asks, "are these exactly the
+bytes that were approved and independently verified?" The first is a velocity optimization; the
+second is an authority boundary. A cache hit can save time. It cannot approve a gate, reconcile an
+ambiguous mutation, publish a PR, or promote a candidate.
+
+See [polyglot task graph: motion, not authority](docs/polyglot-task-graph.md) for the executable
+native graph, cache policy, authority boundary, and graduation criteria.
 
 ## Architecture and lifecycle
 

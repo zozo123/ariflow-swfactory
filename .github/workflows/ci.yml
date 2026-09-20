@@ -83,7 +83,7 @@ jobs:
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: "rust" }
+        with: { workspaces: "." }
       - run: uv sync --group airflow
       - name: swf drives a live Airflow end to end (2 issues x 2 targets, 8 gates, 4 deliveries)
         id: rust_harness
@@ -210,14 +210,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { components: "rustfmt, clippy" }
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: "rust" }
-      - run: cargo fmt --manifest-path rust/Cargo.toml --all --check
+        with: { workspaces: "." }
+      - run: cargo fmt --all --check
       - run: >-
-          cargo clippy --manifest-path rust/Cargo.toml
+          cargo clippy --workspace
           --all-targets --all-features -- -D warnings
-      - run: cargo test --manifest-path rust/Cargo.toml --workspace
+      - run: cargo test --workspace --locked
       - name: Release build (the binary release.yml ships; --locked keeps Cargo.lock authoritative)
-        run: cargo build --manifest-path rust/Cargo.toml --release --locked
+        run: cargo build --release --locked
 
   contract-equivalence:
     if: github.event_name == 'push' || github.base_ref == 'main'
@@ -229,10 +229,10 @@ jobs:
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: "rust" }
+        with: { workspaces: "." }
       - run: uv sync
       - run: uv run pytest tests/test_contract_fixtures.py
-      - run: cargo test --manifest-path rust/Cargo.toml -p swf-domain --test contract
+      - run: cargo test -p swf-domain --test contract --locked
 
   # One blocking fan-in check for the supported release surface. It records the PR head, base and
   # tested checkout (GitHub's PR merge candidate) together with a digest of every required job's

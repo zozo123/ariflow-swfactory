@@ -120,9 +120,9 @@ if [ -n "${SWF_BIN:-}" ]; then
   SWF="$SWF_BIN"
 else
   say "building swf (release)"
-  cargo build --release --manifest-path "$REPO/rust/Cargo.toml" >"$WORK/cargo.log" 2>&1 ||
+  cargo build --release --locked --manifest-path "$REPO/Cargo.toml" >"$WORK/cargo.log" 2>&1 ||
     { tail -30 "$WORK/cargo.log"; fail "cargo build"; }
-  SWF="$REPO/rust/target/release/swf"
+  SWF="$REPO/target/release/swf"
 fi
 [ -x "$SWF" ] || fail "no swf binary at $SWF"
 say "swf under test: $("$SWF" --version)"

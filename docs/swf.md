@@ -149,9 +149,9 @@ swf completions fish > ~/.config/fish/completions/swf.fish
 The release legs build exactly this, adding only `--target` and `--locked`:
 
 ```sh
-cargo build --release --manifest-path rust/Cargo.toml            # the workspace
-cargo build --release --manifest-path rust/Cargo.toml -p swf-cli # the binary alone
-install -m 0755 rust/target/release/swf ~/.local/bin/swf
+cargo build --release            # the workspace
+cargo build --release -p swf-cli # the binary alone
+install -m 0755 target/release/swf ~/.local/bin/swf
 ```
 
 The MSRV is Rust `1.82`. Add `--locked` to resolve the dependency versions CI tested rather than
