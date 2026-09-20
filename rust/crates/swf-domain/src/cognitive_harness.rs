@@ -110,6 +110,27 @@ pub enum CognitiveAttention {
     AuthorityBoundary,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MeasurementKind {
+    Test,
+    StaticAnalysis,
+    Replay,
+    Performance,
+    Security,
+    Formal,
+    Human,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ImprovementDisposition {
+    Shadow,
+    Candidate,
+    Adoptable,
+    Rejected,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorldCandidate {
@@ -283,6 +304,83 @@ impl MemoryEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeasurementReceipt {
+    pub world_id: String,
+    pub kind: MeasurementKind,
+    pub observable: String,
+    pub result_digest: String,
+    pub evidence_digest: String,
+    pub independent: bool,
+    pub passed: bool,
+}
+
+impl MeasurementReceipt {
+    pub fn validate(&self) -> Result<(), CognitiveError> {
+        for (name, value) in [
+            ("world_id", self.world_id.as_str()),
+            ("observable", self.observable.as_str()),
+            ("result_digest", self.result_digest.as_str()),
+            ("evidence_digest", self.evidence_digest.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(CognitiveError::EmptyField(name));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DissipationSnapshot {
+    pub discarded_worlds: u64,
+    pub reclaimed_contexts: u64,
+    pub cleaned_sandboxes: u64,
+    pub cancelled_retries: u64,
+    pub stale_memories_retired: u64,
+}
+
+impl DissipationSnapshot {
+    pub fn total(&self) -> u64 {
+        self.discarded_worlds
+            + self.reclaimed_contexts
+            + self.cleaned_sandboxes
+            + self.cancelled_retries
+            + self.stale_memories_retired
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfImprovementExperiment {
+    pub experiment_id: String,
+    pub baseline_digest: String,
+    pub candidate_world_ids: Vec<String>,
+    pub objective_digest: String,
+    pub evidence_digest: Option<String>,
+    pub disposition: ImprovementDisposition,
+    pub authority: String,
+}
+
+impl SelfImprovementExperiment {
+    pub fn validate(&self) -> Result<(), CognitiveError> {
+        for (name, value) in [
+            ("experiment_id", self.experiment_id.as_str()),
+            ("baseline_digest", self.baseline_digest.as_str()),
+            ("objective_digest", self.objective_digest.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(CognitiveError::EmptyField(name));
+            }
+        }
+        if self.candidate_world_ids.is_empty() {
+            return Err(CognitiveError::EmptyCandidateWorlds);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CognitivePlan {
     pub schema_version: u32,
     pub authority: String,
@@ -387,6 +485,42 @@ pub enum CognitiveError {
     Serialization(#[from] serde_json::Error),
     #[error("authority may only be requested from a crystal verification posture")]
     PrematureAuthorityRequest,
+    #[error("self-improvement experiment requires at least one candidate world")]
+    EmptyCandidateWorlds,
+}
+
+pub fn validate_measurement_set(
+    world: &WorldCandidate,
+    measurements: &[MeasurementReceipt],
+) -> Result<bool, CognitiveError> {
+    let mut relevant = 0usize;
+    let mut independent = false;
+    for measurement in measurements {
+        if measurement.world_id == world.world_id {
+            measurement.validate()?;
+            relevant += 1;
+            independent |= measurement.independent;
+            if !measurement.passed {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(relevant > 0 && independent)
+}
+
+pub fn classify_self_improvement(
+    experiment: &SelfImprovementExperiment,
+    evidence_complete: bool,
+    independent_verification: bool,
+) -> Result<ImprovementDisposition, CognitiveError> {
+    experiment.validate()?;
+    Ok(if !evidence_complete {
+        ImprovementDisposition::Shadow
+    } else if !independent_verification {
+        ImprovementDisposition::Candidate
+    } else {
+        ImprovementDisposition::Adoptable
+    })
 }
 
 fn stable_digest<T: Serialize>(value: &T) -> Result<String, CognitiveError> {
