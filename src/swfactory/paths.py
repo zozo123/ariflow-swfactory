@@ -101,6 +101,24 @@ def normalize_relative_path(value: str, *, field: str = "path", allow_empty: boo
     return normalized
 
 
+
+def normalize_target_dir(value: str, *, field: str = "targets.dir") -> str:
+    """Normalize a target directory while keeping the Cell target join injective."""
+
+    normalized = normalize_relative_path(value, field=field, allow_empty=True)
+    if "@" in normalized:
+        raise ValueError(f"{field} must not contain '@' because it separates Factory Cell target identity")
+    return normalized
+
+
+def validate_target_base_branch(value: str, *, field: str = "targets.base_branch") -> str:
+    """Validate a target branch while preserving the v1 target identity delimiter."""
+
+    normalized = validate_git_ref(value, field=field)
+    if "@" in normalized:
+        raise ValueError(f"{field} must not contain '@' because it separates Factory Cell target identity")
+    return normalized
+
 def normalize_absolute_posix_path(value: str, *, field: str = "path") -> str:
     """Normalize a non-root absolute path used inside a remote sandbox."""
 
