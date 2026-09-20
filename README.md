@@ -136,7 +136,7 @@ The phase vocabulary is now an **experimental cross-language contract**, not jus
 versioned order-parameter fixture. A phase assessment has `authority=search-only`: it may recommend
 search width, isolated/forked/specialist trajectories, context handling, verification intensity and
 queue posture, but it cannot approve, publish, merge, mint credentials or promote. Run a retained
-snapshot locally with `swfactory phase-assess phase.json --json`. See
+snapshot locally with `swfactory phase-assess phase.json --json` or `swf phase phase.json --json`. See
 [phase-aware control](docs/phase-control.md).
 
 That last row matters. Turborepo 2.11 can put uv and Cargo work into one content-addressed task
@@ -403,7 +403,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `sandbox.islo` | `experimental` | `swfactory.sandbox.IsloSandbox (islo use / cp / rm control plane)` | ci:evals-islo in .github/workflows/evals.yml (a real claude run inside a MicroVM) plus the hermetic argv contracts in tests/test_sandbox_argv.py |
 | `selfhost.factory` | `experimental` | `swfactory run --blueprint selfhost (target dir is the repo root), executing swfactory.stages against the factory's own tree` | tests/test_selfhost.py (contract parses, every protected entry survives literal-prefix reduction, confinement modules are refused for build and fix, both gates are non-auto, one line serves both backends) |
 | `sandbox.smolvm` | `experimental` | `swfactory.smolvm_backend.SmolvmSandboxBackend via ToolsetSandbox` | tests/test_smolvm_backend.py (HTTP contract) and opt-in tests/test_smolvm_live.py |
-| `factory.phase-control` | `experimental` | `swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess is read-only` | tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json |
+| `factory.phase-control` | `experimental` | `swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess and swf phase are read-only` | tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json |
 
 <!-- capability-inventory:end -->
 
