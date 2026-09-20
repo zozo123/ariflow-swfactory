@@ -106,6 +106,9 @@ mod tests {
     fn numbers_outside_the_exact_cross_language_range_are_refused() {
         assert!(policy_digest(&serde_json::json!({"n": POLICY_MAX_EXACT_INTEGER})).is_ok());
         assert!(policy_digest(&serde_json::json!({"n": POLICY_MAX_EXACT_INTEGER + 1})).is_err());
-        assert!(policy_digest(&serde_json::json!({"n": -(POLICY_MAX_EXACT_INTEGER as i64) - 1})).is_err());
+        assert!(
+            policy_digest(&serde_json::json!({"n": -(POLICY_MAX_EXACT_INTEGER as i64) - 1}))
+                .is_err()
+        );
     }
 }
