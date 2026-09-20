@@ -2,6 +2,12 @@ version = 1
 revision = 3
 requires-python = "==3.12.*"
 
+[manifest]
+members = [
+    "swfactory",
+    "swfactory-contract-fixtures",
+]
+
 [[package]]
 name = "a2wsgi"
 version = "1.10.10"
@@ -1822,6 +1828,11 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.12" },
 ]
+
+[[package]]
+name = "swfactory-contract-fixtures"
+version = "0.0.0"
+source = { virtual = "tests/fixtures/contract" }
 
 [[package]]
 name = "tabulate"
