@@ -399,6 +399,19 @@ pub struct CognitivePlan {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AuthorityRequestInput {
+    pub cell_id: String,
+    pub epoch: u64,
+    pub candidate_digest: String,
+    pub source_digest: String,
+    pub recipe_digest: String,
+    pub policy_digest: String,
+    pub evidence_digest: String,
+    pub requested_effect: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthorityRequest {
     pub cell_id: String,
     pub epoch: u64,
@@ -413,25 +426,16 @@ pub struct AuthorityRequest {
 }
 
 impl AuthorityRequest {
-    pub fn new(
-        cell_id: impl Into<String>,
-        epoch: u64,
-        candidate_digest: impl Into<String>,
-        source_digest: impl Into<String>,
-        recipe_digest: impl Into<String>,
-        policy_digest: impl Into<String>,
-        evidence_digest: impl Into<String>,
-        requested_effect: impl Into<String>,
-    ) -> Self {
+    pub fn new(input: AuthorityRequestInput) -> Self {
         Self {
-            cell_id: cell_id.into(),
-            epoch,
-            candidate_digest: candidate_digest.into(),
-            source_digest: source_digest.into(),
-            recipe_digest: recipe_digest.into(),
-            policy_digest: policy_digest.into(),
-            evidence_digest: evidence_digest.into(),
-            requested_effect: requested_effect.into(),
+            cell_id: input.cell_id,
+            epoch: input.epoch,
+            candidate_digest: input.candidate_digest,
+            source_digest: input.source_digest,
+            recipe_digest: input.recipe_digest,
+            policy_digest: input.policy_digest,
+            evidence_digest: input.evidence_digest,
+            requested_effect: input.requested_effect,
             authority: "request-only".into(),
             requires: REALITY_BOUNDARY.into(),
         }
