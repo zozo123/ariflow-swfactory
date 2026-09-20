@@ -25,7 +25,6 @@ from swfactory.paths import (
     normalize_absolute_posix_path,
     normalize_relative_path,
     normalize_target_dir,
-    validate_git_ref,
     validate_repo,
     validate_target_base_branch,
 )
