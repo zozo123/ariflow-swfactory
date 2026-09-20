@@ -47,6 +47,7 @@ def _lanes() -> list[dict[str, object]]:
 def test_clean_candidate_crystallizes_only_after_all_lanes_and_green_tests() -> None:
     state = evaluate(_observation())
     assert state.phase == "crystal"
+    assert state.control_mode == "verify"
     assert state.crystallized is True
     assert state.actionable_findings == 0
 
@@ -60,6 +61,7 @@ def test_material_findings_keep_the_candidate_hot_and_stagnation_glasses_it() ->
     clean = evaluate(_observation())
     defective = evaluate(_observation(majors=2))
     assert defective.phase == "liquid"
+    assert defective.control_mode == "anneal"
     assert defective.actionable_findings == 2
     assert defective.temperature > clean.temperature
     assert defective.beta < clean.beta
@@ -332,6 +334,8 @@ def test_annealing_control_plane_is_selfhost_protected() -> None:
         "REVIEW_LIQUID.md",
         "src/swfactory/stage_registry.py",
         "src/swfactory/liquid_annealing.py",
+        "src/swfactory/phase_control.py",
+        "config/phase-control.yaml",
     )
     for stage in ("build", "fix"):
         for path in protected:
