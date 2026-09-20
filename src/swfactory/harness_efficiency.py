@@ -490,3 +490,172 @@ def select_harness_trials(
         refusals=tuple(sorted(refusals)),
         dominated=tuple(sorted(dominated)),
     )
+
+
+# ---------------------------------------------------------------- review-context packing
+
+_REVIEW_DIFF_THRESHOLD_BYTES = 12_000
+_REVIEW_MAX_FILES = 80
+_DIFF_HEADER_RE = re.compile(r"^diff --git a/(.*?) b/(.*)$")
+
+
+@dataclass(frozen=True)
+class ReviewDiffFile:
+    path: str
+    hunks: int
+    added: int
+    deleted: int
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class PackedReviewDiff:
+    handle: str
+    sha256: str
+    state_path: str
+    sandbox_path: str
+    base_sha: str
+    head_sha: str
+    source_bytes: int
+    prompt_bytes: int
+    files: tuple[ReviewDiffFile, ...]
+    fanout: int
+    prompt_text: str
+
+    @property
+    def saved_bytes_per_prompt(self) -> int:
+        return max(self.source_bytes - self.prompt_bytes, 0)
+
+    @property
+    def estimated_replayed_bytes_avoided(self) -> int:
+        return self.saved_bytes_per_prompt * self.fanout
+
+
+def _review_diff_files(diff: str) -> tuple[ReviewDiffFile, ...]:
+    """Build a deterministic file/hunk index without interpreting code semantics."""
+
+    rows: list[ReviewDiffFile] = []
+    current_path: str | None = None
+    hunks = added = deleted = 0
+
+    def flush() -> None:
+        nonlocal current_path, hunks, added, deleted
+        if current_path is not None:
+            rows.append(ReviewDiffFile(current_path, hunks, added, deleted))
+        current_path = None
+        hunks = added = deleted = 0
+
+    for line in diff.splitlines():
+        match = _DIFF_HEADER_RE.match(line)
+        if match:
+            flush()
+            current_path = match.group(2)
+            continue
+        if current_path is None:
+            continue
+        if line.startswith("@@"):
+            hunks += 1
+        elif line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            deleted += 1
+    flush()
+    return tuple(rows)
+
+
+def pack_review_diff(
+    ctx: Ctx,
+    *,
+    diff: str,
+    base_sha: str,
+    head_sha: str,
+    fanout: int = 1,
+) -> PackedReviewDiff | None:
+    """Replace a large repeated review diff with a stable exact-recall index.
+
+    Small diffs retain the existing prompt unchanged. Secret-shaped diffs also retain the existing
+    behavior rather than creating an additional raw copy in scratch. The packed index is navigation
+    only: the exact patch remains host-owned and, for clean diffs, is mirrored into ignored scratch
+    so a read-only reviewer can page it on demand.
+    """
+
+    if fanout < 1:
+        raise ValueError("review diff fanout must be positive")
+    source_bytes = len(diff.encode("utf-8"))
+    if source_bytes <= _REVIEW_DIFF_THRESHOLD_BYTES or _sensitivity_kinds(diff):
+        return None
+    for label, sha in (("base_sha", base_sha), ("head_sha", head_sha)):
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ValueError(f"{label} must be a full lowercase git SHA")
+
+    digest = _sha256(diff)
+    state_path = f"harness/review-diffs/{digest}.patch"
+    sandbox_path = f".factory/observations/review-diff-{digest}.patch"
+    try:
+        existing = ctx.state.read_artifact(state_path)
+    except FileNotFoundError:
+        ctx.state.write_artifact(state_path, diff)
+    else:
+        if existing != diff or _sha256(existing) != digest:
+            raise ObservationIntegrityError(f"review diff archive collision for sha256:{digest}")
+    ctx.sb.write(sandbox_path, diff)
+
+    files = _review_diff_files(diff)
+    shown = files[:_REVIEW_MAX_FILES]
+    file_lines = [f"- {item.path}: {item.hunks} hunk(s), +{item.added}/-{item.deleted}" for item in shown]
+    if len(files) > len(shown):
+        file_lines.append(f"- ... {len(files) - len(shown)} more file(s); page the exact patch")
+
+    prompt = (
+        "REVIEW DIFF PACKED LOCALLY; THIS INDEX IS NAVIGATION, NOT EVIDENCE.\n"
+        f"handle: diff:sha256:{digest}\n"
+        f"exact patch: {sandbox_path}\n"
+        f"base: {base_sha}\n"
+        f"head: {head_sha}\n"
+        f"sha256: {digest}\n"
+        f"source: {source_bytes} bytes, {len(files)} file(s), "
+        f"{sum(item.hunks for item in files)} hunk(s)\n"
+        "Use Read on the exact patch with offset/limit, and Read/Grep the changed files, before "
+        "making findings. Do not approve from this index alone.\n\n"
+        "Changed files:\n" + ("\n".join(file_lines) if file_lines else "(none)")
+    ).strip()
+    prompt_bytes = len(prompt.encode("utf-8"))
+    if prompt_bytes >= source_bytes:
+        return None
+
+    packed = PackedReviewDiff(
+        handle=f"diff:sha256:{digest}",
+        sha256=digest,
+        state_path=state_path,
+        sandbox_path=sandbox_path,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        source_bytes=source_bytes,
+        prompt_bytes=prompt_bytes,
+        files=files,
+        fanout=fanout,
+        prompt_text=prompt,
+    )
+    public = {
+        "schema_version": 1,
+        "authority": "review-navigation-only",
+        "handle": packed.handle,
+        "sha256": packed.sha256,
+        "base_sha": base_sha,
+        "head_sha": head_sha,
+        "source_bytes": source_bytes,
+        "prompt_bytes": prompt_bytes,
+        "saved_bytes_per_prompt": packed.saved_bytes_per_prompt,
+        "fanout": fanout,
+        "estimated_replayed_bytes_avoided": packed.estimated_replayed_bytes_avoided,
+        "files": [item.to_dict() for item in files],
+        "raw_diff_committed": False,
+        "remote_model_used": False,
+    }
+    ctx.write_artifact(
+        f"{ctx.art}/harness-review-context/{digest}.json",
+        json.dumps(public, indent=2, sort_keys=True) + "\n",
+    )
+    return packed
