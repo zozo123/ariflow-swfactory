@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from swfactory.cli import app
 from swfactory.phase_control import (
     PHASE_CONTROL_AUTHORITY,
     ControlMode,
@@ -102,3 +104,17 @@ def test_jam_and_glass_are_not_mistaken_for_success() -> None:
     assert jammed.phase == "jammed"
     assert jammed.recommendation.queue == "drain"
     assert jammed.recommendation.allow_new_implementation_lanes is False
+
+
+def test_cli_exposes_read_only_phase_assessment(tmp_path: Path) -> None:
+    case = {item["name"]: item for item in _fixture()["cases"]}["critical-freeze-and-measure"]
+    path = tmp_path / "phase.json"
+    path.write_text(json.dumps(case["observation"]), encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["phase-assess", str(path), "--json"])
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.output)
+    assert document["phase"] == "critical"
+    assert document["recommendation"]["mode"] == "measure"
+    assert document["authority"] == "search-only"
