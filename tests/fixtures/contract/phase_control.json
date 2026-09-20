@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "gas-divergent-search",
+      "observation": {"candidate_entropy": 0.90, "coherence": 0.20, "mobility": 0.90, "queue_pressure": 0.10, "queue_acceleration": 0.0, "resource_pressure": 0.10, "branching_ratio": 0.30, "evidence_completeness": 0.25, "context_pressure": 0.40, "debt_pressure": 0.10, "verifier_disagreement": 0.20},
+      "expected": {"raw_phase": "gas", "phase": "gas", "mode": "diverge"}
+    },
+    {
+      "name": "liquid-specialist-flow",
+      "observation": {"candidate_entropy": 0.55, "coherence": 0.55, "mobility": 0.80, "queue_pressure": 0.20, "queue_acceleration": 0.0, "resource_pressure": 0.20, "branching_ratio": 0.50, "evidence_completeness": 0.55, "context_pressure": 0.45, "debt_pressure": 0.10, "verifier_disagreement": 0.20},
+      "expected": {"raw_phase": "liquid", "phase": "liquid", "mode": "coordinate"}
+    },
+    {
+      "name": "critical-freeze-and-measure",
+      "observation": {"candidate_entropy": 0.45, "coherence": 0.55, "mobility": 0.70, "queue_pressure": 0.25, "queue_acceleration": 0.60, "resource_pressure": 0.25, "branching_ratio": 0.80, "evidence_completeness": 0.55, "context_pressure": 0.55, "debt_pressure": 0.15, "verifier_disagreement": 0.70},
+      "expected": {"raw_phase": "critical", "phase": "critical", "mode": "measure"}
+    },
+    {
+      "name": "liquid-ready-to-anneal",
+      "observation": {"candidate_entropy": 0.35, "coherence": 0.72, "mobility": 0.65, "queue_pressure": 0.20, "queue_acceleration": -0.10, "resource_pressure": 0.20, "branching_ratio": 0.50, "evidence_completeness": 0.82, "context_pressure": 0.50, "debt_pressure": 0.10, "verifier_disagreement": 0.15},
+      "expected": {"raw_phase": "liquid", "phase": "liquid", "mode": "anneal"}
+    },
+    {
+      "name": "crystal-exact-candidate",
+      "observation": {"candidate_entropy": 0.10, "coherence": 0.95, "mobility": 0.25, "queue_pressure": 0.10, "queue_acceleration": -0.10, "resource_pressure": 0.10, "branching_ratio": 0.20, "evidence_completeness": 0.96, "context_pressure": 0.40, "debt_pressure": 0.05, "verifier_disagreement": 0.05},
+      "expected": {"raw_phase": "crystal", "phase": "crystal", "mode": "verify"}
+    },
+    {
+      "name": "glass-local-minimum",
+      "observation": {"candidate_entropy": 0.25, "coherence": 0.50, "mobility": 0.10, "queue_pressure": 0.15, "queue_acceleration": 0.0, "resource_pressure": 0.15, "branching_ratio": 0.30, "evidence_completeness": 0.45, "context_pressure": 0.80, "debt_pressure": 0.10, "verifier_disagreement": 0.20},
+      "expected": {"raw_phase": "glass", "phase": "glass", "mode": "perturb"}
+    },
+    {
+      "name": "jammed-drain",
+      "observation": {"candidate_entropy": 0.60, "coherence": 0.50, "mobility": 0.20, "queue_pressure": 0.95, "queue_acceleration": 0.80, "resource_pressure": 0.90, "branching_ratio": 1.30, "evidence_completeness": 0.40, "context_pressure": 0.90, "debt_pressure": 0.90, "verifier_disagreement": 0.40},
+      "expected": {"raw_phase": "jammed", "phase": "jammed", "mode": "drain"}
+    },
+    {
+      "name": "supercritical-branching",
+      "observation": {"candidate_entropy": 0.55, "coherence": 0.50, "mobility": 0.70, "queue_pressure": 0.20, "queue_acceleration": 0.10, "resource_pressure": 0.20, "branching_ratio": 1.10, "evidence_completeness": 0.50, "context_pressure": 0.50, "debt_pressure": 0.10, "verifier_disagreement": 0.20},
+      "expected": {"raw_phase": "critical", "phase": "critical", "mode": "measure"}
+    },
+    {
+      "name": "crystal-hysteresis",
+      "previous_phase": "crystal",
+      "observation": {"candidate_entropy": 0.30, "coherence": 0.82, "mobility": 0.40, "queue_pressure": 0.15, "queue_acceleration": 0.0, "resource_pressure": 0.15, "branching_ratio": 0.30, "evidence_completeness": 0.85, "context_pressure": 0.45, "debt_pressure": 0.10, "verifier_disagreement": 0.10},
+      "expected": {"raw_phase": "liquid", "phase": "crystal", "mode": "verify"}
+    }
+  ]
+}
