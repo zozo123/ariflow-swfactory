@@ -12,6 +12,8 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 
+from swfactory.cells import is_cell_id
+
 _DAG_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 
 
@@ -58,7 +60,7 @@ def bind_cell(
     line_name: str,
     blueprint_digest: str,
 ) -> AirflowBinding:
-    if not cell_id.startswith("cell_"):
+    if not is_cell_id(cell_id):
         raise ValueError("Airflow binding requires a Factory Cell id")
     if epoch < 1:
         raise ValueError("Airflow binding epoch must be positive")

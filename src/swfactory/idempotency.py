@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from swfactory.cells import is_cell_id
 from swfactory.store_schema import ensure_named_schema, guard_before_ddl
 
 OutcomeStatus = Literal["committed", "definitely_absent", "ambiguous", "divergent", "refused"]
@@ -492,7 +493,7 @@ class OperationJournal:
 
     @staticmethod
     def _validate_ref(ref: OperationRef) -> None:
-        if not ref.cell_id.startswith("cell_"):
+        if not is_cell_id(ref.cell_id):
             raise OperationIdentityConflict("operation must carry a Factory Cell id")
         if ref.epoch < 1 or not ref.kind.strip() or not ref.key.strip():
             raise OperationIdentityConflict("operation reference is incomplete")

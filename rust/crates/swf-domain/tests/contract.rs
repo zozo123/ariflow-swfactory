@@ -296,6 +296,10 @@ fn apply(function: &str, input: &Value) -> Outcome {
             Ok(digest) => Outcome::Value(json!(digest)),
             Err(error) => Outcome::Error(format!("policy did not canonicalize: {error}")),
         },
+        "is_cell_id" => match input.get("value").and_then(Value::as_str) {
+            Some(value) => Outcome::Value(json!(swf_domain::cell::is_cell_id(value))),
+            None => Outcome::Error("is_cell_id case has no string `value`".to_string()),
+        },
         _ => Outcome::Unhandled,
     }
 }

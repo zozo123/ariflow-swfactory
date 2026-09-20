@@ -41,7 +41,7 @@ def test_cleanup_debt_cannot_be_settled_by_another_cell() -> None:
     item = identity()
     debt.record("container-1", item)
     with pytest.raises(RuntimeError, match="does not match"):
-        debt.settle("container-1", SandboxIdentity("docker", "cell_other", 2, "attempt-1"))
+        debt.settle("container-1", SandboxIdentity("docker", "cell_4ce269b99ed3c09c564e4735", 2, "attempt-1"))
     debt.settle("container-1", item)
     assert not debt.outstanding
 

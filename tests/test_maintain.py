@@ -474,7 +474,10 @@ def test_sweep_refuses_a_live_cells_sandbox_and_removes_only_terminal_or_unowned
     run created it is live at its current epoch. Age and naming only nominate; the Cell decides."""
     live = f"swf-demo-1-{run_id_for(RUN, 0)}"
     done = f"swf-demo-2-{run_id_for(RUN, 1)}"
-    cells = [_cell("cell_live", "running", idx=0), _cell("cell_done", "success", idx=1)]
+    cells = [
+        _cell("cell_027e1e722cd612eceab60210", "running", idx=0),
+        _cell("cell_12976a99412f43996780df50", "success", idx=1),
+    ]
     islo = FakeIslo(
         [
             {"name": live, "created_at": OLD},  # old + running, but its Cell is live -> kept
@@ -490,8 +493,11 @@ def test_sweep_refuses_a_live_cells_sandbox_and_removes_only_terminal_or_unowned
     assert report["kept"] == [live] and report["removed"] == islo.removed and report["debt"] == []
     # every removal is a committed journal row under the Cell that owned the sandbox, carrying a receipt
     rows = {r["cell_id"]: r for r in control.operations.db.execute("SELECT * FROM operations")}
-    assert rows["cell_done"]["state"] == "committed" and rows["cell_done"]["kind"] == "sandbox_cleanup"
-    receipt = json.loads(rows["cell_done"]["result_json"])
+    assert (
+        rows["cell_12976a99412f43996780df50"]["state"] == "committed"
+        and rows["cell_12976a99412f43996780df50"]["kind"] == "sandbox_cleanup"
+    )
+    receipt = json.loads(rows["cell_12976a99412f43996780df50"]["result_json"])
     assert receipt["status"] == "converged" and receipt["resource_id"] == done
     assert control.operations.unresolved() == []
     # without an owner nothing is listed, let alone removed
@@ -619,17 +625,22 @@ def test_sweep_selects_docker_containers_by_label_and_refuses_a_live_cells(tmp_p
     its epoch keeps its container, a finished Cell's is removed and journaled, a Cell the store does
     not know is only observed, incomplete labels are refused."""
     cells = [
-        _cell("cell_live", "running"),
-        _cell("cell_done", "success"),
-        _cell("cell_rearmed", "running", epoch=2),
+        _cell("cell_027e1e722cd612eceab60210", "running"),
+        _cell("cell_12976a99412f43996780df50", "success"),
+        _cell("cell_e10ceadc3590dbc95bb03a8a", "running", epoch=2),
     ]
     docker = FakeDocker(
         {
-            "live1": _labels("cell_live", 1),  # live Cell at its current epoch -> kept
-            "done1": _labels("cell_done", 1),  # terminal Cell never cleaned up -> removed
-            "stale1": _labels("cell_rearmed", 1),  # older epoch while the Cell is live again -> refused
-            "unknown1": _labels("cell_unknown", 1),  # no Cell row: not ours to judge -> observed
-            "half": {"swfactory.owned": "true", "swfactory.cell": "cell_done"},  # incomplete -> refused
+            "live1": _labels("cell_027e1e722cd612eceab60210", 1),  # live Cell at its current epoch -> kept
+            "done1": _labels("cell_12976a99412f43996780df50", 1),  # terminal Cell never cleaned up -> removed
+            "stale1": _labels(
+                "cell_e10ceadc3590dbc95bb03a8a", 1
+            ),  # older epoch while the Cell is live again -> refused
+            "unknown1": _labels("cell_b278149b956910f0e9dab221", 1),  # no Cell row: not ours to judge -> observed
+            "half": {
+                "swfactory.owned": "true",
+                "swfactory.cell": "cell_12976a99412f43996780df50",
+            },  # incomplete -> refused
         }
     )
     control = ControlKernel(tmp_path / "control")
@@ -638,12 +649,15 @@ def test_sweep_selects_docker_containers_by_label_and_refuses_a_live_cells(tmp_p
     assert report["removed"] == ["done1"] and report["debt"] == [] and report["reconciled"] == []
     assert sorted(report["kept"]) == ["half", "live1", "stale1", "unknown1"]
     rows = {r["cell_id"]: r for r in control.operations.db.execute("SELECT * FROM operations")}
-    assert list(rows) == ["cell_done"] and rows["cell_done"]["kind"] == "sandbox_cleanup"
-    receipt = json.loads(rows["cell_done"]["result_json"])
+    assert (
+        list(rows) == ["cell_12976a99412f43996780df50"]
+        and rows["cell_12976a99412f43996780df50"]["kind"] == "sandbox_cleanup"
+    )
+    receipt = json.loads(rows["cell_12976a99412f43996780df50"]["result_json"])
     assert (receipt["provider"], receipt["resource_id"], receipt["status"]) == ("docker", "done1", "converged")
     assert control.operations.unresolved() == []
     # the Cell finished since: its stale container is now an orphan the sweep may reclaim
-    cells[2] = _cell("cell_rearmed", "success", epoch=2)
+    cells[2] = _cell("cell_e10ceadc3590dbc95bb03a8a", "success", epoch=2)
     report = maintain.sweep_containers(docker=docker, cells=cells, control=control)
     assert report["removed"] == ["stale1"] and docker.removed == ["done1", "stale1"]
 
@@ -652,8 +666,8 @@ def test_sweep_journals_a_lost_docker_rm_and_settles_it_by_provider(tmp_path: Pa
     """A lost ``docker rm`` reply converges like a lost ``islo rm``; a docker pass never settles an
     islo row (or the reverse) just because the other provider's listing lacks that name."""
     control = ControlKernel(tmp_path / "control")
-    cells = [_cell("cell_done", "success")]
-    docker = FakeDocker({"gone1": _labels("cell_done", 1)}, lose={"gone1"})
+    cells = [_cell("cell_12976a99412f43996780df50", "success")]
+    docker = FakeDocker({"gone1": _labels("cell_12976a99412f43996780df50", 1)}, lose={"gone1"})
     report = maintain.sweep_containers(docker=docker, cells=cells, control=control)
     assert report["removed"] == ["gone1"] and report["debt"] == []
     (row,) = control.operations.db.execute("SELECT state,result_json FROM operations").fetchall()
@@ -663,7 +677,7 @@ def test_sweep_journals_a_lost_docker_rm_and_settles_it_by_provider(tmp_path: Pa
     stuck = "swf-stuck-1-bbbbbbbb"
     islo = FakeIslo([{"name": stuck, "created_at": OLD}], fail={stuck})
     assert _sweep(islo, [], control)["debt"] == [stuck]
-    docker = FakeDocker({"stuck2": _labels("cell_done", 1)}, fail={"stuck2"})
+    docker = FakeDocker({"stuck2": _labels("cell_12976a99412f43996780df50", 1)}, fail={"stuck2"})
     report = maintain.sweep_containers(docker=docker, cells=cells, control=control)
     assert report["debt"] == ["stuck2"] and report["reconciled"] == []
     pending = {r["observation"]["evidence"]["resource"] for r in control.operations.unresolved()}
@@ -680,10 +694,10 @@ def test_sweep_sandboxes_sweeps_docker_containers_when_the_factory_runs_on_docke
     label, selected by the factory's own ``SWF_SANDBOX``; the report merges. Without that setting
     no ``docker`` command ever runs (the unit suite must stay hermetic on a host that has docker)."""
     control = ControlKernel(tmp_path / "control")
-    cells = [_cell("cell_done", "success", idx=1)]
+    cells = [_cell("cell_12976a99412f43996780df50", "success", idx=1)]
     done = f"swf-demo-2-{run_id_for(RUN, 1)}"
     islo = FakeIslo([{"name": done, "created_at": OLD}])
-    docker = FakeDocker({"done1": _labels("cell_done", 1)})
+    docker = FakeDocker({"done1": _labels("cell_12976a99412f43996780df50", 1)})
     report = maintain.sweep_sandboxes(3600, owner=ME, islo=islo, cells=cells, control=control, now=NOW, docker=docker)
     assert report["removed"] == [done, "done1"] and docker.removed == ["done1"]
     assert maintain.select_containers({}) is None

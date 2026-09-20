@@ -396,7 +396,7 @@ def test_concurrent_admissions_cannot_exceed_the_declared_capacity(tmp_path: Pat
 
 def test_one_work_id_cannot_be_reused_for_a_different_work_order(tmp_path: Path) -> None:
     admission = DurableAdmission(tmp_path / "admission.sqlite3")
-    member = [MemberSpec(0, "owner/one", "cell_a")]
+    member = [MemberSpec(0, "owner/one", "cell_c117f5bfbb421169630bac75")]
     admission.submit(
         work_id="work", actor="op", blueprint="line", order={"schema_version": 1, "issue": "1"}, members=member
     )
@@ -511,7 +511,7 @@ def test_a_delivery_that_lost_its_lease_cannot_bind_cells_afterwards(tmp_path: P
         actor="op",
         blueprint="line",
         order={"schema_version": 1, "issue": "1"},
-        members=[MemberSpec(0, "owner/one", "cell_a")],
+        members=[MemberSpec(0, "owner/one", "cell_c117f5bfbb421169630bac75")],
     )
     # A fresh admission hands its delivery to the submitter inside the admission transaction, so
     # nothing else can claim it -- claim_dispatch here would (correctly) answer None.
@@ -546,7 +546,7 @@ def test_a_legacy_active_row_is_repaired_instead_of_holding_capacity_forever(tmp
     db.execute(
         """INSERT INTO admission_work(work_id,repo,actor,blueprint,priority,sequence,state,reason,
            cell_id,cell_epoch,enqueued_at,admitted_at,updated_at)
-           VALUES('running','owner/one','op','line',?,901,'active','admitted','cell_x',3,?,?,?)""",
+           VALUES('running','owner/one','op','line',?,901,'active','admitted','cell_de82b525b3cd53851a53d6cc',3,?,?,?)""",
         (int(Priority.NORMAL), now, now, now),
     )
     db.commit()
@@ -555,7 +555,7 @@ def test_a_legacy_active_row_is_repaired_instead_of_holding_capacity_forever(tmp
     admission = DurableAdmission(path, Limits(global_active=1))
     assert admission.state_of("stranded") == "cancelled"
     assert admission.state_of("running") == "bound"
-    assert admission.members_for_cell("cell_x", 3) == ["running"]
+    assert admission.members_for_cell("cell_de82b525b3cd53851a53d6cc", 3) == ["running"]
     assert admission.snapshot()["pressure"]["held_units"] == 1
     admission.close()
 
@@ -579,7 +579,7 @@ class _Response:
 
 
 def _managed_job() -> dict[str, Any]:
-    return {"cell_managed": True, "cell_id": "cell_abc", "cell_epoch": 2}
+    return {"cell_managed": True, "cell_id": "cell_555aa0b670e50aef10c1f7fd", "cell_epoch": 2}
 
 
 def test_the_callback_reports_the_resumed_dispatch_and_does_not_perform_it(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -587,7 +587,7 @@ def test_the_callback_reports_the_resumed_dispatch_and_does_not_perform_it(monke
     monkeypatch.setenv("SWF_BACKEND_URL", "https://backend.invalid")
     monkeypatch.setenv("SWF_BACKEND_TOKEN", "b" * 40)
     body = {
-        "cell": {"cell_id": "cell_abc", "epoch": 2, "state": "success"},
+        "cell": {"cell_id": "cell_555aa0b670e50aef10c1f7fd", "epoch": 2, "state": "success"},
         "released_work": ["submit_b"],
         "resumed_dispatch": [{"work_id": "submit_b", "dispatched": True, "run_id": "swf__b"}],
     }
@@ -603,7 +603,7 @@ def test_the_callback_reports_the_resumed_dispatch_and_does_not_perform_it(monke
 def test_the_callback_refuses_an_answer_about_a_different_cell_epoch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWF_BACKEND_URL", "https://backend.invalid")
     monkeypatch.setenv("SWF_BACKEND_TOKEN", "b" * 40)
-    body = {"cell": {"cell_id": "cell_abc", "epoch": 3, "state": "success"}, "released_work": []}
+    body = {"cell": {"cell_id": "cell_555aa0b670e50aef10c1f7fd", "epoch": 3, "state": "success"}, "released_work": []}
     monkeypatch.setattr(cell_callback.urllib.request, "urlopen", lambda *a, **k: _Response(body))
     with pytest.raises(cell_callback.CellCallbackError):
         cell_callback.transition(_managed_job(), "success", operation_key="airflow:success")

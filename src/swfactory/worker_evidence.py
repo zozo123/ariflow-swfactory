@@ -10,6 +10,8 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from swfactory.cells import is_cell_id
+
 _ALLOWED_STATES = {"success", "failed", "cancelled"}
 _ALLOWED_ROLES = {
     "authority",
@@ -37,7 +39,7 @@ class WorkerEvidenceSink:
         batch_id: str,
         receipts: Iterable[Mapping[str, Any]],
     ) -> dict[str, Any]:
-        if not cell_id.startswith("cell_") or epoch < 1:
+        if not is_cell_id(cell_id) or epoch < 1:
             raise ValueError("worker evidence requires a valid Cell id and positive epoch")
         if not batch_id.strip() or len(batch_id) > 256:
             raise ValueError("worker batch id must be nonempty and at most 256 characters")

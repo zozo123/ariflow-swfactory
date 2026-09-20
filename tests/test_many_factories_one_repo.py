@@ -124,7 +124,7 @@ def test_an_instance_adopts_the_pull_request_that_already_exists(tmp_path: Path)
     wrong pull request, and a PR a person opened carries no marker and belongs to nobody.
     """
     key = publication_key("o/r", "demo/target", ISSUE)
-    mine = PublicationIdentity(key=key, instance="swf-a", cell_id="cell_x", epoch=3).marker()
+    mine = PublicationIdentity(key=key, instance="swf-a", cell_id="cell_de82b525b3cd53851a53d6cc", epoch=3).marker()
 
     assert adopts(f"body\n\n{mine}\n", key)
     assert not adopts(f"body\n\n{mine}\n", key[:6]), "a prefix must not adopt"
@@ -151,8 +151,10 @@ def test_the_marker_names_the_cell_and_epoch_the_work_belongs_to() -> None:
     from swfactory.publication_identity import read_marker
 
     key = publication_key("o/r", "demo/target", ISSUE)
-    parsed = read_marker(PublicationIdentity(key=key, instance="swf-a", cell_id="cell_x", epoch=7).marker())
-    assert parsed == {"key": key, "instance": "swf-a", "cell": "cell_x", "epoch": "7"}
+    parsed = read_marker(
+        PublicationIdentity(key=key, instance="swf-a", cell_id="cell_de82b525b3cd53851a53d6cc", epoch=7).marker()
+    )
+    assert parsed == {"key": key, "instance": "swf-a", "cell": "cell_de82b525b3cd53851a53d6cc", "epoch": "7"}
 
 
 def test_the_same_instance_may_still_republish_its_own_branch(remote: Path, tmp_path: Path) -> None:
