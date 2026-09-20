@@ -554,7 +554,7 @@ def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
     if not removed.ok:
         raise StageError("sandbox", f"could not clear stale JUnit report: {removed.stderr[-800:]}")
     res = ctx.sb.run(cmd)
-    output = (res.stdout[-6000:] + "\n" + res.stderr[-2000:]).strip()
+    legacy_output = (res.stdout[-6000:] + "\n" + res.stderr[-2000:]).strip()
     try:
         counts = _parse_junit(ctx.sb.read(contract.junit))
     except (FileNotFoundError, ET.ParseError, ValueError):
@@ -566,6 +566,20 @@ def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
             junit_path=contract.junit,
             report_valid=True,
         )
+    output = legacy_output
+    if not result.ok:
+        from swfactory.harness_efficiency import pack_failure_observation
+
+        packed = pack_failure_observation(
+            ctx,
+            command=cmd,
+            exit_code=res.exit_code,
+            timed_out=res.timed_out,
+            stdout=res.stdout,
+            stderr=res.stderr,
+        )
+        if packed is not None:
+            output = packed.prompt_text
     _assert_workspace_head(ctx, "verification")
     _ensure_clean(ctx, "verification", allow_artifacts=True)
     return result, output
@@ -938,13 +952,32 @@ def review(ctx: Ctx) -> StageResult:
     tests_blocker: Finding | None = None
     for k in range(ctx.cfg.max_review_fixes + 1):
         diff = _sh(ctx, f"git diff {base}..HEAD -- . {_exclude(ctx)}")
+        from swfactory.harness_efficiency import pack_review_diff
+
+        packed_diff = pack_review_diff(
+            ctx,
+            diff=diff,
+            base_sha=base,
+            head_sha=_assert_workspace_head(ctx, "review context"),
+        )
+        review_diff = packed_diff.prompt_text if packed_diff is not None else diff
+        if packed_diff is not None:
+            numbers["review_context_source_bytes"] = numbers.get("review_context_source_bytes", 0.0) + float(
+                packed_diff.source_bytes
+            )
+            numbers["review_context_prompt_bytes"] = numbers.get("review_context_prompt_bytes", 0.0) + float(
+                packed_diff.prompt_bytes
+            )
+            numbers["review_context_saved_bytes"] = numbers.get("review_context_saved_bytes", 0.0) + float(
+                packed_diff.saved_bytes_per_prompt
+            )
         prompt = render_prompt(
             "review",
             issue_id=ctx.issue.id,
             review_policy=_review_policy(ctx),
             spec=spec_text,
             plan=plan_text,
-            diff=diff,
+            diff=review_diff,
         )
         res = _agent(ctx, "review", k + 1, prompt, Review)
         rv, dropped = cap_nits(Review.model_validate(res.data), _nit_cap(ctx))
