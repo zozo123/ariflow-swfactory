@@ -11,6 +11,7 @@ pub mod blueprint;
 pub mod build_exploration;
 pub mod cell;
 pub mod control_plane;
+pub mod cognitive_harness;
 pub mod doctor;
 pub mod evidence;
 pub mod factory;
@@ -27,6 +28,16 @@ pub mod snapshot;
 pub mod states;
 pub mod worker;
 
+pub use cognitive_harness::{
+    classify_self_improvement, ensemble_diversity, gauge_fix, marginal_information_value,
+    memory_phase, pairwise_correlation, plan_cognition, quantity_kind, validate_measurement_set,
+    AuthorityRequest, CognitiveAttention, CognitiveError, CognitiveLayer, CognitivePlan,
+    CognitiveReceipt, CognitiveTimescale, DissipationSnapshot, EnsembleMember,
+    GaugeEquivalenceClass, ImprovementDisposition, MeasurementKind, MeasurementReceipt,
+    MemoryAction, MemoryEvidence, MemoryPhase, PairwiseCorrelation, QuantityKind,
+    SelfImprovementExperiment, StochasticField, WorldAction, WorldCandidate,
+    COGNITIVE_HARNESS_AUTHORITY, COGNITIVE_HARNESS_SCHEMA_VERSION, REALITY_BOUNDARY,
+};
 pub use factory::{
     FactoryError, FactoryName, FactoryRunId, FactoryRunRequest, FactoryRunState, FactoryRunStatus,
     FactorySpec, SchedulerBinding,
