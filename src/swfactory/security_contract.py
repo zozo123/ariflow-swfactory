@@ -270,9 +270,7 @@ def _canonical_value(value: Any) -> Any:
         return value
     if isinstance(value, int):
         if abs(value) > POLICY_MAX_EXACT_INTEGER:
-            raise ValueError(
-                f"policy integer exceeds cross-language exact range +/-{POLICY_MAX_EXACT_INTEGER}"
-            )
+            raise ValueError(f"policy integer exceeds cross-language exact range +/-{POLICY_MAX_EXACT_INTEGER}")
         return value
     if isinstance(value, float):
         if not math.isfinite(value) or abs(value) > POLICY_MAX_EXACT_INTEGER:
