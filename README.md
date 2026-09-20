@@ -128,6 +128,16 @@ microstates while searching, then remove degrees of freedom until only one promo
 | Measurement | Evidence bound to the exact candidate that produced it |
 | Conservation law | A worker may spend compute; it cannot mint authority |
 | Catalyst | Caches and local task graphs can shorten the path without changing what is accepted |
+| Phase | Observable regime: gas, liquid, critical, crystal, glass, or jammed |
+| Mode | Reversible posture: diverge, coordinate, measure, anneal, verify, perturb, or drain |
+
+The phase vocabulary is now an **experimental cross-language contract**, not just prose. Python
+(`swfactory.phase_control`) and Rust (`swf_domain::phase_control`) independently classify the same
+versioned order-parameter fixture. A phase assessment has `authority=search-only`: it may recommend
+search width, isolated/forked/specialist trajectories, context handling, verification intensity and
+queue posture, but it cannot approve, publish, merge, mint credentials or promote. Run a retained
+snapshot locally with `swfactory phase-assess phase.json --json`. See
+[phase-aware control](docs/phase-control.md).
 
 That last row matters. Turborepo 2.11 can put uv and Cargo work into one content-addressed task
 graph. In this repository it is an **experimental accelerator inside the verification layer**, not a
@@ -393,6 +403,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `sandbox.islo` | `experimental` | `swfactory.sandbox.IsloSandbox (islo use / cp / rm control plane)` | ci:evals-islo in .github/workflows/evals.yml (a real claude run inside a MicroVM) plus the hermetic argv contracts in tests/test_sandbox_argv.py |
 | `selfhost.factory` | `experimental` | `swfactory run --blueprint selfhost (target dir is the repo root), executing swfactory.stages against the factory's own tree` | tests/test_selfhost.py (contract parses, every protected entry survives literal-prefix reduction, confinement modules are refused for build and fix, both gates are non-auto, one line serves both backends) |
 | `sandbox.smolvm` | `experimental` | `swfactory.smolvm_backend.SmolvmSandboxBackend via ToolsetSandbox` | tests/test_smolvm_backend.py (HTTP contract) and opt-in tests/test_smolvm_live.py |
+| `factory.phase-control` | `experimental` | `swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess is read-only` | tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json |
 
 <!-- capability-inventory:end -->
 
@@ -432,7 +443,7 @@ acceptance standard and explain the remaining enforcement work.
 | Operate Cells, jobs, approvals, and deliveries | [CLI/TUI](docs/swf.md), [backend API](docs/factory-backend.md) |
 | Design lifecycle and parallel work | [Lifecycle](docs/lifecycle.md), [architecture](docs/design.md) |
 | Receive work and recover interruptions | [Webhooks](docs/webhooks.md), [run recovery](docs/run-recovery.md) |
-| Evaluate behavior and control proposals | [Evals](docs/evals.md), [non-equilibrium control doctrine](docs/non-equilibrium-factory.md) |
+| Evaluate behavior and control proposals | [Phase control](docs/phase-control.md), [Evals](docs/evals.md), [non-equilibrium control doctrine](docs/non-equilibrium-factory.md) |
 | Extend or review the factory | [Contributing](CONTRIBUTING.md), [review policy](REVIEW.md), [changelog](CHANGELOG.md) |
 
 Contribute a coherent change with an explicit invariant, failure behavior, evidence, and a plan to
