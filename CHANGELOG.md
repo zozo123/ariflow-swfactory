@@ -6,10 +6,19 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
-- Make Factory Cell policy identity singular and versioned: `CanonicalPolicy` and structured
-  mappings now share one `policy:v1:<sha256>` constructor and one canonical job projection,
-  Python and Rust are pinned to the same golden fixture, live epochs refuse a different digest
-  before write, and epoch advancement clears inherited policy authority before rebinding.
+- Preserve long failed-test evidence while reducing repair-context replay: output that exceeded the
+  previous repair-prompt tail is archived in host-owned run state and compacted only through exact
+  source-verified excerpts. Clean diagnostics get an ignored sandbox recall handle; secret-shaped
+  logs remain host-only. Raw diagnostics are not committed and no remote reducer model is used.
+- Add constrained harness-research selection: experimental mechanisms must preserve the exact
+  candidate SHA, promotion-authority digest, complete evidence, and a passing verifier before
+  efficiency is considered; survivors are a deterministic Pareto frontier rather than a weighted
+  score. The selector has no promotion or lifecycle action.
+- Pack review diffs above 12 KB behind content-addressed local recall handles. The prompt carries a
+  deterministic file/hunk index instead of replaying the full patch; ordinary review uses one pack
+  and Liquid reuses it across all three specialist lanes. Small or secret-shaped diffs keep the
+  previous full-diff behavior, raw patches are not committed, and the receipt records only identity
+  and measured context-byte savings.
 - Fail SmolVM doctor preflight when the configured daemon is unreachable, unhealthy, or not
   ready, using read-only health/readiness requests under one five-second deadline.
 - Rebuild demo source bytecode before tests so rapid same-size fixes cannot reuse stale Python
