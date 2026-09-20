@@ -6,6 +6,8 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Add experimental factory-wide phase control shared by Python and Rust. Gas/liquid/critical/crystal/glass/jammed are observable states; diverge/coordinate/measure/anneal/verify/perturb/drain are reversible search modes. The controller consumes versioned order parameters (candidate entropy, coherence, mobility, queue/resource/context/debt pressure, branching ratio, evidence completeness and verifier disagreement), applies hysteresis, and emits search-only recommendations. Both `swfactory phase-assess` and `swf phase` assess retained JSON offline; neither can schedule, mutate, approve or promote. Liquid review now records the shared mode vocabulary, and the phase policy/implementation are self-host protected.
+
 - Add an advisory Turborepo 2.11.1 polyglot verification graph with native repository-root Cargo
   and uv discovery. Cargo's manifest, lockfile, toolchain, and target identity now live at the
   repository root while crates remain under `rust/crates/`; uv exposes the shared contract corpus
