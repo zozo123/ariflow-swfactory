@@ -101,7 +101,6 @@ def normalize_relative_path(value: str, *, field: str = "path", allow_empty: boo
     return normalized
 
 
-
 def normalize_target_dir(value: str, *, field: str = "targets.dir") -> str:
     """Normalize a target directory while keeping the Cell target join injective."""
 
