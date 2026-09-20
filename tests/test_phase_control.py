@@ -118,3 +118,24 @@ def test_cli_exposes_read_only_phase_assessment(tmp_path: Path) -> None:
     assert document["phase"] == "critical"
     assert document["recommendation"]["mode"] == "measure"
     assert document["authority"] == "search-only"
+
+
+def test_high_context_pressure_recommends_compaction_without_changing_authority() -> None:
+    observation = PhaseObservation(
+        candidate_entropy=0.55,
+        coherence=0.55,
+        mobility=0.70,
+        queue_pressure=0.20,
+        queue_acceleration=0.0,
+        resource_pressure=0.20,
+        branching_ratio=0.40,
+        evidence_completeness=0.60,
+        context_pressure=0.95,
+        debt_pressure=0.10,
+        verifier_disagreement=0.15,
+    )
+    result = assess(observation)
+    assert result.phase == "liquid"
+    assert result.recommendation.mode == "coordinate"
+    assert result.recommendation.context == "compact"
+    assert result.authority == "search-only"
