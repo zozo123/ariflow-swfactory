@@ -7,9 +7,14 @@ import json
 from typer.testing import CliRunner
 
 from swfactory.cli import app
-from swfactory.evolution import CandidateOutcome, Strategy, evaluation
+from swfactory.evolution import CampaignError, CandidateOutcome, Strategy, evaluation
 from swfactory.generations import CampaignBudget, Dimension
-from swfactory.research_loop import annealed_strategy_schedule, entropy_strategy_schedule, run_annealing_loop
+from swfactory.research_loop import (
+    annealed_strategy_schedule,
+    entropy_strategy_schedule,
+    run_annealing_loop,
+    strategy_schedule_from_build_hypotheses,
+)
 
 
 def _runner(request):
@@ -222,3 +227,92 @@ def test_entropy_schedule_randomizes_search_but_keeps_annealing_shape(monkeypatc
     assert tuple(strategy.value for strategy in schedule[0]) == ("scratch", "repair", "rethink")
     assert tuple(strategy.value for strategy in schedule[1]) == ("scratch", "repair")
     assert tuple(strategy.value for strategy in schedule[2]) == ("scratch",)
+
+
+def test_jev_build_receipt_selects_an_actual_candidate_lane_without_promotion() -> None:
+    seen: list[Strategy] = []
+
+    def capture(request):
+        seen.append(request.strategy)
+        return _runner(request)
+
+    receipt = {
+        "schema_version": 1,
+        "authority": "exploration-only",
+        "model": "jev-1.13.0",
+        "rubric_version": "jev-build-v1",
+        "distribution_digest": "builddist:v1:" + "a" * 64,
+        "entropy_token": "entropy-17",
+        "choices": {"strategy": "scratch", "review_lens": "security"},
+    }
+
+    report = run_annealing_loop(
+        capture,
+        loop_id="jev-build",
+        cell_id="cell",
+        epoch=4,
+        input_head="base",
+        budget=CampaignBudget(max_depth=0, max_candidates=1, max_cost_usd=10, max_wall_s=60),
+        build_hypotheses=(receipt,),
+        parallel=False,
+        human_approved=False,
+    )
+
+    assert seen == [Strategy.SCRATCH]
+    assert report.rounds[0].strategies == ("scratch",)
+    assert report.exploration_winner is not None
+    assert report.promotion_winner is None
+
+
+def test_build_hypotheses_bias_the_front_but_preserve_declared_diversity() -> None:
+    schedule = strategy_schedule_from_build_hypotheses(
+        2,
+        max_candidates=3,
+        hypotheses=(
+            {"authority": "exploration-only", "choices": {"strategy": "scratch"}},
+            {"authority": "exploration-only", "choices": {"strategy": "rethink"}},
+        ),
+    )
+
+    assert tuple(strategy.value for strategy in schedule[0]) == ("scratch", "rethink", "repair")
+    assert tuple(strategy.value for strategy in schedule[1]) == ("scratch", "rethink")
+    assert tuple(strategy.value for strategy in schedule[2]) == ("scratch",)
+
+
+def test_build_hypotheses_cannot_smuggle_authority_or_new_strategies() -> None:
+    import pytest
+
+    with pytest.raises(CampaignError, match="not exploration-only"):
+        strategy_schedule_from_build_hypotheses(
+            0,
+            max_candidates=1,
+            hypotheses=({"authority": "promotion", "choices": {"strategy": "scratch"}},),
+        )
+    with pytest.raises(CampaignError, match="unknown strategy"):
+        strategy_schedule_from_build_hypotheses(
+            0,
+            max_candidates=1,
+            hypotheses=(
+                {
+                    "authority": "exploration-only",
+                    "choices": {"strategy": "merge_without_tests"},
+                },
+            ),
+        )
+
+
+def test_explicit_schedule_and_stochastic_receipts_cannot_both_own_lane_selection() -> None:
+    import pytest
+
+    with pytest.raises(CampaignError, match="mutually exclusive"):
+        run_annealing_loop(
+            _runner,
+            loop_id="conflict",
+            cell_id="cell",
+            epoch=1,
+            input_head="base",
+            budget=CampaignBudget(max_depth=0, max_candidates=1, max_cost_usd=10, max_wall_s=60),
+            strategy_schedule=((Strategy.REPAIR,),),
+            build_hypotheses=({"authority": "exploration-only", "choices": {"strategy": "scratch"}},),
+            parallel=False,
+        )

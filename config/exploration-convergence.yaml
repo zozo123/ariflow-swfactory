@@ -9,6 +9,16 @@ exploration:
   independent_workspaces: true
   immutable_input_snapshot: true
   max_parallelism_is_budgeted: true
+  stochastic_build_oracle:
+    authority: exploration-only
+    provider: jev
+    provider_can_only_weight_declared_values: true
+    local_entropy_sampling: true
+    retain_distribution_digest: true
+    retain_entropy_token: true
+    provider_failure_fallback: local-uniform
+    can_score_candidates: false
+    can_change_promotion: false
 
 convergence:
   authority: deterministic-fan-in
