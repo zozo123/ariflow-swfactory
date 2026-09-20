@@ -26,8 +26,9 @@ def test_cross_language_phase_fixture_is_canonical() -> None:
     data = _fixture()
     assert data["schema_version"] == 1
     for case in data["cases"]:
-        observation = PhaseObservation(**case["observation"])
-        assessment = assess(observation, previous_phase=case.get("previous_phase"))
+        input_ = case["input"]
+        observation = PhaseObservation(**input_["observation"])
+        assessment = assess(observation, previous_phase=input_.get("previous_phase"))
         expected = case["expected"]
         assert assessment.raw_phase == expected["raw_phase"], case["name"]
         assert assessment.phase == expected["phase"], case["name"]
@@ -45,8 +46,8 @@ def test_cross_language_phase_fixture_is_canonical() -> None:
         ):
             assert recommendation[field] == expected[field], f"{case['name']}:{field}"
         assert assessment.authority == PHASE_CONTROL_AUTHORITY
-        assert assessment.as_dict()["observation"] == case["observation"]
-        assert assessment.previous_phase == case.get("previous_phase")
+        assert assessment.as_dict()["observation"] == input_["observation"]
+        assert assessment.previous_phase == input_.get("previous_phase")
 
 
 def test_recommendations_shape_search_but_never_claim_authority() -> None:
@@ -111,8 +112,8 @@ def test_observation_refuses_out_of_contract_values(field: str, value: float) ->
 
 def test_jam_and_glass_are_not_mistaken_for_success() -> None:
     cases = {case["name"]: case for case in _fixture()["cases"]}
-    glass = assess(PhaseObservation(**cases["glass-local-minimum"]["observation"]))
-    jammed = assess(PhaseObservation(**cases["jammed-drain"]["observation"]))
+    glass = assess(PhaseObservation(**cases["glass-local-minimum"]["input"]["observation"]))
+    jammed = assess(PhaseObservation(**cases["jammed-drain"]["input"]["observation"]))
     assert glass.phase == "glass"
     assert glass.recommendation.context == "fresh"
     assert glass.recommendation.candidates == "reset"
@@ -124,7 +125,7 @@ def test_jam_and_glass_are_not_mistaken_for_success() -> None:
 def test_cli_exposes_read_only_phase_assessment(tmp_path: Path) -> None:
     case = {item["name"]: item for item in _fixture()["cases"]}["critical-freeze-and-measure"]
     path = tmp_path / "phase.json"
-    path.write_text(json.dumps(case["observation"]), encoding="utf-8")
+    path.write_text(json.dumps(case["input"]["observation"]), encoding="utf-8")
 
     result = CliRunner().invoke(app, ["phase-assess", str(path), "--json"])
 
