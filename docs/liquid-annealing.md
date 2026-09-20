@@ -13,6 +13,15 @@ https://newsletter.pragmaticengineer.com/p/openai-software-factory
 The adaptation is native to this repository. It does not copy another orchestration model and it
 does not create another scheduler.
 
+
+## Factory-wide phase contract
+
+The review-local annealer now uses the canonical phase names from `swfactory.phase_control` and
+records a control mode in each annealing state. Review remains intentionally narrower than the
+factory-wide phase controller: it cannot expand the Airflow graph or grant authority. Its posture is
+`anneal` for material defects, `measure` for incomplete/critical review, `verify` for crystal,
+`perturb` for glass and `drain` for jammed. See [phase-aware control](phase-control.md).
+
 ## One line, one authority
 
 ```text
