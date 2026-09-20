@@ -161,6 +161,21 @@ have the tree it was built from.
 Nothing is published to a package manager: no Homebrew tap, no `cargo install`, no distro
 package. The release tarballs are the artifacts, as they are for the Python wheel.
 
+
+## Assess factory phase — `swf phase`
+
+`swf phase` is an offline, read-only command. It does not resolve a context or contact Airflow/the
+backend. Give it a JSON object containing the order parameters from [phase-aware control](phase-control.md):
+
+```sh
+swf phase .factory/phase.json --json
+swf phase .factory/phase.json --previous crystal --json
+```
+
+The output includes `raw_phase`, hysteresis-stabilized `phase`, derived signals, and a
+`recommendation` such as `diverge`, `anneal`, `verify` or `drain`. Every document carries
+`authority: search-only`. A crystal result means "verify this exact candidate", never "promote it".
+
 ## Connect a factory — `swf context`
 
 Start `swfactory backend` on the control-plane host first and set `SWF_BACKEND_TOKEN` on the

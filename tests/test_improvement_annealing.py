@@ -30,7 +30,7 @@ def _obs(**kw) -> LoopObservation:
 def test_a_loop_that_is_retiring_debt_stays_cool_and_narrow() -> None:
     heat = evaluate(_obs(cycles_since_retirement=0), base_budget=5)
 
-    assert heat.phase == "exploiting"
+    assert heat.mode == "exploiting"
     assert heat.budget == 5
     assert heat.readmit_stalled is False
 
@@ -40,7 +40,7 @@ def test_a_hard_backlog_is_not_by_itself_a_reason_to_thrash() -> None:
     cycle. Progress is the evidence that matters; a difficult backlog is not a crisis."""
     heat = evaluate(_obs(cycles_since_retirement=0, stalled=6, carried=7))
 
-    assert heat.phase == "exploiting"
+    assert heat.mode == "exploiting"
 
 
 def test_with_no_trajectory_the_loop_does_not_guess() -> None:
@@ -63,8 +63,8 @@ def test_it_starts_exploring_once_it_has_stopped_retiring_anything() -> None:
     cold = evaluate(_obs(cycles_since_retirement=1))
     hot = evaluate(_obs(cycles_since_retirement=6, stalled=6, carried=7))
 
-    assert cold.phase == "exploiting"
-    assert hot.phase == "exploring"
+    assert cold.mode == "exploiting"
+    assert hot.mode == "exploring"
     assert hot.budget > cold.budget
 
 
@@ -164,7 +164,7 @@ def test_a_full_queue_narrows_a_loop_that_heat_alone_would_widen() -> None:
     """The whole point of the term: stagnation says widen, an undrained queue says stop asking."""
     stuck = LoopObservation(cycles=9, cycles_since_retirement=8, stalled=5, carried=6)
     hot = evaluate(stuck, base_budget=5)
-    assert hot.phase == "exploring"
+    assert hot.mode == "exploring"
     assert hot.budget > 5, "a stagnant loop should widen when nothing is queued against it"
 
     flooded = evaluate(
@@ -273,6 +273,7 @@ def test_the_receipt_carries_the_queue_it_was_governed_by() -> None:
     )
     receipt = heat.to_dict()
     assert receipt["authority"] == "proposal-shaping-only"
+    assert receipt["schema_version"] == 3 and "mode" in receipt and "phase" not in receipt
     assert receipt["enrolled"] == 6 and receipt["enrol_cap"] == 10
     assert receipt["annealed_budget"] == 5 and receipt["budget"] == 2
     assert receipt["pressure"] == 0.6

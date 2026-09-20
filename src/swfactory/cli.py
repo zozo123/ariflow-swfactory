@@ -292,7 +292,7 @@ def improve(
         base_budget=budget,
     )
     assessment = propose(signals, budget=heat.budget, stalled_keys=stuck, readmit_stalled=heat.readmit_stalled)
-    typer.echo(f"[{heat.phase} T={heat.temperature:.2f} budget={heat.budget}] {heat.reason}\n")
+    typer.echo(f"[{heat.mode} T={heat.temperature:.2f} budget={heat.budget}] {heat.reason}\n")
     if as_json:
         typer.echo(json.dumps(assessment.to_dict(), indent=2, sort_keys=True))
         return
@@ -1341,6 +1341,54 @@ def campaign_decision_verify(
         typer.echo(json.dumps(document, indent=2, sort_keys=True))
     else:
         typer.echo(f"verified {manifest.campaign_id} {manifest.digest()}")
+
+
+@app.command("phase-assess")
+def phase_assess_cmd(
+    observation_path: Annotated[Path, typer.Argument(help="JSON file containing phase order parameters")],
+    previous_phase: Annotated[
+        str | None,
+        typer.Option("--previous", help="previous phase for hysteresis"),
+    ] = None,
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable phase assessment")] = False,
+) -> None:
+    """Classify factory state and print a search-only control posture."""
+
+    from typing import cast
+
+    from swfactory.phase_control import Phase, PhaseObservation, assess
+
+    phases = {"gas", "liquid", "critical", "crystal", "glass", "jammed"}
+    if previous_phase is not None and previous_phase not in phases:
+        typer.echo(f"phase assess: unknown previous phase {previous_phase!r}", err=True)
+        raise typer.Exit(2)
+    try:
+        raw = json.loads(observation_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("phase input must be a JSON object")
+        payload = raw.get("observation", raw)
+        if not isinstance(payload, dict):
+            raise ValueError("phase observation must be a JSON object")
+        observation = PhaseObservation(**payload)
+        assessment = assess(
+            observation,
+            previous_phase=cast(Phase, previous_phase) if previous_phase is not None else None,
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+        typer.echo(f"phase assess: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    document = assessment.as_dict()
+    if json_out:
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        return
+    recommendation = assessment.recommendation
+    typer.echo(
+        f"{assessment.phase} -> {recommendation.mode} "
+        f"(authority={assessment.authority}, spawn={recommendation.spawn}, "
+        f"trajectory={recommendation.trajectory}, verification={recommendation.verification})"
+    )
+    typer.echo(recommendation.reason)
 
 
 @app.command("research-schedule")

@@ -128,6 +128,37 @@ microstates while searching, then remove degrees of freedom until only one promo
 | Measurement | Evidence bound to the exact candidate that produced it |
 | Conservation law | A worker may spend compute; it cannot mint authority |
 | Catalyst | Caches and local task graphs can shorten the path without changing what is accepted |
+| Phase | Observable regime: gas, liquid, critical, crystal, glass, or jammed |
+| Mode | Reversible posture: diverge, coordinate, measure, anneal, verify, perturb, or drain |
+
+The phase vocabulary is now an **experimental cross-language contract**, not just prose. Python
+(`swfactory.phase_control`) and Rust (`swf_domain::phase_control`) independently classify the same
+versioned order-parameter fixture. A phase assessment has `authority=search-only`: it may recommend
+search width, isolated/forked/specialist trajectories, context handling, verification intensity and
+queue posture, but it cannot approve, publish, merge, mint credentials or promote. Run a retained
+snapshot locally with `swfactory phase-assess phase.json --json` or `swf phase phase.json --json`. See
+[phase-aware control](docs/phase-control.md).
+
+### Cognitive harness: the factory as an executable mind
+
+Assume the factory runs inside an AI harness. The harness is the organism; Airflow is its temporal
+nervous system; Python is the experimental cortex; Rust is the constitutional reality boundary.
+The cognitive layer is explicitly split into:
+
+- **System 1** — stochastic world generation: heterogeneous agents, repair/rethink/scratch,
+  disposable worktrees/sandboxes, and exploration-only stochastic fields such as Jev;
+- **System 2** — measurement and entropy destruction: freeze, replay, adversarial verification,
+  gauge fixing, pruning, deterministic convergence;
+- **metacognition** — phase control deciding what kind of thinking is useful now;
+- **memory consolidation** — observation -> trace -> correlated pattern -> candidate belief ->
+  memory crystal;
+- **authority** — outside cognition: exact Cell/epoch/source/recipe/policy/evidence/effect identity
+  crosses only through the Rust authority kernel.
+
+The code distinguishes **gauge-dependent** representation (model, prompt, agent identity, reasoning
+style) from **gauge-invariant** observables (candidate/source/recipe/policy/evidence/artifact/effect
+digests). Promotion may depend only on invariants. Equivalent worlds may be canonicalized; inequivalent
+worlds still require evidence. See [Cognitive Harness: Executable Mind](docs/cognitive-harness.md).
 
 That last row matters. Turborepo 2.11 can put uv and Cargo work into one content-addressed task
 graph. In this repository it is an **experimental accelerator inside the verification layer**, not a
@@ -393,6 +424,8 @@ A merge callback already in flight is not interrupted or rolled back.
 | `sandbox.islo` | `experimental` | `swfactory.sandbox.IsloSandbox (islo use / cp / rm control plane)` | ci:evals-islo in .github/workflows/evals.yml (a real claude run inside a MicroVM) plus the hermetic argv contracts in tests/test_sandbox_argv.py |
 | `selfhost.factory` | `experimental` | `swfactory run --blueprint selfhost (target dir is the repo root), executing swfactory.stages against the factory's own tree` | tests/test_selfhost.py (contract parses, every protected entry survives literal-prefix reduction, confinement modules are refused for build and fix, both gates are non-auto, one line serves both backends) |
 | `sandbox.smolvm` | `experimental` | `swfactory.smolvm_backend.SmolvmSandboxBackend via ToolsetSandbox` | tests/test_smolvm_backend.py (HTTP contract) and opt-in tests/test_smolvm_live.py |
+| `factory.phase-control` | `experimental` | `swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess and swf phase are read-only` | tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json |
+| `factory.cognitive-harness` | `experimental` | `swfactory.cognitive_harness and swf_domain::cognitive_harness` | qualification pending; code-first architecture intentionally lands before exhaustive validation |
 
 <!-- capability-inventory:end -->
 
@@ -432,7 +465,7 @@ acceptance standard and explain the remaining enforcement work.
 | Operate Cells, jobs, approvals, and deliveries | [CLI/TUI](docs/swf.md), [backend API](docs/factory-backend.md) |
 | Design lifecycle and parallel work | [Lifecycle](docs/lifecycle.md), [architecture](docs/design.md) |
 | Receive work and recover interruptions | [Webhooks](docs/webhooks.md), [run recovery](docs/run-recovery.md) |
-| Evaluate behavior and control proposals | [Evals](docs/evals.md), [non-equilibrium control doctrine](docs/non-equilibrium-factory.md) |
+| Evaluate behavior and control proposals | [Phase control](docs/phase-control.md), [Evals](docs/evals.md), [non-equilibrium control doctrine](docs/non-equilibrium-factory.md) |
 | Extend or review the factory | [Contributing](CONTRIBUTING.md), [review policy](REVIEW.md), [changelog](CHANGELOG.md) |
 
 Contribute a coherent change with an explicit invariant, failure behavior, evidence, and a plan to

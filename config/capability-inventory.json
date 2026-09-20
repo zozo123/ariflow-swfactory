@@ -224,6 +224,50 @@
         "SmolVM",
         "sandbox.smolvm"
       ]
+    },
+    {
+      "id": "factory.phase-control",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Factory phase classification is a pure, cross-language, search-only projection; it may shape reversible search and verification posture but can never grant mutation or promotion authority.",
+      "owner": "workgraph+evidence",
+      "runtime_entry": "swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess and swf phase are read-only",
+      "environment": "offline/read-only assessment over retained dimensionless telemetry",
+      "test": "tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json",
+      "evidence": [
+        "cross-language phase-control fixture",
+        "phase assessment JSON"
+      ],
+      "follow_up": "Emit real phase snapshots from managed runs and expose them through swf attention before allowing any automatic search-only knob adjustment.",
+      "public_surface": [
+        "`phase-assess`",
+        "factory phase control",
+        "phase-aware dark factory"
+      ]
+    },
+    {
+      "id": "factory.cognitive-harness",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "The cognitive harness may create stochastic worlds, measure, anneal, gauge-fix, consolidate memory and request authority; it cannot grant authority or mutate durable reality.",
+      "owner": "workgraph+evidence+authority",
+      "runtime_entry": "swfactory.cognitive_harness and swf_domain::cognitive_harness",
+      "environment": "pure domain/search logic inside the AI harness; Airflow remains lifecycle substrate and the Rust authority kernel remains the reality boundary",
+      "test": "qualification pending; code-first architecture intentionally lands before exhaustive validation",
+      "evidence": [
+        "typed Python/Rust cognitive contract",
+        "config/cognitive-harness.yaml",
+        "docs/cognitive-harness.md"
+      ],
+      "follow_up": "Add cross-language contract fixtures and managed-run telemetry after the architecture lands; do not widen authority while doing so.",
+      "public_surface": [
+        "cognitive harness",
+        "System 1",
+        "System 2",
+        "gauge invariants",
+        "many-world cognition",
+        "executable epistemology"
+      ]
     }
   ]
 }

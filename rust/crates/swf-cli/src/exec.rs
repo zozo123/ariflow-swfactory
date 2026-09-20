@@ -33,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cli::{
     AnswerArgs, Cli, Command, ContextAddArgs, ContextCmd, DeliveriesCmd, FactoryCmd,
-    GateFilterArgs, GatesCmd, JobListArgs, JobsCmd, LogsArgs, MetricsArgs, RunsCmd, SandboxesCmd,
+    GateFilterArgs, GatesCmd, JobListArgs, JobsCmd, LogsArgs, MetricsArgs, PhaseArgs, RunsCmd, SandboxesCmd,
     StackCmd, SubmitArgs, VerifyArgs,
 };
 use crate::exit::Outcome;
@@ -184,6 +184,7 @@ pub async fn run(ctx: &Ctx) -> Result<Outcome> {
         Command::Operations(cmd) => crate::operator_exec::operations(ctx, cmd).await,
         Command::Fleet => crate::operator_exec::fleet(ctx).await,
         Command::Compatibility => crate::operator_exec::compatibility(ctx).await,
+        Command::Phase(args) => phase_cmd(args),
         Command::Logs(args) => logs_cmd(ctx, args).await,
         Command::Gates(cmd) => gates_cmd(ctx, cmd).await,
         Command::Deliveries(cmd) => deliveries_cmd(ctx, cmd).await,
@@ -192,6 +193,69 @@ pub async fn run(ctx: &Ctx) -> Result<Outcome> {
         Command::Snapshot => snapshot_cmd(ctx).await,
         Command::Stack(cmd) => stack_cmd(ctx, cmd).await,
         Command::Tui => tui_cmd(ctx).await,
+    }
+}
+
+
+fn phase_cmd(args: &PhaseArgs) -> Result<Outcome> {
+    use swf_domain::phase_control::{assess, PhaseObservation};
+
+    let raw = std::fs::read_to_string(&args.input)
+        .map_err(|error| OpsError::usage(format!("phase input {}: {error}", args.input.display())))?;
+    let document: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|error| OpsError::usage(format!("phase input is not valid JSON: {error}")))?;
+    let payload = document.get("observation").unwrap_or(&document).clone();
+    let observation: PhaseObservation = serde_json::from_value(payload)
+        .map_err(|error| OpsError::usage(format!("phase observation: {error}")))?;
+    let previous = args
+        .previous
+        .as_deref()
+        .map(parse_phase_name)
+        .transpose()?;
+    let assessment = assess(&observation, previous)
+        .map_err(|error| OpsError::usage(format!("phase observation: {error}")))?;
+    let doc = serde_json::to_value(&assessment)
+        .map_err(|error| OpsError::operational(format!("phase serialization: {error}")))?;
+    let phase = doc.get("phase").and_then(serde_json::Value::as_str).unwrap_or("unknown");
+    let recommendation = doc.get("recommendation").and_then(serde_json::Value::as_object);
+    let mode = recommendation
+        .and_then(|value| value.get("mode"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let spawn = recommendation
+        .and_then(|value| value.get("spawn"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let trajectory = recommendation
+        .and_then(|value| value.get("trajectory"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let verification = recommendation
+        .and_then(|value| value.get("verification"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    Ok(Outcome::new(
+        format!(
+            "{phase} -> {mode} (authority={}, spawn={spawn}, trajectory={trajectory}, verification={verification})",
+            assessment.authority
+        ),
+        doc,
+    ))
+}
+
+fn parse_phase_name(value: &str) -> Result<swf_domain::phase_control::FactoryPhase> {
+    use swf_domain::phase_control::FactoryPhase;
+
+    match value {
+        "gas" => Ok(FactoryPhase::Gas),
+        "liquid" => Ok(FactoryPhase::Liquid),
+        "critical" => Ok(FactoryPhase::Critical),
+        "crystal" => Ok(FactoryPhase::Crystal),
+        "glass" => Ok(FactoryPhase::Glass),
+        "jammed" => Ok(FactoryPhase::Jammed),
+        _ => Err(OpsError::usage(format!(
+            "unknown phase {value:?}; expected gas, liquid, critical, crystal, glass, or jammed"
+        ))),
     }
 }
 

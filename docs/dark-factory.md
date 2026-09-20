@@ -136,6 +136,27 @@ It can only weight options the factory already permits.
 
 Provider failure degrades back to local exploration instead of becoming a control-plane failure.
 
+
+### Phase-aware operating state
+
+The dark factory now has an **experimental observable phase contract** shared by Python and Rust.
+This is not a second scheduler: it reads dimensionless telemetry and recommends only reversible
+search/verification posture.
+
+| Phase | Default posture |
+| --- | --- |
+| gas | diverge through decorrelated isolated trajectories |
+| liquid | coordinate specialist lanes |
+| critical | stop widening and measure independently |
+| crystal | verify one exact candidate; do not auto-promote |
+| glass | perturb with a bounded fresh trajectory |
+| jammed | stop spawning and drain debt/resources |
+
+anneal is a transition mode rather than a phase: when order/evidence are rising, reduce candidate
+count and increase verifier independence. High context pressure may recommend compaction;
+supercritical branching raises transition pressure; hysteresis prevents noisy phase flapping.
+See [phase-aware control](phase-control.md).
+
 ### Deterministic convergence
 
 Candidate generation may be stochastic.
@@ -602,6 +623,14 @@ failure signature
 Future runs use this as prior information, not as authority.
 
 ---
+
+
+## Cognitive harness
+
+The dark factory is now explicitly modeled as cognition inside an AI harness. System 1 creates
+executable candidate worlds; System 2 measures and collapses them; phase control is metacognition;
+memory consolidates on a slower timescale; and only gauge-invariant evidence can approach the Rust
+reality boundary. See [Cognitive Harness: Executable Mind](cognitive-harness.md) for the full model.
 
 ## End state
 

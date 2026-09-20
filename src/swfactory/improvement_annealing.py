@@ -84,7 +84,7 @@ class LoopObservation:
 @dataclass(frozen=True)
 class LoopTemperature:
     temperature: float
-    phase: str
+    mode: str
     budget: int
     readmit_stalled: bool
     spread_sources: int
@@ -101,7 +101,7 @@ class LoopTemperature:
     enrol_allowed: bool = True
 
     def to_dict(self) -> dict[str, Any]:
-        return {"schema_version": 2, "authority": "proposal-shaping-only", **asdict(self)}
+        return {"schema_version": 3, "authority": "proposal-shaping-only", **asdict(self)}
 
 
 def evaluate(observation: LoopObservation, *, base_budget: int = 5) -> LoopTemperature:
@@ -172,7 +172,7 @@ def evaluate(observation: LoopObservation, *, base_budget: int = 5) -> LoopTempe
 
     return LoopTemperature(
         temperature=temperature,
-        phase="exploring" if exploring else "exploiting",
+        mode="exploring" if exploring else "exploiting",
         budget=budget,
         readmit_stalled=readmit,
         spread_sources=spread,

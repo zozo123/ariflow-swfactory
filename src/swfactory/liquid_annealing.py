@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
-from typing import Literal
 
 from swfactory import stages
 from swfactory.models import BuildSummary, Finding, Review, StageResult
+from swfactory.phase_control import ControlMode, Phase
 
-Phase = Literal["gas", "liquid", "critical", "crystal", "glass", "jammed"]
 LANES: tuple[str, ...] = ("correctness", "verification", "risk")
 RISK_PREFIXES: tuple[str, ...] = (
     ".github/",
@@ -56,6 +55,7 @@ class AnnealingObservation:
 class AnnealingState:
     round: int
     phase: Phase
+    control_mode: ControlMode
     temperature: float
     beta: float
     defect_energy: float
@@ -69,6 +69,23 @@ class AnnealingState:
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+def _review_control_mode(phase: Phase) -> ControlMode:
+    """Translate review-local material state into a bounded posture.
+
+    The review stage never widens the lifecycle graph. In particular, a review-local gas state means
+    "measure what is missing", not "spawn arbitrary new implementation lanes".
+    """
+
+    return {
+        "gas": ControlMode.MEASURE,
+        "liquid": ControlMode.ANNEAL,
+        "critical": ControlMode.MEASURE,
+        "crystal": ControlMode.VERIFY,
+        "glass": ControlMode.PERTURB,
+        "jammed": ControlMode.DRAIN,
+    }[phase]
 
 
 def evaluate(observation: AnnealingObservation) -> AnnealingState:
@@ -129,6 +146,7 @@ def evaluate(observation: AnnealingObservation) -> AnnealingState:
     return AnnealingState(
         round=observation.round,
         phase=phase,
+        control_mode=_review_control_mode(phase),
         temperature=round(temperature, 6),
         beta=round(beta, 6),
         defect_energy=round(defect_energy, 6),
@@ -379,6 +397,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
         "schema_version": 1,
         "strategy": "liquid-relaxation-annealing",
         "authority": "advisory-review-only",
+        "phase_contract": "factory-phase/v1",
         "changed_files": list(changed),
         "risky_files": risky_files,
         "specialist_lanes": list(LANES),

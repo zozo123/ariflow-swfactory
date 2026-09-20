@@ -1,0 +1,166 @@
+schema_version: 1
+authority: search-only
+reality_boundary: rust-authority-kernel
+lifecycle_substrate: airflow
+
+thesis: >
+  The AI harness is the organism; the factory is its cognitive dynamics. System 1 creates useful
+  entropy by sampling executable worlds. System 2 measures those worlds and destroys entropy.
+  The phase controller decides which cognition is useful now. Only exact gauge-invariant evidence
+  may approach the Rust authority boundary.
+
+laws:
+  - The mind may be stochastic; reality may not.
+  - Airflow owns time, retries, waits, mapping and durable lifecycle; it does not decide truth.
+  - Rust owns identity, fencing, evidence contracts and authority-sensitive invariants.
+  - Python is the experimental cortex where new search/control ideas may evolve before graduation.
+  - Search power never implies authority.
+  - Compute may multiply; authority may not.
+  - Promotion depends on gauge-invariant observables, never agent confidence or representation.
+  - A crystal is permission to verify one exact candidate, never permission to promote it.
+  - Self-improvement is another bounded experiment and cannot authorize its own adoption.
+  - Human attention is reserved for genuine ambiguity, exceptional debt and authority boundaries.
+
+layers:
+  reflex:
+    timescale: milliseconds-seconds
+    examples: [cache, grep, lint, known-rule, cleanup, admission]
+  system1:
+    timescale: seconds-minutes
+    purpose: create useful entropy
+    examples: [parallel hypotheses, repair, rethink, scratch, cheap tests, heterogeneous agents]
+  system2:
+    timescale: minutes-hours
+    purpose: measure and destroy entropy
+    examples: [freeze candidates, adversarial verification, replay, independent review, convergence]
+  consolidation:
+    timescale: hours-days
+    purpose: crystallize durable memory and improve process
+    examples: [memory promotion, strategy evaluation, threshold learning, failure priors]
+  authority-boundary:
+    timescale: deliberate
+    purpose: bind exact evidence to a real-world effect
+    implementation: rust-authority-kernel
+
+phase_to_cognition:
+  gas: {mode: diverge, layer: system1, world_action: expand-worlds}
+  liquid: {mode: coordinate, layer: system1, world_action: coordinate-worlds}
+  critical: {mode: measure, layer: system2, world_action: freeze-worlds}
+  crystal: {mode: verify, layer: authority-boundary, world_action: verify-world}
+  glass: {mode: perturb, layer: system1, world_action: perturb-world}
+  jammed: {mode: drain, layer: reflex, world_action: drain-worlds}
+  anneal: {kind: transition-mode, layer: system2, world_action: prune-worlds}
+
+gauge:
+  dependent:
+    - agent_id
+    - model
+    - prompt
+    - reasoning_style
+    - token_count
+    - branch_name
+    - explanation
+    - trajectory_id
+    - runtime_name
+  invariant:
+    - candidate_digest
+    - source_digest
+    - recipe_digest
+    - policy_digest
+    - evidence_digest
+    - artifact_digest
+    - external_effect_digest
+    - cell_id
+    - epoch
+  rule: >
+    Gauge fixing may choose one canonical representation among equivalent worlds. It must never
+    choose between inequivalent candidates or manufacture evidence.
+
+many_worlds:
+  unit: executable candidate world
+  dimensions:
+    - model
+    - prompt
+    - role
+    - runtime
+    - context inheritance
+    - repair/rethink/scratch strategy
+    - worktree
+    - sandbox snapshot
+  invariant: every world is disposable; evidence and durable Cell identity are not
+
+measurement:
+  kinds: [test, static-analysis, replay, performance, security, formal, human]
+  independent_required_for_crystal: true
+  rule: computation is epistemology only when the observation is bound to the exact world
+
+stochastic_field:
+  providers: [jev, local-sampler, future-oracle]
+  authority: exploration-only
+  rule: an oracle may weight only factory-declared values and can never add authority-bearing choices
+
+ensemble:
+  objective: maximize useful independence, not agent count
+  pairwise_correlation: jaccard-over-retained-behavior-signatures
+  diversity: one-minus-mean-pairwise-correlation
+  marginal_information_value: "(1-correlation) * expected_information / cost"
+
+memory:
+  phases:
+    - observation
+    - trace
+    - correlated
+    - candidate-belief
+    - memory-crystal
+  rule: repeated independent evidence crystallizes memory; contradiction prevents automatic promotion
+  context_actions: [fresh, retain, compact]
+
+attention:
+  classes: [routine, exception, authority-boundary]
+  expensive_resource: human
+  surface:
+    - genuine ambiguity
+    - verifier disagreement
+    - glass
+    - jammed
+    - novel security event
+    - policy change
+    - authority request
+
+self_improvement:
+  authority: proposal-only
+  lifecycle:
+    - current-controller-as-baseline
+    - candidate-controller-worlds
+    - shadow-evaluation
+    - independent-verification
+    - adoptable-candidate
+    - ordinary-human-or-policy-adoption
+  forbidden:
+    - self-authorization
+    - silent-control-plane-rewrite
+    - direct-production-credential-use
+
+dissipation:
+  meaning: >
+    The factory remains ordered by exporting waste: discarded worlds, reclaimed contexts,
+    cleaned sandboxes, cancelled retries and stale memories.
+  metrics:
+    - discarded_worlds
+    - reclaimed_contexts
+    - cleaned_sandboxes
+    - cancelled_retries
+    - stale_memories_retired
+
+authority_request:
+  required_fields:
+    - cell_id
+    - epoch
+    - candidate_digest
+    - source_digest
+    - recipe_digest
+    - policy_digest
+    - evidence_digest
+    - requested_effect
+  authority: request-only
+  requires: rust-authority-kernel

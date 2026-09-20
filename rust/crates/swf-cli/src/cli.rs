@@ -7,6 +7,8 @@
 //! rules belong to `swf-app`, where the TUI takes the same path, and a check written here would be
 //! a rule one of the two interfaces could skip.
 
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
 
 /// The exit-code table, printed under `swf --help` because scripts branch on it.
@@ -110,6 +112,9 @@ pub enum Command {
     /// The backend's contract versions, features and mutation readiness.
     Compatibility,
 
+    /// Classify one retained factory telemetry snapshot. Pure and read-only.
+    Phase(PhaseArgs),
+
     /// One task attempt's log.
     Logs(LogsArgs),
 
@@ -143,6 +148,19 @@ pub enum Command {
 
     /// Print the version.
     Version,
+}
+
+
+/// `swf phase` — assess one retained telemetry snapshot without contacting the backend.
+#[derive(Debug, Args)]
+pub struct PhaseArgs {
+    /// JSON file containing the PhaseObservation fields, or an object with an observation field.
+    #[arg(value_name = "JSON")]
+    pub input: PathBuf,
+
+    /// Previous phase used only for hysteresis.
+    #[arg(long, value_name = "PHASE")]
+    pub previous: Option<String>,
 }
 
 /// `swf context …`
@@ -910,6 +928,26 @@ mod tests {
             Cli::try_parse_from(["swf", "fleet", "--json", "--timeout", "5", "-v"]).expect("parse");
         assert!(global.json && global.verbose == 1);
         assert_eq!(global.timeout, Some(5.0));
+    }
+
+
+    #[test]
+    fn phase_assessment_is_a_read_only_local_surface() {
+        let cli = Cli::try_parse_from([
+            "swf",
+            "phase",
+            "phase.json",
+            "--previous",
+            "crystal",
+            "--json",
+        ])
+        .expect("phase parses");
+        let Command::Phase(args) = cli.command else {
+            panic!("expected phase");
+        };
+        assert_eq!(args.input, PathBuf::from("phase.json"));
+        assert_eq!(args.previous.as_deref(), Some("crystal"));
+        assert!(cli.json);
     }
 
     #[test]
