@@ -1,0 +1,87 @@
+schema_version: 1
+authority: search-only
+owner: swf-domain
+scheduler: airflow
+description: >
+  Factory-wide observable phase state and reversible search posture. This contract may shape
+  exploration, verification intensity, context handling and operator attention. It may not grant
+  credentials, mutate external systems, approve gates, publish, merge, or promote.
+
+phases:
+  gas:
+    meaning: high candidate entropy, weak coherence, broad independent exploration
+  liquid:
+    meaning: mobile candidate set with useful specialist structure
+  critical:
+    meaning: transition region with high disagreement, acceleration or supercritical branching
+  crystal:
+    meaning: low entropy, high coherence and high independent evidence for one exact candidate
+  glass:
+    meaning: low mobility without sufficient order or evidence; a metastable local minimum
+  jammed:
+    meaning: queue, resource or cleanup debt dominates useful progress
+
+modes:
+  diverge:
+    purpose: widen decorrelated search
+    trajectory: isolated
+    spawn: increase
+  coordinate:
+    purpose: keep specialist lanes productive without adding scheduling authority
+    trajectory: specialist
+    spawn: hold
+  measure:
+    purpose: freeze implementation expansion and increase independent measurement
+    trajectory: specialist
+    spawn: stop
+  anneal:
+    purpose: reduce candidate count while increasing verifier independence
+    trajectory: forked
+    spawn: decrease
+  verify:
+    purpose: verify one exact low-entropy candidate; no new implementation lanes
+    trajectory: none
+    spawn: stop
+  perturb:
+    purpose: escape a glassy local minimum with one bounded fresh trajectory
+    trajectory: isolated
+    spawn: limited
+  drain:
+    purpose: stop creating work and drain queue/resource/cleanup debt
+    trajectory: none
+    spawn: stop
+
+order_parameters:
+  candidate_entropy: {range: [0.0, 1.0], meaning: normalized Shannon entropy of plausible candidates}
+  coherence: {range: [0.0, 1.0], meaning: independent agreement on the same solution}
+  mobility: {range: [0.0, 1.0], meaning: rate of material hypothesis improvement/change}
+  queue_pressure: {range: [0.0, 1.0], meaning: normalized backlog/wait pressure}
+  queue_acceleration: {range: [-1.0, 1.0], meaning: normalized derivative of queue pressure}
+  resource_pressure: {range: [0.0, 1.0], meaning: normalized model/tool/sandbox occupancy}
+  branching_ratio: {range: [0.0, 4.0], meaning: children or retries per terminal parent}
+  evidence_completeness: {range: [0.0, 1.0], meaning: fraction of required independent evidence present}
+  context_pressure: {range: [0.0, 1.0], meaning: context-window or retained-state pressure}
+  debt_pressure: {range: [0.0, 1.0], meaning: unresolved operation, cleanup, lease or fence debt}
+  verifier_disagreement: {range: [0.0, 1.0], meaning: disagreement among independent verification lanes}
+
+derived:
+  jam_pressure: "clamp(0.40*queue + 0.25*resource + 0.35*debt + 0.15*positive_queue_acceleration)"
+  order_parameter: "clamp(0.35*coherence + 0.35*evidence + 0.15*(1-entropy) + 0.15*(1-disagreement))"
+  transition_pressure: "clamp(0.55*disagreement + 0.25*abs(queue_acceleration) + 0.20*branching_pressure)"
+  branching_supercritical: "branching_ratio >= 1.0"
+
+hysteresis:
+  enabled: true
+  rule: >
+    Strong crystal/jammed transitions win immediately; weaker reverse transitions require leaving
+    a retention band so noisy measurements do not flap the factory between modes.
+
+hard_invariants:
+  - Airflow remains the only lifecycle scheduler.
+  - Phase control is search-only and read-only with respect to durable authority.
+  - Search recommendations cannot approve, publish, merge, mint credentials or promote.
+  - Crystal means verify exact bytes; it never means automatically promote them.
+  - Jammed means stop creating work before attempting to increase throughput.
+  - Glass is not success; low mobility without evidence triggers bounded perturbation.
+  - Failure/retry branching should remain subcritical after budgets and fencing.
+  - Every cross-language phase decision is pinned by tests/fixtures/contract/phase_control.json.
