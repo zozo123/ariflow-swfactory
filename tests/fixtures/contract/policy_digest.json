@@ -1,6 +1,6 @@
 {
   "function": "policy_digest",
-  "doc": "Pins the versioned canonical JSON bytes and SHA-256 identity shared by Python and Rust policy authority.",
+  "doc": "Pins policy:v1 as compact UTF-8 canonical JSON with sorted keys and cross-language exact numbers.",
   "cases": [
     {
       "name": "minimal",
@@ -108,6 +108,46 @@
         "tab": "a\tb"
       },
       "expected": "policy:v1:c6ab0f9d2e09b8312cde007f3b8c3cade22f88dd848048763bbfbfd6381c04be"
+    },
+    {
+      "name": "unicode-base-branch",
+      "input": {
+        "schema_version": 1,
+        "target": "src@früh"
+      },
+      "expected": "policy:v1:1a980255174b80d62ed78b13ef57bf458480f5bbf254af514a6f6e3fc2d4a39d"
+    },
+    {
+      "name": "unicode-emoji",
+      "input": {
+        "schema_version": 1,
+        "target": "src/🧪@main"
+      },
+      "expected": "policy:v1:2df3d1b866d9781b19997d01319c87f31d6f1c63d74ff90ef664f351eb48229c"
+    },
+    {
+      "name": "del-0x7f",
+      "input": {
+        "repo": "acme/repo",
+        "schema_version": 1
+      },
+      "expected": "policy:v1:4bde36b2ab958acb2bb7fb8f416be23a8dda25fe91763d444638d201a6ce8d8b"
+    },
+    {
+      "name": "max-safe-integer",
+      "input": {
+        "n": 9007199254740991,
+        "schema_version": 1
+      },
+      "expected": "policy:v1:43202f1464b08c0f75eb447195a5063097727a1b1d6d6b92c0b19b3b426136b3"
+    },
+    {
+      "name": "min-safe-integer",
+      "input": {
+        "n": -9007199254740991,
+        "schema_version": 1
+      },
+      "expected": "policy:v1:f1889718c3d8adfa5ca1f0c819d7f4b57706b11353596de5fcd6e15604d312ab"
     }
   ]
 }
