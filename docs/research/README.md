@@ -1,8 +1,8 @@
 # Research
 
-Material that is **not in the product path** and holds no lifecycle or mutation authority.
+Material in this directory is **not in the product path** and holds no lifecycle or mutation authority.
 
-Nothing here is imported by `src/swfactory/`. The Liquid spec checker
+Nothing under docs/research/ is imported by src/swfactory/. The Liquid spec checker
 (`python -m swfactory.liquid_spec`) resolves every `runtime_anchor` in
 [`config/liquid-spec.yaml`](../../config/liquid-spec.yaml) to real code, and the research families
 in that file are recorded with `state: declared` and `support: unsupported` precisely so that
@@ -28,6 +28,12 @@ behaviour. The one idea worth keeping is the intuition, and it is one line:
 > Create entropy where exploration benefits from it; destroy entropy before promotion.
 
 That belongs in the methodology, and it is already there. It does not need Jarzynski.
+
+A deliberately small idea has since graduated back into the product as an **experimental read-only
+contract**: [phase-aware control](../phase-control.md). It implements only measurable phase
+classification, hysteresis, bounded search modes and cross-language fixtures. It does **not** restore
+the old physics decider, and it cannot emit PROMOTE/THROTTLE/RECOVER mutations. The rest of the
+non-equilibrium program remains research material here.
 
 ## The bar to come back
 
