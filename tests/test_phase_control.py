@@ -28,10 +28,25 @@ def test_cross_language_phase_fixture_is_canonical() -> None:
     for case in data["cases"]:
         observation = PhaseObservation(**case["observation"])
         assessment = assess(observation, previous_phase=case.get("previous_phase"))
-        assert assessment.raw_phase == case["expected"]["raw_phase"], case["name"]
-        assert assessment.phase == case["expected"]["phase"], case["name"]
-        assert assessment.recommendation.mode == ControlMode(case["expected"]["mode"]), case["name"]
+        expected = case["expected"]
+        assert assessment.raw_phase == expected["raw_phase"], case["name"]
+        assert assessment.phase == expected["phase"], case["name"]
+        assert assessment.recommendation.mode == ControlMode(expected["mode"]), case["name"]
+        recommendation = assessment.recommendation.as_dict()
+        for field in (
+            "spawn",
+            "trajectory",
+            "context",
+            "candidates",
+            "queue",
+            "verification",
+            "attention",
+            "allow_new_implementation_lanes",
+        ):
+            assert recommendation[field] == expected[field], f"{case['name']}:{field}"
         assert assessment.authority == PHASE_CONTROL_AUTHORITY
+        assert assessment.as_dict()["observation"] == case["observation"]
+        assert assessment.previous_phase == case.get("previous_phase")
 
 
 def test_recommendations_shape_search_but_never_claim_authority() -> None:
