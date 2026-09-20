@@ -95,6 +95,7 @@ pub enum AttentionClass {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PhaseObservation {
     pub candidate_entropy: f64,
     pub coherence: f64,
@@ -165,6 +166,8 @@ pub struct PhaseRecommendation {
 pub struct PhaseAssessment {
     pub schema_version: u32,
     pub authority: String,
+    pub observation: PhaseObservation,
+    pub previous_phase: Option<FactoryPhase>,
     pub raw_phase: FactoryPhase,
     pub phase: FactoryPhase,
     pub signals: PhaseSignals,
@@ -490,6 +493,8 @@ pub fn assess(
     Ok(PhaseAssessment {
         schema_version: PHASE_CONTROL_SCHEMA_VERSION,
         authority: PHASE_CONTROL_AUTHORITY.into(),
+        observation: observation.clone(),
+        previous_phase,
         raw_phase,
         phase,
         signals,
