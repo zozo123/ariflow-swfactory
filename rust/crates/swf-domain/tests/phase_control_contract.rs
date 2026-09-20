@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use swf_domain::phase_control::{
-    assess, branching_ratio, normalized_entropy, ControlMode, FactoryPhase, PhaseObservation,
-    PHASE_CONTROL_AUTHORITY, PHASE_CONTROL_SCHEMA_VERSION,
+    assess, branching_ratio, normalized_entropy, AttentionClass, CandidateDirective, ContextDirective,
+    ControlMode, FactoryPhase, PhaseObservation, QueueDirective, SpawnDirective, TrajectoryMode,
+    VerificationDirective, PHASE_CONTROL_AUTHORITY, PHASE_CONTROL_SCHEMA_VERSION,
 };
 
 #[derive(Debug, Deserialize)]
@@ -26,6 +27,14 @@ struct Expected {
     raw_phase: FactoryPhase,
     phase: FactoryPhase,
     mode: ControlMode,
+    spawn: SpawnDirective,
+    trajectory: TrajectoryMode,
+    context: ContextDirective,
+    candidates: CandidateDirective,
+    queue: QueueDirective,
+    verification: VerificationDirective,
+    attention: AttentionClass,
+    allow_new_implementation_lanes: bool,
 }
 
 #[test]
@@ -41,7 +50,47 @@ fn python_and_rust_share_one_phase_contract() {
         assert_eq!(assessment.raw_phase, case.expected.raw_phase, "{}", case.name);
         assert_eq!(assessment.phase, case.expected.phase, "{}", case.name);
         assert_eq!(assessment.recommendation.mode, case.expected.mode, "{}", case.name);
+        assert_eq!(assessment.recommendation.spawn, case.expected.spawn, "{}", case.name);
+        assert_eq!(
+            assessment.recommendation.trajectory,
+            case.expected.trajectory,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            assessment.recommendation.context,
+            case.expected.context,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            assessment.recommendation.candidates,
+            case.expected.candidates,
+            "{}",
+            case.name
+        );
+        assert_eq!(assessment.recommendation.queue, case.expected.queue, "{}", case.name);
+        assert_eq!(
+            assessment.recommendation.verification,
+            case.expected.verification,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            assessment.recommendation.attention,
+            case.expected.attention,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            assessment.recommendation.allow_new_implementation_lanes,
+            case.expected.allow_new_implementation_lanes,
+            "{}",
+            case.name
+        );
         assert_eq!(assessment.authority, PHASE_CONTROL_AUTHORITY, "{}", case.name);
+        assert_eq!(assessment.observation, case.observation, "{}", case.name);
+        assert_eq!(assessment.previous_phase, case.previous_phase, "{}", case.name);
     }
 }
 
