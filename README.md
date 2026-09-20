@@ -139,6 +139,27 @@ queue posture, but it cannot approve, publish, merge, mint credentials or promot
 snapshot locally with `swfactory phase-assess phase.json --json` or `swf phase phase.json --json`. See
 [phase-aware control](docs/phase-control.md).
 
+### Cognitive harness: the factory as an executable mind
+
+Assume the factory runs inside an AI harness. The harness is the organism; Airflow is its temporal
+nervous system; Python is the experimental cortex; Rust is the constitutional reality boundary.
+The cognitive layer is explicitly split into:
+
+- **System 1** — stochastic world generation: heterogeneous agents, repair/rethink/scratch,
+  disposable worktrees/sandboxes, and exploration-only stochastic fields such as Jev;
+- **System 2** — measurement and entropy destruction: freeze, replay, adversarial verification,
+  gauge fixing, pruning, deterministic convergence;
+- **metacognition** — phase control deciding what kind of thinking is useful now;
+- **memory consolidation** — observation -> trace -> correlated pattern -> candidate belief ->
+  memory crystal;
+- **authority** — outside cognition: exact Cell/epoch/source/recipe/policy/evidence/effect identity
+  crosses only through the Rust authority kernel.
+
+The code distinguishes **gauge-dependent** representation (model, prompt, agent identity, reasoning
+style) from **gauge-invariant** observables (candidate/source/recipe/policy/evidence/artifact/effect
+digests). Promotion may depend only on invariants. Equivalent worlds may be canonicalized; inequivalent
+worlds still require evidence. See [Cognitive Harness: Executable Mind](docs/cognitive-harness.md).
+
 That last row matters. Turborepo 2.11 can put uv and Cargo work into one content-addressed task
 graph. In this repository it is an **experimental accelerator inside the verification layer**, not a
 second lifecycle scheduler. Cargo now has a real repository-root workspace, and uv exposes a real workspace aggregate plus the
@@ -404,6 +425,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `selfhost.factory` | `experimental` | `swfactory run --blueprint selfhost (target dir is the repo root), executing swfactory.stages against the factory's own tree` | tests/test_selfhost.py (contract parses, every protected entry survives literal-prefix reduction, confinement modules are refused for build and fix, both gates are non-auto, one line serves both backends) |
 | `sandbox.smolvm` | `experimental` | `swfactory.smolvm_backend.SmolvmSandboxBackend via ToolsetSandbox` | tests/test_smolvm_backend.py (HTTP contract) and opt-in tests/test_smolvm_live.py |
 | `factory.phase-control` | `experimental` | `swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess and swf phase are read-only` | tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json |
+| `factory.cognitive-harness` | `experimental` | `swfactory.cognitive_harness and swf_domain::cognitive_harness` | qualification pending; code-first architecture intentionally lands before exhaustive validation |
 
 <!-- capability-inventory:end -->
 
