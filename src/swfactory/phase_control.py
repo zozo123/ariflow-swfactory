@@ -378,7 +378,8 @@ def _recommend(mode: ControlMode, observation: PhaseObservation) -> PhaseRecomme
             mode, SpawnDirective.LIMITED, TrajectoryMode.ISOLATED, ContextDirective.FRESH,
             CandidateDirective.RESET, QueueDirective.HOLD, VerificationDirective.INCREASE,
             AttentionClass.EXCEPTION, True,
-            "Low mobility without sufficient evidence indicates a glassy local minimum: inject a bounded fresh trajectory.",
+            "Low mobility without sufficient evidence indicates a glassy local minimum: "
+            "inject a bounded fresh trajectory.",
         ),
         ControlMode.DRAIN: PhaseRecommendation(
             mode, SpawnDirective.STOP, TrajectoryMode.NONE, ContextDirective.COMPACT,
