@@ -14,11 +14,16 @@ struct Fixture {
 }
 
 #[derive(Debug, Deserialize)]
-struct Case {
-    name: String,
+struct Input {
     observation: PhaseObservation,
     #[serde(default)]
     previous_phase: Option<FactoryPhase>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Case {
+    name: String,
+    input: Input,
     expected: Expected,
 }
 
@@ -46,7 +51,8 @@ fn python_and_rust_share_one_phase_contract() {
 
     assert_eq!(fixture.schema_version, PHASE_CONTROL_SCHEMA_VERSION);
     for case in fixture.cases {
-        let assessment = assess(&case.observation, case.previous_phase).expect(&case.name);
+        let assessment =
+            assess(&case.input.observation, case.input.previous_phase).expect(&case.name);
         assert_eq!(assessment.raw_phase, case.expected.raw_phase, "{}", case.name);
         assert_eq!(assessment.phase, case.expected.phase, "{}", case.name);
         assert_eq!(assessment.recommendation.mode, case.expected.mode, "{}", case.name);
@@ -89,8 +95,13 @@ fn python_and_rust_share_one_phase_contract() {
             case.name
         );
         assert_eq!(assessment.authority, PHASE_CONTROL_AUTHORITY, "{}", case.name);
-        assert_eq!(assessment.observation, case.observation, "{}", case.name);
-        assert_eq!(assessment.previous_phase, case.previous_phase, "{}", case.name);
+        assert_eq!(assessment.observation, case.input.observation, "{}", case.name);
+        assert_eq!(
+            assessment.previous_phase,
+            case.input.previous_phase,
+            "{}",
+            case.name
+        );
     }
 }
 
