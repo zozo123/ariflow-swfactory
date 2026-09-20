@@ -19,6 +19,7 @@ pub mod manager_protocol;
 pub mod metrics;
 pub mod model;
 pub mod operator;
+pub mod phase_control;
 pub mod policy;
 pub mod rollup;
 pub mod sanitize;
@@ -37,6 +38,11 @@ pub use manager_protocol::{
 };
 pub use model::{
     Gate, IssueRef, JobRow, PullRequest, Run, SandboxRef, Snapshot, SourceHealth, TaskState,
+};
+pub use phase_control::{
+    AttentionClass, CandidateDirective, ContextDirective, ControlMode, FactoryPhase, PhaseAssessment,
+    PhaseObservation, PhaseRecommendation, PhaseSignals, QueueDirective, SpawnDirective,
+    TrajectoryMode, VerificationDirective, PHASE_CONTROL_AUTHORITY, PHASE_CONTROL_SCHEMA_VERSION,
 };
 pub use operator::{
     BackendCapabilities, ContractVersions, FleetSummary, LimitingDimension, OperationDebt,
