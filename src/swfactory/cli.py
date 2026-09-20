@@ -1343,6 +1343,50 @@ def campaign_decision_verify(
         typer.echo(f"verified {manifest.campaign_id} {manifest.digest()}")
 
 
+@app.command("phase-assess")
+def phase_assess_cmd(
+    observation_path: Annotated[Path, typer.Argument(help="JSON file containing phase order parameters")],
+    previous_phase: Annotated[
+        str | None,
+        typer.Option("--previous", help="previous phase for hysteresis"),
+    ] = None,
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable phase assessment")] = False,
+) -> None:
+    """Classify factory state and print a search-only control posture."""
+
+    from typing import cast
+
+    from swfactory.phase_control import Phase, PhaseObservation, assess
+
+    phases = {"gas", "liquid", "critical", "crystal", "glass", "jammed"}
+    if previous_phase is not None and previous_phase not in phases:
+        typer.echo(f"phase assess: unknown previous phase {previous_phase!r}", err=True)
+        raise typer.Exit(2)
+    try:
+        raw = json.loads(observation_path.read_text(encoding="utf-8"))
+        payload = raw.get("observation", raw)
+        observation = PhaseObservation(**payload)
+        assessment = assess(
+            observation,
+            previous_phase=cast(Phase, previous_phase) if previous_phase is not None else None,
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+        typer.echo(f"phase assess: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    document = assessment.as_dict()
+    if json_out:
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        return
+    recommendation = assessment.recommendation
+    typer.echo(
+        f"{assessment.phase} -> {recommendation.mode} "
+        f"(authority={assessment.authority}, spawn={recommendation.spawn}, "
+        f"trajectory={recommendation.trajectory}, verification={recommendation.verification})"
+    )
+    typer.echo(recommendation.reason)
+
+
 @app.command("research-schedule")
 def research_schedule_cmd(
     max_depth: Annotated[int, typer.Option(help="deepest descendant experiment round")] = 1,
