@@ -63,7 +63,7 @@ def test_it_starts_exploring_once_it_has_stopped_retiring_anything() -> None:
     cold = evaluate(_obs(cycles_since_retirement=1))
     hot = evaluate(_obs(cycles_since_retirement=6, stalled=6, carried=7))
 
-    assert cold.phase == "exploiting"
+    assert cold.mode == "exploiting"
     assert hot.mode == "exploring"
     assert hot.budget > cold.budget
 
