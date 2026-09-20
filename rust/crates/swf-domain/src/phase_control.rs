@@ -242,10 +242,11 @@ fn signals(observation: &PhaseObservation) -> Result<PhaseSignals, PhaseControlE
         + 0.15 * (1.0 - observation.verifier_disagreement))
         .clamp(0.0, 1.0);
 
-    let transition_pressure = (0.55 * observation.verifier_disagreement
-        + 0.25 * observation.queue_acceleration.abs()
-        + 0.20 * (observation.branching_ratio / 1.5).min(1.0))
-    .min(1.0);
+    let transition_pressure = (0.50 * observation.verifier_disagreement
+        + 0.20 * observation.queue_acceleration.abs()
+        + 0.20 * (observation.branching_ratio / 1.5).min(1.0)
+        + 0.10 * observation.context_pressure)
+        .min(1.0);
 
     Ok(PhaseSignals {
         order_parameter: round6(order_parameter),
@@ -377,7 +378,7 @@ fn mode(
     }
 }
 
-fn recommendation(mode: ControlMode) -> PhaseRecommendation {
+fn recommendation(mode: ControlMode, observation: &PhaseObservation) -> PhaseRecommendation {
     match mode {
         ControlMode::Diverge => PhaseRecommendation {
             mode,
@@ -395,7 +396,11 @@ fn recommendation(mode: ControlMode) -> PhaseRecommendation {
             mode,
             spawn: SpawnDirective::Hold,
             trajectory: TrajectoryMode::Specialist,
-            context: ContextDirective::Retain,
+            context: if observation.context_pressure >= 0.85 {
+                ContextDirective::Compact
+            } else {
+                ContextDirective::Retain
+            },
             candidates: CandidateDirective::Coordinate,
             queue: QueueDirective::Admit,
             verification: VerificationDirective::Normal,
@@ -407,7 +412,11 @@ fn recommendation(mode: ControlMode) -> PhaseRecommendation {
             mode,
             spawn: SpawnDirective::Stop,
             trajectory: TrajectoryMode::Specialist,
-            context: ContextDirective::Retain,
+            context: if observation.context_pressure >= 0.80 {
+                ContextDirective::Compact
+            } else {
+                ContextDirective::Retain
+            },
             candidates: CandidateDirective::Freeze,
             queue: QueueDirective::Hold,
             verification: VerificationDirective::Increase,
@@ -419,7 +428,11 @@ fn recommendation(mode: ControlMode) -> PhaseRecommendation {
             mode,
             spawn: SpawnDirective::Decrease,
             trajectory: TrajectoryMode::Forked,
-            context: ContextDirective::Retain,
+            context: if observation.context_pressure >= 0.80 {
+                ContextDirective::Compact
+            } else {
+                ContextDirective::Retain
+            },
             candidates: CandidateDirective::Prune,
             queue: QueueDirective::Hold,
             verification: VerificationDirective::Increase,
@@ -480,6 +493,6 @@ pub fn assess(
         raw_phase,
         phase,
         signals,
-        recommendation: recommendation(mode),
+        recommendation: recommendation(mode, observation),
     })
 }
