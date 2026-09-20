@@ -134,3 +134,26 @@ def worker_policy_manifest() -> dict[str, Any]:
             for role, policy in sorted(_POLICIES.items())
         },
     }
+
+
+AIRFLOW_WORKER_FORBIDDEN_ACTIONS = frozenset(
+    {
+        "github_publish",
+        "github_raw_mutate",
+        "credential_broker_redeem",
+        "islo_login",
+        "inject_secret_env",
+    }
+)
+AIRFLOW_WORKER_FORBIDDEN_ENV = frozenset({"GH_TOKEN", "GITHUB_TOKEN", "SWF_BACKEND_TOKEN", "ISLO_API_KEY"})
+
+
+def assert_airflow_worker_boundary(*, action: str, env: dict[str, str] | None = None) -> None:
+    """Fail closed when scheduler workers attempt trust-plane authority."""
+    if action in AIRFLOW_WORKER_FORBIDDEN_ACTIONS:
+        raise WorkerPolicyViolation(f"airflow worker may never perform {action}")
+    leaked = sorted(AIRFLOW_WORKER_FORBIDDEN_ENV.intersection((env or {}).keys()))
+    if leaked:
+        raise WorkerPolicyViolation(
+            "airflow worker environment contains forbidden authority: " + ", ".join(leaked)
+        )
