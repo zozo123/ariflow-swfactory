@@ -25,12 +25,10 @@ from swfactory.cells import is_cell_id
 from swfactory.config import FACTORY_ROOT, Config, protected_globs
 from swfactory.models import StageError
 from swfactory.paths import (
-    normalize_relative_path,
     normalize_target_dir,
-    validate_git_ref,
     validate_repo,
-    validate_target_base_branch,
     validate_run_id,
+    validate_target_base_branch,
 )
 from swfactory.sandbox import HOST_SANDBOXES, make_sandbox
 from swfactory.scm import make_scm
