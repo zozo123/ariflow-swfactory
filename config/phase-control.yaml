@@ -67,7 +67,7 @@ order_parameters:
 derived:
   jam_pressure: "clamp(0.40*queue + 0.25*resource + 0.35*debt + 0.15*positive_queue_acceleration)"
   order_parameter: "clamp(0.35*coherence + 0.35*evidence + 0.15*(1-entropy) + 0.15*(1-disagreement))"
-  transition_pressure: "clamp(0.55*disagreement + 0.25*abs(queue_acceleration) + 0.20*branching_pressure)"
+  transition_pressure: "clamp(0.50*disagreement + 0.20*abs(queue_acceleration) + 0.20*branching_pressure + 0.10*context_pressure)"
   branching_supercritical: "branching_ratio >= 1.0"
 
 hysteresis:
