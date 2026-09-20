@@ -624,6 +624,14 @@ Future runs use this as prior information, not as authority.
 
 ---
 
+
+## Cognitive harness
+
+The dark factory is now explicitly modeled as cognition inside an AI harness. System 1 creates
+executable candidate worlds; System 2 measures and collapses them; phase control is metacognition;
+memory consolidates on a slower timescale; and only gauge-invariant evidence can approach the Rust
+reality boundary. See [Cognitive Harness: Executable Mind](cognitive-harness.md) for the full model.
+
 ## End state
 
 The target is not:
