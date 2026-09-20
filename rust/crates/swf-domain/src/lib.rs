@@ -31,7 +31,7 @@ pub mod worker;
 pub use cognitive_harness::{
     classify_self_improvement, ensemble_diversity, gauge_fix, marginal_information_value,
     memory_phase, pairwise_correlation, plan_cognition, quantity_kind, validate_measurement_set,
-    AuthorityRequest, CognitiveAttention, CognitiveError, CognitiveLayer, CognitivePlan,
+    AuthorityRequest, AuthorityRequestInput, CognitiveAttention, CognitiveError, CognitiveLayer, CognitivePlan,
     CognitiveReceipt, CognitiveTimescale, DissipationSnapshot, EnsembleMember,
     GaugeEquivalenceClass, ImprovementDisposition, MeasurementKind, MeasurementReceipt,
     MemoryAction, MemoryEvidence, MemoryPhase, PairwiseCorrelation, QuantityKind,
