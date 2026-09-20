@@ -13,9 +13,10 @@ Airflow remains the lifecycle scheduler. Factory Cell epochs, policy and evidenc
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from enum import StrEnum
-from typing import Iterable, Literal
+from typing import Literal
 
 PHASE_CONTROL_SCHEMA_VERSION = 1
 PHASE_CONTROL_AUTHORITY = "search-only"
