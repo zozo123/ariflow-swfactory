@@ -292,7 +292,7 @@ def improve(
         base_budget=budget,
     )
     assessment = propose(signals, budget=heat.budget, stalled_keys=stuck, readmit_stalled=heat.readmit_stalled)
-    typer.echo(f"[{heat.phase} T={heat.temperature:.2f} budget={heat.budget}] {heat.reason}\n")
+    typer.echo(f"[{heat.mode} T={heat.temperature:.2f} budget={heat.budget}] {heat.reason}\n")
     if as_json:
         typer.echo(json.dumps(assessment.to_dict(), indent=2, sort_keys=True))
         return
