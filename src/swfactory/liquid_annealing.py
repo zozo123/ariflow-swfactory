@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
+
 from swfactory import stages
 from swfactory.models import BuildSummary, Finding, Review, StageResult
 from swfactory.phase_control import ControlMode, Phase
+
 LANES: tuple[str, ...] = ("correctness", "verification", "risk")
 RISK_PREFIXES: tuple[str, ...] = (
     ".github/",
