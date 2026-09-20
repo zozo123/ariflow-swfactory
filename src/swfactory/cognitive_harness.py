@@ -114,6 +114,23 @@ class CognitiveAttention(StrEnum):
     AUTHORITY = "authority-boundary"
 
 
+class MeasurementKind(StrEnum):
+    TEST = "test"
+    STATIC_ANALYSIS = "static-analysis"
+    REPLAY = "replay"
+    PERFORMANCE = "performance"
+    SECURITY = "security"
+    FORMAL = "formal"
+    HUMAN = "human"
+
+
+class ImprovementDisposition(StrEnum):
+    SHADOW = "shadow"
+    CANDIDATE = "candidate"
+    ADOPTABLE = "adoptable"
+    REJECTED = "rejected"
+
+
 @dataclass(frozen=True)
 class WorldCandidate:
     """One executable hypothesis/world.
@@ -255,6 +272,71 @@ class MemoryEvidence:
 
 
 @dataclass(frozen=True)
+class MeasurementReceipt:
+    """One observation produced by executing/challenging a world."""
+
+    world_id: str
+    kind: MeasurementKind
+    observable: str
+    result_digest: str
+    evidence_digest: str
+    independent: bool
+    passed: bool
+
+    def validate(self) -> None:
+        for name, value in {
+            "world_id": self.world_id,
+            "observable": self.observable,
+            "result_digest": self.result_digest,
+            "evidence_digest": self.evidence_digest,
+        }.items():
+            if not value.strip():
+                raise ValueError(f"{name} must be nonempty")
+
+
+@dataclass(frozen=True)
+class DissipationSnapshot:
+    """Waste exported to keep the cognitive process ordered."""
+
+    discarded_worlds: int
+    reclaimed_contexts: int
+    cleaned_sandboxes: int
+    cancelled_retries: int
+    stale_memories_retired: int
+
+    def total(self) -> int:
+        values = (
+            self.discarded_worlds,
+            self.reclaimed_contexts,
+            self.cleaned_sandboxes,
+            self.cancelled_retries,
+            self.stale_memories_retired,
+        )
+        if any(value < 0 for value in values):
+            raise ValueError("dissipation counts must be non-negative")
+        return sum(values)
+
+
+@dataclass(frozen=True)
+class SelfImprovementExperiment:
+    """A proposed change to the factory treated exactly like another bounded world."""
+
+    experiment_id: str
+    baseline_digest: str
+    candidate_world_ids: tuple[str, ...]
+    objective_digest: str
+    evidence_digest: str | None
+    disposition: ImprovementDisposition = ImprovementDisposition.SHADOW
+    authority: str = "proposal-only"
+
+    def validate(self) -> None:
+        if not self.experiment_id.strip() or not self.baseline_digest.strip() or not self.objective_digest.strip():
+            raise ValueError("self-improvement identity/objective fields must be nonempty")
+        if not self.candidate_world_ids:
+            raise ValueError("self-improvement experiment needs at least one candidate world")
+
+
+@dataclass(frozen=True)
 class CognitivePlan:
     schema_version: int
     authority: str
@@ -332,6 +414,34 @@ class CognitiveReceipt:
             "plan": self.plan.as_dict(),
             "authority_request_digest": self.authority_request_digest,
         }
+
+
+def validate_measurement_set(
+    world: WorldCandidate,
+    measurements: Sequence[MeasurementReceipt],
+) -> bool:
+    """Require independent evidence to bind to the exact executable world."""
+
+    relevant = [measurement for measurement in measurements if measurement.world_id == world.world_id]
+    for measurement in relevant:
+        measurement.validate()
+    return bool(relevant) and all(measurement.passed for measurement in relevant) and any(
+        measurement.independent for measurement in relevant
+    )
+
+
+def classify_self_improvement(
+    experiment: SelfImprovementExperiment,
+    *,
+    evidence_complete: bool,
+    independent_verification: bool,
+) -> ImprovementDisposition:
+    experiment.validate()
+    if not evidence_complete:
+        return ImprovementDisposition.SHADOW
+    if not independent_verification:
+        return ImprovementDisposition.CANDIDATE
+    return ImprovementDisposition.ADOPTABLE
 
 
 def stable_digest(value: object) -> str:
