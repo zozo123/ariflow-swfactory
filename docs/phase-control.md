@@ -74,7 +74,7 @@ order_parameter
   = clamp(0.35 C + 0.35 E + 0.15 (1-H) + 0.15 (1-V))
 
 transition_pressure
-  = clamp(0.55 V + 0.25 |dQ/dt| + 0.20 branching_pressure)
+  = clamp(0.50 V + 0.20 |dQ/dt| + 0.20 branching_pressure + 0.10 context_pressure)
 ```
 
 where H is candidate entropy, C coherence, E evidence completeness and V verifier disagreement.
@@ -135,7 +135,8 @@ Context is treated as a finite search resource:
 - **compact**: preserve durable evidence/summary while removing microscopic execution history.
 
 Compaction is an accelerator and memory-management operation. It cannot alter the exact candidate,
-evidence digest or promotion policy.
+evidence digest or promotion policy. High context pressure also contributes to transition pressure;
+in coordinate/measure/anneal modes it can recommend compaction without changing the candidate.
 
 ## Authority boundary
 
