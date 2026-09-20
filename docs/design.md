@@ -466,3 +466,27 @@ One live-only caveat the script encodes: a gate is only answered once its task i
 creating the HITL detail and the task parking makes the scheduler see a stale executor event
 ("finished with state success, but the task instance's state attribute is queued") and fail the
 gate — a race a human cannot hit and a polling script hits about once per dozen gates.
+
+## Factory Cell identity and policy bytes
+
+Factory Cell v1 renders a target as `directory@base_branch`. The delimiter is therefore reserved:
+`targets.dir` and `targets.base_branch` must not contain `@`. This is enforced at blueprint load,
+runtime rebinding, policy projection and Cell identity minting. The restriction preserves every
+existing shipped Cell id while making the join injective.
+
+Policy identity uses one cross-language byte contract:
+
+- family marker: `policy:v1:`;
+- domain separator: `v1\\0` before the JSON payload;
+- JSON object keys sorted lexicographically;
+- compact JSON separators;
+- UTF-8 JSON with `ensure_ascii=False` semantics: Unicode and DEL/0x7f are not re-escaped merely
+  because they are non-ASCII;
+- mapping keys must be strings;
+- numeric values must remain inside +/-`(2^53 - 1)`, the exact integer envelope shared without
+  lossy coercion by both implementations.
+
+The shared `tests/fixtures/contract/policy_digest.json` pins ASCII, Unicode, DEL and safe-integer
+vectors. Values outside the numeric envelope are refused instead of being rounded into another
+policy identity.
+
