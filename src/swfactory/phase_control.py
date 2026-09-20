@@ -158,6 +158,8 @@ class PhaseRecommendation:
 class PhaseAssessment:
     schema_version: int
     authority: str
+    observation: PhaseObservation
+    previous_phase: Phase | None
     raw_phase: Phase
     phase: Phase
     signals: PhaseSignals
@@ -167,6 +169,8 @@ class PhaseAssessment:
         return {
             "schema_version": self.schema_version,
             "authority": self.authority,
+            "observation": asdict(self.observation),
+            "previous_phase": self.previous_phase,
             "raw_phase": self.raw_phase,
             "phase": self.phase,
             "signals": self.signals.as_dict(),
@@ -396,6 +400,8 @@ def assess(observation: PhaseObservation, *, previous_phase: Phase | None = None
     return PhaseAssessment(
         schema_version=PHASE_CONTROL_SCHEMA_VERSION,
         authority=PHASE_CONTROL_AUTHORITY,
+        observation=observation,
+        previous_phase=previous_phase,
         raw_phase=raw,
         phase=phase,
         signals=signals,
