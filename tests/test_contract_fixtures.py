@@ -37,6 +37,7 @@ from swfactory.control import (
 )
 from swfactory.herd import job_index, parse_issues, snapshot_data, stage_progress
 from swfactory.metrics import summarize
+from swfactory.phase_control import PhaseObservation, assess as assess_phase
 from swfactory.security_contract import policy_digest_for_mapping
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "contract"
@@ -187,6 +188,27 @@ def _call_is_cell_id(data: dict) -> Any:
     return is_cell_id(data["value"])
 
 
+def _call_phase_control(data: dict) -> Any:
+    assessment = assess_phase(
+        PhaseObservation(**data["observation"]),
+        previous_phase=data.get("previous_phase"),
+    )
+    recommendation = assessment.recommendation.as_dict()
+    return {
+        "raw_phase": assessment.raw_phase,
+        "phase": assessment.phase,
+        "mode": recommendation["mode"],
+        "spawn": recommendation["spawn"],
+        "trajectory": recommendation["trajectory"],
+        "context": recommendation["context"],
+        "candidates": recommendation["candidates"],
+        "queue": recommendation["queue"],
+        "verification": recommendation["verification"],
+        "attention": recommendation["attention"],
+        "allow_new_implementation_lanes": recommendation["allow_new_implementation_lanes"],
+    }
+
+
 DISPATCH = {
     "job_state": _call_job_state,
     "group_jobs": _call_group_jobs,
@@ -198,6 +220,7 @@ DISPATCH = {
     "snapshot_json": _call_snapshot_json,
     "policy_digest": _call_policy_digest,
     "is_cell_id": _call_is_cell_id,
+    "phase_control": _call_phase_control,
 }
 
 
