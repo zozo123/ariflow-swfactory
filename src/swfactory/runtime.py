@@ -26,8 +26,10 @@ from swfactory.config import FACTORY_ROOT, Config, protected_globs
 from swfactory.models import StageError
 from swfactory.paths import (
     normalize_relative_path,
+    normalize_target_dir,
     validate_git_ref,
     validate_repo,
+    validate_target_base_branch,
     validate_run_id,
 )
 from swfactory.sandbox import HOST_SANDBOXES, make_sandbox
@@ -71,10 +73,10 @@ def job_config(
     identity: dict[str, Any] = {
         "issue": str(job["issue"]),
         "repo": validate_repo(str(job.get("repo", bp.targets[0].repo))),
-        "target_dir": normalize_relative_path(
-            str(job.get("dir", bp.targets[0].dir)), field="target_dir", allow_empty=True
+        "target_dir": normalize_target_dir(str(job.get("dir", bp.targets[0].dir)), field="target_dir"),
+        "base_branch": validate_target_base_branch(
+            str(job.get("base_branch", bp.targets[0].base_branch)), field="base_branch"
         ),
-        "base_branch": validate_git_ref(str(job.get("base_branch", bp.targets[0].base_branch)), field="base_branch"),
         "run_id": validate_run_id(run_id),
         "blueprint": bp.name,
     }
