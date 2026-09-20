@@ -1364,7 +1364,11 @@ def phase_assess_cmd(
         raise typer.Exit(2)
     try:
         raw = json.loads(observation_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("phase input must be a JSON object")
         payload = raw.get("observation", raw)
+        if not isinstance(payload, dict):
+            raise ValueError("phase observation must be a JSON object")
         observation = PhaseObservation(**payload)
         assessment = assess(
             observation,
