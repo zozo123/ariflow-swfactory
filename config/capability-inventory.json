@@ -224,6 +224,26 @@
         "SmolVM",
         "sandbox.smolvm"
       ]
+    },
+    {
+      "id": "factory.phase-control",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Factory phase classification is a pure, cross-language, search-only projection; it may shape reversible search and verification posture but can never grant mutation or promotion authority.",
+      "owner": "workgraph+evidence",
+      "runtime_entry": "swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess is read-only",
+      "environment": "offline/read-only assessment over retained dimensionless telemetry",
+      "test": "tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json",
+      "evidence": [
+        "cross-language phase-control fixture",
+        "phase assessment JSON"
+      ],
+      "follow_up": "Emit real phase snapshots from managed runs and expose them through swf attention before allowing any automatic search-only knob adjustment.",
+      "public_surface": [
+        "`phase-assess`",
+        "factory phase control",
+        "phase-aware dark factory"
+      ]
     }
   ]
 }
