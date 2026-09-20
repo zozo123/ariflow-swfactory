@@ -175,6 +175,13 @@ Python: `swfactory.phase_control`
 
 Rust: `swf_domain::phase_control`
 
+Read-only operator surfaces:
+
+```sh
+swfactory phase-assess phase.json --json
+swf phase phase.json --json
+```
+
 Both consume the same fixture:
 
 `tests/fixtures/contract/phase_control.json`
