@@ -1247,6 +1247,27 @@ order = ["intent", "deliver"]
     }
 
     #[test]
+    fn target_identity_delimiter_is_reserved() {
+        let dir = MINIMAL.replace(
+            "repo = \"owner/name\"",
+            "repo = \"owner/name\"\ndir = \"a@b\"\nbase_branch = \"c\"",
+        );
+        assert_eq!(
+            err(&dir),
+            "targets.dir must not contain '@' because it separates Factory Cell target identity"
+        );
+
+        let branch = MINIMAL.replace(
+            "repo = \"owner/name\"",
+            "repo = \"owner/name\"\ndir = \"a\"\nbase_branch = \"b@c\"",
+        );
+        assert_eq!(
+            err(&branch),
+            "targets.base_branch must not contain '@' because it separates Factory Cell target identity"
+        );
+    }
+
+    #[test]
     fn paths_must_stay_inside_their_root() {
         assert_eq!(
             normalize_relative_path("../etc/passwd", "targets.dir", true),
