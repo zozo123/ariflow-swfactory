@@ -37,7 +37,8 @@ from swfactory.control import (
 )
 from swfactory.herd import job_index, parse_issues, snapshot_data, stage_progress
 from swfactory.metrics import summarize
-from swfactory.phase_control import PhaseObservation, assess as assess_phase
+from swfactory.phase_control import PhaseObservation
+from swfactory.phase_control import assess as assess_phase
 from swfactory.security_contract import policy_digest_for_mapping
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "contract"
