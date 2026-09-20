@@ -543,8 +543,18 @@ impl Blueprint {
             validate_repo(&target.repo).map_err(BlueprintError::invalid)?;
             target.dir = normalize_relative_path(&target.dir, "targets.dir", true)
                 .map_err(BlueprintError::invalid)?;
+            if target.dir.contains('@') {
+                return Err(BlueprintError::invalid(
+                    "targets.dir must not contain '@' because it separates Factory Cell target identity",
+                ));
+            }
             validate_git_ref(&target.base_branch, "targets.base_branch")
                 .map_err(BlueprintError::invalid)?;
+            if target.base_branch.contains('@') {
+                return Err(BlueprintError::invalid(
+                    "targets.base_branch must not contain '@' because it separates Factory Cell target identity",
+                ));
+            }
         }
         Ok(())
     }
