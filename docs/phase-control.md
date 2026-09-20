@@ -187,7 +187,8 @@ Both consume the same fixture:
 `tests/fixtures/contract/phase_control.json`
 
 The fixture covers gas, liquid, critical, annealing posture, crystal, glass, jammed, supercritical
-branching and crystal hysteresis. Any Python/Rust disagreement is a contract failure.
+branching and crystal hysteresis. Any Python/Rust disagreement is a contract failure. Assessments
+retain the exact observation plus previous phase, so the classification is self-contained for replay.
 
 ## Relationship to Liquid review
 
