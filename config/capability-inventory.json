@@ -231,7 +231,7 @@
       "support": "experimental",
       "invariant": "Factory phase classification is a pure, cross-language, search-only projection; it may shape reversible search and verification posture but can never grant mutation or promotion authority.",
       "owner": "workgraph+evidence",
-      "runtime_entry": "swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess is read-only",
+      "runtime_entry": "swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess and swf phase are read-only",
       "environment": "offline/read-only assessment over retained dimensionless telemetry",
       "test": "tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json",
       "evidence": [
