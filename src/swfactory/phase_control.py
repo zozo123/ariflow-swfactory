@@ -427,6 +427,7 @@ def _recommend(mode: ControlMode, observation: PhaseObservation) -> PhaseRecomme
     }
     return table[mode]
 
+
 def assess(observation: PhaseObservation, *, previous_phase: Phase | None = None) -> PhaseAssessment:
     """Classify a snapshot and return a search-only recommendation."""
 
