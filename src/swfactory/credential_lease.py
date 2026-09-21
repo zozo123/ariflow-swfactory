@@ -1,6 +1,6 @@
 """Opaque, attempt-bound credential leases for trusted control-plane capabilities.
 
-Bearer material is never persisted.  The durable store keeps only a hash of the opaque handle,
+Bearer material is never persisted. The durable store keeps only a hash of the opaque handle,
 immutable execution binding, process binding, expiry/revocation state, and negative provenance.
 Airflow workers and coding sandboxes are not permitted to redeem leases; the broker is a backend
 control-plane primitive.
@@ -24,6 +24,7 @@ from swfactory.cells import is_cell_id
 
 LEASE_SCHEMA_VERSION = 1
 _MIN_NONCE_LEN = 16
+_WILDCARD_CAPABILITIES = frozenset({"*", "all", "any", "github"})
 
 
 class CredentialLeaseError(PermissionError):
@@ -75,7 +76,7 @@ class LeaseBinding:
 
     @classmethod
     def from_untrusted(cls, raw: Mapping[str, Any]) -> LeaseBinding:
-        """Parse a scheduler/artifact projection without accepting extra authority-bearing fields."""
+        """Parse scheduler/artifact metadata without accepting extra authority-bearing fields."""
         allowed = {
             "factory_run_id",
             "dag_run_id",
@@ -114,6 +115,8 @@ class LeaseBinding:
 
 @dataclass(frozen=True, repr=False)
 class LeaseHandle:
+    """Opaque bearer capability. The raw publication credential is never part of this value."""
+
     lease_id: str
     bearer: str
 
@@ -127,6 +130,7 @@ class LeaseDenial:
     reason: str
     binding_digest: str | None
     capability: str | None
+    purpose: str | None
     created_at: float
 
     def to_dict(self) -> dict[str, Any]:
@@ -134,6 +138,7 @@ class LeaseDenial:
 
 
 CredentialProvider = Callable[[LeaseBinding], str]
+EpochReader = Callable[[str], int]
 
 
 class CredentialLeaseBroker:
@@ -144,11 +149,13 @@ class CredentialLeaseBroker:
         path: Path,
         *,
         providers: Mapping[str, CredentialProvider] | None = None,
+        epoch_reader: EpochReader | None = None,
         on_denial: Callable[[LeaseDenial], None] | None = None,
     ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.providers = dict(providers or {})
+        self.epoch_reader = epoch_reader
         self.on_denial = on_denial
         self.lock = threading.RLock()
         self.db = sqlite3.connect(
@@ -175,43 +182,27 @@ class CredentialLeaseBroker:
                     schema_version INTEGER NOT NULL,
                     secret_hash TEXT NOT NULL,
                     capability TEXT NOT NULL,
+                    purpose TEXT NOT NULL,
                     binding_json TEXT NOT NULL,
                     binding_digest TEXT NOT NULL,
                     expires_at REAL NOT NULL,
                     process_hash TEXT,
                     revoked_at REAL,
                     revoke_reason TEXT,
-                    created_at REAL NOT NULL
+                    created_at REAL NOT NULL,
+                    cell_id TEXT NOT NULL,
+                    epoch INTEGER NOT NULL,
+                    attempt_number INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS credential_lease_epoch
                     ON credential_leases(cell_id, epoch);
-                """
-                .replace(
-                    "CREATE INDEX IF NOT EXISTS credential_lease_epoch\n                    ON credential_leases(cell_id, epoch);",
-                    "",
-                )
-            )
-            columns = {row["name"] for row in self.db.execute("PRAGMA table_info(credential_leases)")}
-            additions = {
-                "cell_id": "TEXT",
-                "epoch": "INTEGER",
-                "attempt_number": "INTEGER",
-            }
-            for name, ddl in additions.items():
-                if name not in columns:
-                    self.db.execute(f"ALTER TABLE credential_leases ADD COLUMN {name} {ddl}")
-            self.db.execute(
-                "CREATE INDEX IF NOT EXISTS credential_lease_epoch "
-                "ON credential_leases(cell_id, epoch)"
-            )
-            self.db.executescript(
-                """
                 CREATE TABLE IF NOT EXISTS credential_denials (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT,
                     lease_id TEXT NOT NULL,
                     reason TEXT NOT NULL,
                     binding_digest TEXT,
                     capability TEXT,
+                    purpose TEXT,
                     created_at REAL NOT NULL
                 );
                 """
@@ -222,32 +213,40 @@ class CredentialLeaseBroker:
         binding: LeaseBinding,
         *,
         capability: str,
+        purpose: str = "external-effect",
         ttl_s: float = 300.0,
         now: float | None = None,
     ) -> LeaseHandle:
         binding.validate()
         capability = capability.strip()
+        purpose = purpose.strip()
+        if capability.casefold() in _WILDCARD_CAPABILITIES or "." not in capability:
+            raise CredentialLeaseError("credential capability must be explicit and deny-by-default")
         if capability not in self.providers:
             raise CredentialLeaseError(f"capability {capability!r} has no trusted provider")
+        if not purpose or len(purpose) > 128:
+            raise ValueError("credential lease purpose must be nonempty and bounded")
         if ttl_s <= 0 or ttl_s > 3600:
             raise ValueError("credential lease ttl_s must be in (0, 3600]")
+        if self.epoch_reader is not None and self.epoch_reader(binding.cell_id) != binding.epoch:
+            raise CredentialLeaseError("cannot mint a credential lease for a stale Cell epoch")
         clock = time.time() if now is None else now
         lease_id = "lease_" + secrets.token_hex(16)
         bearer = "swfl_" + secrets.token_urlsafe(32)
-        secret_hash = _hash_secret(bearer)
         document = json.dumps(binding.canonical(), sort_keys=True, separators=(",", ":"))
         with self.lock, self.db:
             self.db.execute(
                 """INSERT INTO credential_leases(
-                    lease_id,schema_version,secret_hash,capability,binding_json,binding_digest,
+                    lease_id,schema_version,secret_hash,capability,purpose,binding_json,binding_digest,
                     expires_at,process_hash,revoked_at,revoke_reason,created_at,
                     cell_id,epoch,attempt_number
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     lease_id,
                     LEASE_SCHEMA_VERSION,
-                    secret_hash,
+                    _hash_secret(bearer),
                     capability,
+                    purpose,
                     document,
                     binding.digest(),
                     clock + ttl_s,
@@ -270,6 +269,7 @@ class CredentialLeaseBroker:
         process_nonce: str,
         now: float | None = None,
     ) -> str:
+        """Materialize raw credential bytes only inside the trusted broker caller."""
         binding.validate()
         if len(process_nonce) < _MIN_NONCE_LEN:
             raise ValueError(f"process_nonce must contain at least {_MIN_NONCE_LEN} characters")
@@ -280,23 +280,19 @@ class CredentialLeaseBroker:
                 (handle.lease_id,),
             ).fetchone()
             if row is None:
-                self._deny(handle.lease_id, "unknown_lease", binding=binding, capability=None, now=clock)
+                self._deny(handle.lease_id, "unknown_lease", binding=binding, row=None, now=clock)
             assert row is not None
-            capability = str(row["capability"])
             if not hmac.compare_digest(str(row["secret_hash"]), _hash_secret(handle.bearer)):
-                self._deny(handle.lease_id, "invalid_bearer", binding=binding, capability=capability, now=clock)
+                self._deny(handle.lease_id, "invalid_bearer", binding=binding, row=row, now=clock)
             if row["revoked_at"] is not None:
-                self._deny(handle.lease_id, "revoked", binding=binding, capability=capability, now=clock)
+                self._deny(handle.lease_id, "revoked", binding=binding, row=row, now=clock)
             if float(row["expires_at"]) <= clock:
-                self._deny(handle.lease_id, "expired", binding=binding, capability=capability, now=clock)
+                self._deny(handle.lease_id, "expired", binding=binding, row=row, now=clock)
             if not hmac.compare_digest(str(row["binding_digest"]), binding.digest()):
-                self._deny(
-                    handle.lease_id,
-                    "binding_mismatch",
-                    binding=binding,
-                    capability=capability,
-                    now=clock,
-                )
+                self._deny(handle.lease_id, "binding_mismatch", binding=binding, row=row, now=clock)
+            if self.epoch_reader is not None and self.epoch_reader(binding.cell_id) != binding.epoch:
+                self._deny(handle.lease_id, "stale_epoch", binding=binding, row=row, now=clock)
+
             process_hash = _hash_secret(process_nonce)
             existing = row["process_hash"]
             if existing is None:
@@ -311,22 +307,13 @@ class CredentialLeaseBroker:
                 ).fetchone()
                 existing = row["process_hash"] if row is not None else None
             if existing is None or not hmac.compare_digest(str(existing), process_hash):
-                self._deny(
-                    handle.lease_id,
-                    "process_mismatch",
-                    binding=binding,
-                    capability=capability,
-                    now=clock,
-                )
+                self._deny(handle.lease_id, "process_mismatch", binding=binding, row=row, now=clock)
+
+            capability = str(row["capability"])
             provider = self.providers.get(capability)
             if provider is None:
-                self._deny(
-                    handle.lease_id,
-                    "provider_unavailable",
-                    binding=binding,
-                    capability=capability,
-                    now=clock,
-                )
+                self._deny(handle.lease_id, "provider_unavailable", binding=binding, row=row, now=clock)
+
         value = provider(binding)
         if not isinstance(value, str) or not value:
             raise CredentialLeaseError(f"trusted provider for {capability!r} returned no credential")
@@ -351,10 +338,28 @@ class CredentialLeaseBroker:
             )
             return int(cur.rowcount)
 
+    def revoke_attempt(
+        self,
+        binding: LeaseBinding,
+        *,
+        reason: str = "attempt_superseded",
+        now: float | None = None,
+    ) -> int:
+        """Invalidate attempt N before attempt N+1 receives a fresh handle."""
+        clock = time.time() if now is None else now
+        with self.lock, self.db:
+            cur = self.db.execute(
+                """UPDATE credential_leases
+                   SET revoked_at=?, revoke_reason=?
+                   WHERE cell_id=? AND epoch=? AND attempt_number=? AND revoked_at IS NULL""",
+                (clock, reason, binding.cell_id, binding.epoch, binding.attempt_number),
+            )
+            return int(cur.rowcount)
+
     def denials(self, *, limit: int = 100) -> list[dict[str, Any]]:
         with self.lock:
             rows = self.db.execute(
-                "SELECT lease_id,reason,binding_digest,capability,created_at "
+                "SELECT lease_id,reason,binding_digest,capability,purpose,created_at "
                 "FROM credential_denials ORDER BY seq DESC LIMIT ?",
                 (max(1, min(int(limit), 1000)),),
             ).fetchall()
@@ -364,7 +369,7 @@ class CredentialLeaseBroker:
         """Return metadata only. Bearer hashes and provider values are never operator surface."""
         with self.lock:
             row = self.db.execute(
-                "SELECT lease_id,capability,binding_digest,expires_at,revoked_at,revoke_reason,"
+                "SELECT lease_id,capability,purpose,binding_digest,expires_at,revoked_at,revoke_reason,"
                 "created_at,cell_id,epoch,attempt_number,process_hash IS NOT NULL AS process_bound "
                 "FROM credential_leases WHERE lease_id=?",
                 (lease_id,),
@@ -379,25 +384,27 @@ class CredentialLeaseBroker:
         reason: str,
         *,
         binding: LeaseBinding | None,
-        capability: str | None,
+        row: sqlite3.Row | None,
         now: float,
     ) -> None:
         event = LeaseDenial(
             lease_id=lease_id,
             reason=reason,
             binding_digest=binding.digest() if binding is not None else None,
-            capability=capability,
+            capability=str(row["capability"]) if row is not None else None,
+            purpose=str(row["purpose"]) if row is not None else None,
             created_at=now,
         )
         self.db.execute(
             """INSERT INTO credential_denials(
-                lease_id,reason,binding_digest,capability,created_at
-            ) VALUES(?,?,?,?,?)""",
+                lease_id,reason,binding_digest,capability,purpose,created_at
+            ) VALUES(?,?,?,?,?,?)""",
             (
                 event.lease_id,
                 event.reason,
                 event.binding_digest,
                 event.capability,
+                event.purpose,
                 event.created_at,
             ),
         )
