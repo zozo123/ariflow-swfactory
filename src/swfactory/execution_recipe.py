@@ -150,15 +150,12 @@ def parse_execution_recipe(document: Any) -> ExecutionRecipe:
     secret_raw = document.get("secret_env", [])
     if not isinstance(secret_raw, list):
         raise ExecutionRecipeError("execution recipe secret_env must be an array")
+    if secret_raw:
+        raise ExecutionRecipeError(
+            "execution recipe secret_env is retired; request a scoped credential capability "
+            "from the trusted broker instead"
+        )
     secret_env: list[str] = []
-    for key in secret_raw:
-        _validate_env_name(key)
-        secret_env.append(key)
-    if len(secret_env) != len(set(secret_env)):
-        raise ExecutionRecipeError("execution recipe secret_env contains duplicates")
-    overlap = set(secret_env).intersection(key for key, _ in environment)
-    if overlap:
-        raise ExecutionRecipeError("environment and secret_env overlap: " + ", ".join(sorted(overlap)))
 
     return ExecutionRecipe(
         argv=tuple(argv),
