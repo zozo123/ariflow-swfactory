@@ -219,6 +219,52 @@ SETTINGS_PREFIX = "SWF_"
 #: so a future cell-side setting has to be added deliberately instead of surviving by accident.
 SETTINGS_KEEP = frozenset({"SWF_MAINTAIN_ROOT"})
 
+# Agent/container launch environments are allow-listed. Host CLIs may need more variables than the
+# code they launch, so Docker/Islo control calls keep their own host environment; model-written
+# code receives only boring process/runtime configuration plus an explicit local-development model
+# credential. A novel secret name is absent by default instead of waiting for this list to learn it.
+CELL_ENV_ALLOWLIST = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TERM",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "CI",
+        "NO_COLOR",
+        "FORCE_COLOR",
+        "XDG_CACHE_HOME",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "DOCKER_HOST",
+        "DOCKER_TLS_VERIFY",
+        "DOCKER_CERT_PATH",
+        "DOCKER_CONTEXT",
+    }
+)
+LOCAL_AGENT_CREDENTIALS = frozenset({"ANTHROPIC_API_KEY"})
+
+
+def cell_env(env: Mapping[str, str]) -> dict[str, str]:
+    """Project a hostile host environment onto the small set a coding cell may inherit."""
+
+    return {key: value for key, value in env.items() if key in CELL_ENV_ALLOWLIST}
+
 
 def scrub_env(env: Mapping[str, str]) -> dict[str, str]:
     """Drop credential families AND the factory's own settings before crossing into a cell."""
@@ -276,10 +322,16 @@ def _as_text(data: str | bytes | None) -> str:
 
 
 def _credential_env(pass_env: Sequence[str]) -> dict[str, str]:
-    """Scrubbed host env plus the explicit ``pass_env`` allowlist (only keys the host actually
-    has: an absent credential is never invented). One copy so srt and docker cannot drift."""
-    env = scrub_env(os.environ)
-    env.update({k: os.environ[k] for k in pass_env if k in os.environ})
+    """Allow-listed cell env plus the one local-development model credential we still support.
+
+    Production Islo uses gateway injection, so it never calls this path. New credential names are
+    rejected rather than silently becoming ambient authority in a coding cell.
+    """
+    unknown = sorted(set(pass_env) - LOCAL_AGENT_CREDENTIALS)
+    if unknown:
+        raise StageError("policy", "unsupported sandbox credential passthrough: " + ", ".join(unknown))
+    env = cell_env(os.environ)
+    env.update({key: os.environ[key] for key in pass_env if key in os.environ})
     return env
 
 
