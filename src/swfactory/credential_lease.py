@@ -131,6 +131,10 @@ class LeaseDenial:
     binding_digest: str | None
     capability: str | None
     purpose: str | None
+    factory_run_id: str | None
+    cell_id: str | None
+    epoch: int | None
+    attempt_number: int | None
     created_at: float
 
     def to_dict(self) -> dict[str, Any]:
@@ -203,6 +207,10 @@ class CredentialLeaseBroker:
                     binding_digest TEXT,
                     capability TEXT,
                     purpose TEXT,
+                    factory_run_id TEXT,
+                    cell_id TEXT,
+                    epoch INTEGER,
+                    attempt_number INTEGER,
                     created_at REAL NOT NULL
                 );
                 """
@@ -359,7 +367,8 @@ class CredentialLeaseBroker:
     def denials(self, *, limit: int = 100) -> list[dict[str, Any]]:
         with self.lock:
             rows = self.db.execute(
-                "SELECT lease_id,reason,binding_digest,capability,purpose,created_at "
+                "SELECT lease_id,reason,binding_digest,capability,purpose,factory_run_id,"
+                "cell_id,epoch,attempt_number,created_at "
                 "FROM credential_denials ORDER BY seq DESC LIMIT ?",
                 (max(1, min(int(limit), 1000)),),
             ).fetchall()
@@ -393,18 +402,27 @@ class CredentialLeaseBroker:
             binding_digest=binding.digest() if binding is not None else None,
             capability=str(row["capability"]) if row is not None else None,
             purpose=str(row["purpose"]) if row is not None else None,
+            factory_run_id=binding.factory_run_id if binding is not None else None,
+            cell_id=binding.cell_id if binding is not None else None,
+            epoch=binding.epoch if binding is not None else None,
+            attempt_number=binding.attempt_number if binding is not None else None,
             created_at=now,
         )
         self.db.execute(
             """INSERT INTO credential_denials(
-                lease_id,reason,binding_digest,capability,purpose,created_at
-            ) VALUES(?,?,?,?,?,?)""",
+                lease_id,reason,binding_digest,capability,purpose,factory_run_id,
+                cell_id,epoch,attempt_number,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
             (
                 event.lease_id,
                 event.reason,
                 event.binding_digest,
                 event.capability,
                 event.purpose,
+                event.factory_run_id,
+                event.cell_id,
+                event.epoch,
+                event.attempt_number,
                 event.created_at,
             ),
         )
