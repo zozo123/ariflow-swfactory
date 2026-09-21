@@ -14,7 +14,7 @@ import os
 import re
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
@@ -79,7 +79,13 @@ class Scm(Protocol):
 # ---------------------------------------------------------------- shared helpers
 
 
-def _run(argv: Sequence[str], cwd: Path | None, input: bytes | None = None) -> str:
+def _run(
+    argv: Sequence[str],
+    cwd: Path | None,
+    input: bytes | None = None,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> str:
     """Run one subprocess and return stdout; non-zero exit -> StageError("scm", retryable=True).
 
     Git invocations are hardened here rather than at each call site so a future ``git`` command
@@ -89,7 +95,9 @@ def _run(argv: Sequence[str], cwd: Path | None, input: bytes | None = None) -> s
     if argv and argv[0] == "git":
         argv = [argv[0], *_GIT_NO_AUTO_GC, *argv[1:]]
     try:
-        proc = subprocess.run(argv, cwd=cwd, input=input, capture_output=True, check=False, timeout=600)
+        proc = subprocess.run(
+            argv, cwd=cwd, input=input, capture_output=True, check=False, timeout=600, env=env
+        )
     except FileNotFoundError as e:
         raise StageError("scm", f"{argv[0]} not found on PATH", retryable=False) from e
     except subprocess.TimeoutExpired as e:
@@ -140,8 +148,8 @@ def _issue_from_gh(data: dict) -> Issue:
     )
 
 
-def _gh_json(argv: Sequence[str]) -> object:
-    out = _run(argv, None)
+def _gh_json(argv: Sequence[str], *, env: Mapping[str, str] | None = None) -> object:
+    out = _run(argv, None, env=env)
     try:
         return json.loads(out)
     except json.JSONDecodeError as e:
@@ -165,17 +173,23 @@ def _pr_markdown(title: str, labels: Sequence[str], body: str) -> str:
     return f"# {title}\n\nlabels: {', '.join(labels) or '(none)'}\n\n{body.rstrip()}\n"
 
 
-def _apply_and_push(clone: Path, *, branch: str, patch: bytes) -> None:
+def _apply_and_push(
+    clone: Path,
+    *,
+    branch: str,
+    patch: bytes,
+    env: Mapping[str, str] | None = None,
+) -> None:
     """checkout -b, `git am --3way` the patch (keeps bot author + trailers), push -u.
 
     ``factory/*`` is the bot-owned namespace: a retry of ``deliver`` rebuilds the same branch
     (``git am`` restamps committer dates, so even an identical patch yields new shas), so those
     refs are force-pushed. Any other branch keeps plain (fast-forward only) push semantics.
     """
-    _run(["git", "checkout", "-b", branch], clone)
-    _run(["git", *_GIT_IDENT, "am", "--3way"], clone, input=patch)
+    _run(["git", "checkout", "-b", branch], clone, env=env)
+    _run(["git", *_GIT_IDENT, "am", "--3way"], clone, input=patch, env=env)
     if not branch.startswith(FACTORY_BRANCH_PREFIX):
-        _run(["git", "push", "-u", "origin", branch], clone)
+        _run(["git", "push", "-u", "origin", branch], clone, env=env)
         return
     # Compare-and-swap against WHAT THIS INSTANCE LAST PUSHED, not against what it just observed.
     # The branch is keyed on the work rather than the run (see `Ctx.branch`), so a second factory
@@ -187,15 +201,15 @@ def _apply_and_push(clone: Path, *, branch: str, patch: bytes) -> None:
     # `git am` restamps committer dates, so a retry of THIS run produces commits that are not
     # descendants of the ones it pushed before -- which is why a retry legitimately needs a force
     # and cannot be expressed as a fast-forward.
-    remote_head = _remote_head(clone, branch)
+    remote_head = _remote_head(clone, branch, env=env)
     if not remote_head:
         _run(["git", "push", "-u", "origin", branch], clone)
         return
     # Both sides of the comparison come from commits: the patch just applied says who made it, the
     # remote head says who made that. No caller has to know its own name, so the managed boundary
     # (which publishes on behalf of a worker in another process) cannot get it wrong either.
-    mine = _instance_of(clone, "HEAD")
-    holder = _instance_of(clone, remote_head)
+    mine = _instance_of(clone, "HEAD", env=env)
+    holder = _instance_of(clone, remote_head, env=env)
     if not mine or holder != mine:
         raise StageError(
             "scm",
@@ -206,7 +220,7 @@ def _apply_and_push(clone: Path, *, branch: str, patch: bytes) -> None:
             retryable=False,
         )
     try:
-        _run(["git", "push", "-u", f"--force-with-lease={branch}:{remote_head}", "origin", branch], clone)
+        _run(\n            ["git", "push", "-u", f"--force-with-lease={branch}:{remote_head}", "origin", branch],\n            clone,\n            env=env,\n        )
     except StageError as error:
         if _is_lease_refusal(str(error)):
             raise StageError(
@@ -218,7 +232,12 @@ def _apply_and_push(clone: Path, *, branch: str, patch: bytes) -> None:
         raise
 
 
-def _instance_of(clone: Path, sha: str) -> str:
+def _instance_of(
+    clone: Path,
+    sha: str,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> str:
     """The factory instance named by a commit's ``Factory-Instance`` trailer, or "" if it has none.
 
     The remote is the single source of truth for "is this branch mine". An earlier version kept a
@@ -231,16 +250,25 @@ def _instance_of(clone: Path, sha: str) -> str:
     and is therefore not ours to replace.
     """
     try:
-        _run(["git", "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], clone)
+        _run(["git", "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], clone, env=env)
     except StageError:  # not in the clone yet: the ref moved after we cloned
-        _run(["git", "fetch", "--quiet", "--depth", "1", "origin", sha], clone)
-    message = _run(["git", "log", "-1", "--format=%(trailers:key=Factory-Instance,valueonly)", sha], clone)
+        _run(["git", "fetch", "--quiet", "--depth", "1", "origin", sha], clone, env=env)
+    message = _run(
+        ["git", "log", "-1", "--format=%(trailers:key=Factory-Instance,valueonly)", sha],
+        clone,
+        env=env,
+    )
     return message.strip().splitlines()[0].strip() if message.strip() else ""
 
 
-def _remote_head(clone: Path, branch: str) -> str:
+def _remote_head(
+    clone: Path,
+    branch: str,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> str:
     """The sha the remote currently holds for ``branch``, or "" when it has no such ref."""
-    out = _run(["git", "ls-remote", "origin", f"refs/heads/{branch}"], clone)
+    out = _run(["git", "ls-remote", "origin", f"refs/heads/{branch}"], clone, env=env)
     first = out.split(maxsplit=1)
     return first[0] if first else ""
 
@@ -526,16 +554,24 @@ class GitHubScm:
 
     kind: Literal["local", "github"] = "github"
 
-    def __init__(self, repo: str, base_branch: str, token_env: str = "GH_TOKEN") -> None:
+    def __init__(
+        self,
+        repo: str,
+        base_branch: str,
+        token_env: str = "GH_TOKEN",
+        *,
+        token: str | None = None,
+    ) -> None:
         self.repo = repo
         self.base_branch = base_branch
         self.token_env = token_env
+        self.token = token
 
     def fetch_issue(self, ref: str) -> Issue:
         """Numeric -> ``gh issue view``; anything else -> front-matter file."""
         if not ref.strip().isdigit():
             return parse_issue_file(Path(ref))
-        data = _gh_json(["gh", "issue", "view", ref.strip(), "--repo", self.repo, "--json", _ISSUE_FIELDS])
+        data = self._gh_json(["gh", "issue", "view", ref.strip(), "--repo", self.repo, "--json", _ISSUE_FIELDS])
         return _issue_from_gh(data)  # type: ignore[arg-type]
 
     def list_open_issues(self, label: str, *, limit: int) -> list[Issue]:
@@ -544,7 +580,7 @@ class GitHubScm:
         Open only: closed issues keep their label forever, and a scan window that fills with
         history is a scan that truncates the live work.
         """
-        rows = _gh_json(
+        rows = self._gh_json(
             [
                 "gh", "issue", "list", "--repo", self.repo, "--label", label, "--state", "open",
                 "--limit", str(limit + 1), "--json", _ISSUE_FIELDS,
@@ -555,7 +591,7 @@ class GitHubScm:
 
     def list_open_pr_heads(self, *, limit: int) -> list[str]:
         """Head branches of every open PR; ``factory/<issue>-*`` among them is work in progress."""
-        rows = _gh_json(
+        rows = self._gh_json(
             [
                 "gh", "pr", "list", "--repo", self.repo, "--state", "open",
                 "--limit", str(limit + 1), "--json", "headRefName",
@@ -586,7 +622,7 @@ class GitHubScm:
         key, marker_block = identity.key, identity.marker()
         with tempfile.TemporaryDirectory(prefix="swf-clone-") as tmp:
             clone = Path(tmp) / "clone"
-            _run(
+            self._exec(
                 [
                     "git", *self._cred, "clone", "--quiet", "--depth", "50",
                     "--branch", self.base_branch, f"https://github.com/{self.repo}.git", str(clone),
@@ -594,16 +630,16 @@ class GitHubScm:
                 None,
             )  # fmt: skip
             # Persist the helper in the clone so `git push` uses it (empty value resets globals).
-            _run(["git", "config", "--add", "credential.helper", ""], clone)
-            _run(["git", "config", "--add", "credential.helper", self._helper], clone)
-            _apply_and_push(clone, branch=branch, patch=patch)
+            self._exec(["git", "config", "--add", "credential.helper", ""], clone)
+            self._exec(["git", "config", "--add", "credential.helper", self._helper], clone)
+            _apply_and_push(clone, branch=branch, patch=patch, env=self._environment)
             self._ensure_labels(labels)
             body_file = Path(tmp) / "pr-body.md"
             # The marker travels in the body because the body is the one PR field every instance
             # can read and none can write without the repository credential it already needs.
             body_file.write_text(body + "\n\n" + marker_block + "\n", encoding="utf-8")
             if existing := (self._open_pr_url(branch) or self._adopted_pr_url(key)):
-                _run(
+                self._exec(
                     [
                         "gh", "pr", "edit", existing, "--title", title,
                         "--body-file", str(body_file), *_label_flags(labels, "--add-label"),
@@ -611,7 +647,7 @@ class GitHubScm:
                     None,
                 )  # fmt: skip
                 return existing
-            out = _run(
+            out = self._exec(
                 [
                     "gh", "pr", "create", "--repo", self.repo, "--base", self.base_branch,
                     "--head", branch, "--title", title, "--body-file", str(body_file),
@@ -627,7 +663,7 @@ class GitHubScm:
         with tempfile.TemporaryDirectory(prefix="swf-issue-") as tmp:
             body_file = Path(tmp) / "issue-body.md"
             body_file.write_text(body, encoding="utf-8")
-            out = _run(
+            out = self._exec(
                 [
                     "gh", "issue", "create", "--repo", self.repo, "--title", title,
                     "--body-file", str(body_file), *_label_flags(labels),
@@ -647,7 +683,7 @@ class GitHubScm:
         absent. The content digest comes from the PR's own diff (it outlives the merge and a deleted
         branch) or, for a bare branch, from the compare against the base -- never from the body.
         """
-        out = _run(
+        out = self._exec(
             [
                 "gh", "pr", "list", "--repo", self.repo, "--head", branch, "--state", "all",
                 "--limit", "20", "--json", "number,url,state,headRefOid,baseRefName",
@@ -663,7 +699,7 @@ class GitHubScm:
             if row is None:
                 continue
             number = int(row["number"])
-            diff = _run(["gh", "pr", "diff", str(number), "--repo", self.repo, "--patch"], None)
+            diff = self._exec(["gh", "pr", "diff", str(number), "--repo", self.repo, "--patch"], None)
             return PublicationReceipt(
                 repository=self.repo,
                 base_revision=str(row.get("baseRefName") or ""),
@@ -674,7 +710,7 @@ class GitHubScm:
                 pr_state=pr_state,
                 url=str(row.get("url") or "") or None,
             )
-        out = _run(
+        out = self._exec(
             ["git", *self._cred, "ls-remote", f"https://github.com/{self.repo}.git", f"refs/heads/{branch}"],
             None,
         )
@@ -682,7 +718,7 @@ class GitHubScm:
         if not first:
             return None
         head = first[0]
-        diff = _run(
+        diff = self._exec(
             [
                 "gh", "api", "-H", "Accept: application/vnd.github.patch",
                 f"repos/{self.repo}/compare/{self.base_branch}...{head}",
@@ -699,6 +735,26 @@ class GitHubScm:
             pr_state="branch_only",
         )
 
+    def _exec(
+        self,
+        argv: Sequence[str],
+        cwd: Path | None,
+        input: bytes | None = None,
+    ) -> str:
+        return _run(argv, cwd, input, env=self._environment)
+
+    def _gh_json(self, argv: Sequence[str]) -> object:
+        return _gh_json(argv, env=self._environment)
+
+    @property
+    def _environment(self) -> dict[str, str]:
+        env = dict(os.environ)
+        if self.token is not None:
+            env.pop("GH_TOKEN", None)
+            env.pop("GITHUB_TOKEN", None)
+            env[self.token_env] = self.token
+        return env
+
     # -- internals
 
     @property
@@ -710,12 +766,12 @@ class GitHubScm:
         return ["-c", "credential.helper=", "-c", f"credential.helper={self._helper}"]
 
     def _require_token(self) -> None:
-        if not os.environ.get(self.token_env):
+        if self.token is None and not os.environ.get(self.token_env):
             raise StageError("scm", f"{self.token_env} is not set; cannot push to GitHub")
 
     def _ensure_labels(self, labels: Sequence[str]) -> None:
         for label in labels:
-            _run(["gh", "label", "create", label, "--repo", self.repo, "--force"], None)
+            self._exec(["gh", "label", "create", label, "--repo", self.repo, "--force"], None)
 
     def _adopted_pr_url(self, key: str) -> str | None:
         """Url of the open PR another instance already opened for this work, or None.
@@ -726,7 +782,7 @@ class GitHubScm:
         it is the failure this exists to prevent. The marker is parsed strictly (see
         `publication_identity.adopts`) so a key quoted in a log excerpt cannot adopt the wrong PR.
         """
-        out = _run(
+        out = self._exec(
             [
                 "gh", "pr", "list", "--repo", self.repo, "--state", "open",
                 "--limit", "100", "--json", "url,body",
@@ -744,7 +800,7 @@ class GitHubScm:
 
     def _open_pr_url(self, branch: str) -> str | None:
         """Url of the open PR whose head is ``branch``, or None."""
-        out = _run(
+        out = self._exec(
             [
                 "gh", "pr", "list", "--repo", self.repo, "--head", branch, "--state", "open",
                 "--limit", "1", "--json", "url", "--jq", ".[].url",
