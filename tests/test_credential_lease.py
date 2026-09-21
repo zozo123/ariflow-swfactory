@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from swfactory.cells import CellIdentity, CellStore
 from swfactory.credential_lease import (
     CredentialLeaseBroker,
     CredentialLeaseError,
@@ -135,5 +136,51 @@ def test_broker_denies_unknown_capabilities(tmp_path: Path) -> None:
     try:
         with pytest.raises(CredentialLeaseError, match="no trusted provider"):
             broker.mint(_binding(), capability="github.publish")
+    finally:
+        broker.close()
+
+
+def test_epoch_advance_revokes_live_lease_before_takeover_returns(tmp_path: Path) -> None:
+    store = CellStore(tmp_path / "cells.sqlite3")
+    identity = CellIdentity("acme/widgets", ".", "42")
+    cell = store.activate(identity, actor="test")
+    broker = CredentialLeaseBroker(
+        tmp_path / "leases.sqlite3",
+        providers={"github.publish": lambda _binding: "raw"},
+        epoch_reader=lambda cell_id: int(store.get(cell_id)["epoch"]),
+    )
+    store.on_authority_revoked = (
+        lambda cell_id, epoch, reason: broker.revoke_epoch(cell_id, epoch, reason=reason)
+    )
+    binding = LeaseBinding(
+        factory_run_id="factory-run",
+        dag_run_id="dag-run",
+        task_instance_id="build[0]",
+        stage_id="build",
+        sandbox_id="box-a",
+        attempt_number=1,
+        cell_id=str(cell["cell_id"]),
+        epoch=1,
+        operation_key="github_publish:abc",
+        policy_digest=POLICY,
+    )
+    try:
+        handle = broker.mint(binding, capability="github.publish")
+        assert store.take_epoch(binding.cell_id, 1, actor="takeover") == 2
+        with pytest.raises(CredentialLeaseError, match="revoked|stale_epoch"):
+            broker.redeem(handle, binding, process_nonce="process-nonce-0001")
+    finally:
+        broker.close()
+        store.close()
+
+
+def test_wildcard_capability_is_refused_even_when_a_provider_exists(tmp_path: Path) -> None:
+    broker = CredentialLeaseBroker(
+        tmp_path / "leases.sqlite3",
+        providers={"github": lambda _binding: "raw"},
+    )
+    try:
+        with pytest.raises(CredentialLeaseError, match="explicit and deny-by-default"):
+            broker.mint(_binding(), capability="github")
     finally:
         broker.close()
