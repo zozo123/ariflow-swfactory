@@ -148,6 +148,34 @@
         "schema_version": 1
       },
       "expected": "policy:v1:f1889718c3d8adfa5ca1f0c819d7f4b57706b11353596de5fcd6e15604d312ab"
+    },
+    {
+      "name": "float-1e-6",
+      "input": {
+        "n": 0.000001
+      },
+      "expected": "policy:v1:c764686853a57e6258239ebe2692b70421e3d35f89468c2e6cf1ac56c30f0fe5"
+    },
+    {
+      "name": "float-1e-7",
+      "input": {
+        "n": 1e-7
+      },
+      "expected": "policy:v1:3704c8bd8a8e04b64fb96c513ffe9c8cf6936393d3dfb9ce4e054e3d3e37a39d"
+    },
+    {
+      "name": "float-1.0",
+      "input": {
+        "n": 1
+      },
+      "expected": "policy:v1:f3337ed9526d158dd97d5b20f7eb9ecb73621088b42eb579cb6b27f274638f8f"
+    },
+    {
+      "name": "float-negative-zero",
+      "input": {
+        "n": 0
+      },
+      "expected": "policy:v1:960291f30303bd2aa6feaf17fa84adf97a97d4b4ebde8497681171f670844bce"
     }
   ]
 }
