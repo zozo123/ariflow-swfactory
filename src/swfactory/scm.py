@@ -203,7 +203,7 @@ def _apply_and_push(
     # and cannot be expressed as a fast-forward.
     remote_head = _remote_head(clone, branch, env=env)
     if not remote_head:
-        _run(["git", "push", "-u", "origin", branch], clone)
+        _run(["git", "push", "-u", "origin", branch], clone, env=env)
         return
     # Both sides of the comparison come from commits: the patch just applied says who made it, the
     # remote head says who made that. No caller has to know its own name, so the managed boundary
@@ -220,7 +220,11 @@ def _apply_and_push(
             retryable=False,
         )
     try:
-        _run(\n            ["git", "push", "-u", f"--force-with-lease={branch}:{remote_head}", "origin", branch],\n            clone,\n            env=env,\n        )
+        _run(
+            ["git", "push", "-u", f"--force-with-lease={branch}:{remote_head}", "origin", branch],
+            clone,
+            env=env,
+        )
     except StageError as error:
         if _is_lease_refusal(str(error)):
             raise StageError(
