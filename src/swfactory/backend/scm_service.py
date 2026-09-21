@@ -163,6 +163,11 @@ def _with_github_lease(
     action: Callable[[GitHubScm], T],
 ) -> T:
     binding = _lease_binding(factory, cell, operation_key, stage_id="deliver")
+    factory.leases.revoke_prior_attempts(
+        binding.cell_id,
+        binding.epoch,
+        binding.attempt_number,
+    )
     handle = factory.leases.mint(
         binding,
         capability=capability,
