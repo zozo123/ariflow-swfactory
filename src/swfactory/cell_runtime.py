@@ -12,6 +12,7 @@ from typing import Any
 
 from swfactory.cells import CellIdentity
 from swfactory.intake_governance import require_complete_bindings
+from swfactory.paths import normalize_target_dir, validate_target_base_branch
 
 # The actor a cron tick submits itself as. The backend accepts ``airflow_run_id`` from this actor
 # alone, so a run created by Airflow's scheduler is the only thing that can be attached to.
@@ -20,8 +21,12 @@ _BINDING_KEYS = frozenset({"job_idx", "cell_id", "epoch", "repo", "snapshot_dige
 
 
 def target_identity(job: dict[str, Any]) -> str:
-    directory = str(job.get("dir", "")).strip() or "."
-    base_branch = str(job.get("base_branch", "main")).strip() or "main"
+    raw_directory = str(job.get("dir", "")).strip()
+    directory = normalize_target_dir(raw_directory, field="job.dir") or "."
+    base_branch = validate_target_base_branch(
+        str(job.get("base_branch", "main")).strip() or "main",
+        field="job.base_branch",
+    )
     return f"{directory}@{base_branch}"
 
 

@@ -10,8 +10,8 @@ pub mod advisory;
 pub mod blueprint;
 pub mod build_exploration;
 pub mod cell;
-pub mod control_plane;
 pub mod cognitive_harness;
+pub mod control_plane;
 pub mod doctor;
 pub mod evidence;
 pub mod factory;
@@ -31,8 +31,8 @@ pub mod worker;
 pub use cognitive_harness::{
     classify_self_improvement, ensemble_diversity, gauge_fix, marginal_information_value,
     memory_phase, pairwise_correlation, plan_cognition, quantity_kind, validate_measurement_set,
-    AuthorityRequest, CognitiveAttention, CognitiveError, CognitiveLayer, CognitivePlan,
-    CognitiveReceipt, CognitiveTimescale, DissipationSnapshot, EnsembleMember,
+    AuthorityRequest, AuthorityRequestInput, CognitiveAttention, CognitiveError, CognitiveLayer,
+    CognitivePlan, CognitiveReceipt, CognitiveTimescale, DissipationSnapshot, EnsembleMember,
     GaugeEquivalenceClass, ImprovementDisposition, MeasurementKind, MeasurementReceipt,
     MemoryAction, MemoryEvidence, MemoryPhase, PairwiseCorrelation, QuantityKind,
     SelfImprovementExperiment, StochasticField, WorldAction, WorldCandidate,
@@ -50,13 +50,14 @@ pub use manager_protocol::{
 pub use model::{
     Gate, IssueRef, JobRow, PullRequest, Run, SandboxRef, Snapshot, SourceHealth, TaskState,
 };
-pub use phase_control::{
-    AttentionClass, CandidateDirective, ContextDirective, ControlMode, FactoryPhase, PhaseAssessment,
-    PhaseObservation, PhaseRecommendation, PhaseSignals, QueueDirective, SpawnDirective,
-    TrajectoryMode, VerificationDirective, PHASE_CONTROL_AUTHORITY, PHASE_CONTROL_SCHEMA_VERSION,
-};
 pub use operator::{
     BackendCapabilities, ContractVersions, FleetSummary, LimitingDimension, OperationDebt,
     QueueEntry, QueuePressure, QueueSnapshot,
+};
+pub use phase_control::{
+    AttentionClass, CandidateDirective, ContextDirective, ControlMode, FactoryPhase,
+    PhaseAssessment, PhaseObservation, PhaseRecommendation, PhaseSignals, QueueDirective,
+    SpawnDirective, TrajectoryMode, VerificationDirective, PHASE_CONTROL_AUTHORITY,
+    PHASE_CONTROL_SCHEMA_VERSION,
 };
 pub use worker::{WorkerBatch, WorkerReceipt, WorkerRole, MAX_WORKERS};

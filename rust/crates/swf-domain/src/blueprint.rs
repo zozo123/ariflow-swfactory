@@ -543,8 +543,18 @@ impl Blueprint {
             validate_repo(&target.repo).map_err(BlueprintError::invalid)?;
             target.dir = normalize_relative_path(&target.dir, "targets.dir", true)
                 .map_err(BlueprintError::invalid)?;
+            if target.dir.contains('@') {
+                return Err(BlueprintError::invalid(
+                    "targets.dir must not contain '@' because it separates Factory Cell target identity",
+                ));
+            }
             validate_git_ref(&target.base_branch, "targets.base_branch")
                 .map_err(BlueprintError::invalid)?;
+            if target.base_branch.contains('@') {
+                return Err(BlueprintError::invalid(
+                    "targets.base_branch must not contain '@' because it separates Factory Cell target identity",
+                ));
+            }
         }
         Ok(())
     }
@@ -1234,6 +1244,27 @@ order = ["intent", "deliver"]
         );
         assert!(parse(&with("build", "Write(src/**)")).is_ok());
         assert!(parse(&with("review", "Read(docs/**)")).is_ok());
+    }
+
+    #[test]
+    fn target_identity_delimiter_is_reserved() {
+        let dir = MINIMAL.replace(
+            "repo = \"owner/name\"",
+            "repo = \"owner/name\"\ndir = \"a@b\"\nbase_branch = \"c\"",
+        );
+        assert_eq!(
+            err(&dir),
+            "targets.dir must not contain '@' because it separates Factory Cell target identity"
+        );
+
+        let branch = MINIMAL.replace(
+            "repo = \"owner/name\"",
+            "repo = \"owner/name\"\ndir = \"a\"\nbase_branch = \"b@c\"",
+        );
+        assert_eq!(
+            err(&branch),
+            "targets.base_branch must not contain '@' because it separates Factory Cell target identity"
+        );
     }
 
     #[test]

@@ -399,6 +399,19 @@ pub struct CognitivePlan {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AuthorityRequestInput {
+    pub cell_id: String,
+    pub epoch: u64,
+    pub candidate_digest: String,
+    pub source_digest: String,
+    pub recipe_digest: String,
+    pub policy_digest: String,
+    pub evidence_digest: String,
+    pub requested_effect: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthorityRequest {
     pub cell_id: String,
     pub epoch: u64,
@@ -413,25 +426,16 @@ pub struct AuthorityRequest {
 }
 
 impl AuthorityRequest {
-    pub fn new(
-        cell_id: impl Into<String>,
-        epoch: u64,
-        candidate_digest: impl Into<String>,
-        source_digest: impl Into<String>,
-        recipe_digest: impl Into<String>,
-        policy_digest: impl Into<String>,
-        evidence_digest: impl Into<String>,
-        requested_effect: impl Into<String>,
-    ) -> Self {
+    pub fn new(input: AuthorityRequestInput) -> Self {
         Self {
-            cell_id: cell_id.into(),
-            epoch,
-            candidate_digest: candidate_digest.into(),
-            source_digest: source_digest.into(),
-            recipe_digest: recipe_digest.into(),
-            policy_digest: policy_digest.into(),
-            evidence_digest: evidence_digest.into(),
-            requested_effect: requested_effect.into(),
+            cell_id: input.cell_id,
+            epoch: input.epoch,
+            candidate_digest: input.candidate_digest,
+            source_digest: input.source_digest,
+            recipe_digest: input.recipe_digest,
+            policy_digest: input.policy_digest,
+            evidence_digest: input.evidence_digest,
+            requested_effect: input.requested_effect,
             authority: "request-only".into(),
             requires: REALITY_BOUNDARY.into(),
         }
@@ -526,7 +530,11 @@ pub fn classify_self_improvement(
 fn stable_digest<T: Serialize>(value: &T) -> Result<String, CognitiveError> {
     let payload = serde_json::to_vec(value)?;
     let hash = digest(&SHA256, &payload);
-    Ok(hash.as_ref().iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(hash
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 pub fn quantity_kind(name: &str) -> QuantityKind {
@@ -667,9 +675,7 @@ pub fn plan_cognition(
     memory_evidence: Option<&MemoryEvidence>,
     human_attention_pressure: f64,
 ) -> Result<CognitivePlan, CognitiveError> {
-    if !human_attention_pressure.is_finite()
-        || !(0.0..=1.0).contains(&human_attention_pressure)
-    {
+    if !human_attention_pressure.is_finite() || !(0.0..=1.0).contains(&human_attention_pressure) {
         return Err(CognitiveError::InvalidNumber("human_attention_pressure"));
     }
 
@@ -787,8 +793,10 @@ pub fn make_receipt(
     };
 
     let phase_assessment_digest = stable_digest(phase)?;
-    let invariant_worlds: Vec<InvariantObservables<'_>> =
-        worlds.iter().map(WorldCandidate::invariant_observables).collect();
+    let invariant_worlds: Vec<InvariantObservables<'_>> = worlds
+        .iter()
+        .map(WorldCandidate::invariant_observables)
+        .collect();
 
     Ok(CognitiveReceipt {
         schema_version: COGNITIVE_HARNESS_SCHEMA_VERSION,

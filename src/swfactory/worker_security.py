@@ -154,6 +154,4 @@ def assert_airflow_worker_boundary(*, action: str, env: dict[str, str] | None = 
         raise WorkerPolicyViolation(f"airflow worker may never perform {action}")
     leaked = sorted(AIRFLOW_WORKER_FORBIDDEN_ENV.intersection((env or {}).keys()))
     if leaked:
-        raise WorkerPolicyViolation(
-            "airflow worker environment contains forbidden authority: " + ", ".join(leaked)
-        )
+        raise WorkerPolicyViolation("airflow worker environment contains forbidden authority: " + ", ".join(leaked))

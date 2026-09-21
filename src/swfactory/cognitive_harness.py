@@ -353,10 +353,7 @@ class CognitivePlan:
     reason: str
 
     def as_dict(self) -> dict[str, object]:
-        return {
-            key: str(value) if isinstance(value, StrEnum) else value
-            for key, value in asdict(self).items()
-        }
+        return {key: str(value) if isinstance(value, StrEnum) else value for key, value in asdict(self).items()}
 
 
 @dataclass(frozen=True)
@@ -425,8 +422,10 @@ def validate_measurement_set(
     relevant = [measurement for measurement in measurements if measurement.world_id == world.world_id]
     for measurement in relevant:
         measurement.validate()
-    return bool(relevant) and all(measurement.passed for measurement in relevant) and any(
-        measurement.independent for measurement in relevant
+    return (
+        bool(relevant)
+        and all(measurement.passed for measurement in relevant)
+        and any(measurement.independent for measurement in relevant)
     )
 
 
@@ -512,11 +511,7 @@ def memory_phase(evidence: MemoryEvidence) -> MemoryPhase:
     evidence.validate()
     if evidence.contradictions > 0:
         return MemoryPhase.CANDIDATE_BELIEF
-    if (
-        evidence.independent_confirmations >= 3
-        and evidence.recurrence >= 0.75
-        and evidence.evidence_strength >= 0.85
-    ):
+    if evidence.independent_confirmations >= 3 and evidence.recurrence >= 0.75 and evidence.evidence_strength >= 0.85:
         return MemoryPhase.CRYSTAL
     if evidence.independent_confirmations >= 2 and evidence.evidence_strength >= 0.65:
         return MemoryPhase.CANDIDATE_BELIEF

@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use swf_domain::phase_control::{
-    assess, branching_ratio, normalized_entropy, AttentionClass, CandidateDirective, ContextDirective,
-    ControlMode, FactoryPhase, PhaseObservation, QueueDirective, SpawnDirective, TrajectoryMode,
-    VerificationDirective, PHASE_CONTROL_AUTHORITY, PHASE_CONTROL_SCHEMA_VERSION,
+    assess, branching_ratio, normalized_entropy, AttentionClass, CandidateDirective,
+    ContextDirective, ControlMode, FactoryPhase, PhaseObservation, QueueDirective, SpawnDirective,
+    TrajectoryMode, VerificationDirective, PHASE_CONTROL_AUTHORITY, PHASE_CONTROL_SCHEMA_VERSION,
 };
 
 #[derive(Debug, Deserialize)]
@@ -46,45 +46,56 @@ struct Expected {
 fn python_and_rust_share_one_phase_contract() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../tests/fixtures/contract/phase_control.json");
-    let fixture: Fixture =
-        serde_json::from_str(&std::fs::read_to_string(path).expect("fixture")).expect("valid fixture");
+    let fixture: Fixture = serde_json::from_str(&std::fs::read_to_string(path).expect("fixture"))
+        .expect("valid fixture");
 
     assert_eq!(fixture.schema_version, PHASE_CONTROL_SCHEMA_VERSION);
     for case in fixture.cases {
         let assessment =
             assess(&case.input.observation, case.input.previous_phase).expect(&case.name);
-        assert_eq!(assessment.raw_phase, case.expected.raw_phase, "{}", case.name);
+        assert_eq!(
+            assessment.raw_phase, case.expected.raw_phase,
+            "{}",
+            case.name
+        );
         assert_eq!(assessment.phase, case.expected.phase, "{}", case.name);
-        assert_eq!(assessment.recommendation.mode, case.expected.mode, "{}", case.name);
-        assert_eq!(assessment.recommendation.spawn, case.expected.spawn, "{}", case.name);
         assert_eq!(
-            assessment.recommendation.trajectory,
-            case.expected.trajectory,
+            assessment.recommendation.mode, case.expected.mode,
             "{}",
             case.name
         );
         assert_eq!(
-            assessment.recommendation.context,
-            case.expected.context,
+            assessment.recommendation.spawn, case.expected.spawn,
             "{}",
             case.name
         );
         assert_eq!(
-            assessment.recommendation.candidates,
-            case.expected.candidates,
-            "{}",
-            case.name
-        );
-        assert_eq!(assessment.recommendation.queue, case.expected.queue, "{}", case.name);
-        assert_eq!(
-            assessment.recommendation.verification,
-            case.expected.verification,
+            assessment.recommendation.trajectory, case.expected.trajectory,
             "{}",
             case.name
         );
         assert_eq!(
-            assessment.recommendation.attention,
-            case.expected.attention,
+            assessment.recommendation.context, case.expected.context,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            assessment.recommendation.candidates, case.expected.candidates,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            assessment.recommendation.queue, case.expected.queue,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            assessment.recommendation.verification, case.expected.verification,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            assessment.recommendation.attention, case.expected.attention,
             "{}",
             case.name
         );
@@ -94,11 +105,18 @@ fn python_and_rust_share_one_phase_contract() {
             "{}",
             case.name
         );
-        assert_eq!(assessment.authority, PHASE_CONTROL_AUTHORITY, "{}", case.name);
-        assert_eq!(assessment.observation, case.input.observation, "{}", case.name);
         assert_eq!(
-            assessment.previous_phase,
-            case.input.previous_phase,
+            assessment.authority, PHASE_CONTROL_AUTHORITY,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            assessment.observation, case.input.observation,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            assessment.previous_phase, case.input.previous_phase,
             "{}",
             case.name
         );

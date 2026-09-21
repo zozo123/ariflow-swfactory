@@ -80,3 +80,27 @@ def test_python_matches_the_shared_policy_digest_fixture() -> None:
     assert document["function"] == "policy_digest"
     for case in document["cases"]:
         assert policy_digest_for_mapping(case["input"]) == case["expected"]
+
+
+def test_policy_digest_refuses_numbers_outside_cross_language_exact_range() -> None:
+    limit = contract.POLICY_MAX_EXACT_INTEGER
+    assert policy_digest_for_mapping({"n": limit})
+    assert policy_digest_for_mapping({"n": -limit})
+    with pytest.raises(ValueError, match="cross-language exact range"):
+        policy_digest_for_mapping({"n": limit + 1})
+    with pytest.raises(ValueError, match="cross-language exact range"):
+        policy_digest_for_mapping({"n": -limit - 1})
+
+
+def test_policy_digest_refuses_non_string_mapping_keys() -> None:
+    with pytest.raises(TypeError, match="string keys"):
+        policy_digest_for_mapping({1: "ambiguous"})  # type: ignore[dict-item]
+
+
+def test_factory_policy_refuses_ambiguous_target_join_components() -> None:
+    a = {"repo": "acme/repo", "dir": "a@b", "base_branch": "c", "issue": "7", "sandbox": "islo"}
+    b = {"repo": "acme/repo", "dir": "a", "base_branch": "b@c", "issue": "7", "sandbox": "islo"}
+    with pytest.raises(ValueError, match="must not contain '@'"):
+        CanonicalPolicy.for_factory_job("factory", a)
+    with pytest.raises(ValueError, match="must not contain '@'"):
+        CanonicalPolicy.for_factory_job("factory", b)

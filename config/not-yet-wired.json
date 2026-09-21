@@ -4,6 +4,7 @@
   "does_not_measure": "execution-reachability. A module counted here is one an import path reaches from an entrypoint. It is NOT proof that anything runs: a module imported inside a CLI command counts as wired even when the code it exposes is never entered. An empty map means no module is unimportable -- it does not mean every subsystem executes.",
   "modules": {
     "convergence_decision": "cryptographic convergence receipts; runs once a campaign consumes them",
-    "exploration_space": "orthogonal hypothesis axes; runs once a campaign enumerates them"
+    "exploration_space": "orthogonal hypothesis axes; runs once a campaign enumerates them",
+    "cognitive_harness": "pure cognitive domain contract is qualified but not yet imported by a managed runtime entrypoint"
   }
 }

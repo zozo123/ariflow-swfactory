@@ -24,8 +24,9 @@ from swfactory.intake_governance import ScheduleLimits
 from swfactory.paths import (
     normalize_absolute_posix_path,
     normalize_relative_path,
-    validate_git_ref,
+    normalize_target_dir,
     validate_repo,
+    validate_target_base_branch,
 )
 
 if TYPE_CHECKING:
@@ -63,12 +64,12 @@ class Target(BaseModel):
     @field_validator("dir")
     @classmethod
     def _directory(cls, value: str) -> str:
-        return normalize_relative_path(value, field="targets.dir", allow_empty=True)
+        return normalize_target_dir(value, field="targets.dir")
 
     @field_validator("base_branch")
     @classmethod
     def _branch(cls, value: str) -> str:
-        return validate_git_ref(value, field="targets.base_branch")
+        return validate_target_base_branch(value, field="targets.base_branch")
 
 
 class GateSpec(BaseModel):

@@ -369,3 +369,15 @@ def test_protected_for_frees_tests_dir_outside_fix():
     assert protected_for(c, "build") == ["factory.toml"]
     assert protected_for(c, "plan") == ["factory.toml"]
     assert protected_for(c, "fix") == ["factory.toml", "tests"]
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        {"repo": "o/a", "dir": "a@b", "base_branch": "c"},
+        {"repo": "o/a", "dir": "a", "base_branch": "b@c"},
+    ],
+)
+def test_target_identity_delimiter_is_reserved(target: dict[str, str]) -> None:
+    with pytest.raises(ValidationError, match="must not contain '@'"):
+        Blueprint.model_validate(_data(targets=[target]))

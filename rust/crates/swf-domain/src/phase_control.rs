@@ -128,8 +128,7 @@ impl PhaseObservation {
                 return Err(PhaseControlError::OutOfRange(name));
             }
         }
-        if !self.queue_acceleration.is_finite()
-            || !(-1.0..=1.0).contains(&self.queue_acceleration)
+        if !self.queue_acceleration.is_finite() || !(-1.0..=1.0).contains(&self.queue_acceleration)
         {
             return Err(PhaseControlError::OutOfRange("queue_acceleration"));
         }

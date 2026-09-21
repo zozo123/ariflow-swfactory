@@ -830,10 +830,13 @@ fn phase_assessment_needs_no_context_or_backend() {
         .arg("--json")
         .output()
         .expect("phase runs");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let value = document(&output.stdout);
     assert_eq!(value["phase"], "crystal");
     assert_eq!(value["recommendation"]["mode"], "verify");
     assert_eq!(value["authority"], "search-only");
 }
-

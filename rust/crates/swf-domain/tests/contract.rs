@@ -308,12 +308,11 @@ fn apply(function: &str, input: &Value) -> Outcome {
 fn phase_control(input: &Value) -> Outcome {
     use swf_domain::phase_control::{assess, FactoryPhase, PhaseObservation};
 
-    let observation = match serde_json::from_value::<PhaseObservation>(
-        pick(input, &["observation"]).clone(),
-    ) {
-        Ok(observation) => observation,
-        Err(error) => return Outcome::Error(format!("invalid phase observation: {error}")),
-    };
+    let observation =
+        match serde_json::from_value::<PhaseObservation>(pick(input, &["observation"]).clone()) {
+            Ok(observation) => observation,
+            Err(error) => return Outcome::Error(format!("invalid phase observation: {error}")),
+        };
     let previous_phase = match input.get("previous_phase") {
         None | Some(Value::Null) => None,
         Some(value) => match serde_json::from_value::<FactoryPhase>(value.clone()) {

@@ -33,8 +33,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cli::{
     AnswerArgs, Cli, Command, ContextAddArgs, ContextCmd, DeliveriesCmd, FactoryCmd,
-    GateFilterArgs, GatesCmd, JobListArgs, JobsCmd, LogsArgs, MetricsArgs, PhaseArgs, RunsCmd, SandboxesCmd,
-    StackCmd, SubmitArgs, VerifyArgs,
+    GateFilterArgs, GatesCmd, JobListArgs, JobsCmd, LogsArgs, MetricsArgs, PhaseArgs, RunsCmd,
+    SandboxesCmd, StackCmd, SubmitArgs, VerifyArgs,
 };
 use crate::exit::Outcome;
 use crate::json;
@@ -196,28 +196,29 @@ pub async fn run(ctx: &Ctx) -> Result<Outcome> {
     }
 }
 
-
 fn phase_cmd(args: &PhaseArgs) -> Result<Outcome> {
     use swf_domain::phase_control::{assess, PhaseObservation};
 
-    let raw = std::fs::read_to_string(&args.input)
-        .map_err(|error| OpsError::usage(format!("phase input {}: {error}", args.input.display())))?;
+    let raw = std::fs::read_to_string(&args.input).map_err(|error| {
+        OpsError::usage(format!("phase input {}: {error}", args.input.display()))
+    })?;
     let document: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|error| OpsError::usage(format!("phase input is not valid JSON: {error}")))?;
     let payload = document.get("observation").unwrap_or(&document).clone();
     let observation: PhaseObservation = serde_json::from_value(payload)
         .map_err(|error| OpsError::usage(format!("phase observation: {error}")))?;
-    let previous = args
-        .previous
-        .as_deref()
-        .map(parse_phase_name)
-        .transpose()?;
+    let previous = args.previous.as_deref().map(parse_phase_name).transpose()?;
     let assessment = assess(&observation, previous)
         .map_err(|error| OpsError::usage(format!("phase observation: {error}")))?;
     let doc = serde_json::to_value(&assessment)
         .map_err(|error| OpsError::operational(format!("phase serialization: {error}")))?;
-    let phase = doc.get("phase").and_then(serde_json::Value::as_str).unwrap_or("unknown");
-    let recommendation = doc.get("recommendation").and_then(serde_json::Value::as_object);
+    let phase = doc
+        .get("phase")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let recommendation = doc
+        .get("recommendation")
+        .and_then(serde_json::Value::as_object);
     let mode = recommendation
         .and_then(|value| value.get("mode"))
         .and_then(serde_json::Value::as_str)

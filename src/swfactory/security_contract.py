@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import time
 from collections.abc import Iterable, Mapping
@@ -16,10 +17,12 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from swfactory.cells import is_cell_id
+from swfactory.paths import normalize_target_dir, validate_target_base_branch
 
 POLICY_SCHEMA_VERSION = 1
 POLICY_DIGEST_FAMILY = f"v{POLICY_SCHEMA_VERSION}"
 POLICY_DIGEST_PREFIX = f"policy:{POLICY_DIGEST_FAMILY}:"
+POLICY_MAX_EXACT_INTEGER = (1 << 53) - 1
 MUTATION_SCHEMA_VERSION = 1
 REDACTION_SCHEMA_VERSION = 1
 REDACTED = "[REDACTED]"
@@ -74,8 +77,10 @@ class CanonicalPolicy:
 
         line = str(line_name).strip()
         repo = str(job.get("repo", "")).strip()
-        directory = str(job.get("dir", "")).strip() or "."
-        base_branch = str(job.get("base_branch", "main")).strip() or "main"
+        directory = normalize_target_dir(str(job.get("dir", "")).strip(), field="job.dir") or "."
+        base_branch = validate_target_base_branch(
+            str(job.get("base_branch", "main")).strip() or "main", field="job.base_branch"
+        )
         sandbox = str(job.get("sandbox", "configured")).strip() or "configured"
         if not line:
             raise ValueError("factory policy line must be nonempty")
@@ -219,6 +224,7 @@ def policy_digest_for_mapping(policy: Mapping[str, Any]) -> str:
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
+        ensure_ascii=False,
     )
     digest = hashlib.sha256(f"{POLICY_DIGEST_FAMILY}\0{payload}".encode()).hexdigest()
     return POLICY_DIGEST_PREFIX + digest
@@ -248,10 +254,26 @@ def require_current_policy_digest(digest: str) -> None:
 
 def _canonical_value(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return {str(key): _canonical_value(value[key]) for key in sorted(value, key=str)}
+        keys = list(value)
+        if any(not isinstance(key, str) for key in keys):
+            raise TypeError("policy mappings must use string keys")
+        return {key: _canonical_value(value[key]) for key in sorted(keys)}
     if isinstance(value, (list, tuple)):
         return [_canonical_value(item) for item in value]
     if isinstance(value, set):
         normalized = [_canonical_value(item) for item in value]
-        return sorted(normalized, key=lambda item: json.dumps(item, sort_keys=True))
-    return value
+        return sorted(
+            normalized,
+            key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
+        )
+    if value is None or isinstance(value, (bool, str)):
+        return value
+    if isinstance(value, int):
+        if abs(value) > POLICY_MAX_EXACT_INTEGER:
+            raise ValueError(f"policy integer exceeds cross-language exact range +/-{POLICY_MAX_EXACT_INTEGER}")
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value) or abs(value) > POLICY_MAX_EXACT_INTEGER:
+            raise ValueError("policy float must be finite and inside the cross-language exact range")
+        return value
+    raise TypeError(f"unsupported policy value type: {type(value).__name__}")

@@ -241,3 +241,12 @@ def test_new_epoch_clears_inherited_policy_authority(tmp_path: Path) -> None:
         assert store.get(rebound["cell_id"])["policy_digest"] is None
     finally:
         store.close()
+
+
+def test_ambiguous_target_join_is_refused_before_cell_identity() -> None:
+    a = {"repo": "acme/repo", "dir": "a@b", "base_branch": "c", "issue": "7", "job_idx": 0}
+    b = {"repo": "acme/repo", "dir": "a", "base_branch": "b@c", "issue": "7", "job_idx": 1}
+    with pytest.raises(ValueError, match="job.dir must not contain '@'"):
+        identity_for_job(a)
+    with pytest.raises(ValueError, match="job.base_branch must not contain '@'"):
+        identity_for_job(b)

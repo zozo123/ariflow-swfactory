@@ -150,7 +150,6 @@ pub enum Command {
     Version,
 }
 
-
 /// `swf phase` — assess one retained telemetry snapshot without contacting the backend.
 #[derive(Debug, Args)]
 pub struct PhaseArgs {
@@ -929,7 +928,6 @@ mod tests {
         assert!(global.json && global.verbose == 1);
         assert_eq!(global.timeout, Some(5.0));
     }
-
 
     #[test]
     fn phase_assessment_is_a_read_only_local_surface() {
