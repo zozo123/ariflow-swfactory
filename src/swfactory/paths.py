@@ -118,6 +118,7 @@ def validate_target_base_branch(value: str, *, field: str = "targets.base_branch
         raise ValueError(f"{field} must not contain '@' because it separates Factory Cell target identity")
     return normalized
 
+
 def normalize_absolute_posix_path(value: str, *, field: str = "path") -> str:
     """Normalize a non-root absolute path used inside a remote sandbox."""
 
