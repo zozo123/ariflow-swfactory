@@ -13,6 +13,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from swfactory.store_schema import CELL_ROW_SCHEMA_VERSION, ensure_named_schema, guard_before_ddl
@@ -90,8 +91,14 @@ class CellStore:
     No process-local lock is treated as ownership authority: epochs in the database are.
     """
 
-    def __init__(self, path: Path):
+    def __init__(
+        self,
+        path: Path,
+        *,
+        on_authority_revoked: Callable[[str, int, str], None] | None = None,
+    ):
         self.path = path
+        self.on_authority_revoked = on_authority_revoked
         path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self.db = sqlite3.connect(
@@ -183,7 +190,13 @@ class CellStore:
             fresh = current["state"] == "created" and current["airflow_run_id"] is None
             if not fresh and current["state"] not in TERMINAL_STATES:
                 raise CellBusy(f"{cell_id} is already active at epoch {current['epoch']} in state {current['state']}")
-            next_epoch = int(current["epoch"]) if fresh else int(current["epoch"]) + 1
+            previous_epoch = int(current["epoch"])
+            next_epoch = previous_epoch if fresh else previous_epoch + 1
+            if next_epoch != previous_epoch and self.on_authority_revoked is not None:
+                # Revoke old-epoch credential capabilities before the new fence is committed.
+                # A broker redeem also re-reads the Cell epoch, so this callback is defense in depth
+                # and guarantees take-over never returns while a prior lease remains live.
+                self.on_authority_revoked(cell_id, previous_epoch, "epoch_advanced")
             cur = self.db.execute(
                 """UPDATE cells SET
                     epoch=?, state='dispatching', airflow_dag_id=NULL, airflow_run_id=NULL,
@@ -259,6 +272,8 @@ class CellStore:
         next_epoch = expected_epoch + 1
         now = time.time()
         with self.lock, self.db:
+            if self.on_authority_revoked is not None:
+                self.on_authority_revoked(cell_id, expected_epoch, "epoch_advanced")
             cur = self.db.execute(
                 "UPDATE cells SET epoch=?, policy_digest=NULL, updated_at=? WHERE cell_id=? AND epoch=?",
                 (next_epoch, now, cell_id, expected_epoch),
@@ -309,6 +324,12 @@ class CellStore:
                 )
             now = time.time()
             with self.db:
+                # Terminal lifecycle state revokes the epoch's credential authority before the
+                # terminal write commits. Cleanup/evidence paths remain available through their
+                # own capability contracts; raw credential leases do not.
+                state = fields.get("state")
+                if state in TERMINAL_STATES and self.on_authority_revoked is not None:
+                    self.on_authority_revoked(cell_id, expected_epoch, f"cell_{state}")
                 self._append(Mutation(cell_id, expected_epoch, operation_key, "patch", fields))
                 if encoded:
                     set_clause = ",".join(f"{k}=?" for k in encoded)
