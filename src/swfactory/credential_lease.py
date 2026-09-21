@@ -427,7 +427,12 @@ class CredentialLeaseBroker:
             ),
         )
         if self.on_denial is not None:
-            self.on_denial(event)
+            try:
+                self.on_denial(event)
+            except Exception:
+                # The broker DB is the mandatory negative-provenance ledger. A secondary evidence
+                # projection must never turn a denial into a rolled-back/forgotten denial.
+                pass
         raise CredentialLeaseError(f"credential lease denied: {reason}")
 
 
