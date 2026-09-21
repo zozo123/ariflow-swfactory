@@ -22,7 +22,7 @@ TURBO = ("npx", "--yes", "turbo@2.11.1")
 FACTORY_LEAVES = frozenset(
     {
         "//#python-verify",
-        "//#rust-contract-verify",
+        "swfactory-contract-fixtures#rust-verify",
         "swfactory-rust#test",
         "swf-cli#build",
     }
@@ -32,7 +32,7 @@ query {
   affectedTasks(
     base: "HEAD^"
     head: "HEAD"
-    tasks: ["//#python-verify", "//#rust-contract-verify", "swfactory-rust#test", "swf-cli#build"]
+    tasks: ["//#python-verify", "swfactory-contract-fixtures#rust-verify", "swfactory-rust#test", "swf-cli#build"]
   ) {
     items { fullName }
   }
@@ -125,7 +125,11 @@ def affectedness_matrix() -> dict[str, list[str]]:
 
 
 def _is_rust_verifier(name: str) -> bool:
-    return name == "//#rust-contract-verify" or name.startswith("swf-") or name.startswith("swfactory-rust#")
+    return (
+        name == "swfactory-contract-fixtures#rust-verify"
+        or name.startswith("swf-")
+        or name.startswith("swfactory-rust#")
+    )
 
 
 def _assert_affectedness(matrix: dict[str, list[str]]) -> None:
