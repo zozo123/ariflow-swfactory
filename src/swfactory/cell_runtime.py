@@ -13,6 +13,7 @@ from typing import Any
 from swfactory.cells import CellIdentity
 from swfactory.intake_governance import require_complete_bindings
 from swfactory.paths import normalize_target_dir, validate_target_base_branch
+from swfactory.xcom_contract import validate_xcom_document
 
 # The actor a cron tick submits itself as. The backend accepts ``airflow_run_id`` from this actor
 # alone, so a run created by Airflow's scheduler is the only thing that can be attached to.
@@ -93,7 +94,8 @@ def bind_jobs(jobs: Iterable[dict[str, Any]], bindings: Iterable[dict[str, Any]]
                 cell_epoch=1,
                 cell_managed=False,
             )
-        return out
+        validate_xcom_document(out)
+    return out
 
     rows = list(bindings)
     if not all(isinstance(raw, dict) and raw.keys() >= _BINDING_KEYS for raw in rows):
