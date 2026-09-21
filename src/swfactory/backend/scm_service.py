@@ -12,10 +12,12 @@ from __future__ import annotations
 import base64
 import hashlib
 from dataclasses import asdict
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from swfactory.authority import ResourceKind
 from swfactory.core_capabilities import CoreMutationRequest
+from swfactory.credential_lease import LeaseBinding
 from swfactory.idempotency import MutationOutcome
 from swfactory.liquid_security_runtime import Capability, SecurityContext
 from swfactory.models import StageError
@@ -40,7 +42,8 @@ _ISSUE_MARKER_PREFIX = "<!-- swfactory-operation:"
 def operation(factory: Factory, path: str, body: dict[str, Any]) -> Any:
     if not factory.repo:
         raise Refused(503, "SWF_REPO is not configured on the backend")
-    scm = GitHubScm(factory.repo, text({"base": body.get("base_branch", "main")}, "base"))
+    base_branch = text({"base": body.get("base_branch", "main")}, "base")
+    scm = GitHubScm(factory.repo, base_branch)
     if path == "/scm/issue":
         # Filesystem issue refs are a local-demo affordance. The backend holds publication and
         # Airflow credentials, so a network caller may resolve GitHub issue numbers only.
@@ -50,9 +53,9 @@ def operation(factory: Factory, path: str, body: dict[str, Any]) -> Any:
         issue = scm.fetch_issue(ref)
         return issue.model_dump(mode="json")
     if path == "/scm/publish":
-        return _publish(factory, scm, body)
+        return _publish(factory, base_branch, body)
     if path == "/scm/open-issue":
-        return _open_issue(factory, scm, body)
+        return _open_issue(factory, base_branch, body)
     raise Refused(404, "unknown backend SCM operation")
 
 
@@ -111,7 +114,73 @@ def _request(
     )
 
 
-def _publish(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str, Any]:
+T = TypeVar("T")
+
+
+def _lease_binding(
+    factory: Factory,
+    cell: dict[str, Any],
+    operation_key: str,
+    *,
+    stage_id: str,
+) -> LeaseBinding:
+    try:
+        operation = factory.control.operations.get(operation_key)
+        attempt = max(1, int(operation.get("attempts") or 0))
+    except KeyError:
+        attempt = 1
+    run_id = str(cell.get("airflow_run_id") or "unbound-run")
+    compute = cell.get("compute")
+    compute = compute if isinstance(compute, dict) else {}
+    sandbox_id = str(
+        compute.get("sandbox_id")
+        or compute.get("name")
+        or compute.get("handle")
+        or "backend-publication"
+    )
+    return LeaseBinding(
+        factory_run_id=f"{cell.get('airflow_dag_id') or 'factory'}:{run_id}:{cell.get('map_index', 0)}",
+        dag_run_id=run_id,
+        task_instance_id=f"job[{cell.get('map_index', 0)}].{stage_id}",
+        stage_id=stage_id,
+        sandbox_id=sandbox_id,
+        attempt_number=attempt,
+        cell_id=str(cell["cell_id"]),
+        epoch=int(cell["epoch"]),
+        operation_key=operation_key,
+        policy_digest=str(cell["policy_digest"]),
+    )
+
+
+def _with_github_lease(
+    factory: Factory,
+    cell: dict[str, Any],
+    operation_key: str,
+    *,
+    base_branch: str,
+    capability: str,
+    purpose: str,
+    action: Callable[[GitHubScm], T],
+) -> T:
+    binding = _lease_binding(factory, cell, operation_key, stage_id="deliver")
+    handle = factory.leases.mint(
+        binding,
+        capability=capability,
+        purpose=purpose,
+        ttl_s=120.0,
+    )
+    try:
+        token = factory.leases.redeem(
+            handle,
+            binding,
+            process_nonce=factory.lease_process_nonce,
+        )
+        return action(GitHubScm(factory.repo, base_branch, token=token))
+    finally:
+        factory.leases.revoke(handle.lease_id)
+
+
+def _publish(factory: Factory, base_branch: str, body: dict[str, Any]) -> dict[str, Any]:
     cell, security, operation_key, initiating_actor = _managed_identity(factory, body)
     branch = text(body, "branch")
     title = text(body, "title", max_len=512)
@@ -138,7 +207,7 @@ def _publish(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str
     # access can edit a body, so a retry is judged on git content (`patch_content_digest`) instead.
     marker = f"{_MARKER_PREFIX}{patch_digest} -->"
     publish_body = pr_body.rstrip() + "\n\n" + marker + "\n"
-    base_branch = str(body.get("base_branch") or "main")
+    base_branch = str(base_branch)
     digest = intent_digest(
         {
             "kind": "github_publish",
@@ -202,26 +271,55 @@ def _publish(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str
         )
 
     def publish() -> dict[str, Any]:
-        scm.publish(
-            branch=branch,
-            patch=patch,
-            title=title,
-            body=publish_body,
-            labels=labels,
-            allowed_prefixes=allowed,
+        def apply(scoped: GitHubScm) -> dict[str, Any]:
+            scoped.publish(
+                branch=branch,
+                patch=patch,
+                title=title,
+                body=publish_body,
+                labels=labels,
+                allowed_prefixes=allowed,
+            )
+            # Read the receipt back under the same one-shot trusted lease; the raw credential never
+            # crosses into Airflow/XCom/sandbox state.
+            outcome = judge(scoped.observe_publication(branch))
+            if outcome.status != "committed":
+                raise StageError(
+                    "scm",
+                    f"publication did not verify on the remote: {outcome.detail}",
+                    retryable=True,
+                )
+            return dict(outcome.result)
+
+        return _with_github_lease(
+            factory,
+            cell,
+            operation_key,
+            base_branch=base_branch,
+            capability="github.publish",
+            purpose="publish-pull-request",
+            action=apply,
         )
-        # The receipt is read back from GitHub the way a reconcile reads it, so the journal never
-        # holds a claim the remote cannot repeat (and a later replay compares like with like).
-        outcome = judge(scm.observe_publication(branch))
-        if outcome.status != "committed":
-            raise StageError("scm", f"publication did not verify on the remote: {outcome.detail}", retryable=True)
-        return dict(outcome.result)
 
     def reconcile() -> MutationOutcome:
         try:
-            return judge(scm.observe_publication(branch))
+            receipt = _with_github_lease(
+                factory,
+                cell,
+                operation_key,
+                base_branch=base_branch,
+                capability="github.read",
+                purpose="observe-publication",
+                action=lambda scoped: scoped.observe_publication(branch),
+            )
+            return judge(receipt)
         except StageError as error:
-            return MutationOutcome("ambiguous", None, {"branch": branch}, f"remote observation failed: {error}")
+            return MutationOutcome(
+                "ambiguous",
+                None,
+                {"branch": branch},
+                f"remote observation failed: {error}",
+            )
 
     return factory.control.mutate_core(request, publish, reconcile=reconcile).result
 
@@ -231,7 +329,7 @@ def _publication_identity(repo: str, base: str, branch: str, content_digest: str
     return RemoteIdentity("github_publish", repo, f"{base}:{branch}", content_digest)
 
 
-def _open_issue(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[str, Any]:
+def _open_issue(factory: Factory, base_branch: str, body: dict[str, Any]) -> dict[str, Any]:
     cell, security, operation_key, initiating_actor = _managed_identity(factory, body)
     title = text(body, "title", max_len=512)
     issue_body = body.get("body")
@@ -264,22 +362,25 @@ def _open_issue(factory: Factory, scm: GitHubScm, body: dict[str, Any]) -> dict[
     )
 
     def create() -> dict[str, Any]:
-        return {"url": scm.open_issue(title=title, body=marked_body, labels=labels)}
+        return _with_github_lease(
+            factory,
+            cell,
+            operation_key,
+            base_branch=base_branch,
+            capability="github.publish",
+            purpose="create-issue",
+            action=lambda scoped: {"url": scoped.open_issue(title=title, body=marked_body, labels=labels)},
+        )
 
     def reconcile() -> MutationOutcome:
-        rows = factory._gh(
-            [
-                "issue",
-                "list",
-                "--state",
-                "all",
-                "--search",
-                operation_key,
-                "--limit",
-                "20",
-                "--json",
-                "url,body,title",
-            ]
+        rows = _with_github_lease(
+            factory,
+            cell,
+            operation_key,
+            base_branch=base_branch,
+            capability="github.read",
+            purpose="observe-issue",
+            action=lambda scoped: scoped.search_issues(operation_key, limit=20),
         )
         matches = [row for row in rows if marker in str(row.get("body") or "")]
         if len(matches) == 1 and str(matches[0].get("title") or "") == title:
