@@ -29,16 +29,18 @@ def test_turbo_is_an_accelerator_not_an_authority_layer() -> None:
     assert flags["affectedUsingTaskInputs"] is True
 
     tasks = turbo["tasks"]
-    assert tasks["//#rust-contract-verify"]["command"] == [
+    assert tasks["swfactory-contract-fixtures#rust-verify"]["command"] == [
         "cargo",
         "test",
+        "--manifest-path",
+        "../../../Cargo.toml",
         "-p",
         "swf-domain",
         "--test",
         "contract",
         "--locked",
     ]
-    assert "$TURBO_ROOT$/tests/fixtures/contract/**" in tasks["//#rust-contract-verify"]["inputs"]
+    assert "$TURBO_DEFAULT$" in tasks["swfactory-contract-fixtures#rust-verify"]["inputs"]
     assert tasks["//#polyglot-verification"]["cache"] is False
     assert tasks["//#polyglot-verification"]["inputs"] == ["$TURBO_ROOT$/turbo.json"]
     assert tasks["//#python-verify"]["command"] == [
@@ -58,7 +60,7 @@ def test_turbo_is_an_accelerator_not_an_authority_layer() -> None:
     assert tasks["//#python-verify"].get("cache", True) is True
     assert set(tasks["//#polyglot-verification"]["dependsOn"]) == {
         "//#python-verify",
-        "//#rust-contract-verify",
+        "swfactory-contract-fixtures#rust-verify",
         "swfactory-rust#test",
         "swf-cli#build",
     }
