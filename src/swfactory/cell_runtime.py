@@ -92,8 +92,6 @@ def bind_jobs(jobs: Iterable[dict[str, Any]], bindings: Iterable[dict[str, Any]]
                 cell_id=identity_for_job(job).stable_id(),
                 cell_epoch=1,
                 cell_managed=False,
-                cell_policy_digest=None,
-                cell_generation=None,
             )
         return out
 
@@ -110,19 +108,13 @@ def bind_jobs(jobs: Iterable[dict[str, Any]], bindings: Iterable[dict[str, Any]]
         identity = identity_for_job(job)
         if binding.cell_id != identity.stable_id() or binding.repo != identity.repo:
             raise ValueError(f"factory cell binding mismatch for mapped job {idx}")
-        policy_digest = raw.get("policy_digest")
-        if policy_digest is not None and (
-            not isinstance(policy_digest, str) or not policy_digest.startswith("policy:")
-        ):
-            raise ValueError(f"invalid factory cell policy digest for mapped job {idx}")
-        generation = raw.get("factory_generation")
-        if generation is not None and not isinstance(generation, str):
-            raise ValueError(f"invalid factory generation for mapped job {idx}")
+        # XCom is scheduler scratch, not authority storage. The backend response may contain
+        # policy/generation so fan_out can validate the work-order response, but those seals are
+        # deliberately not copied into the mapped job/XCom document. Each managed task re-reads
+        # current authority from CellStore through the backend before constructing its context.
         job.update(
             cell_id=binding.cell_id,
             cell_epoch=binding.epoch,
             cell_managed=True,
-            cell_policy_digest=policy_digest,
-            cell_generation=generation,
         )
     return out
