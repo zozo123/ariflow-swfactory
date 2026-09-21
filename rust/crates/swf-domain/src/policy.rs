@@ -122,7 +122,7 @@ fn canonical_number(number: &Number) -> Result<String, PolicyError> {
         return Ok(value.to_string());
     }
     let value = number.as_f64().ok_or(PolicyError::InvalidFloat)?;
-    Ok(python_float(value)?)
+    python_float(value)
 }
 
 /// Match CPython's finite-float JSON spelling over the v1 accepted range.
