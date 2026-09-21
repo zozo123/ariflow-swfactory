@@ -253,13 +253,14 @@
       "owner": "workgraph+evidence+authority",
       "runtime_entry": "swfactory.cognitive_harness and swf_domain::cognitive_harness",
       "environment": "pure domain/search logic inside the AI harness; Airflow remains lifecycle substrate and the Rust authority kernel remains the reality boundary",
-      "test": "qualification pending; code-first architecture intentionally lands before exhaustive validation",
+      "test": "tests/test_cognitive_harness.py",
       "evidence": [
+        "tests/test_cognitive_harness.py",
         "typed Python/Rust cognitive contract",
         "config/cognitive-harness.yaml",
         "docs/cognitive-harness.md"
       ],
-      "follow_up": "Add cross-language contract fixtures and managed-run telemetry after the architecture lands; do not widen authority while doing so.",
+      "follow_up": "Wire the pure cognitive domain into managed-run telemetry before enabling any automatic search-only control; do not widen authority while doing so.",
       "public_surface": [
         "cognitive harness",
         "System 1",
