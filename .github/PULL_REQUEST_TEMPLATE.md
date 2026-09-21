@@ -6,6 +6,10 @@
 
 <!-- Agent permissions, credentials, network, patch validation, or "None". -->
 
+## Search / authority discipline
+
+- [ ] This change does not demand elimination of exploration nondeterminism; any new entropy stays outside authority, identity, and promotion decisions.
+
 ## Verification
 
 - [ ] `uv run ruff check .`

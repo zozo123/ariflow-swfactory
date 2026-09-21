@@ -37,6 +37,22 @@ engineering metaphor, not a measured thermodynamic quantity. The
 [non-equilibrium control doctrine](non-equilibrium-factory.md) separately requires measurable inputs,
 falsifiable behavior, and bounded authority for any physics-inspired control model.
 
+## Search and authority glossary
+
+The factory deliberately separates **Search** from **Authority**. Exploration may be stochastic; promotion must be explicit, evidence-bound, and deterministic enough to audit.
+
+| Term | Meaning in this repository |
+| --- | --- |
+| **Search** | Reversible exploration: hypotheses, candidate branches, model samples, workgraph alternatives, and annealing choices. Search may be nondeterministic and carries no mutation or promotion authority by itself. |
+| **Authority** | The singular right to bind durable state or perform an external effect. Authority is scoped by Cell identity, epoch, policy, gate decisions, and the trusted mutation boundary. |
+| **Entropy token** | Evidence that distinguishes an exploratory sample or trajectory. It may diversify search, but it must never become an idempotency key, policy identity, or promotion credential. |
+| **Objective digest** | Content-addressed identity of the loss/objective used to compare candidates. Changing it changes what "better" means and therefore requires an explicit authority decision before promotion. |
+| **Lease** | Bounded permission to attempt a scoped operation or use a resource. A lease expires or is revoked; possession is not proof of current Cell authority. |
+| **Fence** | The current Cell epoch checked at the mutation boundary. A stale epoch is refused even when the attempted operation would otherwise be idempotent. |
+| **Promotion** | Projection from many possible candidates onto one accepted repository/release state, after independent verification and the required human/control-plane gates. |
+
+The SGD analogy is intentional but bounded: exploration behaves like stochastic steps over a search landscape; convergence projects a candidate onto the **trust manifold** defined by policy, evidence, current authority, and promotion gates. Do not "fix" exploration by eliminating useful nondeterminism. Instead, prevent search entropy from crossing the authority boundary.
+
 ## Identity and authority
 
 ### Durable intent, disposable execution
