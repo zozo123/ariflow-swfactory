@@ -173,7 +173,10 @@ class Factory:
         self.lease_process_nonce = secrets.token_urlsafe(32)
         self.leases = CredentialLeaseBroker(
             self.state_root / "credential-leases.sqlite3",
-            providers={"github.publish": self._github_publication_credential},
+            providers={
+                "github.publish": self._github_publication_credential,
+                "github.read": self._github_publication_credential,
+            },
             epoch_reader=lambda cell_id: int(self.cell_store.get(cell_id)["epoch"]),
             on_denial=self._record_lease_denial,
         )
