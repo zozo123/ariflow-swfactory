@@ -34,7 +34,7 @@
       "cache": false,
       "dependsOn": [
         "//#python-verify",
-        "//#rust-contract-verify",
+        "swfactory-contract-fixtures#rust-verify",
         "swfactory-rust#test",
         "swf-cli#build"
       ],
@@ -56,10 +56,12 @@
         "!rust/**/*.rs"
       ]
     },
-    "//#rust-contract-verify": {
+    "swfactory-contract-fixtures#rust-verify": {
       "command": [
         "cargo",
         "test",
+        "--manifest-path",
+        "../../../Cargo.toml",
         "-p",
         "swf-domain",
         "--test",
@@ -67,11 +69,11 @@
         "--locked"
       ],
       "inputs": [
+        "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/Cargo.toml",
         "$TURBO_ROOT$/Cargo.lock",
         "$TURBO_ROOT$/rust-toolchain.toml",
-        "$TURBO_ROOT$/rust/crates/swf-domain/**",
-        "$TURBO_ROOT$/tests/fixtures/contract/**"
+        "$TURBO_ROOT$/rust/crates/swf-domain/**"
       ]
     }
   },
