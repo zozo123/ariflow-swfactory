@@ -23,3 +23,18 @@ swfactory treats agent-generated code as untrusted. The production design separa
 sandbox from the orchestrator that holds source-control credentials, validates patch paths, scans
 for secret-shaped values, and alone performs delivery. See the trust-boundary diagram and sandbox
 comparison in [README.md](README.md) before operating the real-agent path.
+
+
+## Credential authority
+
+Managed publication credentials stay in the trusted backend. The backend mints one-shot opaque
+credential leases bound to the exact run, task, stage, sandbox, attempt, Cell epoch, operation and
+policy digest; raw provider tokens are materialized only inside the trusted SCM process and are
+never written to XCom, run artifacts, receipts, or coding-cell environments. Cell epoch changes and
+terminal transitions synchronously revoke outstanding leases, and redeem independently re-checks
+the durable current epoch.
+
+Coding-cell environments are allow-listed. Public execution recipes cannot request `secret_env`;
+new ambient credential names fail closed rather than relying on a secret-name denylist. See
+[docs/credential-authority.md](docs/credential-authority.md) and
+[docs/xcom-ownership.md](docs/xcom-ownership.md).
