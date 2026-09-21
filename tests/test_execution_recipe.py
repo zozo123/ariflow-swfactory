@@ -38,7 +38,7 @@ def _repo(tmp_path: Path) -> tuple[Path, str]:
                 "timeout_s": 1800,
                 "resources": {"cpus": 4, "memory_mb": 8192},
                 "environment": {"PYTHONHASHSEED": "0"},
-                "secret_env": ["GH_TOKEN"],
+                "secret_env": [],
             }
         )
         + "\n",
@@ -61,7 +61,7 @@ def test_recipe_is_read_from_recorded_commit_not_dirty_checkout(tmp_path: Path) 
     assert bound.recipe.cpus == 4
     assert bound.recipe.memory_mb == 8192
     assert bound.recipe.environment == (("PYTHONHASHSEED", "0"),)
-    assert bound.recipe.secret_env == ("GH_TOKEN",)
+    assert bound.recipe.secret_env == ()
     assert len(bound.digest) == 64
 
 
@@ -157,3 +157,16 @@ def test_option_like_revision_and_escaping_recipe_path_are_refused(tmp_path: Pat
         load_execution_recipe(repo, "--help")
     with pytest.raises(ExecutionRecipeError, match="escapes repository"):
         load_execution_recipe(repo, "HEAD", path="../candidate-run.json")
+
+
+def test_public_recipe_rejects_secret_env_injection(tmp_path: Path) -> None:
+    repo, _ = _repo(tmp_path)
+    path = repo / ".swfactory" / "candidate-run.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["secret_env"] = ["GH_TOKEN"]
+    path.write_text(json.dumps(document) + "\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "forbidden secret injection")
+
+    with pytest.raises(ExecutionRecipeError, match="secret_env is retired"):
+        load_execution_recipe(repo, "HEAD")
