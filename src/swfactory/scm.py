@@ -52,6 +52,29 @@ class Scm(Protocol):
         """Numeric ref -> GitHub issue; path -> front-matter markdown file."""
         ...
 
+    def search_issues(self, query: str, *, limit: int = 20) -> list[dict[str, object]]:
+        """Read-only issue search used by backend reconciliation under a scoped lease."""
+        rows = self._gh_json(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                self.repo,
+                "--state",
+                "all",
+                "--search",
+                query,
+                "--limit",
+                str(limit),
+                "--json",
+                "url,body,title",
+            ]
+        )
+        if not isinstance(rows, list):
+            raise StageError("scm", "gh issue list returned a non-array", retryable=True)
+        return [row for row in rows if isinstance(row, dict)]
+
     def publish(
         self,
         *,
