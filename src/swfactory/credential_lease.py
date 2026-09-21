@@ -71,7 +71,7 @@ class LeaseBinding:
         return asdict(self)
 
     def digest(self) -> str:
-        payload = json.dumps(self.canonical(), sort_keys=True, separators=(",", ":")).encode()
+        payload = json.dumps(self.canonical(), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
         return "lease-binding:" + hashlib.sha256(payload).hexdigest()
 
     @classmethod
