@@ -327,6 +327,23 @@ class CredentialLeaseBroker:
             raise CredentialLeaseError(f"trusted provider for {capability!r} returned no credential")
         return value
 
+    def revoke(
+        self,
+        lease_id: str,
+        *,
+        reason: str = "use_complete",
+        now: float | None = None,
+    ) -> bool:
+        clock = time.time() if now is None else now
+        with self.lock, self.db:
+            cur = self.db.execute(
+                """UPDATE credential_leases
+                   SET revoked_at=?, revoke_reason=?
+                   WHERE lease_id=? AND revoked_at IS NULL""",
+                (clock, reason, lease_id),
+            )
+            return bool(cur.rowcount)
+
     def revoke_epoch(
         self,
         cell_id: str,
