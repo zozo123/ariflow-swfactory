@@ -477,7 +477,7 @@ existing shipped Cell id while making the join injective.
 Policy identity uses one cross-language byte contract:
 
 - family marker: `policy:v1:`;
-- domain separator: `v1\\0` before the JSON payload;
+- domain separator: ASCII "v1" followed by byte `0x00`, then the JSON payload;
 - JSON object keys sorted lexicographically;
 - compact JSON separators;
 - UTF-8 JSON with `ensure_ascii=False` semantics: Unicode and DEL/0x7f are not re-escaped merely
