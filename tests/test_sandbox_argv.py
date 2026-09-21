@@ -26,6 +26,7 @@ from swfactory.sandbox import (
     Sandbox,
     SrtSandbox,
     make_sandbox,
+    cell_env,
     scrub_env,
 )
 from swfactory.sandbox_governance import SandboxIdentity
@@ -1307,3 +1308,24 @@ def test_toolset_termination_survives_task_restart_and_still_allows_cleanup(tmp_
     restored.close()
     assert backend.destroyed == ["sbx-1"]
     assert not state.has_control(sandbox_mod.TOOLSET_STATE_FILE)
+
+
+def test_agent_cell_environment_is_allow_list_not_secret_deny_list() -> None:
+    source = {
+        "PATH": "/usr/bin",
+        "HOME": "/home/u",
+        "CI": "1",
+        "TOTALLY_NOVEL_CREDENTIAL": "do-not-inherit",
+        "MAGIC_SESSION_CAPABILITY": "do-not-inherit",
+        "SOME_SERVICE_BEARER": "do-not-inherit",
+    }
+
+    assert cell_env(source) == {"PATH": "/usr/bin", "HOME": "/home/u", "CI": "1"}
+
+
+def test_new_pass_env_credentials_fail_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("NOVEL_MODEL_TOKEN", "secret")
+    sandbox = _srt(tmp_path, pass_env=("NOVEL_MODEL_TOKEN",))
+
+    with pytest.raises(StageError, match="unsupported sandbox credential passthrough"):
+        sandbox.run_agent("true")
