@@ -363,6 +363,28 @@ class CredentialLeaseBroker:
             )
             return int(cur.rowcount)
 
+    def revoke_prior_attempts(
+        self,
+        cell_id: str,
+        epoch: int,
+        attempt_number: int,
+        *,
+        reason: str = "attempt_superseded",
+        now: float | None = None,
+    ) -> int:
+        """Revoke every lease from an earlier Airflow/provider attempt before attempt N proceeds."""
+        if attempt_number < 1:
+            raise ValueError("attempt_number must be positive")
+        clock = time.time() if now is None else now
+        with self.lock, self.db:
+            cur = self.db.execute(
+                """UPDATE credential_leases
+                   SET revoked_at=?, revoke_reason=?
+                   WHERE cell_id=? AND epoch=? AND attempt_number<? AND revoked_at IS NULL""",
+                (clock, reason, cell_id, epoch, attempt_number),
+            )
+            return int(cur.rowcount)
+
     def revoke_attempt(
         self,
         binding: LeaseBinding,
