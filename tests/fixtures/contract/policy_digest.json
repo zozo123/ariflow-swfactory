@@ -166,14 +166,14 @@
     {
       "name": "float-1.0",
       "input": {
-        "n": 1
+        "n": 1.0
       },
       "expected": "policy:v1:f3337ed9526d158dd97d5b20f7eb9ecb73621088b42eb579cb6b27f274638f8f"
     },
     {
       "name": "float-negative-zero",
       "input": {
-        "n": 0
+        "n": -0.0
       },
       "expected": "policy:v1:960291f30303bd2aa6feaf17fa84adf97a97d4b4ebde8497681171f670844bce"
     }
