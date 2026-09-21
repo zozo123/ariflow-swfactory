@@ -22,6 +22,7 @@ TURBO = ("npx", "--yes", "turbo@2.11.1")
 FACTORY_LEAVES = frozenset(
     {
         "//#python-verify",
+        "//#rust-contract-verify",
         "swfactory-rust#test",
         "swf-cli#build",
     }
@@ -31,7 +32,7 @@ query {
   affectedTasks(
     base: "HEAD^"
     head: "HEAD"
-    tasks: ["//#python-verify", "swfactory-rust#test", "swf-cli#build"]
+    tasks: ["//#python-verify", "//#rust-contract-verify", "swfactory-rust#test", "swf-cli#build"]
   ) {
     items { fullName }
   }
@@ -123,30 +124,34 @@ def affectedness_matrix() -> dict[str, list[str]]:
     return matrix
 
 
+def _is_rust_verifier(name: str) -> bool:
+    return name == "//#rust-contract-verify" or name.startswith("swf-") or name.startswith("swfactory-rust#")
+
+
 def _assert_affectedness(matrix: dict[str, list[str]]) -> None:
     """Validate that affected tasks preserve the polyglot graph boundaries."""
     docs = set(matrix["docs"])
     if "//#python-verify" not in docs:
         raise RuntimeError(f"docs-only change missed Python/site verification: {sorted(docs)}")
-    if any(name.startswith("swf-") or name.startswith("swfactory-rust#") for name in docs):
+    if any(_is_rust_verifier(name) for name in docs):
         raise RuntimeError(f"docs-only change selected Rust work: {sorted(docs)}")
 
     python = set(matrix["python"])
     if "//#python-verify" not in python:
         raise RuntimeError(f"python-only change missed factory Python verification: {sorted(python)}")
-    if any(name.startswith("swf-") or name.startswith("swfactory-rust#") for name in python):
+    if any(_is_rust_verifier(name) for name in python):
         raise RuntimeError(f"python-only change selected Rust work: {sorted(python)}")
 
     rust = set(matrix["rust"])
     if "//#python-verify" in rust:
         raise RuntimeError(f"rust-only change selected factory Python verification: {sorted(rust)}")
-    if not any(name.startswith("swf-") or name.startswith("swfactory-rust#") for name in rust):
+    if not any(_is_rust_verifier(name) for name in rust):
         raise RuntimeError(f"rust-only change selected no Rust task: {sorted(rust)}")
 
     contract = set(matrix["contract"])
     if "//#python-verify" not in contract:
         raise RuntimeError(f"shared-contract change missed factory Python verification: {sorted(contract)}")
-    if not any(name.startswith("swf-") or name.startswith("swfactory-rust#") for name in contract):
+    if not any(_is_rust_verifier(name) for name in contract):
         raise RuntimeError(f"shared-contract change missed Rust verification: {sorted(contract)}")
 
 
