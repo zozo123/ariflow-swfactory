@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from dataclasses import asdict
 from collections.abc import Callable
+from dataclasses import asdict
 from typing import Any, TypeVar
 
 from swfactory.authority import ResourceKind
