@@ -848,7 +848,7 @@ class FakeScm:
     remote: PublicationReceipt | None = None
     lose_next_response: bool = False
 
-    def __init__(self, repo: str, base: str) -> None:
+    def __init__(self, repo: str, base: str, **_kwargs: Any) -> None:
         self.repo, self.base = repo, base
         self.fetched: list[str] = []
         self.published: list[dict[str, Any]] = []
@@ -879,6 +879,18 @@ class FakeScm:
         self.issues.append(kwargs)
         return "https://x/issue/1"
 
+    def search_issues(self, query: str, *, limit: int = 20) -> list[dict[str, object]]:
+        del limit
+        if FakeScm.remote is None:
+            return []
+        return [
+            {
+                "url": "https://x/issue/1",
+                "title": "blocked",
+                "body": f"<!-- swfactory-operation:{query} intent:placeholder -->",
+            }
+        ]
+
     def receipt(self, patch: bytes, **changes: Any) -> PublicationReceipt:
         """What GitHub would report for a branch that carries exactly ``patch``."""
         fields: dict[str, Any] = {
@@ -897,6 +909,7 @@ class FakeScm:
 
 @pytest.fixture
 def scm(monkeypatch: pytest.MonkeyPatch) -> type[FakeScm]:
+    monkeypatch.setenv("GH_TOKEN", "test-publication-token")
     FakeScm.instances = []
     FakeScm.remote = None
     FakeScm.lose_next_response = False
