@@ -10,6 +10,13 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from swfactory.population_execution import (
+    PopulationCancellation,
+    PopulationExecutionReport,
+    PopulationExecutor,
+)
+from swfactory.population_manifest import PopulationManifest
+from swfactory.provider_binding import ProviderBindingManifest
 from swfactory.sandbox_contract import CapabilityRequirement, ProviderDocument, select_provider
 from swfactory.work_executor import Cancellation, ExecutionReport, WorkExecutor
 from swfactory.workgraph import WorkNode, conflict_set
@@ -79,5 +86,24 @@ def execute_bound_work(
         input_head=input_head,
         nodes=tuple(nodes),
         supports_fork=decision.parallel and provider.capabilities.fork,
+        cancellation=cancellation,
+    )
+
+
+
+def execute_bound_population(
+    executor: PopulationExecutor,
+    *,
+    manifest: PopulationManifest,
+    binding: ProviderBindingManifest,
+    cancellation: PopulationCancellation | None = None,
+) -> PopulationExecutionReport:
+    """Execute one search-only population inside an already-scheduled Airflow lifecycle task."""
+
+    if binding.population_manifest_digest != manifest.digest():
+        raise ValueError("population execution binding/manifest mismatch")
+    return executor.execute(
+        manifest=manifest,
+        binding=binding,
         cancellation=cancellation,
     )
