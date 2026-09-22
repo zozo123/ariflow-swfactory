@@ -303,7 +303,8 @@ class SwarmPlan:
         for crystal in self.crystals_to_verify:
             crystal.validate()
         total = sum(lane.count for lane in self.lanes)
-        deep = sum(lane.count for lane in self.lanes if lane.compute_tier in {ComputeTier.DEEP, ComputeTier.EXACT_REPLAY})
+        deep_tiers = {ComputeTier.DEEP, ComputeTier.EXACT_REPLAY}
+        deep = sum(lane.count for lane in self.lanes if lane.compute_tier in deep_tiers)
         exact = sum(lane.count for lane in self.lanes if lane.compute_tier == ComputeTier.EXACT_REPLAY)
         if total > budget.max_agents:
             raise ValueError("swarm plan exceeds max_agents")
@@ -539,7 +540,7 @@ def allocate_population(
                     ("role", "model"),
                 )
             )
-        reason = "gas/diverge: maximize cheap independent search; correlated trajectories buy diversity, not more copies"
+        reason = "gas/diverge: maximize independent search; correlated trajectories buy diversity, not copies"
 
     elif mode == ControlMode.COORDINATE:
         total = min(
