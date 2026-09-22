@@ -613,16 +613,8 @@ def allocate_population(
         standard = min(max(2, planning_budget.max_agents - deep), max(2, planning_budget.max_parallel))
         lanes.extend(
             [
-                PopulationLane(
-                    AgentRole.CRITIC,
-                    ComputeTier.STANDARD,
-                    max(1, standard // 2),
-                    ContextPolicy.COMPACT,
-                    0.15,
-                    False,
-                    ("model", "role", "verifier"),
-                    tuple(item.hotspot_id for item in selected_hotspots),
-                ),
+                # Measurement is the point of this regime. Put the independent verifier first so
+                # a severely narrowed resource envelope drops commentary before it drops evidence.
                 PopulationLane(
                     AgentRole.VERIFIER,
                     ComputeTier.DEEP if deep else ComputeTier.STANDARD,
@@ -631,6 +623,16 @@ def allocate_population(
                     0.0,
                     True,
                     ("model", "runtime", "verifier"),
+                    tuple(item.hotspot_id for item in selected_hotspots),
+                ),
+                PopulationLane(
+                    AgentRole.CRITIC,
+                    ComputeTier.STANDARD,
+                    max(1, standard // 2),
+                    ContextPolicy.COMPACT,
+                    0.15,
+                    False,
+                    ("model", "role", "verifier"),
                     tuple(item.hotspot_id for item in selected_hotspots),
                 ),
                 PopulationLane(
