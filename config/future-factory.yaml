@@ -298,6 +298,46 @@ population_dynamics:
       - approve
       - merge
       - promote
+  adaptive_information_budget:
+    authority: search-only
+    input:
+      - retained-population-execution-report
+      - optional-prior-population-manifest
+      - human-declared-swarm-budget
+    objective: maximize-independent-information-per-compute-unit
+    lane_measurements:
+      - answer-rate
+      - unique-candidate-yield
+      - evidence-yield
+      - effective-independent-search
+      - mean-pairwise-correlation
+      - verifier-disagreement
+      - compute-tier-cost
+    marginal_value: "(1-correlation) * expected-information / compute-units"
+    actions:
+      hold: retain measured useful lanes
+      shrink: reduce correlated-or-low-value replicas
+      measure: reserve-independent-verifier-capacity-under-unresolved-disagreement
+      perturb: change-coordinates-after-correlation-collapse
+      drain: stop-new-search-when-marginal-value-is-exhausted
+    invariants:
+      - never-widen-max-agents
+      - never-widen-max-parallel
+      - never-widen-deep-compute
+      - never-widen-exact-replay
+      - never-widen-compute-units
+      - retained-decision-is-content-addressed
+      - decision-digest-is-bound-into-next-search-provenance
+      - cancelled-population-drains-before-new-work
+    may_not:
+      - schedule-airflow
+      - weaken-verification
+      - mint-credential
+      - mutate-cell
+      - publish
+      - approve
+      - merge
+      - promote
 
 artifact_blackboard:
   authority: exploration-only
