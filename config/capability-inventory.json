@@ -308,7 +308,7 @@
         "config/future-factory.yaml",
         "docs/future-factory.md"
       ],
-      "follow_up": "Connect real heterogeneous providers to the population manifest, emit managed-run behavior receipts, qualify compute accounting and verifier independence, then graduate proven contracts into Rust.",
+      "follow_up": "Qualify heterogeneous provider gateways in live managed runs, correlate retained behavior signatures with actual provider diversity, and graduate proven contracts into Rust.",
       "public_surface": [
         "swfactory.swarm_dynamics",
         "effective independent search",
@@ -330,7 +330,7 @@
         "tests/test_recursive_search.py",
         "docs/future-factory.md"
       ],
-      "follow_up": "Connect real provider adapters to bound PopulationManifest tasks and emit managed-run BehaviorReceipt files automatically; the retained receipt-to-telemetry-to-next-plan loop is already available offline.",
+      "follow_up": "Qualify provider-specific managed runs and attach retained PopulationExecutionReport evidence automatically to long-horizon campaign records.",
       "public_surface": [
         "population manifest",
         "behavior receipt",
@@ -352,7 +352,7 @@
         "tests/test_population_manifest.py",
         "docs/future-factory.md"
       ],
-      "follow_up": "Add real provider adapters that consume BoundPopulationTask values and emit BehaviorReceipt records while preserving Airflow lifecycle ownership and the search-only boundary.",
+      "follow_up": "Qualify allowlisted provider/model/runtime choice sets against live gateways and surface effective diversity/correlation in the operator view.",
       "public_surface": [
         "provider binding",
         "diversity coordinates",
@@ -363,22 +363,51 @@
       "id": "factory.population-execution",
       "state": "experimental",
       "support": "experimental",
-      "invariant": "A provider-bound PopulationManifest may execute with bounded in-stage concurrency inside an already scheduled Airflow lifecycle task; task/variant identity, bound provider/model/runtime, verifier independence, scheduler ownership, and search-only authority are revalidated before receipts are reduced to telemetry.",
+      "invariant": "A provider-bound PopulationManifest executes with bounded in-stage concurrency only inside an already scheduled Airflow lifecycle task; the worker holds only the factory backend token, while the trusted backend revalidates Cell/Airflow/policy identity, journals each paid model call, projects any provider credential through an attempt-bound lease, and returns sanitized BehaviorReceipts whose exact digests bind the derived telemetry.",
       "owner": "workgraph+evidence",
-      "runtime_entry": "swfactory.population_execution; swfactory.execution_binding.execute_bound_population",
-      "environment": "bounded in-process fan-out/fan-in only; no Airflow lifecycle creation, credential projection, publication, approval, or promotion",
-      "test": "tests/test_population_execution.py",
+      "runtime_entry": "swfactory.execution_binding.execute_managed_population -> swfactory.backend_population.BackendPopulationRunner -> /v1/population/execute -> swfactory.backend.population_service",
+      "environment": "Airflow worker owns only SWF_BACKEND_URL/TOKEN; provider endpoint configuration, credential env names, raw provider credentials, model-call operation journal, and output artifact retention live on the trusted backend",
+      "test": "tests/test_population_execution.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py",
       "evidence": [
         "tests/test_population_execution.py",
+        "tests/test_backend_population.py",
+        "tests/test_managed_population_e2e.py",
         "src/swfactory/population_execution.py",
-        "src/swfactory/execution_binding.py",
+        "src/swfactory/backend_population.py",
+        "src/swfactory/backend/population_service.py",
         "docs/future-factory.md"
       ],
-      "follow_up": "Connect concrete provider adapters to BoundPopulationTask execution under backend-owned credential projection and retain reports automatically from managed Airflow runs.",
+      "follow_up": "Qualify concrete provider gateways in live managed runs, add managed-run operator rendering, and graduate only the stable execution/receipt contracts into Rust.",
       "public_surface": [
-        "population executor",
+        "managed population executor",
+        "backend population runner",
         "population execution report",
         "managed behavior receipts"
+      ]
+    },
+    {
+      "id": "factory.population-provider-adapter",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "A trusted-backend population adapter binds one exact PopulationInvocation to one configured provider gateway. Endpoint/config identity participates in the journal intent; adapter configuration contains credential env names but never secret values; raw provider credentials are redeemed from an explicit dotted capability lease only inside the backend process; provider output is retained in a host-owned invocation-bound content-addressed artifact and never returned as credential-bearing state.",
+      "owner": "security+workgraph+evidence",
+      "runtime_entry": "swfactory.population_adapter.HttpPopulationAdapter via swfactory.backend.population_service",
+      "environment": "trusted backend only; HTTPS or allowlisted loopback/private gateway, bounded JSON request/response, no redirects, backend-owned credential lease broker",
+      "test": "tests/test_population_adapter.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py",
+      "evidence": [
+        "tests/test_population_adapter.py",
+        "tests/test_backend_population.py",
+        "tests/test_managed_population_e2e.py",
+        "src/swfactory/population_adapter.py",
+        "src/swfactory/backend/population_service.py",
+        "docs/factory-backend.md"
+      ],
+      "follow_up": "Live-qualify concrete provider gateways and secret-manager injection on supported deployments; do not infer provider support merely from this generic adapter contract.",
+      "public_surface": [
+        "population provider adapter",
+        "population invocation",
+        "population artifact store",
+        "backend credential projection"
       ]
     }
   ]
