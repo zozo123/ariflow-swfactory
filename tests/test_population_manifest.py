@@ -185,8 +185,6 @@ def test_diversity_coordinates_change_across_replicas_but_replay_exactly() -> No
         task.diversity_coordinates for task in replay_explorers
     ]
 
-
-
 def test_population_summarize_cli_emits_reusable_telemetry(tmp_path) -> None:
     manifest = build_population_manifest(
         _plan(),
@@ -267,8 +265,6 @@ def test_population_summarize_cli_refuses_incomplete_receipts(tmp_path) -> None:
 
     assert result.exit_code == 2
     assert "population receipts incomplete" in result.output
-
-
 
 def test_population_task_id_is_bound_to_variant_digest() -> None:
     manifest = build_population_manifest(
