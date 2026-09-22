@@ -94,6 +94,9 @@ protected = [
   "src/swfactory/population_manifest.py",     # provider-neutral swarm execution contract is protected
   "src/swfactory/provider_binding.py",       # provider choice binding cannot self-widen mid-run
   "src/swfactory/population_execution.py",     # managed search fan-out cannot widen its own authority
+  "src/swfactory/population_adapter.py",       # backend provider/credential contract is protected
+  "src/swfactory/backend_population.py",        # worker may reach providers only through backend authority
+  "src/swfactory/backend/population_service.py", # paid provider effects are backend-owned and journaled
   "src/swfactory/security_boundary.py",
   "src/swfactory/security_contract.py",
   "src/swfactory/worker_security.py",
