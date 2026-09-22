@@ -303,11 +303,7 @@ class SwarmPlan:
         for crystal in self.crystals_to_verify:
             crystal.validate()
         total = sum(lane.count for lane in self.lanes)
-        deep = sum(
-            lane.count
-            for lane in self.lanes
-            if lane.compute_tier in {ComputeTier.DEEP, ComputeTier.EXACT_REPLAY}
-        )
+        deep = sum(lane.count for lane in self.lanes if lane.compute_tier in {ComputeTier.DEEP, ComputeTier.EXACT_REPLAY})
         exact = sum(lane.count for lane in self.lanes if lane.compute_tier == ComputeTier.EXACT_REPLAY)
         if total > budget.max_agents:
             raise ValueError("swarm plan exceeds max_agents")
@@ -492,8 +488,7 @@ def allocate_population(
     # pressure to spend the remaining envelope on genuinely different search coordinates.
     independence_ratio = min(
         1.0,
-        observation.effective_independent_search
-        / max(1.0, float(planning_budget.max_agents)),
+        observation.effective_independent_search / max(1.0, float(planning_budget.max_agents)),
     )
     independence_deficit = 1.0 - independence_ratio
     collapse_pressure = max(
@@ -503,12 +498,7 @@ def allocate_population(
     )
     cheap_width = max(
         1,
-        int(
-            round(
-                planning_budget.max_agents
-                * (0.45 + 0.35 * collapse_pressure)
-            )
-        ),
+        int(round(planning_budget.max_agents * (0.45 + 0.35 * collapse_pressure))),
     )
     cheap_width = min(planning_budget.max_agents, cheap_width)
 
@@ -549,10 +539,7 @@ def allocate_population(
                     ("role", "model"),
                 )
             )
-        reason = (
-            "gas/diverge: maximize cheap independent search; "
-            "correlated trajectories buy diversity, not more copies"
-        )
+        reason = "gas/diverge: maximize cheap independent search; correlated trajectories buy diversity, not more copies"
 
     elif mode == ControlMode.COORDINATE:
         total = min(
@@ -603,10 +590,7 @@ def allocate_population(
                 ),
             ]
         )
-        reason = (
-            "liquid/coordinate: preserve motion while coupling candidate worlds "
-            "through compact evidence"
-        )
+        reason = "liquid/coordinate: preserve motion while coupling candidate worlds through compact evidence"
 
     elif mode in {ControlMode.MEASURE, ControlMode.ANNEAL}:
         deep = min(planning_budget.max_deep_agents, max(1, len(selected_hotspots)))
@@ -647,10 +631,7 @@ def allocate_population(
                 ),
             ]
         )
-        reason = (
-            "critical/anneal: concentrate expensive reasoning on disagreements "
-            "that can change the decision"
-        )
+        reason = "critical/anneal: concentrate expensive reasoning on disagreements that can change the decision"
 
     elif mode == ControlMode.VERIFY:
         exact = min(planning_budget.max_exact_replays, len(ready_crystals))
@@ -679,10 +660,7 @@ def allocate_population(
                     ("model", "runtime", "verifier", "attack-surface"),
                 )
             )
-        reason = (
-            "crystal/verify: stop broad search and spend compute proving or breaking "
-            "exact frozen candidates"
-        )
+        reason = "crystal/verify: stop broad search and spend compute proving or breaking exact frozen candidates"
 
     elif mode == ControlMode.PERTURB:
         total = min(
@@ -721,8 +699,7 @@ def allocate_population(
             ]
         )
         reason = (
-            "glass/perturb: abandon correlated context and inject new coordinates "
-            "instead of thinking harder in place"
+            "glass/perturb: abandon correlated context and inject new coordinates instead of thinking harder in place"
         )
 
     else:  # DRAIN
