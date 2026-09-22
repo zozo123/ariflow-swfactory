@@ -94,8 +94,11 @@ def bind_jobs(jobs: Iterable[dict[str, Any]], bindings: Iterable[dict[str, Any]]
                 cell_epoch=1,
                 cell_managed=False,
             )
+            # Legacy/direct runs have no policy seal in scheduler scratch. The explicit null keeps
+            # every mapped-job schema stable without pretending the worker has authority material.
+            job["cell_policy_digest"] = None
         validate_xcom_document(out)
-    return out
+        return out
 
     rows = list(bindings)
     if not all(isinstance(raw, dict) and raw.keys() >= _BINDING_KEYS for raw in rows):
@@ -103,10 +106,9 @@ def bind_jobs(jobs: Iterable[dict[str, Any]], bindings: Iterable[dict[str, Any]]
     parsed = {item.job_idx: item for item in require_complete_bindings(rows, len(out))}
     if len({item.snapshot_digest for item in parsed.values()}) != 1:
         raise ValueError("factory cell bindings must come from one work order")
-    raw_by_index = {int(raw["job_idx"]): raw for raw in rows}
     for job in out:
         idx = int(job["job_idx"])
-        binding, raw = parsed[idx], raw_by_index[idx]
+        binding = parsed[idx]
         identity = identity_for_job(job)
         if binding.cell_id != identity.stable_id() or binding.repo != identity.repo:
             raise ValueError(f"factory cell binding mismatch for mapped job {idx}")
