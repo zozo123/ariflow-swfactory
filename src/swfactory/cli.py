@@ -1534,6 +1534,77 @@ def research_adapt_cmd(
         typer.echo(f"{law.kind.value}: {law.statement} ({law.confidence:.2f}, n={law.support})")
 
 
+@app.command("population-bind")
+def population_bind(
+    plan_path: Annotated[
+        Path,
+        typer.Argument(help="research-adapt JSON or a direct population-manifest JSON"),
+    ],
+    choices_path: Annotated[
+        Path,
+        typer.Argument(help="JSON allowlist for provider/model/runtime diversity choices"),
+    ],
+    json_out: Annotated[bool, typer.Option("--json", help="emit the bound population manifest")] = False,
+) -> None:
+    """Bind provider-neutral population tasks to deterministic allowlisted provider choices."""
+
+    from swfactory.population_manifest import (
+        PopulationManifestError,
+        population_manifest_from_document,
+    )
+    from swfactory.provider_binding import (
+        bind_population_manifest,
+        provider_choices_from_document,
+    )
+
+    try:
+        raw_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        raw_choices = json.loads(choices_path.read_text(encoding="utf-8"))
+        if not isinstance(raw_plan, dict) or not isinstance(raw_choices, dict):
+            raise PopulationManifestError("population plan and choices must be JSON objects")
+
+        manifest_document = raw_plan
+        if isinstance(raw_plan.get("plan"), dict):
+            manifest_document = raw_plan["plan"].get("population_manifest")
+        if not isinstance(manifest_document, dict):
+            raise PopulationManifestError("input does not contain a population_manifest object")
+
+        manifest = population_manifest_from_document(manifest_document)
+        choices = provider_choices_from_document(raw_choices)
+        bound = bind_population_manifest(manifest, choices=choices)
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        PopulationManifestError,
+    ) as error:
+        typer.echo(f"population bind: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    document = {
+        "authority": bound.authority,
+        "scheduler": bound.scheduler,
+        "population_manifest_digest": manifest.digest(),
+        "provider_binding_digest": bound.digest(),
+        "binding": bound.canonical_dict(),
+    }
+    if json_out:
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        return
+
+    typer.echo(
+        f"population {manifest.digest()} -> binding {bound.digest()} "
+        f"tasks={len(bound.tasks)}"
+    )
+    for task in bound.tasks:
+        typer.echo(
+            f"{task.task_id}: provider={task.provider or '-'} model={task.model or '-'} "
+            f"runtime={task.runtime or '-'} prompt={task.prompt_variant or '-'}"
+        )
+
+
 @candidate_evidence_app.command("retain")
 def candidate_evidence_retain(
     destination: Annotated[Path, typer.Argument(help="verified candidate evidence bundle directory")],
