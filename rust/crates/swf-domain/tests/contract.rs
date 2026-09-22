@@ -304,7 +304,9 @@ fn apply(function: &str, input: &Value) -> Outcome {
             match serde_json::from_value::<swf_domain::CredentialLeaseBinding>(input.clone()) {
                 Ok(binding) => match binding.digest() {
                     Ok(value) => Outcome::Value(json!(value)),
-                    Err(error) => Outcome::Error(format!("credential lease binding invalid: {error}")),
+                    Err(error) => {
+                        Outcome::Error(format!("credential lease binding invalid: {error}"))
+                    }
                 },
                 Err(error) => Outcome::Error(format!("credential lease fixture invalid: {error}")),
             }
