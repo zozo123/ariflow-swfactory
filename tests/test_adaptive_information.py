@@ -228,6 +228,19 @@ def test_cancelled_population_drains_before_new_search() -> None:
     assert decision.next_budget.max_agents == 1
 
 
+def test_manifest_replay_never_invents_a_wider_parallel_ceiling() -> None:
+    manifest, _report_value = _report(explorer_count=3)
+
+    conservative = budget_from_manifest(manifest)
+    retained = budget_from_manifest(manifest, max_parallel=2)
+
+    assert conservative.max_parallel == 1
+    assert retained.max_parallel == 2
+    assert retained.max_agents == len(manifest.tasks)
+    with pytest.raises(ValueError, match="prior max_parallel"):
+        budget_from_manifest(manifest, max_parallel=len(manifest.tasks) + 1)
+
+
 def test_information_budget_never_widens_outer_human_budget() -> None:
     manifest, report = _report(explorer_count=2)
     base = SwarmBudget(
@@ -304,6 +317,8 @@ def test_population_budget_cli_replays_lane_economics(tmp_path) -> None:
     assert document["source_manifest_digest"] == manifest.digest()
     assert document["source_execution_report_digest"] == report.digest()
     assert document["decision_digest"].startswith("sha256:")
+    assert document["base_budget"]["max_parallel"] == 1
+    assert document["next_budget"]["max_parallel"] <= 1
     assert document["next_budget"]["max_agents"] <= len(manifest.tasks)
     assert decision_path.is_file()
     assert load_information_budget(decision_path).digest() == document["decision_digest"]
