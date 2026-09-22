@@ -1445,7 +1445,7 @@ def research_adapt_cmd(
         ArtifactBlackboard,
         extract_search_laws,
         load_blackboard,
-        plan_next_round,
+        plan_adaptive_round,
         signal_from_document,
     )
 
@@ -1485,7 +1485,7 @@ def research_adapt_cmd(
             if blackboard_path is not None
             else ArtifactBlackboard()
         )
-        plan = plan_next_round(
+        plan = plan_adaptive_round(
             signals,
             depth=signals[-1].depth + 1,
             input_head=input_head,
@@ -1524,7 +1524,8 @@ def research_adapt_cmd(
     typer.echo(
         f"depth {plan.depth}: {plan.posture.value} "
         f"strategies={' '.join(strategy.value for strategy in plan.strategies)} "
-        f"parallel={plan.max_parallel}"
+        f"parallel={plan.max_parallel} phase={plan.phase or '-'} "
+        f"compute={plan.estimated_compute_units:.1f}"
     )
     typer.echo(plan.reason)
     for law in laws:
