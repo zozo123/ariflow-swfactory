@@ -8,6 +8,7 @@ control-plane primitive.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -465,13 +466,14 @@ class CredentialLeaseBroker:
                 event.created_at,
             ),
         )
+        # A denial is itself durable security evidence. Commit it before raising: redeem() runs
+        # inside a sqlite context manager whose exception path would otherwise roll this INSERT back.
+        self.db.commit()
         if self.on_denial is not None:
-            try:
-                self.on_denial(event)
-            except Exception:
+            with contextlib.suppress(Exception):
                 # The broker DB is the mandatory negative-provenance ledger. A secondary evidence
                 # projection must never turn a denial into a rolled-back/forgotten denial.
-                pass
+                self.on_denial(event)
         raise CredentialLeaseError(f"credential lease denied: {reason}")
 
 
