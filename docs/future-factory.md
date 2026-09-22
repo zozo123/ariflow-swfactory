@@ -679,7 +679,7 @@ The shortest path from today's repository to the full end state is:
 6. build complete replay capsules;
 7. learn search policies offline from retained campaigns;
 8. shadow-run candidate controllers;
-9. graduate proven stable contracts from Python into Rust;
+9. graduate proven contracts from Python into Rust;
 10. keep one explicit authority boundary throughout.
 
 The goal is not an autonomous system that can do anything.
