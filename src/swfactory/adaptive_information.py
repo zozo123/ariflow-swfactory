@@ -19,6 +19,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from swfactory.cognitive_harness import marginal_information_value
@@ -249,6 +250,59 @@ class InformationBudgetDecision:
     def role_cap_map(self) -> dict[AgentRole, int]:
         self.validate()
         return dict(self.role_caps)
+
+
+def budget_from_manifest(manifest: PopulationManifest) -> SwarmBudget:
+    """Return the exact outer envelope represented by a retained population manifest."""
+
+    manifest.validate()
+    total = len(manifest.tasks)
+    if total < 1:
+        return SwarmBudget(
+            max_agents=1,
+            max_parallel=1,
+            max_deep_agents=0,
+            max_exact_replays=0,
+            max_compute_units=1.0,
+        )
+    deep = sum(1 for task in manifest.tasks if task.compute_tier == ComputeTier.DEEP)
+    exact = sum(1 for task in manifest.tasks if task.compute_tier == ComputeTier.EXACT_REPLAY)
+    compute = sum(_tier_units(task.compute_tier) for task in manifest.tasks)
+    budget = SwarmBudget(
+        max_agents=total,
+        max_parallel=total,
+        max_deep_agents=deep,
+        max_exact_replays=exact,
+        max_compute_units=max(1.0, compute),
+    )
+    budget.validate()
+    return budget
+
+
+def write_information_budget(path: Path, decision: InformationBudgetDecision) -> str:
+    """Atomically retain one canonical adaptive-budget decision."""
+
+    document = decision.canonical_dict()
+    digest = decision.digest()
+    document["decision_digest"] = digest
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    return digest
+
+
+def load_information_budget(path: Path) -> InformationBudgetDecision:
+    """Load a retained decision and prove its digest before use."""
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("information budget must be a JSON object")
+    expected = raw.get("decision_digest")
+    decision = information_budget_from_document(raw)
+    if expected is not None and str(expected) != decision.digest():
+        raise ValueError("information budget decision digest mismatch")
+    return decision
 
 
 def evaluate_information_budget(
