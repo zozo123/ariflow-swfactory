@@ -311,21 +311,9 @@ def summarize_population(
 
     answered = [receipt for receipt in rows.values() if receipt.state == "answered"]
     signatures = [receipt.behavior_signature for receipt in answered]
-    candidate_digests = {
-        receipt.candidate_digest
-        for receipt in answered
-        if receipt.candidate_digest is not None
-    }
-    disagreement = (
-        0.0
-        if len(answered) < 2
-        else max(0.0, (len(candidate_digests) - 1) / max(1, len(answered) - 1))
-    )
-    verifier_answers = sum(
-        1
-        for receipt in answered
-        if tasks[receipt.task_id].independent_verification
-    )
+    candidate_digests = {receipt.candidate_digest for receipt in answered if receipt.candidate_digest is not None}
+    disagreement = 0.0 if len(answered) < 2 else max(0.0, (len(candidate_digests) - 1) / max(1, len(answered) - 1))
+    verifier_answers = sum(1 for receipt in answered if tasks[receipt.task_id].independent_verification)
     telemetry = PopulationTelemetry(
         manifest_digest=manifest.digest(),
         total_tasks=len(tasks),
