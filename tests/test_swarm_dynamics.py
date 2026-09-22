@@ -76,10 +76,7 @@ def test_gas_spends_population_on_cheap_diverse_search() -> None:
 
     assert plan.authority == "search-only"
     assert any(lane.role == AgentRole.EXPLORER for lane in plan.lanes)
-    assert all(
-        lane.compute_tier in {ComputeTier.CHEAP, ComputeTier.STANDARD}
-        for lane in plan.lanes
-    )
+    assert all(lane.compute_tier in {ComputeTier.CHEAP, ComputeTier.STANDARD} for lane in plan.lanes)
 
 
 def test_crystal_requires_exact_identity_but_grants_no_authority() -> None:
@@ -117,10 +114,7 @@ def test_jammed_phase_stops_new_exploration() -> None:
     )
 
     assert plan.stop_new_work is True
-    assert not any(
-        lane.role in {AgentRole.EXPLORER, AgentRole.MUTATOR} and lane.count
-        for lane in plan.lanes
-    )
+    assert not any(lane.role in {AgentRole.EXPLORER, AgentRole.MUTATOR} and lane.count for lane in plan.lanes)
 
 
 def test_effective_independent_search_is_a_count_not_a_probability() -> None:
@@ -161,11 +155,7 @@ def test_low_effective_independence_buys_diversity_not_duplicate_agents() -> Non
     )
 
     def search_width(plan) -> int:
-        return sum(
-            lane.count
-            for lane in plan.lanes
-            if lane.role in {AgentRole.EXPLORER, AgentRole.MUTATOR}
-        )
+        return sum(lane.count for lane in plan.lanes if lane.role in {AgentRole.EXPLORER, AgentRole.MUTATOR})
 
     assert search_width(collapsed) > search_width(independent)
 
