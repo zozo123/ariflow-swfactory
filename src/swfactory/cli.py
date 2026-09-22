@@ -1436,11 +1436,19 @@ def research_adapt_cmd(
         Path | None,
         typer.Option("--blackboard", help="optional recursive-search artifact blackboard JSON"),
     ] = None,
+    population_telemetry_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--population-telemetry",
+            help="optional retained population telemetry JSON from the previous swarm",
+        ),
+    ] = None,
     json_out: Annotated[bool, typer.Option("--json", help="machine-readable recursive search plan")] = False,
 ) -> None:
     """Compress prior campaigns into search laws and adapt the next experiment round."""
 
     from swfactory.evolution import CampaignError
+    from swfactory.population_manifest import population_telemetry_from_document
     from swfactory.recursive_search import (
         ArtifactBlackboard,
         extract_search_laws,
@@ -1477,6 +1485,13 @@ def research_adapt_cmd(
             raise CampaignError("latest campaign does not identify a next input head")
 
         blackboard = load_blackboard(blackboard_path) if blackboard_path is not None else ArtifactBlackboard()
+        population_telemetry = None
+        if population_telemetry_path is not None:
+            raw_telemetry = json.loads(population_telemetry_path.read_text(encoding="utf-8"))
+            if not isinstance(raw_telemetry, dict):
+                raise CampaignError("population telemetry must be a JSON object")
+            population_telemetry = population_telemetry_from_document(raw_telemetry)
+
         plan = plan_adaptive_round(
             signals,
             depth=signals[-1].depth + 1,
@@ -1484,6 +1499,7 @@ def research_adapt_cmd(
             blackboard=blackboard,
             max_candidates=max_candidates,
             max_parallel=max_parallel,
+            population_telemetry=population_telemetry,
         )
         laws = extract_search_laws(signals)
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, CampaignError) as error:
