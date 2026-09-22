@@ -407,8 +407,10 @@ Those measurements may change the next search allocation. They remain evidence a
 authority over durable reality. The manifest explicitly names Airflow as the scheduler and contains
 no credential, Cell mutation, publication or promotion capability.
 
-Provider adapters are still future work; existence of the manifest is not a claim that heterogeneous
-providers are production-wired.
+A generic trusted-backend HTTP population adapter now realizes this manifest contract, but that is
+not a blanket claim of vendor support. A provider/model/runtime combination becomes operationally
+supported only after its gateway, credential source, quotas, timeout semantics and retained receipts
+are live-qualified.
 
 ### Deterministic provider binding
 
@@ -450,9 +452,27 @@ independence while collapsing to the same concrete verifier binding, converts pr
 into failed search receipts, and derives population telemetry automatically. Reports are written as
 canonical JSON with a digest and can be reloaded and revalidated after process exit.
 
-Concrete provider adapters and backend-owned credential projection into those adapters remain future
-work. The managed executor carries names and search configuration only; it still cannot mint a
-credential, mutate a Cell, publish, approve, merge, or promote.
+The managed runtime now reaches a generic trusted provider gateway through the factory backend. The
+Airflow worker holds only `SWF_BACKEND_URL` and `SWF_BACKEND_TOKEN`. For each bound trajectory the
+backend rechecks Cell epoch, policy and authoritative Airflow ownership, journals the paid model call
+as the canonical `model_call` resource, binds the operation intent to the exact invocation and
+adapter configuration, and—only when that adapter declares an explicit dotted capability—mints and
+redeems an attempt-bound credential lease inside the backend process.
+
+Provider adapter configuration carries **credential environment-variable names, never values**.
+The raw credential is handed directly from lease redemption to the trusted adapter callback, then
+the lease is revoked. It never enters XCom, the population manifest, the provider binding, the
+execution report, the candidate artifact, the operation receipt, or the evidence chain.
+
+Provider output is retained in a backend-owned artifact whose digest binds both the invocation
+digest and the raw output hash. The journal stores only the artifact/receipt identities. An
+ambiguous timeout is therefore **in doubt**, not replayable: a redelivered Airflow task reads the
+journal instead of blindly spending on the provider again. Exact committed redelivery replays the
+sanitized receipt without another model call.
+
+The generic adapter is a contract and gateway, not a support claim for every vendor. Concrete
+provider endpoints remain experimental until live-qualified. The runtime still cannot create
+Airflow lifecycle work, publish, approve, merge, or promote.
 
 ## 12. Local crystals
 
