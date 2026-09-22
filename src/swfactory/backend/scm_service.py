@@ -114,8 +114,6 @@ def _request(
     )
 
 
-
-
 def _lease_binding(
     factory: Factory,
     cell: dict[str, Any],
@@ -131,12 +129,7 @@ def _lease_binding(
     run_id = str(cell.get("airflow_run_id") or "unbound-run")
     compute = cell.get("compute")
     compute = compute if isinstance(compute, dict) else {}
-    sandbox_id = str(
-        compute.get("sandbox_id")
-        or compute.get("name")
-        or compute.get("handle")
-        or "backend-publication"
-    )
+    sandbox_id = str(compute.get("sandbox_id") or compute.get("name") or compute.get("handle") or "backend-publication")
     return LeaseBinding(
         factory_run_id=f"{cell.get('airflow_dag_id') or 'factory'}:{run_id}:{cell.get('map_index', 0)}",
         dag_run_id=run_id,
