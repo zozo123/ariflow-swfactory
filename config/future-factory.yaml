@@ -289,7 +289,7 @@ evidence:
   fan_in:
     rule: rebuild decisions from immutable sibling evidence rather than trusting an in-memory winner
 
-authority:
+authority_envelope:
   request:
     may_be_created_by_search: true
     grants_authority: false
