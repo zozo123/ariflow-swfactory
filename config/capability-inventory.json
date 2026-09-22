@@ -281,10 +281,11 @@
       "test": "tests/test_recursive_search.py",
       "evidence": [
         "tests/test_recursive_search.py",
+        "tests/test_candidate_evidence.py",
         "config/future-factory.yaml",
         "docs/future-factory.md"
       ],
-      "follow_up": "Emit recursive plans from real managed campaigns, retain provenance in candidate evidence bundles, then add contract tests and Rust operator rendering before changing support.",
+      "follow_up": "Emit recursive plans from real managed campaigns, expose retained planning receipts through the Rust operator surface, and qualify provider-backed population execution before changing support.",
       "public_surface": [
         "research-adapt",
         "swfactory.recursive_search",
