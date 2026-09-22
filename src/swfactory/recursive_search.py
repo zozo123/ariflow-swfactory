@@ -38,7 +38,11 @@ from swfactory.evolution import (
 )
 from swfactory.generations import CampaignBudget, Dimension
 from swfactory.phase_control import Phase, PhaseObservation, assess
-from swfactory.population_manifest import PopulationManifest, build_population_manifest
+from swfactory.population_manifest import (
+    PopulationManifest,
+    PopulationTelemetry,
+    build_population_manifest,
+)
 from swfactory.swarm_dynamics import (
     DisagreementHotspot,
     SearchProvenance,
@@ -363,6 +367,8 @@ class RecursiveRoundPlan:
     search_provenance: SearchProvenance | None = None
     population_manifest_digest: str | None = None
     population_manifest: PopulationManifest | None = None
+    population_telemetry_digest: str | None = None
+    population_telemetry: PopulationTelemetry | None = None
     estimated_compute_units: float = 0.0
     authority: str = RECURSIVE_SEARCH_AUTHORITY
 
@@ -396,6 +402,10 @@ class RecursiveRoundPlan:
                 raise CampaignError("population manifest is bound to another swarm plan")
             if self.search_provenance_digest != self.population_manifest.search_provenance_digest:
                 raise CampaignError("population manifest is bound to another search provenance receipt")
+        if self.population_telemetry is not None:
+            self.population_telemetry.validate()
+            if self.population_telemetry_digest != self.population_telemetry.digest():
+                raise CampaignError("embedded population telemetry digest mismatch")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -415,6 +425,7 @@ class RecursiveRoundPlan:
             "swarm_plan_digest": self.swarm_plan_digest,
             "search_provenance_digest": self.search_provenance_digest,
             "population_manifest_digest": self.population_manifest_digest,
+            "population_telemetry_digest": self.population_telemetry_digest,
             "estimated_compute_units": self.estimated_compute_units,
         }
         if self.swarm_plan is not None:
@@ -423,6 +434,8 @@ class RecursiveRoundPlan:
             document["search_provenance"] = self.search_provenance.canonical_dict()
         if self.population_manifest is not None:
             document["population_manifest"] = self.population_manifest.canonical_dict()
+        if self.population_telemetry is not None:
+            document["population_telemetry"] = self.population_telemetry.canonical_dict()
         return document
 
     def digest(self) -> str:
@@ -778,6 +791,7 @@ def plan_adaptive_round(
     context_pressure: float = 0.0,
     debt_pressure: float = 0.0,
     swarm_budget: SwarmBudget | None = None,
+    population_telemetry: PopulationTelemetry | None = None,
 ) -> RecursiveRoundPlan:
     """Join recursive search, phase metacognition and population allocation.
 
@@ -802,7 +816,13 @@ def plan_adaptive_round(
         debt_pressure=debt_pressure,
     )
     phase = assess(observation, previous_phase=previous_phase)
-    swarm_observation = _swarm_observation(signals, observation)
+    if population_telemetry is not None:
+        population_telemetry.validate()
+    swarm_observation = _swarm_observation(
+        signals,
+        observation,
+        population_telemetry=population_telemetry,
+    )
     hotspots: tuple[DisagreementHotspot, ...] = ()
     if signals and signals[-1].disagreement > 0.0:
         last = signals[-1]
@@ -858,6 +878,12 @@ def plan_adaptive_round(
         search_provenance=provenance,
         population_manifest_digest=manifest.digest(),
         population_manifest=manifest,
+        population_telemetry_digest=(
+            population_telemetry.digest()
+            if population_telemetry is not None
+            else None
+        ),
+        population_telemetry=population_telemetry,
         estimated_compute_units=swarm.estimated_compute_units,
     )
 
@@ -916,13 +942,30 @@ def _phase_observation(
 def _swarm_observation(
     signals: Sequence[RoundSignal],
     phase_observation: PhaseObservation,
+    *,
+    population_telemetry: PopulationTelemetry | None = None,
 ) -> SwarmObservation:
     if not signals:
+        telemetry_disagreement = (
+            population_telemetry.candidate_disagreement
+            if population_telemetry is not None
+            else 1.0
+        )
+        telemetry_independence = (
+            population_telemetry.effective_independent_search
+            if population_telemetry is not None
+            else 1.0
+        )
+        telemetry_correlation = (
+            population_telemetry.mean_correlation
+            if population_telemetry is not None
+            else 0.0
+        )
         return SwarmObservation(
-            effective_independent_search=1.0,
-            mean_correlation=0.0,
+            effective_independent_search=telemetry_independence,
+            mean_correlation=telemetry_correlation,
             novelty=1.0,
-            verifier_disagreement=1.0,
+            verifier_disagreement=telemetry_disagreement,
             evidence_completeness=0.0,
             resource_pressure=phase_observation.resource_pressure,
             context_pressure=phase_observation.context_pressure,
@@ -931,11 +974,29 @@ def _swarm_observation(
             expected_information=1.0,
         )
     last = signals[-1]
+    measured_independence = (
+        population_telemetry.effective_independent_search
+        if population_telemetry is not None
+        else float(max(1, last.unique_outputs))
+    )
+    measured_correlation = (
+        population_telemetry.mean_correlation
+        if population_telemetry is not None
+        else max(0.0, min(1.0, 1.0 - last.novelty))
+    )
+    measured_disagreement = max(
+        last.disagreement,
+        (
+            population_telemetry.candidate_disagreement
+            if population_telemetry is not None
+            else 0.0
+        ),
+    )
     return SwarmObservation(
-        effective_independent_search=float(max(1, last.unique_outputs)),
-        mean_correlation=max(0.0, min(1.0, 1.0 - last.novelty)),
+        effective_independent_search=measured_independence,
+        mean_correlation=measured_correlation,
         novelty=last.novelty,
-        verifier_disagreement=last.disagreement,
+        verifier_disagreement=measured_disagreement,
         evidence_completeness=last.evidence_rate,
         resource_pressure=phase_observation.resource_pressure,
         context_pressure=phase_observation.context_pressure,
@@ -943,7 +1004,11 @@ def _swarm_observation(
         progress_rate=_ratio(last.answered, last.attempts),
         expected_information=max(
             0.0,
-            min(1.0, last.disagreement * (1.0 - last.evidence_rate) + (1.0 - last.required_pass_rate) * 0.25),
+            min(
+                1.0,
+                measured_disagreement * (1.0 - last.evidence_rate)
+                + (1.0 - last.required_pass_rate) * 0.25,
+            ),
         ),
     )
 
