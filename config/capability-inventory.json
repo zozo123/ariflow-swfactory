@@ -305,7 +305,7 @@
         "config/future-factory.yaml",
         "docs/future-factory.md"
       ],
-      "follow_up": "Connect real heterogeneous providers and managed-run telemetry, qualify compute accounting and verifier independence, then graduate stable contracts into Rust.",
+      "follow_up": "Connect real heterogeneous providers and managed-run telemetry, qualify compute accounting and verifier independence, then graduate proven contracts into Rust.",
       "public_surface": [
         "swfactory.swarm_dynamics",
         "effective independent search",
