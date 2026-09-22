@@ -251,12 +251,23 @@ class InformationBudgetDecision:
         return dict(self.role_caps)
 
 
-def budget_from_manifest(manifest: PopulationManifest) -> SwarmBudget:
-    """Return the exact outer envelope represented by a retained population manifest."""
+def budget_from_manifest(
+    manifest: PopulationManifest,
+    *,
+    max_parallel: int = 1,
+) -> SwarmBudget:
+    """Build a conservative replay envelope from one retained manifest.
+
+    A manifest proves task/tier counts but does not prove the concurrency ceiling that produced it.
+    Callers with a retained plan/stage must supply that prior max_parallel. Callers with only a
+    manifest default to serial rather than inventing wider concurrency.
+    """
 
     manifest.validate()
     total = len(manifest.tasks)
     if total < 1:
+        if max_parallel != 1:
+            raise ValueError("empty population manifests can only replay serially")
         return SwarmBudget(
             max_agents=1,
             max_parallel=1,
@@ -264,12 +275,14 @@ def budget_from_manifest(manifest: PopulationManifest) -> SwarmBudget:
             max_exact_replays=0,
             max_compute_units=1.0,
         )
+    if type(max_parallel) is not int or not 1 <= max_parallel <= total:
+        raise ValueError("prior max_parallel must be an integer in [1, manifest task count]")
     deep = sum(1 for task in manifest.tasks if task.compute_tier == ComputeTier.DEEP)
     exact = sum(1 for task in manifest.tasks if task.compute_tier == ComputeTier.EXACT_REPLAY)
     compute = sum(_tier_units(task.compute_tier) for task in manifest.tasks)
     budget = SwarmBudget(
         max_agents=total,
-        max_parallel=total,
+        max_parallel=max_parallel,
         max_deep_agents=deep,
         max_exact_replays=exact,
         max_compute_units=max(1.0, compute),
