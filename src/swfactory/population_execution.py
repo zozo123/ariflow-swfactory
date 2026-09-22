@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from swfactory.models import StageError
 from swfactory.population_manifest import (
     BehaviorReceipt,
     PopulationManifest,
@@ -47,6 +48,13 @@ class PopulationExecutionPolicy:
     def validate(self) -> None:
         if self.max_parallel < 1:
             raise PopulationManifestError("population execution max_parallel must be positive")
+
+
+class PopulationExecutionAbort(StageError):
+    """A managed population stage must abort rather than downgrade this boundary failure."""
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__("agent", message, retryable=retryable)
 
 
 class PopulationCancellation:
@@ -220,6 +228,11 @@ class PopulationExecutor:
                     continue
                 try:
                     receipt = future.result()
+                except (PopulationExecutionAbort, PopulationManifestError):
+                    cancellation.cancel()
+                    for pending in futures:
+                        pending.cancel()
+                    raise
                 except BaseException as exc:
                     receipt = BehaviorReceipt(
                         task_id=task.task_id,
