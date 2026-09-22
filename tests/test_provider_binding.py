@@ -76,9 +76,7 @@ def test_provider_binding_is_deterministic_and_preserves_task_identity() -> None
     assert first.scheduler == "airflow"
     assert first.population_manifest_digest == manifest.digest()
     assert [task.task_id for task in first.tasks] == [task.task_id for task in manifest.tasks]
-    assert [task.variant_digest for task in first.tasks] == [
-        task.variant_digest for task in manifest.tasks
-    ]
+    assert [task.variant_digest for task in first.tasks] == [task.variant_digest for task in manifest.tasks]
     assert first.digest().startswith("sha256:")
     assert all(task.binding_digest.startswith("sha256:") for task in first.tasks)
 
@@ -87,10 +85,7 @@ def test_replica_coordinates_drive_real_provider_variation() -> None:
     bound = bind_population_manifest(_manifest(), choices=_choices())
     explorers = bound.tasks[:3]
 
-    combinations = {
-        (task.model, task.prompt_variant, task.runtime)
-        for task in explorers
-    }
+    combinations = {(task.model, task.prompt_variant, task.runtime) for task in explorers}
     assert len(combinations) > 1
 
 
@@ -173,8 +168,6 @@ def test_cli_refuses_missing_required_provider_choice(tmp_path) -> None:
 
     assert result.exit_code == 2
     assert "no provider choices: model" in result.output
-
-
 
 def test_programmatic_provider_choices_reject_duplicate_values() -> None:
     choices = ProviderChoiceSet(
