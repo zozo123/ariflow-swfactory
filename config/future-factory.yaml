@@ -413,9 +413,8 @@ future:
     retained memory and search laws
   graduation:
     - emit real phase and swarm telemetry from managed runs
-    - preserve search provenance in candidate evidence bundles
     - expose recursive decisions in swf operator surfaces
     - add provider-backed heterogeneous population execution
     - add exact replay capsules
     - train offline policy from retained campaigns without granting online authority
-    - graduate stable search contracts from Python into Rust
+    - graduate proven search contracts from Python into Rust
