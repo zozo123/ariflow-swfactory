@@ -59,6 +59,7 @@ class PopulationTask:
     temperature: float
     independent_verification: bool
     diversity_axes: tuple[str, ...]
+    diversity_coordinates: tuple[tuple[str, int], ...]
     focus_hotspots: tuple[str, ...]
     variant_digest: str
 
@@ -71,6 +72,11 @@ class PopulationTask:
             raise PopulationManifestError("population task temperature must be finite and in [0, 2]")
         if not self.diversity_axes:
             raise PopulationManifestError("population task must declare at least one diversity axis")
+        coordinate_axes = tuple(axis for axis, _seed in self.diversity_coordinates)
+        if coordinate_axes != self.diversity_axes:
+            raise PopulationManifestError("population diversity coordinates must exactly match declared axes")
+        if any(seed < 0 or seed > 0x7FFFFFFF for _axis, seed in self.diversity_coordinates):
+            raise PopulationManifestError("population diversity coordinates must use non-negative 31-bit seeds")
         if self.compute_tier == ComputeTier.EXACT_REPLAY and self.temperature != 0.0:
             raise PopulationManifestError("exact replay population tasks must have zero temperature")
         if self.independent_verification:
@@ -92,6 +98,10 @@ class PopulationTask:
             "temperature": self.temperature,
             "independent_verification": self.independent_verification,
             "diversity_axes": list(self.diversity_axes),
+            "diversity_coordinates": [
+                {"axis": axis, "seed": seed}
+                for axis, seed in self.diversity_coordinates
+            ],
             "focus_hotspots": list(self.focus_hotspots),
             "variant_digest": self.variant_digest,
         }
@@ -247,16 +257,35 @@ def build_population_manifest(
     for lane_index, lane in enumerate(plan.lanes):
         lane.validate()
         for replica_index in range(lane.count):
+            coordinate_root = {
+                "swarm_plan_digest": plan_digest,
+                "lane_index": lane_index,
+                "replica_index": replica_index,
+                "role": lane.role.value,
+            }
+            diversity_coordinates = tuple(
+                (
+                    axis,
+                    int(
+                        _digest({**coordinate_root, "axis": axis})
+                        .removeprefix("sha256:")[:8],
+                        16,
+                    )
+                    & 0x7FFFFFFF,
+                )
+                for axis in lane.diversity_axes
+            )
             variant_digest = _digest(
                 {
-                    "swarm_plan_digest": plan_digest,
-                    "lane_index": lane_index,
-                    "replica_index": replica_index,
-                    "role": lane.role.value,
+                    **coordinate_root,
                     "compute_tier": lane.compute_tier.value,
                     "context": lane.context.value,
                     "temperature": lane.temperature,
                     "diversity_axes": list(lane.diversity_axes),
+                    "diversity_coordinates": [
+                        {"axis": axis, "seed": seed}
+                        for axis, seed in diversity_coordinates
+                    ],
                     "focus_hotspots": list(lane.focus_hotspots),
                 }
             )
@@ -272,6 +301,7 @@ def build_population_manifest(
                     temperature=lane.temperature,
                     independent_verification=lane.independent_verification,
                     diversity_axes=lane.diversity_axes,
+                    diversity_coordinates=diversity_coordinates,
                     focus_hotspots=lane.focus_hotspots,
                     variant_digest=variant_digest,
                 )
