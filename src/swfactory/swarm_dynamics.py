@@ -516,7 +516,10 @@ def allocate_population(
                     ("role", "model"),
                 )
             )
-        reason = "gas/diverge: maximize cheap independent search; correlated trajectories buy diversity, not more copies"
+        reason = (
+            "gas/diverge: maximize cheap independent search; "
+            "correlated trajectories buy diversity, not more copies"
+        )
 
     elif mode == ControlMode.COORDINATE:
         total = min(budget.max_agents, max(4, int(round(budget.max_agents * 0.65))))
@@ -526,10 +529,42 @@ def allocate_population(
         verifier = max(1, total - explore - synth - critic)
         lanes.extend(
             [
-                PopulationLane(AgentRole.EXPLORER, ComputeTier.CHEAP, explore, ContextPolicy.INHERIT, 0.95, False, axes),
-                PopulationLane(AgentRole.SYNTHESIZER, ComputeTier.STANDARD, synth, ContextPolicy.COMPACT, 0.30, False, ("role", "model")),
-                PopulationLane(AgentRole.CRITIC, ComputeTier.STANDARD, critic, ContextPolicy.COMPACT, 0.25, False, ("role", "model", "verifier")),
-                PopulationLane(AgentRole.VERIFIER, ComputeTier.STANDARD, verifier, ContextPolicy.FRESH, 0.0, True, ("model", "runtime", "verifier")),
+                PopulationLane(
+                    AgentRole.EXPLORER,
+                    ComputeTier.CHEAP,
+                    explore,
+                    ContextPolicy.INHERIT,
+                    0.95,
+                    False,
+                    axes,
+                ),
+                PopulationLane(
+                    AgentRole.SYNTHESIZER,
+                    ComputeTier.STANDARD,
+                    synth,
+                    ContextPolicy.COMPACT,
+                    0.30,
+                    False,
+                    ("role", "model"),
+                ),
+                PopulationLane(
+                    AgentRole.CRITIC,
+                    ComputeTier.STANDARD,
+                    critic,
+                    ContextPolicy.COMPACT,
+                    0.25,
+                    False,
+                    ("role", "model", "verifier"),
+                ),
+                PopulationLane(
+                    AgentRole.VERIFIER,
+                    ComputeTier.STANDARD,
+                    verifier,
+                    ContextPolicy.FRESH,
+                    0.0,
+                    True,
+                    ("model", "runtime", "verifier"),
+                ),
             ]
         )
         reason = "liquid/coordinate: preserve motion while coupling candidate worlds through compact evidence"
@@ -635,7 +670,10 @@ def allocate_population(
                 ),
             ]
         )
-        reason = "glass/perturb: abandon correlated context and inject new coordinates instead of thinking harder in place"
+        reason = (
+            "glass/perturb: abandon correlated context and inject new coordinates "
+            "instead of thinking harder in place"
+        )
 
     else:  # DRAIN
         stop_new_work = True
