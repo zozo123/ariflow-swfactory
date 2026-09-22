@@ -382,6 +382,49 @@ def test_research_adapt_cli_consumes_managed_population_execution_report(tmp_pat
     document = json.loads(result.stdout)
     assert document["plan"]["population_telemetry_digest"] == telemetry.digest()
     assert document["plan"]["population_telemetry"]["manifest_digest"] == telemetry.manifest_digest
+    assert document["plan"]["information_budget_digest"].startswith("sha256:")
+    assert document["plan"]["information_budget"]["source_execution_report_digest"] == execution.digest()
+    assert document["plan"]["information_budget"]["next_budget"]["max_agents"] <= 4
+
+
+def test_adaptive_round_binds_managed_execution_budget_into_swarm_identity() -> None:
+    telemetry = _population_telemetry()
+    receipts = tuple(
+        BehaviorReceipt(
+            task_id=f"pop_{index:024x}",
+            state="answered",
+            behavior_signature=("same" if index < 3 else "counterfactual",),
+        )
+        for index in range(4)
+    )
+    telemetry = replace(
+        telemetry,
+        receipt_digests=tuple(sorted(receipt.digest() for receipt in receipts)),
+    )
+    execution = PopulationExecutionReport(
+        population_manifest_digest=telemetry.manifest_digest,
+        provider_binding_digest="sha256:" + "7" * 64,
+        receipts=receipts,
+        telemetry=telemetry,
+        cancelled=False,
+        started_tasks=4,
+    )
+
+    plan = plan_adaptive_round(
+        (_round(disagreement=0.8, evidence=1, required=1),),
+        depth=1,
+        input_head="abc123",
+        max_candidates=4,
+        max_parallel=4,
+        population_execution_report=execution,
+    )
+
+    assert plan.information_budget is not None
+    assert plan.information_budget_digest == plan.information_budget.digest()
+    assert plan.population_telemetry == telemetry
+    assert plan.swarm_plan is not None
+    assert f"information-budget={plan.information_budget_digest}" in plan.swarm_plan.reason
+    assert plan.max_parallel <= plan.information_budget.next_budget.max_agents
 
 
 def test_research_adapt_refuses_two_population_feedback_sources(tmp_path: Path) -> None:
