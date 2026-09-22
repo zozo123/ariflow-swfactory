@@ -45,6 +45,7 @@ services:
       # Fixed, not `${SWF_BACKEND_URL:-...}`: a host shell exporting the console's localhost:8082
       # would be interpolated into the worker and route it to a port inside its own container (#2050).
       SWF_BACKEND_URL: http://backend:8082
+      SWF_BACKEND_HTTP_HOSTS: backend
       SWF_BACKEND_TOKEN: ${SWF_BACKEND_TOKEN:-}
       # Operational factory knobs. Mapped job identity still wins over ambient SWF_* values.
       SWF_SANDBOX: docker
@@ -126,6 +127,9 @@ services:
       AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-}
       AIRFLOW_TOKEN: ${AIRFLOW_TOKEN:-}
       SWF_BACKEND_TOKEN: ${SWF_BACKEND_TOKEN:-}
+      # Provider endpoints + credential ENV NAMES only. The named secret values must be injected
+      # into this backend service explicitly; they are never copied into the Airflow service.
+      SWF_POPULATION_ADAPTERS_JSON: ${SWF_POPULATION_ADAPTERS_JSON:-}
       SWF_REPO: ${SWF_REPO:-}
       SWF_SANDBOX_OWNER: ${SWF_SANDBOX_OWNER:-}
       GH_TOKEN: ${GH_TOKEN:-}
