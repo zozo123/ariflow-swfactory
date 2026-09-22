@@ -14,7 +14,7 @@ managed lifecycle; isolated coding workers perform the work; the trusted factory
 People decide what reaches `main`.
 
 [Quickstart](#quickstart) · [Liquid methodology](#the-liquid-methodology) · [Physics](#physics-of-the-factory) ·
-[Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
+[Future factory](docs/future-factory.md) · [Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
 [Illustrated walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Agent skills](#agent-skills)
 
 ![A software change moving through work cells from issue to reviewed pull request](site/factory-line.webp)
@@ -184,6 +184,27 @@ ambiguous mutation, publish a PR, or promote a candidate.
 
 See [polyglot task graph: motion, not authority](docs/polyglot-task-graph.md) for the executable
 native graph, cache policy, authority boundary, and graduation criteria.
+
+### Recursive search and swarm dynamics
+
+The experimental next layer makes the search process itself observable and replayable.
+
+`swfactory.recursive_search` reduces campaigns into order parameters, extracts exploration-only
+search laws, retains a content-addressed artifact blackboard, classifies the current factory phase,
+and binds the resulting search provenance into descendant candidate identity.
+
+`swfactory.swarm_dynamics` then allocates a bounded heterogeneous population by **effective
+independent search**, not raw agent count. Cheap compute expands gas-like search; critical
+disagreements attract selective deep verification; a local crystal stops broad search and moves to
+exact replay plus independent red-team verification; glass perturbs with fresh context; jammed
+stops new work and drains debt.
+
+These mechanisms are intentionally marked **experimental** in the capability inventory. They may
+change search posture, population and compute allocation, but they cannot schedule Airflow, weaken
+evidence, mint credentials, approve, publish, merge or promote.
+
+The full end-state and graduation path are in [Future Factory](docs/future-factory.md), with the
+machine-readable architecture contract in [`config/future-factory.yaml`](config/future-factory.yaml).
 
 ## Architecture and lifecycle
 
