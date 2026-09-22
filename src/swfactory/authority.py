@@ -22,6 +22,7 @@ class ResourceKind(StrEnum):
     AIRFLOW_RUN = "airflow_run"
     SANDBOX = "sandbox"
     GITHUB_PUBLICATION = "github_publication"
+    MODEL_CALL = "model_call"
     CLEANUP = "cleanup"
     ADMISSION = "admission"
     EVIDENCE = "evidence"
@@ -46,6 +47,7 @@ _RULES = (
         "operation_key",
         "operation journal",
     ),
+    AuthorityRule(ResourceKind.MODEL_CALL, "python-backend", "operation_key", "operation journal"),
     AuthorityRule(ResourceKind.CLEANUP, "python-backend", "cell_epoch", "cleanup receipt"),
     AuthorityRule(ResourceKind.ADMISSION, "python-backend", "work_id", "admission store"),
     AuthorityRule(ResourceKind.EVIDENCE, "python-backend", "cell_epoch", "evidence bundle"),
