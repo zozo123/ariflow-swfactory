@@ -168,9 +168,7 @@ def provider_choices_from_document(document: Mapping[str, Any]) -> ProviderChoic
     }
     unknown = sorted(set(document) - allowed)
     if unknown:
-        raise PopulationManifestError(
-            "unknown provider choice axes: " + ", ".join(unknown)
-        )
+        raise PopulationManifestError("unknown provider choice axes: " + ", ".join(unknown))
 
     values: dict[str, tuple[str, ...]] = {}
     for axis in allowed:
@@ -231,11 +229,7 @@ def bind_population_manifest(
                 "attack-surface",
             )
         }
-        missing = sorted(
-            axis
-            for axis in required_axes
-            if axis in declared and not selected.get(axis)
-        )
+        missing = sorted(axis for axis in required_axes if axis in declared and not selected.get(axis))
         if missing:
             raise PopulationManifestError(
                 f"{task.task_id}: declared diversity axes have no provider choices: {', '.join(missing)}"
