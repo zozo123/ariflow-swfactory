@@ -104,7 +104,7 @@ def test_default_request_bound_is_64k_and_only_scm_patch_routes_get_16m() -> Non
 
 def test_population_route_has_a_bounded_non_scm_body_limit() -> None:
     assert MAX_POPULATION_BODY == 512 * 1024
-    assert POPULATION_ROUTES == {"/v1/population/execute"}
+    assert {"/v1/population/execute"} == POPULATION_ROUTES
 
 
 def test_compose_wires_backend_callback_contract_into_airflow_workers() -> None:
