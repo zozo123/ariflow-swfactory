@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from typer.testing import CliRunner
 
 from swfactory.adaptive_information import (
     InformationBudgetPolicy,
@@ -11,8 +12,12 @@ from swfactory.adaptive_information import (
     load_information_budget,
     write_information_budget,
 )
+from swfactory.cli import app
 from swfactory.phase_control import ControlMode
-from swfactory.population_execution import PopulationExecutionReport
+from swfactory.population_execution import (
+    PopulationExecutionReport,
+    write_population_execution_report,
+)
 from swfactory.population_manifest import (
     BehaviorReceipt,
     build_population_manifest,
@@ -267,3 +272,38 @@ def test_information_budget_round_trips_and_rejects_digest_tampering(tmp_path) -
     path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(ValueError, match="decision digest mismatch"):
         load_information_budget(path)
+
+
+
+def test_population_budget_cli_replays_lane_economics(tmp_path) -> None:
+    manifest, report = _report(explorer_count=3, verifier_count=1)
+    plan_path = tmp_path / "plan.json"
+    report_path = tmp_path / "execution.json"
+    decision_path = tmp_path / "decision.json"
+    plan_path.write_text(
+        json.dumps({"plan": {"population_manifest": manifest.canonical_dict()}}),
+        encoding="utf-8",
+    )
+    write_population_execution_report(report_path, report)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "population-budget",
+            str(plan_path),
+            str(report_path),
+            "--output",
+            str(decision_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert document["authority"] == "search-only"
+    assert document["source_manifest_digest"] == manifest.digest()
+    assert document["source_execution_report_digest"] == report.digest()
+    assert document["decision_digest"].startswith("sha256:")
+    assert document["next_budget"]["max_agents"] <= len(manifest.tasks)
+    assert decision_path.is_file()
+    assert load_information_budget(decision_path).digest() == document["decision_digest"]
