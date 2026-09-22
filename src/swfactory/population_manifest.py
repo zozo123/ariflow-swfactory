@@ -46,6 +46,66 @@ def _require_digest(value: str, *, field: str) -> None:
         raise PopulationManifestError(f"{field} must be a canonical sha256 digest")
 
 
+def _task_coordinate_root(
+    *,
+    swarm_plan_digest: str,
+    search_provenance_digest: str,
+    lane_index: int,
+    replica_index: int,
+    role: AgentRole,
+) -> dict[str, object]:
+    return {
+        "swarm_plan_digest": swarm_plan_digest,
+        "search_provenance_digest": search_provenance_digest,
+        "lane_index": lane_index,
+        "replica_index": replica_index,
+        "role": role.value,
+    }
+
+
+def _diversity_coordinates(
+    coordinate_root: Mapping[str, object],
+    axes: Sequence[str],
+) -> tuple[tuple[str, int], ...]:
+    return tuple(
+        (
+            axis,
+            int(
+                _digest({**coordinate_root, "axis": axis}).removeprefix("sha256:")[:8],
+                16,
+            )
+            & 0x7FFFFFFF,
+        )
+        for axis in axes
+    )
+
+
+def _variant_digest(
+    coordinate_root: Mapping[str, object],
+    *,
+    compute_tier: ComputeTier,
+    context: ContextPolicy,
+    temperature: float,
+    diversity_axes: Sequence[str],
+    diversity_coordinates: Sequence[tuple[str, int]],
+    focus_hotspots: Sequence[str],
+) -> str:
+    return _digest(
+        {
+            **coordinate_root,
+            "compute_tier": compute_tier.value,
+            "context": context.value,
+            "temperature": temperature,
+            "diversity_axes": list(diversity_axes),
+            "diversity_coordinates": [
+                {"axis": axis, "seed": seed}
+                for axis, seed in diversity_coordinates
+            ],
+            "focus_hotspots": list(focus_hotspots),
+        }
+    )
+
+
 @dataclass(frozen=True)
 class PopulationTask:
     """One provider-neutral trajectory request materialized from a swarm lane."""
@@ -135,6 +195,34 @@ class PopulationManifest:
         variants: set[str] = set()
         for task in self.tasks:
             task.validate()
+            coordinate_root = _task_coordinate_root(
+                swarm_plan_digest=self.swarm_plan_digest,
+                search_provenance_digest=self.search_provenance_digest,
+                lane_index=task.lane_index,
+                replica_index=task.replica_index,
+                role=task.role,
+            )
+            expected_coordinates = _diversity_coordinates(
+                coordinate_root,
+                task.diversity_axes,
+            )
+            if task.diversity_coordinates != expected_coordinates:
+                raise PopulationManifestError(
+                    f"{task.task_id}: diversity coordinates do not match manifest provenance"
+                )
+            expected_variant = _variant_digest(
+                coordinate_root,
+                compute_tier=task.compute_tier,
+                context=task.context,
+                temperature=task.temperature,
+                diversity_axes=task.diversity_axes,
+                diversity_coordinates=task.diversity_coordinates,
+                focus_hotspots=task.focus_hotspots,
+            )
+            if task.variant_digest != expected_variant:
+                raise PopulationManifestError(
+                    f"{task.task_id}: variant digest does not match manifest provenance"
+                )
             if task.task_id in ids:
                 raise PopulationManifestError(f"duplicate population task id {task.task_id}")
             if task.variant_digest in variants:
@@ -345,6 +433,11 @@ def population_manifest_from_document(document: Mapping[str, Any]) -> Population
         coordinates = raw.get("diversity_coordinates", ())
         if not isinstance(coordinates, list):
             raise PopulationManifestError("population diversity coordinates must be an array")
+        if any(not isinstance(item, Mapping) for item in coordinates):
+            raise PopulationManifestError("population diversity coordinate entries must be objects")
+        independent_verification = raw.get("independent_verification")
+        if not isinstance(independent_verification, bool):
+            raise PopulationManifestError("population task independent_verification must be boolean")
         tasks.append(
             PopulationTask(
                 task_id=str(raw["task_id"]),
@@ -354,10 +447,10 @@ def population_manifest_from_document(document: Mapping[str, Any]) -> Population
                 compute_tier=ComputeTier(str(raw["compute_tier"])),
                 context=ContextPolicy(str(raw["context"])),
                 temperature=float(raw["temperature"]),
-                independent_verification=bool(raw["independent_verification"]),
+                independent_verification=independent_verification,
                 diversity_axes=tuple(str(axis) for axis in raw.get("diversity_axes", ())),
                 diversity_coordinates=tuple(
-                    (str(item["axis"]), int(item["seed"])) for item in coordinates if isinstance(item, Mapping)
+                    (str(item["axis"]), int(item["seed"])) for item in coordinates
                 ),
                 focus_hotspots=tuple(str(value) for value in raw.get("focus_hotspots", ())),
                 variant_digest=str(raw["variant_digest"]),
@@ -390,33 +483,25 @@ def build_population_manifest(
     for lane_index, lane in enumerate(plan.lanes):
         lane.validate()
         for replica_index in range(lane.count):
-            coordinate_root = {
-                "swarm_plan_digest": plan_digest,
-                "lane_index": lane_index,
-                "replica_index": replica_index,
-                "role": lane.role.value,
-            }
-            diversity_coordinates = tuple(
-                (
-                    axis,
-                    int(
-                        _digest({**coordinate_root, "axis": axis}).removeprefix("sha256:")[:8],
-                        16,
-                    )
-                    & 0x7FFFFFFF,
-                )
-                for axis in lane.diversity_axes
+            coordinate_root = _task_coordinate_root(
+                swarm_plan_digest=plan_digest,
+                search_provenance_digest=search_provenance_digest,
+                lane_index=lane_index,
+                replica_index=replica_index,
+                role=lane.role,
             )
-            variant_digest = _digest(
-                {
-                    **coordinate_root,
-                    "compute_tier": lane.compute_tier.value,
-                    "context": lane.context.value,
-                    "temperature": lane.temperature,
-                    "diversity_axes": list(lane.diversity_axes),
-                    "diversity_coordinates": [{"axis": axis, "seed": seed} for axis, seed in diversity_coordinates],
-                    "focus_hotspots": list(lane.focus_hotspots),
-                }
+            diversity_coordinates = _diversity_coordinates(
+                coordinate_root,
+                lane.diversity_axes,
+            )
+            variant_digest = _variant_digest(
+                coordinate_root,
+                compute_tier=lane.compute_tier,
+                context=lane.context,
+                temperature=lane.temperature,
+                diversity_axes=lane.diversity_axes,
+                diversity_coordinates=diversity_coordinates,
+                focus_hotspots=lane.focus_hotspots,
             )
             task_id = "pop_" + variant_digest.removeprefix("sha256:")[:24]
             tasks.append(

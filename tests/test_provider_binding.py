@@ -10,6 +10,7 @@ from swfactory.population_manifest import PopulationManifestError, build_populat
 from swfactory.provider_binding import (
     ProviderChoiceSet,
     bind_population_manifest,
+    provider_choices_from_document,
 )
 from swfactory.swarm_dynamics import (
     AgentRole,
@@ -55,7 +56,6 @@ def _manifest():
         search_provenance_digest="sha256:" + "a" * 64,
     )
 
-
 def _choices() -> ProviderChoiceSet:
     return ProviderChoiceSet(
         model=("fast", "deep", "critic"),
@@ -63,7 +63,6 @@ def _choices() -> ProviderChoiceSet:
         runtime=("linux-a", "linux-b"),
         verifier=("unit", "property", "adversarial"),
     )
-
 
 def test_provider_binding_is_deterministic_and_preserves_task_identity() -> None:
     manifest = _manifest()
@@ -80,14 +79,12 @@ def test_provider_binding_is_deterministic_and_preserves_task_identity() -> None
     assert first.digest().startswith("sha256:")
     assert all(task.binding_digest.startswith("sha256:") for task in first.tasks)
 
-
 def test_replica_coordinates_drive_real_provider_variation() -> None:
     bound = bind_population_manifest(_manifest(), choices=_choices())
     explorers = bound.tasks[:3]
 
     combinations = {(task.model, task.prompt_variant, task.runtime) for task in explorers}
     assert len(combinations) > 1
-
 
 def test_declared_required_axis_without_choices_is_refused() -> None:
     manifest = _manifest()
@@ -98,7 +95,6 @@ def test_declared_required_axis_without_choices_is_refused() -> None:
 
     with pytest.raises(PopulationManifestError, match="no provider choices: model"):
         bind_population_manifest(manifest, choices=choices)
-
 
 def test_binding_does_not_require_axes_a_lane_never_declared() -> None:
     manifest = _manifest()
@@ -112,7 +108,6 @@ def test_binding_does_not_require_axes_a_lane_never_declared() -> None:
     assert all(task.provider is None for task in bound.tasks)
     assert all(task.model is not None for task in bound.tasks)
     assert all(task.runtime is not None for task in bound.tasks)
-
 
 def test_cli_binds_persisted_population_manifest(tmp_path) -> None:
     manifest = _manifest()
@@ -147,7 +142,6 @@ def test_cli_binds_persisted_population_manifest(tmp_path) -> None:
     assert document["provider_binding_digest"].startswith("sha256:")
     assert len(document["binding"]["tasks"]) == len(manifest.tasks)
 
-
 def test_cli_refuses_missing_required_provider_choice(tmp_path) -> None:
     manifest = _manifest()
     plan_path = tmp_path / "plan.json"
@@ -177,3 +171,13 @@ def test_programmatic_provider_choices_reject_duplicate_values() -> None:
 
     with pytest.raises(PopulationManifestError, match="must be distinct"):
         bind_population_manifest(_manifest(), choices=choices)
+
+
+def test_persisted_provider_choices_reject_non_string_values() -> None:
+    with pytest.raises(PopulationManifestError, match="strings only"):
+        provider_choices_from_document(
+            {
+                "model": ["fast", 7],
+                "runtime": ["linux"],
+            }
+        )

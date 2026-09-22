@@ -175,7 +175,9 @@ def provider_choices_from_document(document: Mapping[str, Any]) -> ProviderChoic
         raw = document.get(axis, ())
         if not isinstance(raw, (list, tuple)):
             raise PopulationManifestError(f"provider choices for {axis!r} must be an array")
-        choices = tuple(str(value).strip() for value in raw)
+        if any(not isinstance(value, str) for value in raw):
+            raise PopulationManifestError(f"provider choices for {axis!r} must contain strings only")
+        choices = tuple(value.strip() for value in raw)
         if any(not value for value in choices):
             raise PopulationManifestError(f"provider choices for {axis!r} must be nonempty strings")
         if len(set(choices)) != len(choices):
