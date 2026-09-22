@@ -195,3 +195,39 @@ def test_resource_pressure_narrows_the_population_before_jam() -> None:
     assert pressured_count < relaxed_count
     assert pressured.estimated_compute_units < relaxed.estimated_compute_units
     assert "resource-cap=3/12" in pressured.reason
+
+
+def test_critical_pressure_preserves_independent_measurement_first() -> None:
+    assessment = _phase(
+        candidate_entropy=0.5,
+        coherence=0.5,
+        evidence_completeness=0.3,
+        verifier_disagreement=0.9,
+        queue_acceleration=0.5,
+    )
+    assert assessment.recommendation.mode.value == "measure"
+    hotspot = DisagreementHotspot(
+        "decision",
+        "sha256:decision",
+        disagreement=0.9,
+        evidence_gap=0.9,
+        impact=1.0,
+    )
+
+    plan = allocate_population(
+        assessment,
+        _observation(resource_pressure=0.0),
+        budget=SwarmBudget(
+            max_agents=1,
+            max_parallel=1,
+            max_deep_agents=1,
+            max_exact_replays=0,
+            max_compute_units=8.0,
+        ),
+        hotspots=(hotspot,),
+    )
+
+    assert len(plan.lanes) == 1
+    assert plan.lanes[0].role == AgentRole.VERIFIER
+    assert plan.lanes[0].compute_tier == ComputeTier.DEEP
+    assert plan.lanes[0].independent_verification is True
