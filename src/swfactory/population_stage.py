@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import os
 from dataclasses import dataclass
 from typing import Any, Mapping
 
 from swfactory.backend_population import BackendPopulationRunner, PopulationTaskInput
+from swfactory.call_accounting import CallAttempt, CallLedger
 from swfactory.execution_binding import execute_managed_population
 from swfactory.population_adapter import PopulationInvocation
 from swfactory.population_execution import (
@@ -33,6 +36,7 @@ from swfactory.state import RunState
 CONTROL_FILE = "population-search.json"
 PIN_FILE = "population-search-pin.json"
 REPORT_FILE = "population-execution.json"
+BUDGET_FILE = "population-budget.json"
 SCHEMA_VERSION = 1
 AUTHORITY = "search-only"
 DEFAULT_EXCERPT_CHARS = 4096
@@ -50,6 +54,7 @@ class PopulationStageSpec:
     binding: ProviderBindingManifest
     inputs: Mapping[str, PopulationTaskInput]
     max_parallel: int = 8
+    max_cost_usd: float = 1.0
     excerpt_chars: int = DEFAULT_EXCERPT_CHARS
     total_excerpt_chars: int = DEFAULT_TOTAL_EXCERPT_CHARS
     authority: str = AUTHORITY
@@ -76,6 +81,8 @@ class PopulationStageSpec:
             )
         if not 1 <= self.max_parallel <= 64:
             raise PopulationManifestError("population stage max_parallel must be in [1, 64]")
+        if not math.isfinite(self.max_cost_usd) or self.max_cost_usd <= 0.0:
+            raise PopulationManifestError("population stage max_cost_usd must be finite and positive")
         if not 256 <= self.excerpt_chars <= 8192:
             raise PopulationManifestError("population stage excerpt_chars must be in [256, 8192]")
         if not self.excerpt_chars <= self.total_excerpt_chars <= 32_768:
@@ -109,6 +116,7 @@ class PopulationStageSpec:
                 for task_id, task_input in sorted(self.inputs.items())
             },
             "max_parallel": self.max_parallel,
+            "max_cost_usd": self.max_cost_usd,
             "excerpt_chars": self.excerpt_chars,
             "total_excerpt_chars": self.total_excerpt_chars,
         }
@@ -158,6 +166,7 @@ def population_stage_spec_from_document(document: Mapping[str, Any]) -> Populati
         binding=provider_binding_manifest_from_document(raw_binding),
         inputs=inputs,
         max_parallel=int(document.get("max_parallel", 8)),
+        max_cost_usd=float(document.get("max_cost_usd", 1.0)),
         excerpt_chars=int(document.get("excerpt_chars", DEFAULT_EXCERPT_CHARS)),
         total_excerpt_chars=int(
             document.get("total_excerpt_chars", DEFAULT_TOTAL_EXCERPT_CHARS)
@@ -222,6 +231,94 @@ def _managed_cell(state: RunState) -> tuple[str, int, str]:
     return cell_id, epoch, policy_digest
 
 
+def _budget_attempt(ctx: Any, spec: PopulationStageSpec) -> tuple[CallLedger, CallAttempt]:
+    from swfactory import stages
+
+    stages.seed_budget(ctx, refresh=True)
+    ledger = CallLedger(ctx.state)
+    remaining = max(0.0, float(ctx.cfg.max_budget_usd) - float(ctx.spent_usd))
+
+    if ctx.state.has_control(BUDGET_FILE):
+        try:
+            raw = json.loads(ctx.state.read_control(BUDGET_FILE))
+        except (OSError, ValueError) as error:
+            raise PopulationManifestError(f"population budget record is corrupt: {error}") from error
+        if not isinstance(raw, dict) or raw.get("spec_digest") != spec.digest():
+            raise PopulationManifestError("population budget record belongs to another search spec")
+        call_id = raw.get("call_id")
+        if not isinstance(call_id, str):
+            raise PopulationManifestError("population budget record has no call id")
+        record = ledger.record(call_id)
+        if abs(record.reserved_usd - spec.max_cost_usd) > 1e-9:
+            raise PopulationManifestError("population budget reservation changed after it was pinned")
+        return ledger, CallAttempt(
+            record.call_id,
+            record.owner or "",
+            record.stage,
+            record.iteration,
+            record.reserved_usd,
+        )
+
+    if spec.max_cost_usd > remaining + 1e-9:
+        raise PopulationManifestError(
+            f"population search needs a {spec.max_cost_usd:.4f} USD reservation "
+            f"but only {remaining:.4f} USD remains"
+        )
+    attempt = ledger.reserve(
+        stage="population_search",
+        iteration=1,
+        reserved_usd=spec.max_cost_usd,
+    )
+    ctx.state.write_control(
+        BUDGET_FILE,
+        json.dumps(
+            {
+                "schema_version": 1,
+                "spec_digest": spec.digest(),
+                "call_id": attempt.call_id,
+                "reserved_usd": attempt.reserved_usd,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+    )
+    return ledger, attempt
+
+
+def _settle_population_budget(
+    ctx: Any,
+    spec: PopulationStageSpec,
+    ledger: CallLedger,
+    attempt: CallAttempt,
+    report: PopulationExecutionReport,
+) -> None:
+    from swfactory import stages
+
+    actual = float(report.telemetry.total_cost_usd)
+    record = ledger.record(attempt.call_id)
+    if record.settled_usd is None:
+        ledger.settle(
+            attempt,
+            cost_usd=actual,
+            receipt={
+                "population_report_digest": report.digest(),
+                "population_manifest_digest": report.population_manifest_digest,
+                "provider_binding_digest": report.provider_binding_digest,
+                "telemetry_digest": report.telemetry.digest(),
+            },
+        )
+    elif abs(record.settled_usd - actual) > 1e-9:
+        raise PopulationManifestError("population budget settlement disagrees with retained report")
+
+    stages.seed_budget(ctx, refresh=True)
+    if actual > spec.max_cost_usd + 1e-9:
+        raise PopulationManifestError(
+            f"population provider reported {actual:.4f} USD, above the declared "
+            f"{spec.max_cost_usd:.4f} USD ceiling"
+        )
+
+
 def execute_population_stage(
     ctx: Any,
     *,
@@ -234,6 +331,7 @@ def execute_population_stage(
         return None
     cell_id, epoch, policy_digest = _managed_cell(ctx.state)
     report_path = ctx.state.root / REPORT_FILE
+    ledger, budget_attempt = _budget_attempt(ctx, spec)
 
     if report_path.is_file():
         report = load_population_execution_report(report_path)
@@ -242,21 +340,29 @@ def execute_population_stage(
         if report.provider_binding_digest != spec.binding.digest():
             raise PopulationManifestError("retained population report belongs to another binding")
     else:
-        report = execute_managed_population(
-            manifest=spec.manifest,
-            binding=spec.binding,
-            inputs=spec.inputs,
-            cell_id=cell_id,
-            epoch=epoch,
-            policy_digest=policy_digest,
-            env=env,
-            max_parallel=spec.max_parallel,
-            report_path=report_path,
-        )
+        try:
+            report = execute_managed_population(
+                manifest=spec.manifest,
+                binding=spec.binding,
+                inputs=spec.inputs,
+                cell_id=cell_id,
+                epoch=epoch,
+                policy_digest=policy_digest,
+                env=env,
+                max_parallel=spec.max_parallel,
+                report_path=report_path,
+            )
+        except BaseException as error:
+            if ledger.record(budget_attempt.call_id).settled_usd is None:
+                ledger.mark_unknown(budget_attempt, error)
+            raise
 
+    _settle_population_budget(ctx, spec, ledger, budget_attempt, report)
+
+    environment = os.environ if env is None else env
     runner = BackendPopulationRunner(
-        backend_url=(env or {}).get("SWF_BACKEND_URL", "") if env is not None else __import__("os").environ.get("SWF_BACKEND_URL", ""),
-        backend_token=(env or {}).get("SWF_BACKEND_TOKEN", "") if env is not None else __import__("os").environ.get("SWF_BACKEND_TOKEN", ""),
+        backend_url=environment.get("SWF_BACKEND_URL", ""),
+        backend_token=environment.get("SWF_BACKEND_TOKEN", ""),
         cell_id=cell_id,
         epoch=epoch,
         policy_digest=policy_digest,
