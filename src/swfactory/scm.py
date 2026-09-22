@@ -52,29 +52,6 @@ class Scm(Protocol):
         """Numeric ref -> GitHub issue; path -> front-matter markdown file."""
         ...
 
-    def search_issues(self, query: str, *, limit: int = 20) -> list[dict[str, object]]:
-        """Read-only issue search used by backend reconciliation under a scoped lease."""
-        rows = self._gh_json(
-            [
-                "gh",
-                "issue",
-                "list",
-                "--repo",
-                self.repo,
-                "--state",
-                "all",
-                "--search",
-                query,
-                "--limit",
-                str(limit),
-                "--json",
-                "url,body,title",
-            ]
-        )
-        if not isinstance(rows, list):
-            raise StageError("scm", "gh issue list returned a non-array", retryable=True)
-        return [row for row in rows if isinstance(row, dict)]
-
     def publish(
         self,
         *,
@@ -118,9 +95,7 @@ def _run(
     if argv and argv[0] == "git":
         argv = [argv[0], *_GIT_NO_AUTO_GC, *argv[1:]]
     try:
-        proc = subprocess.run(
-            argv, cwd=cwd, input=input, capture_output=True, check=False, timeout=600, env=env
-        )
+        proc = subprocess.run(argv, cwd=cwd, input=input, capture_output=True, check=False, timeout=600, env=env)
     except FileNotFoundError as e:
         raise StageError("scm", f"{argv[0]} not found on PATH", retryable=False) from e
     except subprocess.TimeoutExpired as e:
@@ -130,6 +105,19 @@ def _run(
         stderr = proc.stderr.decode("utf-8", errors="replace").strip()
         raise StageError("scm", f"{' '.join(argv)} failed (rc={proc.returncode}): {stderr}", retryable=True)
     return stdout
+
+
+def _run_scoped(
+    argv: Sequence[str],
+    cwd: Path | None,
+    input: bytes | None = None,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> str:
+    """Preserve the legacy _run call shape unless a scoped credential env is actually required."""
+    if env is None:
+        return _run(argv, cwd, input)
+    return _run(argv, cwd, input, env=env)
 
 
 def parse_issue_file(path: Path) -> Issue:
@@ -172,7 +160,7 @@ def _issue_from_gh(data: dict) -> Issue:
 
 
 def _gh_json(argv: Sequence[str], *, env: Mapping[str, str] | None = None) -> object:
-    out = _run(argv, None, env=env)
+    out = _run_scoped(argv, None, env=env)
     try:
         return json.loads(out)
     except json.JSONDecodeError as e:
@@ -209,10 +197,10 @@ def _apply_and_push(
     (``git am`` restamps committer dates, so even an identical patch yields new shas), so those
     refs are force-pushed. Any other branch keeps plain (fast-forward only) push semantics.
     """
-    _run(["git", "checkout", "-b", branch], clone, env=env)
-    _run(["git", *_GIT_IDENT, "am", "--3way"], clone, input=patch, env=env)
+    _run_scoped(["git", "checkout", "-b", branch], clone, env=env)
+    _run_scoped(["git", *_GIT_IDENT, "am", "--3way"], clone, input=patch, env=env)
     if not branch.startswith(FACTORY_BRANCH_PREFIX):
-        _run(["git", "push", "-u", "origin", branch], clone, env=env)
+        _run_scoped(["git", "push", "-u", "origin", branch], clone, env=env)
         return
     # Compare-and-swap against WHAT THIS INSTANCE LAST PUSHED, not against what it just observed.
     # The branch is keyed on the work rather than the run (see `Ctx.branch`), so a second factory
@@ -226,7 +214,7 @@ def _apply_and_push(
     # and cannot be expressed as a fast-forward.
     remote_head = _remote_head(clone, branch, env=env)
     if not remote_head:
-        _run(["git", "push", "-u", "origin", branch], clone, env=env)
+        _run_scoped(["git", "push", "-u", "origin", branch], clone, env=env)
         return
     # Both sides of the comparison come from commits: the patch just applied says who made it, the
     # remote head says who made that. No caller has to know its own name, so the managed boundary
@@ -243,7 +231,7 @@ def _apply_and_push(
             retryable=False,
         )
     try:
-        _run(
+        _run_scoped(
             ["git", "push", "-u", f"--force-with-lease={branch}:{remote_head}", "origin", branch],
             clone,
             env=env,
@@ -277,10 +265,10 @@ def _instance_of(
     and is therefore not ours to replace.
     """
     try:
-        _run(["git", "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], clone, env=env)
+        _run_scoped(["git", "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], clone, env=env)
     except StageError:  # not in the clone yet: the ref moved after we cloned
-        _run(["git", "fetch", "--quiet", "--depth", "1", "origin", sha], clone, env=env)
-    message = _run(
+        _run_scoped(["git", "fetch", "--quiet", "--depth", "1", "origin", sha], clone, env=env)
+    message = _run_scoped(
         ["git", "log", "-1", "--format=%(trailers:key=Factory-Instance,valueonly)", sha],
         clone,
         env=env,
@@ -295,7 +283,7 @@ def _remote_head(
     env: Mapping[str, str] | None = None,
 ) -> str:
     """The sha the remote currently holds for ``branch``, or "" when it has no such ref."""
-    out = _run(["git", "ls-remote", "origin", f"refs/heads/{branch}"], clone, env=env)
+    out = _run_scoped(["git", "ls-remote", "origin", f"refs/heads/{branch}"], clone, env=env)
     first = out.split(maxsplit=1)
     return first[0] if first else ""
 
@@ -601,6 +589,29 @@ class GitHubScm:
         data = self._gh_json(["gh", "issue", "view", ref.strip(), "--repo", self.repo, "--json", _ISSUE_FIELDS])
         return _issue_from_gh(data)  # type: ignore[arg-type]
 
+    def search_issues(self, query: str, *, limit: int = 20) -> list[dict[str, object]]:
+        """Read-only issue search used by backend reconciliation under a scoped GitHub lease."""
+        rows = self._gh_json(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                self.repo,
+                "--state",
+                "all",
+                "--search",
+                query,
+                "--limit",
+                str(limit),
+                "--json",
+                "url,body,title",
+            ]
+        )
+        if not isinstance(rows, list):
+            raise StageError("scm", "gh issue list returned a non-array", retryable=True)
+        return [row for row in rows if isinstance(row, dict)]
+
     def list_open_issues(self, label: str, *, limit: int) -> list[Issue]:
         """The open issues carrying ``label``: a scheduled line's backlog (``intake_governance``).
 
@@ -659,7 +670,12 @@ class GitHubScm:
             # Persist the helper in the clone so `git push` uses it (empty value resets globals).
             self._exec(["git", "config", "--add", "credential.helper", ""], clone)
             self._exec(["git", "config", "--add", "credential.helper", self._helper], clone)
-            _apply_and_push(clone, branch=branch, patch=patch, env=self._environment)
+            _apply_and_push(
+                clone,
+                branch=branch,
+                patch=patch,
+                env=self._environment if self.token is not None else None,
+            )
             self._ensure_labels(labels)
             body_file = Path(tmp) / "pr-body.md"
             # The marker travels in the body because the body is the one PR field every instance
@@ -768,9 +784,15 @@ class GitHubScm:
         cwd: Path | None,
         input: bytes | None = None,
     ) -> str:
+        # Ambient-token instances preserve the legacy adapter contract. Backend-issued scoped
+        # tokens get an explicit scrubbed environment so they cannot inherit a broader credential.
+        if self.token is None:
+            return _run(argv, cwd, input)
         return _run(argv, cwd, input, env=self._environment)
 
     def _gh_json(self, argv: Sequence[str]) -> object:
+        if self.token is None:
+            return _gh_json(argv)
         return _gh_json(argv, env=self._environment)
 
     @property

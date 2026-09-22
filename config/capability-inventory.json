@@ -269,6 +269,95 @@
         "many-world cognition",
         "executable epistemology"
       ]
+    },
+    {
+      "id": "factory.recursive-search",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Recursive search may extract exploration-only laws, mutate declared search posture and bind the resulting search provenance into descendant candidate identity; it cannot relax evidence or grant promotion authority.",
+      "owner": "workgraph+evidence",
+      "runtime_entry": "swfactory.recursive_search; swfactory research-adapt",
+      "environment": "pure search-domain logic over retained CampaignReport/evidence artifacts",
+      "test": "tests/test_recursive_search.py",
+      "evidence": [
+        "tests/test_recursive_search.py",
+        "tests/test_candidate_evidence.py",
+        "tests/test_population_manifest.py",
+        "config/future-factory.yaml",
+        "docs/future-factory.md"
+      ],
+      "follow_up": "Emit adaptive planning/telemetry automatically from real managed campaigns and expose retained planning receipts through the Rust operator surface; the offline telemetry feedback loop is already implemented.",
+      "public_surface": [
+        "research-adapt",
+        "swfactory.recursive_search",
+        "search provenance"
+      ]
+    },
+    {
+      "id": "factory.swarm-dynamics",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Population and compute allocation optimize effective independent search and disagreement resolution under a hard budget; the planner is search-only and cannot schedule Airflow or cross the authority boundary.",
+      "owner": "workgraph+evidence",
+      "runtime_entry": "swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round",
+      "environment": "pure phase-aware population planning; no provider execution is implied",
+      "test": "tests/test_swarm_dynamics.py",
+      "evidence": [
+        "tests/test_swarm_dynamics.py",
+        "tests/test_population_manifest.py",
+        "config/future-factory.yaml",
+        "docs/future-factory.md"
+      ],
+      "follow_up": "Connect real heterogeneous providers to the population manifest, emit managed-run behavior receipts, qualify compute accounting and verifier independence, then graduate proven contracts into Rust.",
+      "public_surface": [
+        "swfactory.swarm_dynamics",
+        "effective independent search",
+        "selective deep compute"
+      ]
+    },
+    {
+      "id": "factory.population-manifest",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "A swarm plan may be materialized into deterministic provider-neutral trajectory tasks and reduced into behavior telemetry; the manifest remains search-only, names Airflow as the scheduler, carries no credentials or mutation authority, and independent verifiers cannot inherit another trajectory's context.",
+      "owner": "workgraph+evidence",
+      "runtime_entry": "swfactory.population_manifest via swfactory.recursive_search.plan_adaptive_round; swfactory population-summarize",
+      "environment": "pure provider-neutral task materialization and receipt reduction; provider execution is not implied",
+      "test": "tests/test_population_manifest.py",
+      "evidence": [
+        "tests/test_population_manifest.py",
+        "src/swfactory/population_manifest.py",
+        "tests/test_recursive_search.py",
+        "docs/future-factory.md"
+      ],
+      "follow_up": "Connect real provider adapters to bound PopulationManifest tasks and emit managed-run BehaviorReceipt files automatically; the retained receipt-to-telemetry-to-next-plan loop is already available offline.",
+      "public_surface": [
+        "population manifest",
+        "behavior receipt",
+        "population telemetry"
+      ]
+    },
+    {
+      "id": "factory.provider-binding",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Provider-neutral population tasks may bind deterministic diversity coordinates to allowlisted provider/model/runtime/prompt choices without changing task identity, scheduler ownership, or authority; declared required axes must resolve or the binding is refused.",
+      "owner": "workgraph+evidence",
+      "runtime_entry": "swfactory.provider_binding; swfactory population-bind",
+      "environment": "pure deterministic choice binding; no provider invocation or scheduling is implied",
+      "test": "tests/test_provider_binding.py",
+      "evidence": [
+        "tests/test_provider_binding.py",
+        "src/swfactory/provider_binding.py",
+        "tests/test_population_manifest.py",
+        "docs/future-factory.md"
+      ],
+      "follow_up": "Add real provider adapters that consume BoundPopulationTask values and emit BehaviorReceipt records while preserving Airflow lifecycle ownership and the search-only boundary.",
+      "public_surface": [
+        "provider binding",
+        "diversity coordinates",
+        "bound population task"
+      ]
     }
   ]
 }

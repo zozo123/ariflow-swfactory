@@ -8,6 +8,7 @@ control-plane primitive.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -91,9 +92,7 @@ class LeaseBinding:
         }
         unknown = sorted(set(raw) - allowed)
         if unknown:
-            raise CredentialLeaseError(
-                "untrusted lease binding carries unsupported fields: " + ", ".join(unknown)
-            )
+            raise CredentialLeaseError("untrusted lease binding carries unsupported fields: " + ", ".join(unknown))
         try:
             binding = cls(
                 factory_run_id=str(raw["factory_run_id"]),
@@ -305,8 +304,7 @@ class CredentialLeaseBroker:
             existing = row["process_hash"]
             if existing is None:
                 self.db.execute(
-                    "UPDATE credential_leases SET process_hash=? "
-                    "WHERE lease_id=? AND process_hash IS NULL",
+                    "UPDATE credential_leases SET process_hash=? WHERE lease_id=? AND process_hash IS NULL",
                     (process_hash, handle.lease_id),
                 )
                 row = self.db.execute(
@@ -465,13 +463,14 @@ class CredentialLeaseBroker:
                 event.created_at,
             ),
         )
+        # A denial is itself durable security evidence. Commit it before raising: redeem() runs
+        # inside a sqlite context manager whose exception path would otherwise roll this INSERT back.
+        self.db.commit()
         if self.on_denial is not None:
-            try:
-                self.on_denial(event)
-            except Exception:
+            with contextlib.suppress(Exception):
                 # The broker DB is the mandatory negative-provenance ledger. A secondary evidence
                 # projection must never turn a denial into a rolled-back/forgotten denial.
-                pass
+                self.on_denial(event)
         raise CredentialLeaseError(f"credential lease denied: {reason}")
 
 

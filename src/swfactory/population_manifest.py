@@ -1,0 +1,491 @@
+"""Provider-neutral executable population manifests for search-only swarm plans.
+
+A SwarmPlan says what kinds of trajectories should exist. This module turns that abstract
+allocation into immutable per-trajectory work descriptions and later summarizes behavior receipts.
+
+The manifest is deliberately not a scheduler and carries no authority material. Airflow remains
+the lifecycle substrate; providers may consume these tasks, but they cannot publish, promote,
+mint credentials, mutate Cells, or widen policy through this contract.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass
+from typing import Any, Literal
+
+from swfactory.swarm_dynamics import (
+    AgentRole,
+    ComputeTier,
+    ContextPolicy,
+    SwarmPlan,
+    effective_independent_search,
+    mean_pairwise_correlation,
+)
+
+POPULATION_MANIFEST_SCHEMA_VERSION = 1
+POPULATION_MANIFEST_AUTHORITY = "search-only"
+ReceiptState = Literal["answered", "failed", "cancelled", "refused"]
+
+
+class PopulationManifestError(ValueError):
+    """The provider-neutral population contract is invalid or internally inconsistent."""
+
+
+def _digest(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _require_digest(value: str, *, field: str) -> None:
+    raw = value.removeprefix("sha256:")
+    if len(raw) != 64 or any(char not in "0123456789abcdef" for char in raw):
+        raise PopulationManifestError(f"{field} must be a canonical sha256 digest")
+
+
+@dataclass(frozen=True)
+class PopulationTask:
+    """One provider-neutral trajectory request materialized from a swarm lane."""
+
+    task_id: str
+    lane_index: int
+    replica_index: int
+    role: AgentRole
+    compute_tier: ComputeTier
+    context: ContextPolicy
+    temperature: float
+    independent_verification: bool
+    diversity_axes: tuple[str, ...]
+    diversity_coordinates: tuple[tuple[str, int], ...]
+    focus_hotspots: tuple[str, ...]
+    variant_digest: str
+
+    def validate(self) -> None:
+        if not self.task_id.startswith("pop_"):
+            raise PopulationManifestError("population task id must use the pop_ namespace")
+        expected_task_id = "pop_" + self.variant_digest.removeprefix("sha256:")[:24]
+        if self.task_id != expected_task_id:
+            raise PopulationManifestError("population task id does not match its variant digest")
+        if self.lane_index < 0 or self.replica_index < 0:
+            raise PopulationManifestError("population task indexes must be non-negative")
+        if not math.isfinite(self.temperature) or not 0.0 <= self.temperature <= 2.0:
+            raise PopulationManifestError("population task temperature must be finite and in [0, 2]")
+        if not self.diversity_axes:
+            raise PopulationManifestError("population task must declare at least one diversity axis")
+        coordinate_axes = tuple(axis for axis, _seed in self.diversity_coordinates)
+        if coordinate_axes != self.diversity_axes:
+            raise PopulationManifestError("population diversity coordinates must exactly match declared axes")
+        if any(seed < 0 or seed > 0x7FFFFFFF for _axis, seed in self.diversity_coordinates):
+            raise PopulationManifestError("population diversity coordinates must use non-negative 31-bit seeds")
+        if self.compute_tier == ComputeTier.EXACT_REPLAY and self.temperature != 0.0:
+            raise PopulationManifestError("exact replay population tasks must have zero temperature")
+        if self.independent_verification:
+            if self.role not in {AgentRole.VERIFIER, AgentRole.RED_TEAM}:
+                raise PopulationManifestError("independent verification must use verifier/red-team roles")
+            if self.context not in {ContextPolicy.FRESH, ContextPolicy.FROZEN}:
+                raise PopulationManifestError("independent verification cannot inherit another trajectory context")
+        _require_digest(self.variant_digest, field="variant_digest")
+
+    def canonical_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "task_id": self.task_id,
+            "lane_index": self.lane_index,
+            "replica_index": self.replica_index,
+            "role": self.role.value,
+            "compute_tier": self.compute_tier.value,
+            "context": self.context.value,
+            "temperature": self.temperature,
+            "independent_verification": self.independent_verification,
+            "diversity_axes": list(self.diversity_axes),
+            "diversity_coordinates": [{"axis": axis, "seed": seed} for axis, seed in self.diversity_coordinates],
+            "focus_hotspots": list(self.focus_hotspots),
+            "variant_digest": self.variant_digest,
+        }
+
+
+@dataclass(frozen=True)
+class PopulationManifest:
+    """Immutable search-only work description that any provider adapter can consume."""
+
+    swarm_plan_digest: str
+    search_provenance_digest: str
+    phase: str
+    mode: str
+    tasks: tuple[PopulationTask, ...]
+    authority: str = POPULATION_MANIFEST_AUTHORITY
+    scheduler: str = "airflow"
+    schema_version: int = POPULATION_MANIFEST_SCHEMA_VERSION
+
+    def validate(self) -> None:
+        if self.schema_version != POPULATION_MANIFEST_SCHEMA_VERSION:
+            raise PopulationManifestError("unsupported population manifest schema")
+        if self.authority != POPULATION_MANIFEST_AUTHORITY:
+            raise PopulationManifestError("population manifests must remain search-only")
+        if self.scheduler != "airflow":
+            raise PopulationManifestError("population manifest cannot introduce a second scheduler")
+        _require_digest(self.swarm_plan_digest, field="swarm_plan_digest")
+        _require_digest(self.search_provenance_digest, field="search_provenance_digest")
+        if not self.phase.strip() or not self.mode.strip():
+            raise PopulationManifestError("population manifest phase and mode must be nonempty")
+        ids: set[str] = set()
+        variants: set[str] = set()
+        for task in self.tasks:
+            task.validate()
+            if task.task_id in ids:
+                raise PopulationManifestError(f"duplicate population task id {task.task_id}")
+            if task.variant_digest in variants:
+                raise PopulationManifestError(
+                    f"duplicate population variant digest {task.variant_digest}; replicas must be distinct questions"
+                )
+            ids.add(task.task_id)
+            variants.add(task.variant_digest)
+
+    def canonical_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "schema_version": self.schema_version,
+            "authority": self.authority,
+            "scheduler": self.scheduler,
+            "swarm_plan_digest": self.swarm_plan_digest,
+            "search_provenance_digest": self.search_provenance_digest,
+            "phase": self.phase,
+            "mode": self.mode,
+            "tasks": [task.canonical_dict() for task in self.tasks],
+        }
+
+    def digest(self) -> str:
+        return _digest(self.canonical_dict())
+
+
+@dataclass(frozen=True)
+class BehaviorReceipt:
+    """Gauge-dependent provider result reduced to replayable search telemetry."""
+
+    task_id: str
+    state: ReceiptState
+    behavior_signature: tuple[str, ...] = ()
+    candidate_digest: str | None = None
+    evidence_digest: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    runtime: str | None = None
+    cost_usd: float = 0.0
+    duration_s: float = 0.0
+
+    def validate(self) -> None:
+        if not self.task_id.startswith("pop_"):
+            raise PopulationManifestError("behavior receipt task id must use the pop_ namespace")
+        if self.state not in {"answered", "failed", "cancelled", "refused"}:
+            raise PopulationManifestError(f"unknown behavior receipt state {self.state!r}")
+        if self.state == "answered" and not self.behavior_signature:
+            raise PopulationManifestError("answered behavior receipts need a nonempty behavior signature")
+        for field, digest in (
+            ("candidate_digest", self.candidate_digest),
+            ("evidence_digest", self.evidence_digest),
+        ):
+            if digest is not None:
+                _require_digest(digest, field=field)
+        if not math.isfinite(self.cost_usd) or self.cost_usd < 0.0:
+            raise PopulationManifestError("behavior receipt cost must be finite and non-negative")
+        if not math.isfinite(self.duration_s) or self.duration_s < 0.0:
+            raise PopulationManifestError("behavior receipt duration must be finite and non-negative")
+
+    def canonical_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            **asdict(self),
+            "behavior_signature": list(self.behavior_signature),
+        }
+
+    def digest(self) -> str:
+        return _digest(self.canonical_dict())
+
+
+@dataclass(frozen=True)
+class PopulationTelemetry:
+    """Measured population behavior used to decide whether more trajectories buy information."""
+
+    manifest_digest: str
+    total_tasks: int
+    receipts: int
+    answered: int
+    independent_verifier_answers: int
+    unique_candidates: int
+    effective_independent_search: float
+    mean_correlation: float
+    candidate_disagreement: float
+    total_cost_usd: float
+    total_duration_s: float
+    receipt_digests: tuple[str, ...]
+    authority: str = POPULATION_MANIFEST_AUTHORITY
+    schema_version: int = POPULATION_MANIFEST_SCHEMA_VERSION
+
+    def validate(self) -> None:
+        if self.schema_version != POPULATION_MANIFEST_SCHEMA_VERSION:
+            raise PopulationManifestError("unsupported population telemetry schema")
+        if self.authority != POPULATION_MANIFEST_AUTHORITY:
+            raise PopulationManifestError("population telemetry must remain search-only")
+        _require_digest(self.manifest_digest, field="manifest_digest")
+        if (
+            min(
+                self.total_tasks,
+                self.receipts,
+                self.answered,
+                self.independent_verifier_answers,
+                self.unique_candidates,
+            )
+            < 0
+        ):
+            raise PopulationManifestError("population telemetry counts must be non-negative")
+        if self.receipts > self.total_tasks or self.answered > self.receipts:
+            raise PopulationManifestError("population telemetry counts are inconsistent")
+        if self.independent_verifier_answers > self.answered:
+            raise PopulationManifestError("independent verifier answers exceed answered tasks")
+        if self.unique_candidates > self.answered:
+            raise PopulationManifestError("unique candidates exceed answered tasks")
+        if self.effective_independent_search > float(self.answered):
+            raise PopulationManifestError("effective independent search exceeds answered tasks")
+        if len(self.receipt_digests) != self.receipts:
+            raise PopulationManifestError("receipt digest count does not match receipt count")
+        if len(set(self.receipt_digests)) != len(self.receipt_digests):
+            raise PopulationManifestError("population telemetry contains duplicate receipt digests")
+        for field, value in (
+            ("effective_independent_search", self.effective_independent_search),
+            ("mean_correlation", self.mean_correlation),
+            ("candidate_disagreement", self.candidate_disagreement),
+            ("total_cost_usd", self.total_cost_usd),
+            ("total_duration_s", self.total_duration_s),
+        ):
+            if not math.isfinite(value) or value < 0.0:
+                raise PopulationManifestError(f"{field} must be finite and non-negative")
+        if self.mean_correlation > 1.0 or self.candidate_disagreement > 1.0:
+            raise PopulationManifestError("population correlation/disagreement must be in [0, 1]")
+        for digest in self.receipt_digests:
+            _require_digest(digest, field="receipt_digest")
+
+    def canonical_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "schema_version": self.schema_version,
+            "authority": self.authority,
+            "manifest_digest": self.manifest_digest,
+            "total_tasks": self.total_tasks,
+            "receipts": self.receipts,
+            "answered": self.answered,
+            "independent_verifier_answers": self.independent_verifier_answers,
+            "unique_candidates": self.unique_candidates,
+            "effective_independent_search": self.effective_independent_search,
+            "mean_correlation": self.mean_correlation,
+            "candidate_disagreement": self.candidate_disagreement,
+            "total_cost_usd": self.total_cost_usd,
+            "total_duration_s": self.total_duration_s,
+            "receipt_digests": list(self.receipt_digests),
+        }
+
+    def digest(self) -> str:
+        return _digest(self.canonical_dict())
+
+
+def behavior_receipt_from_document(document: Mapping[str, Any]) -> BehaviorReceipt:
+    """Rehydrate one provider behavior receipt and re-check its bounded telemetry contract."""
+
+    receipt = BehaviorReceipt(
+        task_id=str(document["task_id"]),
+        state=str(document["state"]),
+        behavior_signature=tuple(str(value) for value in document.get("behavior_signature", ())),
+        candidate_digest=(str(document["candidate_digest"]) if document.get("candidate_digest") is not None else None),
+        evidence_digest=(str(document["evidence_digest"]) if document.get("evidence_digest") is not None else None),
+        provider=(str(document["provider"]) if document.get("provider") is not None else None),
+        model=(str(document["model"]) if document.get("model") is not None else None),
+        runtime=(str(document["runtime"]) if document.get("runtime") is not None else None),
+        cost_usd=float(document.get("cost_usd", 0.0)),
+        duration_s=float(document.get("duration_s", 0.0)),
+    )
+    receipt.validate()
+    return receipt
+
+
+def population_telemetry_from_document(document: Mapping[str, Any]) -> PopulationTelemetry:
+    """Rehydrate retained population telemetry and reject inconsistent counters or authority."""
+
+    telemetry = PopulationTelemetry(
+        manifest_digest=str(document["manifest_digest"]),
+        total_tasks=int(document["total_tasks"]),
+        receipts=int(document["receipts"]),
+        answered=int(document["answered"]),
+        independent_verifier_answers=int(document["independent_verifier_answers"]),
+        unique_candidates=int(document["unique_candidates"]),
+        effective_independent_search=float(document["effective_independent_search"]),
+        mean_correlation=float(document["mean_correlation"]),
+        candidate_disagreement=float(document["candidate_disagreement"]),
+        total_cost_usd=float(document["total_cost_usd"]),
+        total_duration_s=float(document["total_duration_s"]),
+        receipt_digests=tuple(str(value) for value in document.get("receipt_digests", ())),
+        authority=str(document.get("authority", POPULATION_MANIFEST_AUTHORITY)),
+        schema_version=int(document.get("schema_version", POPULATION_MANIFEST_SCHEMA_VERSION)),
+    )
+    telemetry.validate()
+    return telemetry
+
+
+def population_manifest_from_document(document: Mapping[str, Any]) -> PopulationManifest:
+    """Rehydrate a persisted population manifest and re-check every search-only invariant."""
+
+    raw_tasks = document.get("tasks")
+    if not isinstance(raw_tasks, list):
+        raise PopulationManifestError("population manifest tasks must be an array")
+    tasks: list[PopulationTask] = []
+    for raw in raw_tasks:
+        if not isinstance(raw, Mapping):
+            raise PopulationManifestError("population manifest task must be an object")
+        coordinates = raw.get("diversity_coordinates", ())
+        if not isinstance(coordinates, list):
+            raise PopulationManifestError("population diversity coordinates must be an array")
+        tasks.append(
+            PopulationTask(
+                task_id=str(raw["task_id"]),
+                lane_index=int(raw["lane_index"]),
+                replica_index=int(raw["replica_index"]),
+                role=AgentRole(str(raw["role"])),
+                compute_tier=ComputeTier(str(raw["compute_tier"])),
+                context=ContextPolicy(str(raw["context"])),
+                temperature=float(raw["temperature"]),
+                independent_verification=bool(raw["independent_verification"]),
+                diversity_axes=tuple(str(axis) for axis in raw.get("diversity_axes", ())),
+                diversity_coordinates=tuple(
+                    (str(item["axis"]), int(item["seed"])) for item in coordinates if isinstance(item, Mapping)
+                ),
+                focus_hotspots=tuple(str(value) for value in raw.get("focus_hotspots", ())),
+                variant_digest=str(raw["variant_digest"]),
+            )
+        )
+    manifest = PopulationManifest(
+        swarm_plan_digest=str(document["swarm_plan_digest"]),
+        search_provenance_digest=str(document["search_provenance_digest"]),
+        phase=str(document["phase"]),
+        mode=str(document["mode"]),
+        tasks=tuple(tasks),
+        authority=str(document.get("authority", POPULATION_MANIFEST_AUTHORITY)),
+        scheduler=str(document.get("scheduler", "airflow")),
+        schema_version=int(document.get("schema_version", POPULATION_MANIFEST_SCHEMA_VERSION)),
+    )
+    manifest.validate()
+    return manifest
+
+
+def build_population_manifest(
+    plan: SwarmPlan,
+    *,
+    search_provenance_digest: str,
+) -> PopulationManifest:
+    """Deterministically materialize every swarm lane into provider-neutral search tasks."""
+
+    plan_digest = plan.digest()
+    _require_digest(search_provenance_digest, field="search_provenance_digest")
+    tasks: list[PopulationTask] = []
+    for lane_index, lane in enumerate(plan.lanes):
+        lane.validate()
+        for replica_index in range(lane.count):
+            coordinate_root = {
+                "swarm_plan_digest": plan_digest,
+                "lane_index": lane_index,
+                "replica_index": replica_index,
+                "role": lane.role.value,
+            }
+            diversity_coordinates = tuple(
+                (
+                    axis,
+                    int(
+                        _digest({**coordinate_root, "axis": axis}).removeprefix("sha256:")[:8],
+                        16,
+                    )
+                    & 0x7FFFFFFF,
+                )
+                for axis in lane.diversity_axes
+            )
+            variant_digest = _digest(
+                {
+                    **coordinate_root,
+                    "compute_tier": lane.compute_tier.value,
+                    "context": lane.context.value,
+                    "temperature": lane.temperature,
+                    "diversity_axes": list(lane.diversity_axes),
+                    "diversity_coordinates": [{"axis": axis, "seed": seed} for axis, seed in diversity_coordinates],
+                    "focus_hotspots": list(lane.focus_hotspots),
+                }
+            )
+            task_id = "pop_" + variant_digest.removeprefix("sha256:")[:24]
+            tasks.append(
+                PopulationTask(
+                    task_id=task_id,
+                    lane_index=lane_index,
+                    replica_index=replica_index,
+                    role=lane.role,
+                    compute_tier=lane.compute_tier,
+                    context=lane.context,
+                    temperature=lane.temperature,
+                    independent_verification=lane.independent_verification,
+                    diversity_axes=lane.diversity_axes,
+                    diversity_coordinates=diversity_coordinates,
+                    focus_hotspots=lane.focus_hotspots,
+                    variant_digest=variant_digest,
+                )
+            )
+    manifest = PopulationManifest(
+        swarm_plan_digest=plan_digest,
+        search_provenance_digest=search_provenance_digest,
+        phase=plan.phase,
+        mode=plan.mode,
+        tasks=tuple(tasks),
+    )
+    manifest.validate()
+    return manifest
+
+
+def summarize_population(
+    manifest: PopulationManifest,
+    receipts: Sequence[BehaviorReceipt],
+    *,
+    require_complete: bool = False,
+) -> PopulationTelemetry:
+    """Reduce provider receipts into correlation, effective-search and disagreement telemetry."""
+
+    manifest.validate()
+    tasks = {task.task_id: task for task in manifest.tasks}
+    rows: dict[str, BehaviorReceipt] = {}
+    for receipt in receipts:
+        receipt.validate()
+        if receipt.task_id not in tasks:
+            raise PopulationManifestError(f"receipt names unknown population task {receipt.task_id}")
+        if receipt.task_id in rows:
+            raise PopulationManifestError(f"duplicate receipt for population task {receipt.task_id}")
+        rows[receipt.task_id] = receipt
+    if require_complete and set(rows) != set(tasks):
+        missing = sorted(set(tasks) - set(rows))
+        raise PopulationManifestError(f"population receipts incomplete; missing {', '.join(missing)}")
+
+    answered = [receipt for receipt in rows.values() if receipt.state == "answered"]
+    signatures = [receipt.behavior_signature for receipt in answered]
+    candidate_digests = {receipt.candidate_digest for receipt in answered if receipt.candidate_digest is not None}
+    disagreement = 0.0 if len(answered) < 2 else max(0.0, (len(candidate_digests) - 1) / max(1, len(answered) - 1))
+    verifier_answers = sum(1 for receipt in answered if tasks[receipt.task_id].independent_verification)
+    telemetry = PopulationTelemetry(
+        manifest_digest=manifest.digest(),
+        total_tasks=len(tasks),
+        receipts=len(rows),
+        answered=len(answered),
+        independent_verifier_answers=verifier_answers,
+        unique_candidates=len(candidate_digests),
+        effective_independent_search=effective_independent_search(signatures),
+        mean_correlation=mean_pairwise_correlation(signatures),
+        candidate_disagreement=round(min(1.0, disagreement), 6),
+        total_cost_usd=round(sum(receipt.cost_usd for receipt in rows.values()), 6),
+        total_duration_s=round(sum(receipt.duration_s for receipt in rows.values()), 6),
+        receipt_digests=tuple(sorted(receipt.digest() for receipt in rows.values())),
+    )
+    telemetry.validate()
+    return telemetry

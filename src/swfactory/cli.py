@@ -1436,16 +1436,24 @@ def research_adapt_cmd(
         Path | None,
         typer.Option("--blackboard", help="optional recursive-search artifact blackboard JSON"),
     ] = None,
+    population_telemetry_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--population-telemetry",
+            help="optional retained population telemetry JSON from the previous swarm",
+        ),
+    ] = None,
     json_out: Annotated[bool, typer.Option("--json", help="machine-readable recursive search plan")] = False,
 ) -> None:
     """Compress prior campaigns into search laws and adapt the next experiment round."""
 
     from swfactory.evolution import CampaignError
+    from swfactory.population_manifest import population_telemetry_from_document
     from swfactory.recursive_search import (
         ArtifactBlackboard,
         extract_search_laws,
         load_blackboard,
-        plan_next_round,
+        plan_adaptive_round,
         signal_from_document,
     )
 
@@ -1468,11 +1476,7 @@ def research_adapt_cmd(
             outcomes = last.get("outcomes")
             if isinstance(outcomes, list):
                 winner = next(
-                    (
-                        row
-                        for row in outcomes
-                        if isinstance(row, dict) and str(row.get("logical_id")) == str(winner_id)
-                    ),
+                    (row for row in outcomes if isinstance(row, dict) and str(row.get("logical_id")) == str(winner_id)),
                     None,
                 )
                 if winner is not None and winner.get("output_head"):
@@ -1480,18 +1484,22 @@ def research_adapt_cmd(
         if not input_head:
             raise CampaignError("latest campaign does not identify a next input head")
 
-        blackboard = (
-            load_blackboard(blackboard_path)
-            if blackboard_path is not None
-            else ArtifactBlackboard()
-        )
-        plan = plan_next_round(
+        blackboard = load_blackboard(blackboard_path) if blackboard_path is not None else ArtifactBlackboard()
+        population_telemetry = None
+        if population_telemetry_path is not None:
+            raw_telemetry = json.loads(population_telemetry_path.read_text(encoding="utf-8"))
+            if not isinstance(raw_telemetry, dict):
+                raise CampaignError("population telemetry must be a JSON object")
+            population_telemetry = population_telemetry_from_document(raw_telemetry)
+
+        plan = plan_adaptive_round(
             signals,
             depth=signals[-1].depth + 1,
             input_head=input_head,
             blackboard=blackboard,
             max_candidates=max_candidates,
             max_parallel=max_parallel,
+            population_telemetry=population_telemetry,
         )
         laws = extract_search_laws(signals)
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, CampaignError) as error:
@@ -1524,11 +1532,164 @@ def research_adapt_cmd(
     typer.echo(
         f"depth {plan.depth}: {plan.posture.value} "
         f"strategies={' '.join(strategy.value for strategy in plan.strategies)} "
-        f"parallel={plan.max_parallel}"
+        f"parallel={plan.max_parallel} phase={plan.phase or '-'} "
+        f"compute={plan.estimated_compute_units:.1f}"
     )
     typer.echo(plan.reason)
+    if plan.swarm_plan is not None:
+        lanes = ", ".join(
+            f"{lane.role.value}:{lane.count}@{lane.compute_tier.value}/{lane.context.value}"
+            for lane in plan.swarm_plan.lanes
+        )
+        typer.echo(f"swarm: {lanes}")
+    if plan.population_manifest is not None and plan.population_manifest_digest is not None:
+        typer.echo(
+            f"population: tasks={len(plan.population_manifest.tasks)} manifest={plan.population_manifest_digest}"
+        )
     for law in laws:
         typer.echo(f"{law.kind.value}: {law.statement} ({law.confidence:.2f}, n={law.support})")
+
+
+@app.command("population-bind")
+def population_bind(
+    plan_path: Annotated[
+        Path,
+        typer.Argument(help="research-adapt JSON or a direct population-manifest JSON"),
+    ],
+    choices_path: Annotated[
+        Path,
+        typer.Argument(help="JSON allowlist for provider/model/runtime diversity choices"),
+    ],
+    json_out: Annotated[bool, typer.Option("--json", help="emit the bound population manifest")] = False,
+) -> None:
+    """Bind provider-neutral population tasks to deterministic allowlisted provider choices."""
+
+    from swfactory.population_manifest import (
+        PopulationManifestError,
+        population_manifest_from_document,
+    )
+    from swfactory.provider_binding import (
+        bind_population_manifest,
+        provider_choices_from_document,
+    )
+
+    try:
+        raw_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        raw_choices = json.loads(choices_path.read_text(encoding="utf-8"))
+        if not isinstance(raw_plan, dict) or not isinstance(raw_choices, dict):
+            raise PopulationManifestError("population plan and choices must be JSON objects")
+
+        manifest_document = raw_plan
+        if isinstance(raw_plan.get("plan"), dict):
+            manifest_document = raw_plan["plan"].get("population_manifest")
+        if not isinstance(manifest_document, dict):
+            raise PopulationManifestError("input does not contain a population_manifest object")
+
+        manifest = population_manifest_from_document(manifest_document)
+        choices = provider_choices_from_document(raw_choices)
+        bound = bind_population_manifest(manifest, choices=choices)
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        PopulationManifestError,
+    ) as error:
+        typer.echo(f"population bind: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    document = {
+        "authority": bound.authority,
+        "scheduler": bound.scheduler,
+        "population_manifest_digest": manifest.digest(),
+        "provider_binding_digest": bound.digest(),
+        "binding": bound.canonical_dict(),
+    }
+    if json_out:
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        return
+
+    typer.echo(f"population {manifest.digest()} -> binding {bound.digest()} tasks={len(bound.tasks)}")
+    for task in bound.tasks:
+        typer.echo(
+            f"{task.task_id}: provider={task.provider or '-'} model={task.model or '-'} "
+            f"runtime={task.runtime or '-'} prompt={task.prompt_variant or '-'}"
+        )
+
+
+@app.command("population-summarize")
+def population_summarize(
+    plan_path: Annotated[
+        Path,
+        typer.Argument(help="research-adapt JSON or a direct population-manifest JSON"),
+    ],
+    receipts_path: Annotated[
+        Path,
+        typer.Argument(help="JSON array of retained provider BehaviorReceipt documents"),
+    ],
+    require_complete: Annotated[
+        bool,
+        typer.Option("--require-complete", help="refuse unless every population task has a receipt"),
+    ] = False,
+    json_out: Annotated[bool, typer.Option("--json", help="emit population telemetry JSON")] = False,
+) -> None:
+    """Reduce provider behavior receipts into replayable population telemetry."""
+
+    from swfactory.population_manifest import (
+        PopulationManifestError,
+        behavior_receipt_from_document,
+        population_manifest_from_document,
+        summarize_population,
+    )
+
+    try:
+        raw_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        raw_receipts = json.loads(receipts_path.read_text(encoding="utf-8"))
+        if not isinstance(raw_plan, dict):
+            raise PopulationManifestError("population plan must be a JSON object")
+        if not isinstance(raw_receipts, list):
+            raise PopulationManifestError("population receipts must be a JSON array")
+
+        manifest_document = raw_plan
+        if isinstance(raw_plan.get("plan"), dict):
+            manifest_document = raw_plan["plan"].get("population_manifest")
+        if not isinstance(manifest_document, dict):
+            raise PopulationManifestError("input does not contain a population_manifest object")
+
+        manifest = population_manifest_from_document(manifest_document)
+        receipts = tuple(behavior_receipt_from_document(row) for row in raw_receipts if isinstance(row, dict))
+        if len(receipts) != len(raw_receipts):
+            raise PopulationManifestError("every population receipt must be a JSON object")
+        telemetry = summarize_population(
+            manifest,
+            receipts,
+            require_complete=require_complete,
+        )
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        PopulationManifestError,
+    ) as error:
+        typer.echo(f"population summarize: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    document = telemetry.canonical_dict()
+    document["telemetry_digest"] = telemetry.digest()
+    if json_out:
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        return
+
+    typer.echo(
+        f"population {telemetry.manifest_digest}: answered={telemetry.answered}/"
+        f"{telemetry.total_tasks} effective={telemetry.effective_independent_search:.3f} "
+        f"correlation={telemetry.mean_correlation:.3f} "
+        f"disagreement={telemetry.candidate_disagreement:.3f}"
+    )
+    typer.echo(f"telemetry={telemetry.digest()}")
 
 
 @candidate_evidence_app.command("retain")

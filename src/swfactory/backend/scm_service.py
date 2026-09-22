@@ -13,7 +13,7 @@ import base64
 import hashlib
 from collections.abc import Callable
 from dataclasses import asdict
-from typing import Any, TypeVar
+from typing import Any
 
 from swfactory.authority import ResourceKind
 from swfactory.core_capabilities import CoreMutationRequest
@@ -114,9 +114,6 @@ def _request(
     )
 
 
-T = TypeVar("T")
-
-
 def _lease_binding(
     factory: Factory,
     cell: dict[str, Any],
@@ -132,12 +129,7 @@ def _lease_binding(
     run_id = str(cell.get("airflow_run_id") or "unbound-run")
     compute = cell.get("compute")
     compute = compute if isinstance(compute, dict) else {}
-    sandbox_id = str(
-        compute.get("sandbox_id")
-        or compute.get("name")
-        or compute.get("handle")
-        or "backend-publication"
-    )
+    sandbox_id = str(compute.get("sandbox_id") or compute.get("name") or compute.get("handle") or "backend-publication")
     return LeaseBinding(
         factory_run_id=f"{cell.get('airflow_dag_id') or 'factory'}:{run_id}:{cell.get('map_index', 0)}",
         dag_run_id=run_id,
@@ -152,7 +144,7 @@ def _lease_binding(
     )
 
 
-def _with_github_lease(
+def _with_github_lease[T](
     factory: Factory,
     cell: dict[str, Any],
     operation_key: str,
@@ -277,6 +269,17 @@ def _publish(factory: Factory, base_branch: str, body: dict[str, Any]) -> dict[s
 
     def publish() -> dict[str, Any]:
         def apply(scoped: GitHubScm) -> dict[str, Any]:
+            # Re-observe inside the write lease before mutating. Reconciliation may have happened
+            # under a previous read lease; another publisher can win between those two moments.
+            before = judge(scoped.observe_publication(branch))
+            if before.status == "committed":
+                return dict(before.result)
+            if before.status not in {"definitely_absent"}:
+                raise StageError(
+                    "scm",
+                    f"publication preflight refused remote state: {before.detail}",
+                    retryable=before.status == "ambiguous",
+                )
             scoped.publish(
                 branch=branch,
                 patch=patch,

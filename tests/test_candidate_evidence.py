@@ -80,12 +80,14 @@ def test_bundle_retains_exact_diff_and_named_artifacts(repo: Path, tmp_path: Pat
     log.write_text("candidate completed\n", encoding="utf-8")
     destination = tmp_path / "bundle"
 
+    search_provenance = "sha256:" + "a" * 64
     bundle = build_candidate_evidence_bundle(
         repo,
         revision,
         source,
         artifacts={"agent-log": log},
         destination=destination,
+        search_provenance_digest=search_provenance,
     )
     verified = verify_candidate_evidence_bundle(destination, repo=repo)
 
@@ -96,6 +98,10 @@ def test_bundle_retains_exact_diff_and_named_artifacts(repo: Path, tmp_path: Pat
     result = (destination / "RESULT.md").read_text(encoding="utf-8")
     assert revision.output_head in result
     assert bundle.digest() in result
+    assert search_provenance in result
+    assert bundle.search_provenance_digest == search_provenance
+    manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["search_provenance_digest"] == search_provenance
 
     remove_candidate_worktree(worktree)
 

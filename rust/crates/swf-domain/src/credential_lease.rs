@@ -72,7 +72,9 @@ impl CredentialLeaseBinding {
         let raw = serde_json::to_value(self)
             .map_err(|error| CredentialLeaseContractError::Serialization(error.to_string()))?;
         let Value::Object(object) = raw else {
-            return Err(CredentialLeaseContractError::Serialization("binding was not an object".into()));
+            return Err(CredentialLeaseContractError::Serialization(
+                "binding was not an object".into(),
+            ));
         };
         let mut keys: Vec<_> = object.keys().cloned().collect();
         keys.sort();

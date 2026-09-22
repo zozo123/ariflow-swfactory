@@ -1,0 +1,476 @@
+schema_version: 1
+authority: search-only
+lifecycle_scheduler: apache-airflow
+reality_boundary: rust-authority-kernel
+
+thesis: >
+  Create entropy where exploration benefits from it; destroy entropy before authority.
+  Execution may be disposable, stochastic, heterogeneous and recursively self-improving.
+  Durable reality may only change through exact identity, evidence, fencing and explicit authority.
+
+end_state: >
+  Rust is the factory. Airflow is the scheduler. swf is the harness. Python is the experimental
+  cortex. Sandboxes are disposable executable worlds. Content-addressed evidence is memory.
+  Recursive search may improve how the factory thinks but may never widen what it is allowed to do.
+
+laws:
+  - The mind may be stochastic; reality may not.
+  - Compute may multiply; authority may not.
+  - Search and authority are separate universes.
+  - Workers are disposable; Cell identity and accepted inputs are durable.
+  - Every external effect is fenced, journaled, observed and reconciled.
+  - Credentials are scoped leases, never ambient worker state.
+  - Candidate selection for another experiment is not promotion.
+  - A candidate must be frozen before independent verification.
+  - Promotion depends on gauge-invariant evidence, not model confidence or explanation.
+  - Correlated agents do not count as independent search.
+  - Deep compute belongs at high-value disagreements, not uniformly across the population.
+  - Glass means perturb; jammed means drain; crystal means verify exact bytes.
+  - Self-improvement runs as shadow experiments and cannot authorize its own adoption.
+  - Claims must never be stronger than retained evidence.
+
+architecture:
+  harness:
+    public_entry: swf
+    responsibility:
+      - submit
+      - inspect
+      - approve
+      - verify
+      - explain search provenance
+  rust:
+    role: constitutional-reality-kernel
+    owns:
+      - durable identity
+      - Cell epoch fencing
+      - policy identity
+      - evidence contracts
+      - capability and lease identity
+      - deterministic convergence contracts
+      - mutation authority
+  airflow:
+    role: temporal-nervous-system
+    owns:
+      - lifecycle
+      - mapping
+      - waits
+      - retries
+      - timeouts
+      - bounded concurrency
+      - human interrupts
+    forbidden:
+      - truth authority
+      - promotion authority
+      - alternate policy state
+  python:
+    role: experimental-cortex
+    owns:
+      - search strategies
+      - stochastic fields
+      - recursive research
+      - phase estimation
+      - swarm dynamics
+      - memory experiments
+      - model ensembles
+      - offline learning
+  sandbox:
+    role: disposable-executable-world
+    invariant: execution capability never implies mutation authority
+
+durable_matter:
+  - cell_id
+  - epoch
+  - work_order
+  - accepted_input_digest
+  - policy_digest
+  - operation_intent
+  - mutation_journal
+  - approval_digest
+  - candidate_digest
+  - source_digest
+  - recipe_digest
+  - evidence_digest
+  - publication_receipt
+  - search_provenance_digest
+
+disposable_motion:
+  - agent_session
+  - worker
+  - sandbox
+  - vm
+  - container
+  - worktree
+  - speculative_branch
+  - prompt
+  - model_sample
+  - intermediate_plan
+  - temporary_context
+  - unselected_candidate
+
+search:
+  system1:
+    purpose: create useful entropy
+    mechanisms:
+      - heterogeneous models
+      - heterogeneous prompts
+      - heterogeneous roles
+      - repair-rethink-scratch
+      - isolated worktrees
+      - sandbox snapshots
+      - stochastic fields
+      - mutation operators
+  system2:
+    purpose: measure and destroy entropy
+    mechanisms:
+      - freeze candidate
+      - independent tests
+      - replay
+      - adversarial verification
+      - security review
+      - gauge fixing
+      - deterministic ranking
+      - evidence fan-in
+  recursive:
+    loop:
+      - observe campaign
+      - reduce campaign to order parameters
+      - extract search laws
+      - update artifact blackboard
+      - classify phase
+      - allocate population and compute
+      - bind search provenance into descendant identity
+      - run next experiment
+    search_laws:
+      authority: exploration-only
+      examples:
+        - prefer a strategy that repeatedly produces evidence-complete answers
+        - deprioritize correlated strategies
+        - diversify after population collapse
+        - measure when disagreement is high
+        - verify when evidence is high and disagreement is low
+        - perturb after a dead basin
+
+population_dynamics:
+  objective: maximize-effective-independent-search
+  not_objective: raw-agent-count
+  diversity_axes:
+    - model
+    - prompt
+    - role
+    - runtime
+    - strategy
+    - mutation
+    - context
+    - verifier
+  compute_tiers:
+    cheap:
+      use: broad exploration
+    standard:
+      use: synthesis and ordinary verification
+    deep:
+      use: high-value disagreement hotspots
+    exact-replay:
+      use: frozen candidate verification
+  allocation:
+    gas: many-cheap-independent-worlds
+    liquid: coordinate-through-artifacts
+    critical: concentrate-deep-compute-on-disagreement
+    crystal: stop-broad-search-and-replay-exact-candidate
+    glass: fresh-context-perturbation
+    jammed: stop-new-work-and-drain
+  execution_manifest:
+    authority: search-only
+    scheduler: airflow
+    materializes:
+      - role
+      - compute-tier
+      - context-policy
+      - temperature
+      - diversity-axes
+      - disagreement-hotspots
+      - deterministic-variant-digest
+    independent_verifier:
+      context:
+        - fresh
+        - frozen
+      forbidden:
+        - inherited-context
+        - credential
+        - promotion-authority
+    behavior_receipt:
+      measures:
+        - behavior-signature
+        - candidate-digest
+        - evidence-digest
+        - provider
+        - model
+        - runtime
+        - cost
+        - duration
+    reducer:
+      outputs:
+        - effective-independent-search
+        - mean-correlation
+        - candidate-disagreement
+        - unique-candidates
+        - independent-verifier-answers
+  provider_binding:
+    authority: search-only
+    scheduler: airflow
+    input:
+      - population-manifest
+      - operator-allowlisted-choice-set
+    rule: deterministic-diversity-coordinate-to-allowlisted-choice
+    preserves:
+      - population-task-id
+      - variant-digest
+      - population-manifest-digest
+    required_axis_without_choice: refuse
+    may_not:
+      - invoke-provider
+      - schedule-work
+      - mint-credential
+      - mutate-cell
+      - publish
+      - approve
+      - promote
+
+artifact_blackboard:
+  authority: exploration-only
+  rule: agents coordinate through immutable retained artifacts rather than hidden shared conversation
+  artifact_kinds:
+    - hypothesis
+    - failure
+    - evidence
+    - counterexample
+    - search-law
+    - verifier
+  invariants:
+    - content-addressed
+    - parent-linked
+    - no credentials
+    - no promotion authority
+
+phase_control:
+  phases:
+    gas: high entropy and weak coherence
+    liquid: mobile structured search
+    critical: decision-sensitive disagreement
+    crystal: low entropy and strong exact evidence
+    glass: low mobility without enough evidence
+    jammed: queue/resource/debt pressure dominates
+  modes:
+    - diverge
+    - coordinate
+    - measure
+    - anneal
+    - verify
+    - perturb
+    - drain
+
+candidate_crystal:
+  meaning: frozen exact candidate worth independent verification
+  requires:
+    - exact candidate digest
+    - source digest
+    - execution recipe digest
+    - policy digest
+    - evidence digest
+    - low verifier disagreement
+    - no unresolved contradiction
+  does_not_mean:
+    - approved
+    - publishable
+    - merged
+    - promoted
+
+gauge:
+  dependent:
+    - agent_id
+    - model
+    - prompt
+    - explanation
+    - token_count
+    - trajectory_name
+    - branch_name
+  invariant:
+    - cell_id
+    - epoch
+    - candidate_digest
+    - source_digest
+    - recipe_digest
+    - policy_digest
+    - evidence_digest
+    - artifact_digest
+    - effect_digest
+  rule: only invariant quantities may approach authority
+
+memory:
+  phases:
+    - observation
+    - trace
+    - correlated
+    - candidate-belief
+    - memory-crystal
+  contradiction_rule: contradiction prevents automatic crystallization
+  context:
+    - fresh
+    - inherit
+    - compact
+    - frozen
+  efficiency:
+    - ObservationPack
+    - evidence-preserving reducer
+    - online context compaction
+    - exact recall handles
+    - bounded validation action fusion
+
+evidence:
+  candidate:
+    - immutable source snapshot
+    - frozen candidate ref
+    - execution recipe
+    - test receipts
+    - review receipts
+    - artifact digests
+  replay_capsule:
+    target:
+      - source
+      - recipe
+      - executable identity
+      - stdout
+      - stderr
+      - environment identity
+      - evidence
+  fan_in:
+    rule: rebuild decisions from immutable sibling evidence rather than trusting an in-memory winner
+
+authority_envelope:
+  request:
+    may_be_created_by_search: true
+    grants_authority: false
+  promotion:
+    owner: explicit-human-or-parent-policy
+    required:
+      - current Cell epoch
+      - exact accepted input identity
+      - exact candidate identity
+      - required evidence
+      - explicit gate
+  external_mutation:
+    required:
+      - operation identity
+      - scoped capability
+      - current epoch
+      - current policy
+      - durable observation
+
+security:
+  credential_projection:
+    - short-lived
+    - capability-scoped
+    - operation-bound
+    - Cell-bound
+    - epoch-bound
+    - attempt-bound
+    - process-bound
+  sandbox_boundaries:
+    - process isolation
+    - capability-scoped filesystem
+    - deny-by-default network
+    - no publication credentials
+    - tamper-evident execution history
+  self_host:
+    law: an agent may not widen its own cage in the change that uses the wider cage
+    protected:
+      - policy
+      - CI
+      - blueprints
+      - DAGs
+      - confinement
+      - authority kernel
+      - capability claims
+      - future-factory laws
+
+recovery:
+  principle: observe-before-replay
+  external_effect_states:
+    - definitely-absent
+    - committed
+    - ambiguous
+    - divergent
+    - refused
+  backup_restore:
+    rule: restored old state must not silently replay effects already present in the outside world
+
+self_improvement:
+  authority: proposal-only
+  lifecycle:
+    - current-controller-baseline
+    - candidate-controller-worlds
+    - shadow-run
+    - compare
+    - independent-verification
+    - adoptable-candidate
+    - ordinary-promotion-gate
+  recursive_limit: improvement may change cognition but not its own authority boundary
+
+acceleration:
+  turbo:
+    meaning: motion-layer content-hash cache
+    forbidden_interpretation: cache-hit-is-approval
+  snapshots:
+    meaning: forkable execution acceleration
+    forbidden_interpretation: snapshot-inherits-authority
+  cache:
+    rule: performance state cannot become policy identity
+
+observability:
+  measure:
+    - candidate_entropy
+    - coherence
+    - mobility
+    - effective_independent_search
+    - mean_pairwise_correlation
+    - novelty
+    - verifier_disagreement
+    - evidence_completeness
+    - queue_pressure
+    - resource_pressure
+    - context_pressure
+    - debt_pressure
+    - branching_ratio
+    - progress_rate
+    - marginal_information_value
+    - compute_by_phase
+    - discarded_worlds
+    - cleaned_sandboxes
+    - reclaimed_contexts
+    - stale_memories_retired
+
+human_attention:
+  expensive_resource: true
+  surface:
+    - genuine ambiguity
+    - authority request
+    - verifier disagreement that survives deep measurement
+    - glass
+    - jammed
+    - novel security event
+    - policy change
+    - self-improvement adoption
+
+future:
+  target_loop: >
+    immutable problem -> broad cheap heterogeneous worlds -> artifact blackboard -> diversity and
+    disagreement measurement -> recursive search-law update -> phase-aware population allocation ->
+    selective deep compute -> exact candidate freeze -> independent verifier population -> evidence
+    crystal -> request-only authority envelope -> Rust authority kernel -> explicit promotion ->
+    retained memory and search laws
+  graduation:
+    - emit real phase and swarm telemetry from managed runs
+    - expose recursive decisions in swf operator surfaces
+    - add provider-backed heterogeneous population execution
+    - add exact replay capsules
+    - train offline policy from retained campaigns without granting online authority
+    - graduate proven search contracts from Python into Rust

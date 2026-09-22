@@ -29,9 +29,6 @@ pub mod snapshot;
 pub mod states;
 pub mod worker;
 
-pub use credential_lease::{
-    CredentialLeaseBinding, CredentialLeaseContractError, CREDENTIAL_LEASE_SCHEMA_VERSION,
-};
 pub use cognitive_harness::{
     classify_self_improvement, ensemble_diversity, gauge_fix, marginal_information_value,
     memory_phase, pairwise_correlation, plan_cognition, quantity_kind, validate_measurement_set,
@@ -41,6 +38,9 @@ pub use cognitive_harness::{
     MemoryAction, MemoryEvidence, MemoryPhase, PairwiseCorrelation, QuantityKind,
     SelfImprovementExperiment, StochasticField, WorldAction, WorldCandidate,
     COGNITIVE_HARNESS_AUTHORITY, COGNITIVE_HARNESS_SCHEMA_VERSION, REALITY_BOUNDARY,
+};
+pub use credential_lease::{
+    CredentialLeaseBinding, CredentialLeaseContractError, CREDENTIAL_LEASE_SCHEMA_VERSION,
 };
 pub use factory::{
     FactoryError, FactoryName, FactoryRunId, FactoryRunRequest, FactoryRunState, FactoryRunStatus,

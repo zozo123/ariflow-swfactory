@@ -22,7 +22,6 @@ from typing import Any
 import pytest
 
 from swfactory.cells import is_cell_id
-from swfactory.credential_lease import LeaseBinding
 from swfactory.control import (
     NO_ISSUE,
     Gate,
@@ -36,6 +35,7 @@ from swfactory.control import (
     job_state,
     summarize_checks,
 )
+from swfactory.credential_lease import LeaseBinding
 from swfactory.herd import job_index, parse_issues, snapshot_data, stage_progress
 from swfactory.metrics import summarize
 from swfactory.phase_control import PhaseObservation

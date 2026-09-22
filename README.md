@@ -14,7 +14,7 @@ managed lifecycle; isolated coding workers perform the work; the trusted factory
 People decide what reaches `main`.
 
 [Quickstart](#quickstart) · [Liquid methodology](#the-liquid-methodology) · [Physics](#physics-of-the-factory) ·
-[Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
+[Future factory](docs/future-factory.md) · [Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
 [Illustrated walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Agent skills](#agent-skills)
 
 ![A software change moving through work cells from issue to reviewed pull request](site/factory-line.webp)
@@ -184,6 +184,27 @@ ambiguous mutation, publish a PR, or promote a candidate.
 
 See [polyglot task graph: motion, not authority](docs/polyglot-task-graph.md) for the executable
 native graph, cache policy, authority boundary, and graduation criteria.
+
+### Recursive search and swarm dynamics
+
+The experimental next layer makes the search process itself observable and replayable.
+
+`swfactory.recursive_search` reduces campaigns into order parameters, extracts exploration-only
+search laws, retains a content-addressed artifact blackboard, classifies the current factory phase,
+and binds the resulting search provenance into descendant candidate identity.
+
+`swfactory.swarm_dynamics` then allocates a bounded heterogeneous population by **effective
+independent search**, not raw agent count. Cheap compute expands gas-like search; critical
+disagreements attract selective deep verification; a local crystal stops broad search and moves to
+exact replay plus independent red-team verification; glass perturbs with fresh context; jammed
+stops new work and drains debt.
+
+These mechanisms are intentionally marked **experimental** in the capability inventory. They may
+change search posture, population and compute allocation, but they cannot schedule Airflow, weaken
+evidence, mint credentials, approve, publish, merge or promote.
+
+The full end-state and graduation path are in [Future Factory](docs/future-factory.md), with the
+machine-readable architecture contract in [`config/future-factory.yaml`](config/future-factory.yaml).
 
 ## Architecture and lifecycle
 
@@ -426,6 +447,10 @@ A merge callback already in flight is not interrupted or rolled back.
 | `sandbox.smolvm` | `experimental` | `swfactory.smolvm_backend.SmolvmSandboxBackend via ToolsetSandbox` | tests/test_smolvm_backend.py (HTTP contract) and opt-in tests/test_smolvm_live.py |
 | `factory.phase-control` | `experimental` | `swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess and swf phase are read-only` | tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json |
 | `factory.cognitive-harness` | `experimental` | `swfactory.cognitive_harness and swf_domain::cognitive_harness` | tests/test_cognitive_harness.py |
+| `factory.recursive-search` | `experimental` | `swfactory.recursive_search; swfactory research-adapt` | tests/test_recursive_search.py |
+| `factory.swarm-dynamics` | `experimental` | `swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round` | tests/test_swarm_dynamics.py |
+| `factory.population-manifest` | `experimental` | `swfactory.population_manifest via swfactory.recursive_search.plan_adaptive_round; swfactory population-summarize` | tests/test_population_manifest.py |
+| `factory.provider-binding` | `experimental` | `swfactory.provider_binding; swfactory population-bind` | tests/test_provider_binding.py |
 
 <!-- capability-inventory:end -->
 

@@ -118,9 +118,7 @@ def _cell_binding(job: dict[str, Any]) -> dict[str, Any] | None:
             raise StageError("policy", "managed Factory Cell epoch is stale")
         policy_digest = authoritative.get("policy_digest")
         generation = authoritative.get("factory_generation")
-    if policy_digest is not None and (
-        not isinstance(policy_digest, str) or not policy_digest.startswith("policy:")
-    ):
+    if policy_digest is not None and (not isinstance(policy_digest, str) or not policy_digest.startswith("policy:")):
         raise StageError("policy", "mapped job carries an invalid Factory Cell policy digest")
     if generation is not None and not isinstance(generation, str):
         raise StageError("policy", "mapped job carries an invalid Factory Cell generation")

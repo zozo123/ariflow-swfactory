@@ -180,8 +180,8 @@ class Factory:
             epoch_reader=lambda cell_id: int(self.cell_store.get(cell_id)["epoch"]),
             on_denial=self._record_lease_denial,
         )
-        self.cell_store.on_authority_revoked = (
-            lambda cell_id, epoch, reason: self.leases.revoke_epoch(cell_id, epoch, reason=reason)
+        self.cell_store.on_authority_revoked = lambda cell_id, epoch, reason: self.leases.revoke_epoch(
+            cell_id, epoch, reason=reason
         )
         self.opener = urllib.request.build_opener(_NoRedirect)
         self.credentials = AirflowClient(

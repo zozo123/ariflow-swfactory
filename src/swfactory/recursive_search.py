@@ -37,6 +37,20 @@ from swfactory.evolution import (
     run_campaign,
 )
 from swfactory.generations import CampaignBudget, Dimension
+from swfactory.phase_control import Phase, PhaseObservation, assess
+from swfactory.population_manifest import (
+    PopulationManifest,
+    PopulationTelemetry,
+    build_population_manifest,
+)
+from swfactory.swarm_dynamics import (
+    DisagreementHotspot,
+    SearchProvenance,
+    SwarmBudget,
+    SwarmObservation,
+    SwarmPlan,
+    allocate_population,
+)
 from swfactory.work_executor import Cancellation
 
 RECURSIVE_SEARCH_SCHEMA_VERSION = 1
@@ -127,9 +141,7 @@ class ArtifactBlackboard:
         for artifact in self.artifacts:
             unknown = set(artifact.parents) - ids
             if unknown:
-                raise CampaignError(
-                    f"{artifact.artifact_id}: unknown parent artifacts {', '.join(sorted(unknown))}"
-                )
+                raise CampaignError(f"{artifact.artifact_id}: unknown parent artifacts {', '.join(sorted(unknown))}")
 
     def digest(self) -> str:
         self.validate()
@@ -149,14 +161,8 @@ class ArtifactBlackboard:
 
     def select(self, *, tags: Iterable[str] = (), limit: int = 16) -> tuple[ResearchArtifact, ...]:
         required = set(tags)
-        values = [
-            artifact
-            for artifact in self.artifacts
-            if not required or required.intersection(artifact.tags)
-        ]
-        return tuple(
-            sorted(values, key=lambda item: (-item.weight, item.artifact_id))[: max(0, limit)]
-        )
+        values = [artifact for artifact in self.artifacts if not required or required.intersection(artifact.tags)]
+        return tuple(sorted(values, key=lambda item: (-item.weight, item.artifact_id))[: max(0, limit)])
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -353,6 +359,17 @@ class RecursiveRoundPlan:
     artifact_digests: tuple[str, ...]
     law_digests: tuple[str, ...]
     reason: str
+    phase: str | None = None
+    phase_assessment_digest: str | None = None
+    swarm_plan_digest: str | None = None
+    search_provenance_digest: str | None = None
+    swarm_plan: SwarmPlan | None = None
+    search_provenance: SearchProvenance | None = None
+    population_manifest_digest: str | None = None
+    population_manifest: PopulationManifest | None = None
+    population_telemetry_digest: str | None = None
+    population_telemetry: PopulationTelemetry | None = None
+    estimated_compute_units: float = 0.0
     authority: str = RECURSIVE_SEARCH_AUTHORITY
 
     def validate(self) -> None:
@@ -368,10 +385,31 @@ class RecursiveRoundPlan:
             raise CampaignError("recursive round max_parallel must be positive")
         if self.authority != RECURSIVE_SEARCH_AUTHORITY:
             raise CampaignError("recursive search plans are exploration-only")
+        if self.swarm_plan is not None:
+            if self.swarm_plan.authority != "search-only":
+                raise CampaignError("embedded swarm plan is not search-only")
+            if self.swarm_plan_digest != self.swarm_plan.digest():
+                raise CampaignError("embedded swarm plan digest mismatch")
+        if self.search_provenance is not None:
+            self.search_provenance.validate()
+            if self.search_provenance_digest != self.search_provenance.digest():
+                raise CampaignError("embedded search provenance digest mismatch")
+        if self.population_manifest is not None:
+            self.population_manifest.validate()
+            if self.population_manifest_digest != self.population_manifest.digest():
+                raise CampaignError("embedded population manifest digest mismatch")
+            if self.swarm_plan_digest != self.population_manifest.swarm_plan_digest:
+                raise CampaignError("population manifest is bound to another swarm plan")
+            if self.search_provenance_digest != self.population_manifest.search_provenance_digest:
+                raise CampaignError("population manifest is bound to another search provenance receipt")
+        if self.population_telemetry is not None:
+            self.population_telemetry.validate()
+            if self.population_telemetry_digest != self.population_telemetry.digest():
+                raise CampaignError("embedded population telemetry digest mismatch")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
-        return {
+        document = {
             "schema_version": RECURSIVE_SEARCH_SCHEMA_VERSION,
             "authority": self.authority,
             "depth": self.depth,
@@ -382,7 +420,26 @@ class RecursiveRoundPlan:
             "artifact_digests": list(self.artifact_digests),
             "law_digests": list(self.law_digests),
             "reason": self.reason,
+            "phase": self.phase,
+            "phase_assessment_digest": self.phase_assessment_digest,
+            "swarm_plan_digest": self.swarm_plan_digest,
+            "search_provenance_digest": self.search_provenance_digest,
+            "population_manifest_digest": self.population_manifest_digest,
+            "population_telemetry_digest": self.population_telemetry_digest,
+            "estimated_compute_units": self.estimated_compute_units,
         }
+        if self.swarm_plan is not None:
+            document["swarm_plan"] = self.swarm_plan.canonical_dict()
+        if self.search_provenance is not None:
+            document["search_provenance"] = self.search_provenance.canonical_dict()
+        if self.population_manifest is not None:
+            document["population_manifest"] = self.population_manifest.canonical_dict()
+        if self.population_telemetry is not None:
+            document["population_telemetry"] = self.population_telemetry.canonical_dict()
+        return document
+
+    def digest(self) -> str:
+        return _digest(self.to_dict())
 
 
 @dataclass(frozen=True)
@@ -457,11 +514,7 @@ def campaign_signal(
             required_passes.append(outcome)
 
     unique_outputs = {outcome.output_head for outcome in answered if outcome.output_head}
-    disagreement = (
-        0.0
-        if len(answered) < 2
-        else (len(unique_outputs) - 1) / max(1, len(answered) - 1)
-    )
+    disagreement = 0.0 if len(answered) < 2 else (len(unique_outputs) - 1) / max(1, len(answered) - 1)
     novelty = _ratio(len(unique_outputs), len(answered))
 
     winner_strategy: Strategy | None = None
@@ -480,12 +533,8 @@ def campaign_signal(
                 attempts=len(outcomes),
                 answered=len(answered_rows),
                 evidence_complete=sum(1 for outcome in answered_rows if outcome.evidence_digest),
-                required_passes=sum(
-                    1 for outcome in answered_rows if required_set.issubset(outcome.passed)
-                ),
-                unique_outputs=len(
-                    {outcome.output_head for outcome in answered_rows if outcome.output_head}
-                ),
+                required_passes=sum(1 for outcome in answered_rows if required_set.issubset(outcome.passed)),
+                unique_outputs=len({outcome.output_head for outcome in answered_rows if outcome.output_head}),
                 cost_usd=round(sum(outcome.cost_usd for outcome in outcomes), 6),
             )
         )
@@ -604,7 +653,10 @@ def extract_search_laws(
         laws.append(
             _law(
                 LawKind.VERIFY,
-                "search has compressed to an evidence-complete low-disagreement basin; narrow and verify exact descendants",
+                (
+                    "search has compressed to an evidence-complete low-disagreement basin; "
+                    "narrow and verify exact descendants"
+                ),
                 min(1.0, (last.evidence_rate + last.required_pass_rate + (1.0 - last.disagreement)) / 3.0),
                 max(1, last.answered),
                 ((last.winner_strategy,) if last.winner_strategy is not None else ()),
@@ -725,6 +777,225 @@ def plan_next_round(
     return plan
 
 
+def plan_adaptive_round(
+    signals: Sequence[RoundSignal],
+    *,
+    depth: int,
+    input_head: str,
+    blackboard: ArtifactBlackboard | None = None,
+    allowed_strategies: Sequence[Strategy] = DEFAULT_STRATEGIES,
+    max_candidates: int = 4,
+    max_parallel: int = 3,
+    previous_phase: Phase | None = None,
+    resource_pressure: float = 0.0,
+    context_pressure: float = 0.0,
+    debt_pressure: float = 0.0,
+    swarm_budget: SwarmBudget | None = None,
+    population_telemetry: PopulationTelemetry | None = None,
+) -> RecursiveRoundPlan:
+    """Join recursive search, phase metacognition and population allocation.
+
+    Search determines *what* experiment to ask. Phase control determines *what kind of thinking*
+    is useful. Swarm dynamics determines *where compute goes*. The resulting provenance digest is
+    bound into descendant candidate identity by :func:`plan_requests`.
+    """
+
+    base = plan_next_round(
+        signals,
+        depth=depth,
+        input_head=input_head,
+        blackboard=blackboard,
+        allowed_strategies=allowed_strategies,
+        max_candidates=max_candidates,
+        max_parallel=max_parallel,
+    )
+    observation = _phase_observation(
+        signals,
+        resource_pressure=resource_pressure,
+        context_pressure=context_pressure,
+        debt_pressure=debt_pressure,
+    )
+    phase = assess(observation, previous_phase=previous_phase)
+    if population_telemetry is not None:
+        population_telemetry.validate()
+    swarm_observation = _swarm_observation(
+        signals,
+        observation,
+        population_telemetry=population_telemetry,
+    )
+    hotspots: tuple[DisagreementHotspot, ...] = ()
+    if signals and signals[-1].disagreement > 0.0:
+        last = signals[-1]
+        hotspots = (
+            DisagreementHotspot(
+                hotspot_id=f"campaign:{last.campaign_id}:disagreement",
+                topic_digest=_digest(_signal_dict(last)),
+                disagreement=last.disagreement,
+                evidence_gap=max(0.0, 1.0 - last.evidence_rate),
+                impact=max(0.5, last.required_pass_rate),
+            ),
+        )
+    max_agents = max(1, max_candidates * 4)
+    effective_budget = swarm_budget or SwarmBudget(
+        max_agents=max_agents,
+        max_parallel=max(1, min(max_parallel, max_agents)),
+        max_deep_agents=max(1, min(max_parallel, 4)),
+        max_exact_replays=min(2, max(1, max_parallel)),
+        max_compute_units=max(16.0, float(max_candidates * 12)),
+    )
+    swarm = allocate_population(
+        phase,
+        swarm_observation,
+        budget=effective_budget,
+        hotspots=hotspots,
+    )
+    board = blackboard or ArtifactBlackboard()
+    provenance = swarm.provenance(
+        posture=base.posture.value,
+        blackboard_digest=board.digest(),
+        artifact_digests=base.artifact_digests,
+        law_digests=base.law_digests,
+    )
+    manifest = build_population_manifest(
+        swarm,
+        search_provenance_digest=provenance.digest(),
+    )
+    active_population = max(1, len(manifest.tasks))
+    return RecursiveRoundPlan(
+        depth=base.depth,
+        input_head=base.input_head,
+        posture=base.posture,
+        strategies=base.strategies,
+        max_parallel=min(base.max_parallel, active_population),
+        artifact_digests=base.artifact_digests,
+        law_digests=base.law_digests,
+        reason=f"{base.reason}; {swarm.reason}",
+        phase=phase.phase,
+        phase_assessment_digest=_digest(phase.as_dict()),
+        swarm_plan_digest=swarm.digest(),
+        search_provenance_digest=provenance.digest(),
+        swarm_plan=swarm,
+        search_provenance=provenance,
+        population_manifest_digest=manifest.digest(),
+        population_manifest=manifest,
+        population_telemetry_digest=(population_telemetry.digest() if population_telemetry is not None else None),
+        population_telemetry=population_telemetry,
+        estimated_compute_units=swarm.estimated_compute_units,
+    )
+
+
+def _phase_observation(
+    signals: Sequence[RoundSignal],
+    *,
+    resource_pressure: float,
+    context_pressure: float,
+    debt_pressure: float,
+) -> PhaseObservation:
+    for name, value in {
+        "resource_pressure": resource_pressure,
+        "context_pressure": context_pressure,
+        "debt_pressure": debt_pressure,
+    }.items():
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            raise CampaignError(f"{name} must be finite and in [0, 1]")
+
+    if not signals:
+        return PhaseObservation(
+            candidate_entropy=1.0,
+            coherence=0.0,
+            mobility=1.0,
+            queue_pressure=0.0,
+            queue_acceleration=0.0,
+            resource_pressure=resource_pressure,
+            branching_ratio=0.0,
+            evidence_completeness=0.0,
+            context_pressure=context_pressure,
+            debt_pressure=debt_pressure,
+            verifier_disagreement=1.0,
+        )
+
+    last = signals[-1]
+    previous = signals[-2] if len(signals) > 1 else None
+    answer_rate = _ratio(last.answered, last.attempts)
+    previous_answer_rate = _ratio(previous.answered, previous.attempts) if previous is not None else answer_rate
+    queue_acceleration = max(-1.0, min(1.0, previous_answer_rate - answer_rate))
+    failure_branching = _ratio(max(0, last.attempts - last.answered), max(1, last.attempts))
+    return PhaseObservation(
+        candidate_entropy=max(0.0, min(1.0, last.novelty)),
+        coherence=max(0.0, min(1.0, 1.0 - last.disagreement)),
+        mobility=answer_rate,
+        queue_pressure=0.0,
+        queue_acceleration=queue_acceleration,
+        resource_pressure=resource_pressure,
+        branching_ratio=min(4.0, failure_branching),
+        evidence_completeness=last.evidence_rate,
+        context_pressure=context_pressure,
+        debt_pressure=debt_pressure,
+        verifier_disagreement=last.disagreement,
+    )
+
+
+def _swarm_observation(
+    signals: Sequence[RoundSignal],
+    phase_observation: PhaseObservation,
+    *,
+    population_telemetry: PopulationTelemetry | None = None,
+) -> SwarmObservation:
+    if not signals:
+        telemetry_disagreement = (
+            population_telemetry.candidate_disagreement if population_telemetry is not None else 1.0
+        )
+        telemetry_independence = (
+            population_telemetry.effective_independent_search if population_telemetry is not None else 1.0
+        )
+        telemetry_correlation = population_telemetry.mean_correlation if population_telemetry is not None else 0.0
+        return SwarmObservation(
+            effective_independent_search=telemetry_independence,
+            mean_correlation=telemetry_correlation,
+            novelty=1.0,
+            verifier_disagreement=telemetry_disagreement,
+            evidence_completeness=0.0,
+            resource_pressure=phase_observation.resource_pressure,
+            context_pressure=phase_observation.context_pressure,
+            branching_ratio=phase_observation.branching_ratio,
+            progress_rate=0.0,
+            expected_information=1.0,
+        )
+    last = signals[-1]
+    measured_independence = (
+        population_telemetry.effective_independent_search
+        if population_telemetry is not None
+        else float(max(1, last.unique_outputs))
+    )
+    measured_correlation = (
+        population_telemetry.mean_correlation
+        if population_telemetry is not None
+        else max(0.0, min(1.0, 1.0 - last.novelty))
+    )
+    measured_disagreement = max(
+        last.disagreement,
+        (population_telemetry.candidate_disagreement if population_telemetry is not None else 0.0),
+    )
+    return SwarmObservation(
+        effective_independent_search=measured_independence,
+        mean_correlation=measured_correlation,
+        novelty=last.novelty,
+        verifier_disagreement=measured_disagreement,
+        evidence_completeness=last.evidence_rate,
+        resource_pressure=phase_observation.resource_pressure,
+        context_pressure=phase_observation.context_pressure,
+        branching_ratio=phase_observation.branching_ratio,
+        progress_rate=_ratio(last.answered, last.attempts),
+        expected_information=max(
+            0.0,
+            min(
+                1.0,
+                measured_disagreement * (1.0 - last.evidence_rate) + (1.0 - last.required_pass_rate) * 0.25,
+            ),
+        ),
+    )
+
+
 def run_recursive_search(
     runner: CandidateRunner,
     *,
@@ -775,7 +1046,8 @@ def run_recursive_search(
             stop_reason = "budget_exhausted"
             break
 
-        plan = plan_next_round(
+        previous_phase = plans[-1].phase if plans else None
+        plan = plan_adaptive_round(
             signals,
             depth=depth,
             input_head=current_head,
@@ -783,6 +1055,7 @@ def run_recursive_search(
             allowed_strategies=strategies,
             max_candidates=budget.max_candidates,
             max_parallel=max_parallel,
+            previous_phase=previous_phase,
         )
         plans.append(plan)
 
@@ -800,6 +1073,7 @@ def run_recursive_search(
             strategies=plan.strategies,
             budget=round_budget,
             parent_candidate=parent_candidate,
+            search_provenance_digest=plan.search_provenance_digest,
             depth=depth,
         )
         report = run_campaign(
@@ -899,11 +1173,7 @@ def signal_from_document(
                 required_passes += 1
 
     unique_outputs = {str(row.get("output_head")) for row in answered_rows if row.get("output_head")}
-    disagreement = (
-        0.0
-        if len(answered_rows) < 2
-        else (len(unique_outputs) - 1) / max(1, len(answered_rows) - 1)
-    )
+    disagreement = 0.0 if len(answered_rows) < 2 else (len(unique_outputs) - 1) / max(1, len(answered_rows) - 1)
     winner_id = None
     selection = document.get("exploration_selection")
     if isinstance(selection, Mapping) and selection.get("winner") is not None:
@@ -1098,10 +1368,7 @@ def _law(
     strategies: tuple[Strategy, ...],
     signals: Sequence[RoundSignal],
 ) -> SearchLaw:
-    evidence = tuple(
-        _digest(_signal_dict(signal))
-        for signal in signals
-    )
+    evidence = tuple(_digest(_signal_dict(signal)) for signal in signals)
     raw = {
         "kind": kind.value,
         "statement": statement,
@@ -1120,11 +1387,7 @@ def _law(
 
 
 def _answered(outcome: CandidateOutcome) -> bool:
-    return (
-        outcome.state == "ok"
-        and bool(outcome.output_head)
-        and outcome.output_head != outcome.input_head
-    )
+    return outcome.state == "ok" and bool(outcome.output_head) and outcome.output_head != outcome.input_head
 
 
 def _document_answered(outcome: Mapping[str, Any]) -> bool:

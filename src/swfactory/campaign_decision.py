@@ -152,6 +152,11 @@ class DescendantCampaignPlan:
                     "parent_generation": request.parent_generation,
                     "parent_candidate": request.parent_candidate,
                     "parent_decision_digest": request.parent_decision_digest,
+                    **(
+                        {"search_provenance_digest": request.search_provenance_digest}
+                        if request.search_provenance_digest is not None
+                        else {}
+                    ),
                     "depth": request.depth,
                     "budget_usd": request.budget_usd,
                     "timeout_s": request.timeout_s,

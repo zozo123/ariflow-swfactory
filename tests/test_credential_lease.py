@@ -149,9 +149,7 @@ def test_epoch_advance_revokes_live_lease_before_takeover_returns(tmp_path: Path
         providers={"github.publish": lambda _binding: "raw"},
         epoch_reader=lambda cell_id: int(store.get(cell_id)["epoch"]),
     )
-    store.on_authority_revoked = (
-        lambda cell_id, epoch, reason: broker.revoke_epoch(cell_id, epoch, reason=reason)
-    )
+    store.on_authority_revoked = lambda cell_id, epoch, reason: broker.revoke_epoch(cell_id, epoch, reason=reason)
     binding = LeaseBinding(
         factory_run_id="factory-run",
         dag_run_id="dag-run",
