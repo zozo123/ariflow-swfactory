@@ -21,6 +21,7 @@ from swfactory.swarm_dynamics import (
     SwarmPlan,
 )
 
+
 def _plan() -> SwarmPlan:
     return SwarmPlan(
         phase="gas",
