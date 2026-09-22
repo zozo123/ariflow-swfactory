@@ -358,6 +358,28 @@
         "diversity coordinates",
         "bound population task"
       ]
+    },
+    {
+      "id": "factory.population-execution",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "A provider-bound PopulationManifest may execute with bounded in-stage concurrency inside an already scheduled Airflow lifecycle task; task/variant identity, bound provider/model/runtime, verifier independence, scheduler ownership, and search-only authority are revalidated before receipts are reduced to telemetry.",
+      "owner": "workgraph+evidence",
+      "runtime_entry": "swfactory.population_execution; swfactory.execution_binding.execute_bound_population",
+      "environment": "bounded in-process fan-out/fan-in only; no Airflow lifecycle creation, credential projection, publication, approval, or promotion",
+      "test": "tests/test_population_execution.py",
+      "evidence": [
+        "tests/test_population_execution.py",
+        "src/swfactory/population_execution.py",
+        "src/swfactory/execution_binding.py",
+        "docs/future-factory.md"
+      ],
+      "follow_up": "Connect concrete provider adapters to BoundPopulationTask execution under backend-owned credential projection and retain reports automatically from managed Airflow runs.",
+      "public_surface": [
+        "population executor",
+        "population execution report",
+        "managed behavior receipts"
+      ]
     }
   ]
 }
