@@ -214,6 +214,26 @@ population_dynamics:
         - candidate-disagreement
         - unique-candidates
         - independent-verifier-answers
+  provider_binding:
+    authority: search-only
+    scheduler: airflow
+    input:
+      - population-manifest
+      - operator-allowlisted-choice-set
+    rule: deterministic-diversity-coordinate-to-allowlisted-choice
+    preserves:
+      - population-task-id
+      - variant-digest
+      - population-manifest-digest
+    required_axis_without_choice: refuse
+    may_not:
+      - invoke-provider
+      - schedule-work
+      - mint-credential
+      - mutate-cell
+      - publish
+      - approve
+      - promote
 
 artifact_blackboard:
   authority: exploration-only
