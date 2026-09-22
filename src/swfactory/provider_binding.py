@@ -43,6 +43,13 @@ class ProviderChoiceSet:
     verifier: tuple[str, ...] = ()
     attack_surface: tuple[str, ...] = ()
 
+    def validate(self) -> None:
+        for axis, values in self.canonical_dict().items():
+            if any(not value.strip() for value in values):
+                raise PopulationManifestError(f"provider choices for {axis!r} must be nonempty strings")
+            if len(set(values)) != len(values):
+                raise PopulationManifestError(f"provider choices for {axis!r} must be distinct")
+
     def choices_for(self, axis: str) -> tuple[str, ...]:
         normalized = axis.replace("-", "_")
         value = getattr(self, normalized, ())
@@ -207,6 +214,7 @@ def bind_population_manifest(
     """
 
     manifest.validate()
+    choices.validate()
     bound: list[BoundPopulationTask] = []
     for task in manifest.tasks:
         declared = set(task.diversity_axes)
