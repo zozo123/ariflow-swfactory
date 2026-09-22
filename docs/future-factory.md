@@ -283,6 +283,11 @@ The request therefore carries a `search_provenance_digest`.
 Changing the recursive plan that caused a candidate to exist changes the logical question and
 therefore changes candidate identity.
 
+The adaptive round document retains both the full swarm-plan receipt and the full search-provenance
+receipt beside their digests. Candidate evidence retains the provenance digest. That creates a
+replayable chain from frozen candidate evidence back to the exact search laws, blackboard identity,
+hotspots, phase and population decision that caused the candidate to exist.
+
 This makes meta-search replayable rather than hidden controller state.
 
 ## 10. Phase control is metacognition
@@ -671,16 +676,15 @@ A feature existing in Python is not evidence that the production path exercises 
 
 The shortest path from today's repository to the full end state is:
 
-1. retain recursive search provenance in candidate evidence;
-2. emit phase/swarm telemetry from real managed runs;
-3. expose search laws, phase and compute allocation in `swf`;
-4. plug real heterogeneous model/runtime providers into population lanes;
-5. add provider-backed forkable snapshots without transferring authority;
-6. build complete replay capsules;
-7. learn search policies offline from retained campaigns;
-8. shadow-run candidate controllers;
-9. graduate proven contracts from Python into Rust;
-10. keep one explicit authority boundary throughout.
+1. emit phase/swarm telemetry from real managed runs;
+2. expose search laws, phase, provenance receipts and compute allocation in `swf`;
+3. plug real heterogeneous model/runtime providers into population lanes;
+4. add provider-backed forkable snapshots without transferring authority;
+5. build complete replay capsules;
+6. learn search policies offline from retained campaigns;
+7. shadow-run candidate controllers;
+8. graduate proven contracts from Python into Rust;
+9. keep one explicit authority boundary throughout.
 
 The goal is not an autonomous system that can do anything.
 
