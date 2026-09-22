@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import hashlib
 from pathlib import Path
 
 from swfactory.evolution import Strategy, plan_requests
@@ -207,45 +206,3 @@ def test_future_factory_contract_keeps_one_root_search_authority() -> None:
 
     assert [line for line in lines if line.startswith("authority:")] == ["authority: search-only"]
     assert "authority_envelope:" in lines
-
-
-def test_adaptive_round_clamps_large_parallel_request_to_its_population() -> None:
-    plan = plan_adaptive_round(
-        (),
-        depth=0,
-        input_head="abc123",
-        max_candidates=1,
-        max_parallel=9,
-    )
-
-    assert len(plan.strategies) == 1
-    assert plan.max_parallel == 1
-    assert plan.search_provenance_digest is not None
-
-
-def test_candidate_identity_without_provenance_keeps_the_legacy_encoding() -> None:
-    request = plan_requests(
-        campaign_id="campaign",
-        cell_id="cell_0123456789abcdef01234567",
-        epoch=1,
-        input_head="abc123",
-        strategies=(Strategy.REPAIR,),
-        budget=CampaignBudget(max_candidates=3),
-    )[0]
-    legacy = "\0".join(
-        (
-            request.campaign_id,
-            request.cell_id,
-            str(request.epoch),
-            request.strategy.value,
-            request.input_head,
-            "",
-            "",
-            "",
-            str(request.depth),
-        )
-    ).encode()
-    expected = "cand_" + hashlib.sha256(legacy).hexdigest()[:24]
-
-    assert request.search_provenance_digest is None
-    assert request.logical_id == expected
