@@ -1424,6 +1424,113 @@ def research_schedule_cmd(
         typer.echo(f"depth {round_['depth']}: {' '.join(round_['strategies'])}")
 
 
+@app.command("research-adapt")
+def research_adapt_cmd(
+    reports: Annotated[
+        list[Path],
+        typer.Argument(help="stored CampaignReport JSON files in chronological order"),
+    ],
+    max_candidates: Annotated[int, typer.Option(help="maximum sibling candidates in the next round")] = 4,
+    max_parallel: Annotated[int, typer.Option(help="maximum next-round parallelism")] = 3,
+    blackboard_path: Annotated[
+        Path | None,
+        typer.Option("--blackboard", help="optional recursive-search artifact blackboard JSON"),
+    ] = None,
+    json_out: Annotated[bool, typer.Option("--json", help="machine-readable recursive search plan")] = False,
+) -> None:
+    """Compress prior campaigns into search laws and adapt the next experiment round."""
+
+    from swfactory.evolution import CampaignError
+    from swfactory.recursive_search import (
+        ArtifactBlackboard,
+        extract_search_laws,
+        load_blackboard,
+        plan_next_round,
+        signal_from_document,
+    )
+
+    try:
+        if not reports:
+            raise CampaignError("research adapt needs at least one campaign report")
+        documents = []
+        for report_path in reports:
+            raw = json.loads(report_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise CampaignError(f"{report_path}: campaign report must be a JSON object")
+            documents.append(raw)
+
+        signals = tuple(signal_from_document(document) for document in documents)
+        last = documents[-1]
+        input_head = str(last.get("input_head") or "")
+        selection = last.get("exploration_selection")
+        winner_id = selection.get("winner") if isinstance(selection, dict) else None
+        if winner_id is not None:
+            outcomes = last.get("outcomes")
+            if isinstance(outcomes, list):
+                winner = next(
+                    (
+                        row
+                        for row in outcomes
+                        if isinstance(row, dict) and str(row.get("logical_id")) == str(winner_id)
+                    ),
+                    None,
+                )
+                if winner is not None and winner.get("output_head"):
+                    input_head = str(winner["output_head"])
+        if not input_head:
+            raise CampaignError("latest campaign does not identify a next input head")
+
+        blackboard = (
+            load_blackboard(blackboard_path)
+            if blackboard_path is not None
+            else ArtifactBlackboard()
+        )
+        plan = plan_next_round(
+            signals,
+            depth=signals[-1].depth + 1,
+            input_head=input_head,
+            blackboard=blackboard,
+            max_candidates=max_candidates,
+            max_parallel=max_parallel,
+        )
+        laws = extract_search_laws(signals)
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, CampaignError) as error:
+        typer.echo(f"research adapt: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    document = {
+        "authority": "exploration-only",
+        "scheduler": "airflow",
+        "plan": plan.to_dict(),
+        "laws": [
+            {
+                "law_id": law.law_id,
+                "kind": law.kind.value,
+                "statement": law.statement,
+                "confidence": law.confidence,
+                "support": law.support,
+                "strategies": [strategy.value for strategy in law.strategies],
+                "evidence_digests": list(law.evidence_digests),
+                "digest": law.digest(),
+            }
+            for law in laws
+        ],
+        "blackboard_digest": blackboard.digest(),
+    }
+    if json_out:
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        return
+
+    typer.echo(
+        f"depth {plan.depth}: {plan.posture.value} "
+        f"strategies={' '.join(strategy.value for strategy in plan.strategies)} "
+        f"parallel={plan.max_parallel}"
+    )
+    typer.echo(plan.reason)
+    for law in laws:
+        typer.echo(f"{law.kind.value}: {law.statement} ({law.confidence:.2f}, n={law.support})")
+
+
 @candidate_evidence_app.command("retain")
 def candidate_evidence_retain(
     destination: Annotated[Path, typer.Argument(help="verified candidate evidence bundle directory")],
