@@ -193,8 +193,9 @@ class SwarmObservation:
     expected_information: float
 
     def validate(self) -> None:
+        if not math.isfinite(self.effective_independent_search) or self.effective_independent_search < 0.0:
+            raise ValueError("effective_independent_search must be finite and non-negative")
         for name, value in {
-            "effective_independent_search": self.effective_independent_search,
             "mean_correlation": self.mean_correlation,
             "novelty": self.novelty,
             "verifier_disagreement": self.verifier_disagreement,
@@ -567,7 +568,10 @@ def allocate_population(
                 ),
             ]
         )
-        reason = "liquid/coordinate: preserve motion while coupling candidate worlds through compact evidence"
+        reason = (
+            "liquid/coordinate: preserve motion while coupling candidate worlds "
+            "through compact evidence"
+        )
 
     elif mode in {ControlMode.MEASURE, ControlMode.ANNEAL}:
         deep = min(budget.max_deep_agents, max(1, len(selected_hotspots)))
@@ -606,7 +610,10 @@ def allocate_population(
                 ),
             ]
         )
-        reason = "critical/anneal: concentrate expensive reasoning on disagreements that can change the decision"
+        reason = (
+            "critical/anneal: concentrate expensive reasoning on disagreements "
+            "that can change the decision"
+        )
 
     elif mode == ControlMode.VERIFY:
         exact = min(budget.max_exact_replays, len(ready_crystals))
@@ -635,7 +642,10 @@ def allocate_population(
                     ("model", "runtime", "verifier", "attack-surface"),
                 )
             )
-        reason = "crystal/verify: stop broad search and spend compute proving or breaking exact frozen candidates"
+        reason = (
+            "crystal/verify: stop broad search and spend compute proving or breaking "
+            "exact frozen candidates"
+        )
 
     elif mode == ControlMode.PERTURB:
         total = min(budget.max_agents, max(3, int(round(budget.max_agents * 0.50))))
