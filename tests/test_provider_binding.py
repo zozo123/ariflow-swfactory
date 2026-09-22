@@ -10,6 +10,7 @@ from swfactory.population_manifest import PopulationManifestError, build_populat
 from swfactory.provider_binding import (
     ProviderChoiceSet,
     bind_population_manifest,
+    provider_choices_from_document,
 )
 from swfactory.swarm_dynamics import (
     AgentRole,
@@ -177,3 +178,14 @@ def test_programmatic_provider_choices_reject_duplicate_values() -> None:
 
     with pytest.raises(PopulationManifestError, match="must be distinct"):
         bind_population_manifest(_manifest(), choices=choices)
+
+
+
+def test_persisted_provider_choices_reject_non_string_values() -> None:
+    with pytest.raises(PopulationManifestError, match="strings only"):
+        provider_choices_from_document(
+            {
+                "model": ["fast", 7],
+                "runtime": ["linux"],
+            }
+        )
