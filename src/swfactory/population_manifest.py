@@ -433,6 +433,11 @@ def population_manifest_from_document(document: Mapping[str, Any]) -> Population
         coordinates = raw.get("diversity_coordinates", ())
         if not isinstance(coordinates, list):
             raise PopulationManifestError("population diversity coordinates must be an array")
+        if any(not isinstance(item, Mapping) for item in coordinates):
+            raise PopulationManifestError("population diversity coordinate entries must be objects")
+        independent_verification = raw.get("independent_verification")
+        if not isinstance(independent_verification, bool):
+            raise PopulationManifestError("population task independent_verification must be boolean")
         tasks.append(
             PopulationTask(
                 task_id=str(raw["task_id"]),
@@ -442,10 +447,10 @@ def population_manifest_from_document(document: Mapping[str, Any]) -> Population
                 compute_tier=ComputeTier(str(raw["compute_tier"])),
                 context=ContextPolicy(str(raw["context"])),
                 temperature=float(raw["temperature"]),
-                independent_verification=bool(raw["independent_verification"]),
+                independent_verification=independent_verification,
                 diversity_axes=tuple(str(axis) for axis in raw.get("diversity_axes", ())),
                 diversity_coordinates=tuple(
-                    (str(item["axis"]), int(item["seed"])) for item in coordinates if isinstance(item, Mapping)
+                    (str(item["axis"]), int(item["seed"])) for item in coordinates
                 ),
                 focus_hotspots=tuple(str(value) for value in raw.get("focus_hotspots", ())),
                 variant_digest=str(raw["variant_digest"]),
