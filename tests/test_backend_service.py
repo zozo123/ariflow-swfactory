@@ -1158,9 +1158,15 @@ def test_scm_publish_retry_resumes_when_the_branch_holds_the_content_but_no_pr_e
     assert status == 200, payload
     assert payload["pr_state"] == "open" and payload["url"] == "https://x/pr/1"
     assert len(scm.instances[-1].published) == 1
-    # Observed before the retry (the remote decides), and observed again after it: the receipt
-    # the journal keeps is what GitHub holds, not what the provider call claimed.
-    assert scm.instances[-1].observed == ["swf/101", "swf/101"]
+    # Observation and publication deliberately use different scoped credential leases/SCM
+    # clients. Together they observe before replay and again after publication; no one client
+    # receives both the read-only and write capability.
+    observations = [
+        branch
+        for instance in scm.instances[-2:]
+        for branch in instance.observed
+    ]
+    assert observations == ["swf/101", "swf/101"]
 
 
 # ---------------------------------------------------------------- transport bounds
