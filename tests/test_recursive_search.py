@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from swfactory.evolution import Strategy, plan_requests
@@ -159,3 +160,49 @@ def test_search_provenance_changes_candidate_question_identity() -> None:
     )[0]
 
     assert first.logical_id != second.logical_id
+
+
+def test_legacy_candidate_identity_is_unchanged_without_search_provenance() -> None:
+    request = plan_requests(
+        campaign_id="campaign",
+        cell_id="cell_0123456789abcdef01234567",
+        epoch=1,
+        input_head="abc123",
+        strategies=(Strategy.REPAIR,),
+        budget=CampaignBudget(max_candidates=3),
+    )[0]
+    raw = "\0".join(
+        (
+            "campaign",
+            "cell_0123456789abcdef01234567",
+            "1",
+            Strategy.REPAIR.value,
+            "abc123",
+            "",
+            "",
+            "",
+            "0",
+        )
+    ).encode()
+
+    assert request.logical_id == "cand_" + hashlib.sha256(raw).hexdigest()[:24]
+
+
+def test_adaptive_round_clamps_parallelism_to_its_default_population_budget() -> None:
+    plan = plan_adaptive_round(
+        (),
+        depth=0,
+        input_head="abc123",
+        max_candidates=1,
+        max_parallel=99,
+    )
+
+    assert plan.max_parallel == 1
+
+
+def test_future_factory_contract_keeps_one_root_search_authority() -> None:
+    root = Path(__file__).resolve().parents[1]
+    lines = (root / "config" / "future-factory.yaml").read_text(encoding="utf-8").splitlines()
+
+    assert [line for line in lines if line.startswith("authority:")] == ["authority: search-only"]
+    assert "authority_envelope:" in lines
