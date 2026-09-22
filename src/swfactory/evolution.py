@@ -441,11 +441,7 @@ def plan_requests(
             continue
         prefix = "sha256:"
         suffix = digest.removeprefix(prefix)
-        if (
-            not digest.startswith(prefix)
-            or len(suffix) != 64
-            or any(char not in "0123456789abcdef" for char in suffix)
-        ):
+        if not digest.startswith(prefix) or len(suffix) != 64 or any(char not in "0123456789abcdef" for char in suffix):
             raise CampaignError(f"{name} must be a canonical sha256 digest")
     share = round(budget.max_cost_usd / len(strategies), 6)
     return tuple(
