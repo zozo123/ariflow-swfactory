@@ -1468,11 +1468,7 @@ def research_adapt_cmd(
             outcomes = last.get("outcomes")
             if isinstance(outcomes, list):
                 winner = next(
-                    (
-                        row
-                        for row in outcomes
-                        if isinstance(row, dict) and str(row.get("logical_id")) == str(winner_id)
-                    ),
+                    (row for row in outcomes if isinstance(row, dict) and str(row.get("logical_id")) == str(winner_id)),
                     None,
                 )
                 if winner is not None and winner.get("output_head"):
@@ -1480,11 +1476,7 @@ def research_adapt_cmd(
         if not input_head:
             raise CampaignError("latest campaign does not identify a next input head")
 
-        blackboard = (
-            load_blackboard(blackboard_path)
-            if blackboard_path is not None
-            else ArtifactBlackboard()
-        )
+        blackboard = load_blackboard(blackboard_path) if blackboard_path is not None else ArtifactBlackboard()
         plan = plan_adaptive_round(
             signals,
             depth=signals[-1].depth + 1,
