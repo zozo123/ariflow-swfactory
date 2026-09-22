@@ -292,6 +292,21 @@ class HttpPopulationAdapter:
         return result
 
 
+def population_adapter_identity(adapter: PopulationAdapter) -> str:
+    """Bind operation identity to the concrete trusted adapter configuration."""
+
+    config = getattr(adapter, "config", None)
+    if isinstance(config, HttpPopulationAdapterConfig):
+        return config.digest()
+    return _digest(
+        {
+            "provider": adapter.provider,
+            "credential_capability": adapter.credential_capability,
+            "implementation": f"{type(adapter).__module__}.{type(adapter).__qualname__}",
+        }
+    )
+
+
 class PopulationArtifactStore:
     """Host-owned content-addressed provider output retention."""
 
