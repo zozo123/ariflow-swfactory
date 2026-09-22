@@ -1528,8 +1528,7 @@ def research_adapt_cmd(
         typer.echo(f"swarm: {lanes}")
     if plan.population_manifest is not None and plan.population_manifest_digest is not None:
         typer.echo(
-            f"population: tasks={len(plan.population_manifest.tasks)} "
-            f"manifest={plan.population_manifest_digest}"
+            f"population: tasks={len(plan.population_manifest.tasks)} manifest={plan.population_manifest_digest}"
         )
     for law in laws:
         typer.echo(f"{law.kind.value}: {law.statement} ({law.confidence:.2f}, n={law.support})")
