@@ -66,6 +66,9 @@ class PopulationTask:
     def validate(self) -> None:
         if not self.task_id.startswith("pop_"):
             raise PopulationManifestError("population task id must use the pop_ namespace")
+        expected_task_id = "pop_" + self.variant_digest.removeprefix("sha256:")[:24]
+        if self.task_id != expected_task_id:
+            raise PopulationManifestError("population task id does not match its variant digest")
         if self.lane_index < 0 or self.replica_index < 0:
             raise PopulationManifestError("population task indexes must be non-negative")
         if not math.isfinite(self.temperature) or not 0.0 <= self.temperature <= 2.0:
@@ -179,6 +182,8 @@ class BehaviorReceipt:
     def validate(self) -> None:
         if not self.task_id.startswith("pop_"):
             raise PopulationManifestError("behavior receipt task id must use the pop_ namespace")
+        if self.state not in {"answered", "failed", "cancelled", "refused"}:
+            raise PopulationManifestError(f"unknown behavior receipt state {self.state!r}")
         if self.state == "answered" and not self.behavior_signature:
             raise PopulationManifestError("answered behavior receipts need a nonempty behavior signature")
         for field, digest in (
@@ -240,6 +245,14 @@ class PopulationTelemetry:
             raise PopulationManifestError("population telemetry counts are inconsistent")
         if self.independent_verifier_answers > self.answered:
             raise PopulationManifestError("independent verifier answers exceed answered tasks")
+        if self.unique_candidates > self.answered:
+            raise PopulationManifestError("unique candidates exceed answered tasks")
+        if self.effective_independent_search > float(self.answered):
+            raise PopulationManifestError("effective independent search exceeds answered tasks")
+        if len(self.receipt_digests) != self.receipts:
+            raise PopulationManifestError("receipt digest count does not match receipt count")
+        if len(set(self.receipt_digests)) != len(self.receipt_digests):
+            raise PopulationManifestError("population telemetry contains duplicate receipt digests")
         for field, value in (
             ("effective_independent_search", self.effective_independent_search),
             ("mean_correlation", self.mean_correlation),
