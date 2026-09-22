@@ -447,8 +447,8 @@ A merge callback already in flight is not interrupted or rolled back.
 | `sandbox.smolvm` | `experimental` | `swfactory.smolvm_backend.SmolvmSandboxBackend via ToolsetSandbox` | tests/test_smolvm_backend.py (HTTP contract) and opt-in tests/test_smolvm_live.py |
 | `factory.phase-control` | `experimental` | `swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess and swf phase are read-only` | tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json |
 | `factory.cognitive-harness` | `experimental` | `swfactory.cognitive_harness and swf_domain::cognitive_harness` | tests/test_cognitive_harness.py |
-| `factory.recursive-search` | `experimental` | `swfactory.recursive_search; swfactory research-adapt` | not yet stabilized; intentionally introduced as experimental architecture code |
-| `factory.swarm-dynamics` | `experimental` | `swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round` | not yet stabilized; intentionally introduced as experimental architecture code |
+| `factory.recursive-search` | `experimental` | `swfactory.recursive_search; swfactory research-adapt` | tests/test_recursive_search.py |
+| `factory.swarm-dynamics` | `experimental` | `swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round` | tests/test_swarm_dynamics.py |
 
 <!-- capability-inventory:end -->
 
