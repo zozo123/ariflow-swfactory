@@ -153,6 +153,32 @@ class ProviderBindingManifest:
         return _digest(self.canonical_dict())
 
 
+def provider_binding_manifest_from_document(
+    document: Mapping[str, Any],
+) -> ProviderBindingManifest:
+    """Rehydrate one provider binding manifest and verify every bound task."""
+
+    raw_tasks = document.get("tasks")
+    if not isinstance(raw_tasks, list):
+        raise PopulationManifestError("provider binding tasks must be an array")
+    tasks = tuple(
+        bound_population_task_from_document(row)
+        for row in raw_tasks
+        if isinstance(row, Mapping)
+    )
+    if len(tasks) != len(raw_tasks):
+        raise PopulationManifestError("every provider binding task must be an object")
+    manifest = ProviderBindingManifest(
+        population_manifest_digest=str(document["population_manifest_digest"]),
+        tasks=tasks,
+        authority=str(document.get("authority", PROVIDER_BINDING_AUTHORITY)),
+        scheduler=str(document.get("scheduler", "airflow")),
+        schema_version=int(document.get("schema_version", PROVIDER_BINDING_SCHEMA_VERSION)),
+    )
+    manifest.validate()
+    return manifest
+
+
 def bound_population_task_from_document(document: Mapping[str, Any]) -> BoundPopulationTask:
     """Rehydrate one concrete provider binding and verify its binding digest."""
 
