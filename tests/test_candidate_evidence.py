@@ -98,6 +98,7 @@ def test_bundle_retains_exact_diff_and_named_artifacts(repo: Path, tmp_path: Pat
     result = (destination / "RESULT.md").read_text(encoding="utf-8")
     assert revision.output_head in result
     assert bundle.digest() in result
+    assert search_provenance in result
     assert bundle.search_provenance_digest == search_provenance
     manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["search_provenance_digest"] == search_provenance
