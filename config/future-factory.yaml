@@ -178,6 +178,42 @@ population_dynamics:
     crystal: stop-broad-search-and-replay-exact-candidate
     glass: fresh-context-perturbation
     jammed: stop-new-work-and-drain
+  execution_manifest:
+    authority: search-only
+    scheduler: airflow
+    materializes:
+      - role
+      - compute-tier
+      - context-policy
+      - temperature
+      - diversity-axes
+      - disagreement-hotspots
+      - deterministic-variant-digest
+    independent_verifier:
+      context:
+        - fresh
+        - frozen
+      forbidden:
+        - inherited-context
+        - credential
+        - promotion-authority
+    behavior_receipt:
+      measures:
+        - behavior-signature
+        - candidate-digest
+        - evidence-digest
+        - provider
+        - model
+        - runtime
+        - cost
+        - duration
+    reducer:
+      outputs:
+        - effective-independent-search
+        - mean-correlation
+        - candidate-disagreement
+        - unique-candidates
+        - independent-verifier-answers
 
 artifact_blackboard:
   authority: exploration-only
