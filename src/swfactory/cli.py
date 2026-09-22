@@ -1621,6 +1621,84 @@ def population_bind(
         )
 
 
+@app.command("population-summarize")
+def population_summarize(
+    plan_path: Annotated[
+        Path,
+        typer.Argument(help="research-adapt JSON or a direct population-manifest JSON"),
+    ],
+    receipts_path: Annotated[
+        Path,
+        typer.Argument(help="JSON array of retained provider BehaviorReceipt documents"),
+    ],
+    require_complete: Annotated[
+        bool,
+        typer.Option("--require-complete", help="refuse unless every population task has a receipt"),
+    ] = False,
+    json_out: Annotated[bool, typer.Option("--json", help="emit population telemetry JSON")] = False,
+) -> None:
+    """Reduce provider behavior receipts into replayable population telemetry."""
+
+    from swfactory.population_manifest import (
+        PopulationManifestError,
+        behavior_receipt_from_document,
+        population_manifest_from_document,
+        summarize_population,
+    )
+
+    try:
+        raw_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        raw_receipts = json.loads(receipts_path.read_text(encoding="utf-8"))
+        if not isinstance(raw_plan, dict):
+            raise PopulationManifestError("population plan must be a JSON object")
+        if not isinstance(raw_receipts, list):
+            raise PopulationManifestError("population receipts must be a JSON array")
+
+        manifest_document = raw_plan
+        if isinstance(raw_plan.get("plan"), dict):
+            manifest_document = raw_plan["plan"].get("population_manifest")
+        if not isinstance(manifest_document, dict):
+            raise PopulationManifestError("input does not contain a population_manifest object")
+
+        manifest = population_manifest_from_document(manifest_document)
+        receipts = tuple(
+            behavior_receipt_from_document(row)
+            for row in raw_receipts
+            if isinstance(row, dict)
+        )
+        if len(receipts) != len(raw_receipts):
+            raise PopulationManifestError("every population receipt must be a JSON object")
+        telemetry = summarize_population(
+            manifest,
+            receipts,
+            require_complete=require_complete,
+        )
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        PopulationManifestError,
+    ) as error:
+        typer.echo(f"population summarize: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    document = telemetry.canonical_dict()
+    document["telemetry_digest"] = telemetry.digest()
+    if json_out:
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        return
+
+    typer.echo(
+        f"population {telemetry.manifest_digest}: answered={telemetry.answered}/"
+        f"{telemetry.total_tasks} effective={telemetry.effective_independent_search:.3f} "
+        f"correlation={telemetry.mean_correlation:.3f} "
+        f"disagreement={telemetry.candidate_disagreement:.3f}"
+    )
+    typer.echo(f"telemetry={telemetry.digest()}")
+
+
 @candidate_evidence_app.command("retain")
 def candidate_evidence_retain(
     destination: Annotated[Path, typer.Argument(help="verified candidate evidence bundle directory")],
