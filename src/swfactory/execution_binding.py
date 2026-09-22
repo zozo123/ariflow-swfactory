@@ -7,13 +7,18 @@ creates a second scheduling authority.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import os
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
+from swfactory.backend_population import BackendPopulationRunner, PopulationTaskInput
 from swfactory.population_execution import (
     PopulationCancellation,
+    PopulationExecutionPolicy,
     PopulationExecutionReport,
     PopulationExecutor,
+    write_population_execution_report,
 )
 from swfactory.population_manifest import PopulationManifest
 from swfactory.provider_binding import ProviderBindingManifest
@@ -107,3 +112,55 @@ def execute_bound_population(
         binding=binding,
         cancellation=cancellation,
     )
+
+
+
+def execute_managed_population(
+    *,
+    manifest: PopulationManifest,
+    binding: ProviderBindingManifest,
+    inputs: Mapping[str, PopulationTaskInput],
+    cell_id: str,
+    epoch: int,
+    policy_digest: str,
+    env: Mapping[str, str] | None = None,
+    max_parallel: int = 8,
+    report_path: Path | None = None,
+    cancellation: PopulationCancellation | None = None,
+) -> PopulationExecutionReport:
+    """Run a provider-bound population through the trusted backend from one Airflow stage.
+
+    The Airflow worker receives only the factory backend URL/token. Provider credentials stay on the
+    backend and are projected there per population task.
+    """
+
+    environment = os.environ if env is None else env
+    backend_url = environment.get("SWF_BACKEND_URL", "")
+    backend_token = environment.get("SWF_BACKEND_TOKEN", "")
+    runner = BackendPopulationRunner(
+        backend_url=backend_url,
+        backend_token=backend_token,
+        cell_id=cell_id,
+        epoch=epoch,
+        policy_digest=policy_digest,
+        population_manifest_digest=manifest.digest(),
+        provider_binding_digest=binding.digest(),
+        inputs=dict(inputs),
+    )
+    executor = PopulationExecutor(
+        runner,
+        PopulationExecutionPolicy(
+            max_parallel=max_parallel,
+            require_complete=True,
+            require_distinct_independent_verifiers=True,
+        ),
+    )
+    report = execute_bound_population(
+        executor,
+        manifest=manifest,
+        binding=binding,
+        cancellation=cancellation,
+    )
+    if report_path is not None:
+        write_population_execution_report(report_path, report)
+    return report
