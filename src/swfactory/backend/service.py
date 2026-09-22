@@ -23,7 +23,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,11 @@ from swfactory.durable_admission import (
 from swfactory.idempotency import MutationOutcome, OperationRef, RetryBudget
 from swfactory.inspection import inspect_run, list_runs
 from swfactory.lifecycle_evidence import TraceContext
+from swfactory.population_adapter import (
+    PopulationAdapter,
+    PopulationArtifactStore,
+    http_population_adapters_from_document,
+)
 from swfactory.product_surface import build_preview, capability_document
 from swfactory.restore_contract import GATE_PENDING as RESTORE_PENDING
 from swfactory.restore_contract import RestoreGate
@@ -151,6 +156,7 @@ class Factory:
         owner: str = "",
         root: Path = Path("."),
         state_root: Path = Path(".factory"),
+        population_adapters: Mapping[str, PopulationAdapter] | None = None,
     ):
         if len(token) < 32 or any(c.isspace() for c in token):
             raise ValueError("SWF_BACKEND_TOKEN must contain at least 32 non-whitespace characters")
@@ -170,13 +176,53 @@ class Factory:
         self.cell_store = CellStore(self.state_root / "cells.sqlite3")
         self.control = ControlKernel(self.state_root / "control", restore_gate=self.restore_gate)
         self.evidence = TrustedEvidence(self.state_root / "evidence")
+        self.population_artifacts = PopulationArtifactStore(self.state_root / "population-artifacts")
+        if population_adapters is None:
+            raw_population_adapters = os.getenv("SWF_POPULATION_ADAPTERS_JSON", "").strip()
+            if raw_population_adapters:
+                document = json.loads(raw_population_adapters)
+                if not isinstance(document, dict):
+                    raise ValueError("SWF_POPULATION_ADAPTERS_JSON must be a JSON object")
+                population_adapters = http_population_adapters_from_document(document)
+            else:
+                population_adapters = {}
+        self.population_adapters = dict(population_adapters)
+
+        credential_providers: dict[str, Callable[[LeaseBinding], str]] = {
+            "github.publish": self._github_publication_credential,
+            "github.read": self._github_publication_credential,
+        }
+        capability_envs: dict[str, str] = {}
+        for provider, adapter in self.population_adapters.items():
+            if provider != adapter.provider:
+                raise ValueError(
+                    f"population adapter registry key {provider!r} does not match adapter provider {adapter.provider!r}"
+                )
+            capability = adapter.credential_capability
+            env_name = adapter.credential_env
+            if capability is None:
+                if env_name is not None:
+                    raise ValueError(f"population adapter {provider!r} has credential env without capability")
+                continue
+            if capability in credential_providers:
+                raise ValueError(f"population adapter capability {capability!r} conflicts with a core capability")
+            if env_name is None:
+                raise ValueError(f"population adapter {provider!r} has credential capability without env")
+            previous = capability_envs.setdefault(capability, env_name)
+            if previous != env_name:
+                raise ValueError(
+                    f"population capability {capability!r} maps to multiple credential env names"
+                )
+
+        for capability, env_name in capability_envs.items():
+            credential_providers[capability] = (
+                lambda _binding, credential_env=env_name: self._population_credential(credential_env)
+            )
+
         self.lease_process_nonce = secrets.token_urlsafe(32)
         self.leases = CredentialLeaseBroker(
             self.state_root / "credential-leases.sqlite3",
-            providers={
-                "github.publish": self._github_publication_credential,
-                "github.read": self._github_publication_credential,
-            },
+            providers=credential_providers,
             epoch_reader=lambda cell_id: int(self.cell_store.get(cell_id)["epoch"]),
             on_denial=self._record_lease_denial,
         )
@@ -210,6 +256,15 @@ class Factory:
         if not token:
             raise CredentialLeaseError("backend has no GitHub publication credential")
         return token
+
+    @staticmethod
+    def _population_credential(env_name: str) -> str:
+        value = os.getenv(env_name) or ""
+        if not value:
+            raise CredentialLeaseError(
+                f"backend population credential env {env_name!r} is not configured"
+            )
+        return value
 
     def _record_lease_denial(self, event: LeaseDenial) -> None:
         if event.cell_id is None or event.epoch is None:

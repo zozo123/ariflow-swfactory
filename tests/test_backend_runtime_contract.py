@@ -7,7 +7,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from swfactory.backend.server import LARGE_SCM_ROUTES, MAX_BODY, MAX_SCM_BODY, make_server
+from swfactory.backend.server import (
+    LARGE_SCM_ROUTES,
+    MAX_BODY,
+    MAX_POPULATION_BODY,
+    MAX_SCM_BODY,
+    POPULATION_ROUTES,
+    make_server,
+)
 
 TOKEN = "t" * 32
 
@@ -95,8 +102,17 @@ def test_default_request_bound_is_64k_and_only_scm_patch_routes_get_16m() -> Non
     assert {"/v1/scm/publish", "/v1/scm/open-issue"} == LARGE_SCM_ROUTES
 
 
+def test_population_route_has_a_bounded_non_scm_body_limit() -> None:
+    assert MAX_POPULATION_BODY == 512 * 1024
+    assert POPULATION_ROUTES == {"/v1/population/execute"}
+
+
 def test_compose_wires_backend_callback_contract_into_airflow_workers() -> None:
     compose = Path("deploy/docker/compose.yml").read_text()
     airflow = compose.split("  airflow:", 1)[1].split("  webhook:", 1)[0]
+    backend = compose.split("  backend:", 1)[1].split("  sandbox-image:", 1)[0]
     assert "SWF_BACKEND_URL: http://backend:8082" in airflow
+    assert "SWF_BACKEND_HTTP_HOSTS: backend" in airflow
     assert "SWF_BACKEND_TOKEN: ${SWF_BACKEND_TOKEN:-}" in airflow
+    assert "SWF_POPULATION_ADAPTERS_JSON" not in airflow
+    assert "SWF_POPULATION_ADAPTERS_JSON: ${SWF_POPULATION_ADAPTERS_JSON:-}" in backend

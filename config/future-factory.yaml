@@ -234,6 +234,70 @@ population_dynamics:
       - publish
       - approve
       - promote
+  managed_execution:
+    authority: search-only
+    lifecycle_scheduler: airflow
+    location: inside-one-already-scheduled-task
+    worker_authority:
+      carries:
+        - factory-backend-url
+        - factory-backend-token
+      forbidden:
+        - provider-credential
+        - credential-lease-handle
+        - publication-credential
+    backend_provider_effect:
+      resource: model-call
+      owner: python-backend
+      fence:
+        - cell-epoch
+        - airflow-binding
+        - policy-digest
+        - operation-key
+        - invocation-digest
+        - adapter-config-digest
+      ambiguous-outcome: in-doubt-no-blind-replay
+      committed-redelivery: replay-sanitized-receipt
+    credential_projection:
+      location: trusted-backend-only
+      configuration: credential-env-name-not-value
+      capability: explicit-dotted-deny-by-default
+      lease:
+        - cell-bound
+        - epoch-bound
+        - task-bound
+        - attempt-bound
+        - process-bound
+        - short-lived
+        - revoked-after-call
+    output_retention:
+      owner: trusted-backend
+      artifact-digest-binds:
+        - invocation-digest
+        - output-sha256
+    validates:
+      - population-manifest-digest
+      - provider-binding-digest
+      - task-order-and-identity
+      - variant-identity
+      - provider-model-runtime-receipt-binding
+      - independent-verifier-distinctness
+      - telemetry-receipt-digest-set
+    emits:
+      - behavior-receipts
+      - population-telemetry
+      - canonical-execution-report
+      - report-digest
+    ordinary-provider-failure: failed-search-receipt
+    trust-boundary-or-backend-failure: abort-managed-stage
+    may_not:
+      - create-airflow-lifecycle
+      - expose-provider-credential-to-worker
+      - mutate-cell-authority
+      - publish
+      - approve
+      - merge
+      - promote
 
 artifact_blackboard:
   authority: exploration-only

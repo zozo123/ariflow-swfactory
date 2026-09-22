@@ -1443,11 +1443,19 @@ def research_adapt_cmd(
             help="optional retained population telemetry JSON from the previous swarm",
         ),
     ] = None,
+    population_execution_report_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--population-execution-report",
+            help="optional retained managed population execution report; uses its verified telemetry",
+        ),
+    ] = None,
     json_out: Annotated[bool, typer.Option("--json", help="machine-readable recursive search plan")] = False,
 ) -> None:
     """Compress prior campaigns into search laws and adapt the next experiment round."""
 
     from swfactory.evolution import CampaignError
+    from swfactory.population_execution import load_population_execution_report
     from swfactory.population_manifest import population_telemetry_from_document
     from swfactory.recursive_search import (
         ArtifactBlackboard,
@@ -1485,8 +1493,16 @@ def research_adapt_cmd(
             raise CampaignError("latest campaign does not identify a next input head")
 
         blackboard = load_blackboard(blackboard_path) if blackboard_path is not None else ArtifactBlackboard()
+        if population_telemetry_path is not None and population_execution_report_path is not None:
+            raise CampaignError(
+                "--population-telemetry and --population-execution-report are mutually exclusive"
+            )
         population_telemetry = None
-        if population_telemetry_path is not None:
+        if population_execution_report_path is not None:
+            population_telemetry = load_population_execution_report(
+                population_execution_report_path
+            ).telemetry
+        elif population_telemetry_path is not None:
             raw_telemetry = json.loads(population_telemetry_path.read_text(encoding="utf-8"))
             if not isinstance(raw_telemetry, dict):
                 raise CampaignError("population telemetry must be a JSON object")

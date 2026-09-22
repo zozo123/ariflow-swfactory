@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -9,7 +10,8 @@ from typer.testing import CliRunner
 from swfactory.cli import app
 from swfactory.evolution import Strategy, plan_requests
 from swfactory.generations import CampaignBudget
-from swfactory.population_manifest import PopulationTelemetry
+from swfactory.population_execution import PopulationExecutionReport, write_population_execution_report
+from swfactory.population_manifest import BehaviorReceipt, PopulationTelemetry
 from swfactory.recursive_search import (
     ArtifactBlackboard,
     ArtifactKind,
@@ -324,3 +326,116 @@ def test_research_adapt_cli_consumes_retained_population_telemetry(tmp_path: Pat
     document = json.loads(result.stdout)
     assert document["plan"]["population_telemetry_digest"] == telemetry.digest()
     assert document["plan"]["population_telemetry"]["manifest_digest"] == telemetry.manifest_digest
+
+
+
+def test_research_adapt_cli_consumes_managed_population_execution_report(tmp_path: Path) -> None:
+    report_path = tmp_path / "campaign.json"
+    execution_path = tmp_path / "population-execution.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "campaign_id": "campaign-managed",
+                "input_head": "abc123",
+                "experiment_round": {"depth": 0},
+                "exploration_selection": {"winner": None},
+                "outcomes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    telemetry = _population_telemetry()
+    receipts = tuple(
+        BehaviorReceipt(
+            task_id=f"pop_{index:024x}",
+            state="answered",
+            behavior_signature=(f"trajectory-{index}",),
+        )
+        for index in range(4)
+    )
+    telemetry = replace(
+        telemetry,
+        receipt_digests=tuple(sorted(receipt.digest() for receipt in receipts)),
+    )
+    execution = PopulationExecutionReport(
+        population_manifest_digest=telemetry.manifest_digest,
+        provider_binding_digest="sha256:" + "9" * 64,
+        receipts=receipts,
+        telemetry=telemetry,
+        cancelled=False,
+        started_tasks=4,
+    )
+    write_population_execution_report(execution_path, execution)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "research-adapt",
+            str(report_path),
+            "--population-execution-report",
+            str(execution_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert document["plan"]["population_telemetry_digest"] == telemetry.digest()
+    assert document["plan"]["population_telemetry"]["manifest_digest"] == telemetry.manifest_digest
+
+
+def test_research_adapt_refuses_two_population_feedback_sources(tmp_path: Path) -> None:
+    report_path = tmp_path / "campaign.json"
+    telemetry_path = tmp_path / "telemetry.json"
+    execution_path = tmp_path / "execution.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "campaign_id": "campaign-mutual-exclusion",
+                "input_head": "abc123",
+                "experiment_round": {"depth": 0},
+                "exploration_selection": {"winner": None},
+                "outcomes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    telemetry = _population_telemetry()
+    telemetry_path.write_text(json.dumps(telemetry.canonical_dict()), encoding="utf-8")
+    receipts = tuple(
+        BehaviorReceipt(
+            task_id=f"pop_{index:024x}",
+            state="answered",
+            behavior_signature=(f"trajectory-{index}",),
+        )
+        for index in range(4)
+    )
+    telemetry = replace(
+        telemetry,
+        receipt_digests=tuple(sorted(receipt.digest() for receipt in receipts)),
+    )
+    execution = PopulationExecutionReport(
+        population_manifest_digest=telemetry.manifest_digest,
+        provider_binding_digest="sha256:" + "8" * 64,
+        receipts=receipts,
+        telemetry=telemetry,
+        cancelled=False,
+        started_tasks=4,
+    )
+    write_population_execution_report(execution_path, execution)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "research-adapt",
+            str(report_path),
+            "--population-telemetry",
+            str(telemetry_path),
+            "--population-execution-report",
+            str(execution_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "mutually exclusive" in result.output

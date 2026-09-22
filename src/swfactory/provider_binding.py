@@ -153,6 +153,74 @@ class ProviderBindingManifest:
         return _digest(self.canonical_dict())
 
 
+def provider_binding_manifest_from_document(
+    document: Mapping[str, Any],
+) -> ProviderBindingManifest:
+    """Rehydrate one provider binding manifest and verify every bound task."""
+
+    raw_tasks = document.get("tasks")
+    if not isinstance(raw_tasks, list):
+        raise PopulationManifestError("provider binding tasks must be an array")
+    tasks = tuple(
+        bound_population_task_from_document(row)
+        for row in raw_tasks
+        if isinstance(row, Mapping)
+    )
+    if len(tasks) != len(raw_tasks):
+        raise PopulationManifestError("every provider binding task must be an object")
+    manifest = ProviderBindingManifest(
+        population_manifest_digest=str(document["population_manifest_digest"]),
+        tasks=tasks,
+        authority=str(document.get("authority", PROVIDER_BINDING_AUTHORITY)),
+        scheduler=str(document.get("scheduler", "airflow")),
+        schema_version=int(document.get("schema_version", PROVIDER_BINDING_SCHEMA_VERSION)),
+    )
+    manifest.validate()
+    return manifest
+
+
+def bound_population_task_from_document(document: Mapping[str, Any]) -> BoundPopulationTask:
+    """Rehydrate one concrete provider binding and verify its binding digest."""
+
+    task = BoundPopulationTask(
+        task_id=str(document["task_id"]),
+        variant_digest=str(document["variant_digest"]),
+        provider=(str(document["provider"]) if document.get("provider") is not None else None),
+        model=(str(document["model"]) if document.get("model") is not None else None),
+        runtime=(str(document["runtime"]) if document.get("runtime") is not None else None),
+        prompt_variant=(
+            str(document["prompt_variant"])
+            if document.get("prompt_variant") is not None
+            else None
+        ),
+        context_variant=(
+            str(document["context_variant"])
+            if document.get("context_variant") is not None
+            else None
+        ),
+        mutation_variant=(
+            str(document["mutation_variant"])
+            if document.get("mutation_variant") is not None
+            else None
+        ),
+        verifier_variant=(
+            str(document["verifier_variant"])
+            if document.get("verifier_variant") is not None
+            else None
+        ),
+        attack_surface_variant=(
+            str(document["attack_surface_variant"])
+            if document.get("attack_surface_variant") is not None
+            else None
+        ),
+        binding_digest=str(document["binding_digest"]),
+        authority=str(document.get("authority", PROVIDER_BINDING_AUTHORITY)),
+        schema_version=int(document.get("schema_version", PROVIDER_BINDING_SCHEMA_VERSION)),
+    )
+    task.validate()
+    return task
+
+
 def provider_choices_from_document(document: Mapping[str, Any]) -> ProviderChoiceSet:
     """Load an allowlist document without accepting unknown axes or non-string choices."""
 

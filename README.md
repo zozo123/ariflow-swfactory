@@ -451,6 +451,8 @@ A merge callback already in flight is not interrupted or rolled back.
 | `factory.swarm-dynamics` | `experimental` | `swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round` | tests/test_swarm_dynamics.py |
 | `factory.population-manifest` | `experimental` | `swfactory.population_manifest via swfactory.recursive_search.plan_adaptive_round; swfactory population-summarize` | tests/test_population_manifest.py |
 | `factory.provider-binding` | `experimental` | `swfactory.provider_binding; swfactory population-bind` | tests/test_provider_binding.py |
+| `factory.population-execution` | `experimental` | `swfactory.execution_binding.execute_managed_population -> backend population route` | tests/test_population_execution.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
+| `factory.population-provider-adapter` | `experimental` | `swfactory.population_adapter.HttpPopulationAdapter via backend population service` | tests/test_population_adapter.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
 
 <!-- capability-inventory:end -->
 

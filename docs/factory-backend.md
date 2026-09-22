@@ -62,6 +62,33 @@ this is a single trusted-operator deployment, not a multi-tenant authorization s
 Optional integrations use the backend's `gh` and `islo` installations and credentials. Missing
 integrations remain visible in `swf doctor`; an empty configured fleet is a valid result.
 
+### Managed population provider gateways
+
+Experimental managed population execution is configured **only on the backend**. The adapter map
+contains endpoints and credential environment-variable **names**, never credential values:
+
+```sh
+export MODEL_A_TOKEN='...from your secret manager...'
+export SWF_POPULATION_ADAPTERS_JSON='{
+  "model-a": {
+    "endpoint": "https://model-gateway.example/v1/search",
+    "credential_capability": "model.invoke",
+    "credential_env": "MODEL_A_TOKEN",
+    "timeout_s": 120
+  }
+}'
+```
+
+The named secret (here `MODEL_A_TOKEN`) must be injected into the backend process by the deployment
+secret mechanism. Do **not** inject it into the Airflow worker. The worker receives only
+`SWF_BACKEND_URL` and `SWF_BACKEND_TOKEN`; the backend validates the current Cell epoch, policy
+and Airflow binding, journals the paid model call, then mints/redeems/revokes the explicit
+`model.invoke` lease inside the backend process.
+
+Adapter endpoints must use HTTPS, except loopback HTTP. Redirects are not followed. The generic
+HTTP adapter is experimental infrastructure, not a support claim for any provider: each concrete
+gateway still needs live qualification for its authentication, timeout, quota and receipt semantics.
+
 ## Backend-host variables are not worker variables
 
 `SWF_BACKEND_URL` and `SWF_BACKEND_TOKEN` are read by three different processes. Setting them once,
@@ -139,6 +166,7 @@ filesystem paths or command strings. No route accepts a caller-provided executab
 | `POST /v1/doctor` | `{}` | readiness checks from the backend host |
 | `POST /v1/lines` | `{}` | installed line names, routes, gates and targets |
 | `POST /v1/work-orders` | `line`, `issues`, optional `targets`; `airflow_run_id` from actor `airflow-schedule` binds a run Airflow's scheduler already created instead of dispatching one | run identity, validated blueprint, mapped job count and, once bound, the complete Cell `bindings` |
+| `POST /v1/population/execute` | internal managed-worker request: Cell/epoch/policy/operation identity, exact bound population task, invocation/manifest/binding digests and bounded instruction/context | sanitized BehaviorReceipt/artifact/evidence identities; raw provider credential and raw provider output are not returned |
 | `POST /v1/workers` | `{}` | configured owner's active worker references |
 | `POST /v1/workers/remove` | `name` | argv executed after fresh server-side ownership checks |
 | `POST /v1/deliveries/prs` / `issues` | optional `label`, `limit` | normalized repository records |
@@ -157,8 +185,9 @@ approval mutations validate in Python, including a fresh task-readiness check fo
 Rust keeps its additional evidence review and repeated readiness observations. `--force` cannot
 bypass the backend's readiness check.
 
-Requests are bounded to 64 KiB and upstream responses to 16 MiB, with deadlines and redirects
-disabled. Airflow authentication can refresh once after an explicit 401. A timeout or server error
+Ordinary requests are bounded to 64 KiB. Managed population invocation requests are bounded to
+512 KiB, and the two SCM patch/body routes to 16 MiB. Upstream responses remain bounded, with
+deadlines and redirects disabled. Airflow authentication can refresh once after an explicit 401. A timeout or server error
 after a write remains an **unknown outcome**: the backend does not replay it. Inspect the run/gate
 before retrying. Interactive submission has no durable deduplication key; webhook submissions use
 the separate [durable inbox](webhooks.md).
