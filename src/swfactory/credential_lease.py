@@ -92,9 +92,7 @@ class LeaseBinding:
         }
         unknown = sorted(set(raw) - allowed)
         if unknown:
-            raise CredentialLeaseError(
-                "untrusted lease binding carries unsupported fields: " + ", ".join(unknown)
-            )
+            raise CredentialLeaseError("untrusted lease binding carries unsupported fields: " + ", ".join(unknown))
         try:
             binding = cls(
                 factory_run_id=str(raw["factory_run_id"]),
@@ -306,8 +304,7 @@ class CredentialLeaseBroker:
             existing = row["process_hash"]
             if existing is None:
                 self.db.execute(
-                    "UPDATE credential_leases SET process_hash=? "
-                    "WHERE lease_id=? AND process_hash IS NULL",
+                    "UPDATE credential_leases SET process_hash=? WHERE lease_id=? AND process_hash IS NULL",
                     (process_hash, handle.lease_id),
                 )
                 row = self.db.execute(
