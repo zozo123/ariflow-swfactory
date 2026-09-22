@@ -13,9 +13,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
 
 from swfactory.swarm_dynamics import (
     AgentRole,
