@@ -11,9 +11,9 @@ import re
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Callable
 from typing import Any
 
 from swfactory.store_schema import CELL_ROW_SCHEMA_VERSION, ensure_named_schema, guard_before_ddl
