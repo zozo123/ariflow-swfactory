@@ -110,23 +110,23 @@ class BackendPopulationRunner:
         }
         response = self._post(body)
         if response.get("invocation_digest") != invocation.digest():
-            raise PopulationExecutionAbort( "backend population receipt is bound to another invocation")
+            raise PopulationExecutionAbort("backend population receipt is bound to another invocation")
         if response.get("population_manifest_digest") != self.population_manifest_digest:
-            raise PopulationExecutionAbort( "backend population receipt is bound to another manifest")
+            raise PopulationExecutionAbort("backend population receipt is bound to another manifest")
         if response.get("provider_binding_digest") != self.provider_binding_digest:
-            raise PopulationExecutionAbort( "backend population receipt is bound to another provider binding")
+            raise PopulationExecutionAbort("backend population receipt is bound to another provider binding")
         raw_receipt = response.get("receipt")
         if not isinstance(raw_receipt, dict):
-            raise PopulationExecutionAbort( "backend population response contains no behavior receipt")
+            raise PopulationExecutionAbort("backend population response contains no behavior receipt")
         try:
             receipt = behavior_receipt_from_document(raw_receipt)
         except (KeyError, TypeError, ValueError, PopulationManifestError) as error:
-            raise PopulationExecutionAbort( "backend returned an invalid population behavior receipt") from error
+            raise PopulationExecutionAbort("backend returned an invalid population behavior receipt") from error
         digest = response.get("receipt_digest")
         if digest != receipt.digest():
-            raise PopulationExecutionAbort( "backend population receipt digest mismatch")
+            raise PopulationExecutionAbort("backend population receipt digest mismatch")
         if receipt.task_id != task.task_id:
-            raise PopulationExecutionAbort( "backend returned a receipt for another population task")
+            raise PopulationExecutionAbort("backend returned a receipt for another population task")
         return receipt
 
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -154,13 +154,13 @@ class BackendPopulationRunner:
             status = int(response.code)
             raw = response.read(MAX_BACKEND_POPULATION_RESPONSE + 1)
         if len(raw) > MAX_BACKEND_POPULATION_RESPONSE:
-            raise PopulationExecutionAbort( "factory backend population response exceeds limit")
+            raise PopulationExecutionAbort("factory backend population response exceeds limit")
         try:
             value = json.loads(raw) if raw else {}
         except ValueError as error:
-            raise PopulationExecutionAbort( "factory backend population route returned invalid JSON") from error
+            raise PopulationExecutionAbort("factory backend population route returned invalid JSON") from error
         if not isinstance(value, dict):
-            raise PopulationExecutionAbort( "factory backend population route returned a non-object")
+            raise PopulationExecutionAbort("factory backend population route returned a non-object")
         if status >= 300:
             detail = str(value.get("detail") or f"HTTP {status}")[:500]
             raise PopulationExecutionAbort(
