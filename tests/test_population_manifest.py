@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-import pytest
+import json
 
+import pytest
+from typer.testing import CliRunner
+
+from swfactory.cli import app
 from swfactory.population_manifest import (
     BehaviorReceipt,
     PopulationManifestError,
@@ -180,3 +184,86 @@ def test_diversity_coordinates_change_across_replicas_but_replay_exactly() -> No
     assert [task.diversity_coordinates for task in explorers] == [
         task.diversity_coordinates for task in replay_explorers
     ]
+
+
+
+def test_population_summarize_cli_emits_reusable_telemetry(tmp_path) -> None:
+    manifest = build_population_manifest(
+        _plan(),
+        search_provenance_digest="sha256:" + "9" * 64,
+    )
+    plan_path = tmp_path / "plan.json"
+    receipts_path = tmp_path / "receipts.json"
+    plan_path.write_text(
+        json.dumps({"plan": {"population_manifest": manifest.canonical_dict()}}),
+        encoding="utf-8",
+    )
+    receipts = [
+        {
+            "task_id": task.task_id,
+            "state": "answered",
+            "behavior_signature": [task.task_id, task.role.value],
+            "candidate_digest": "sha256:" + str(index + 1) * 64,
+            "cost_usd": 0.1,
+            "duration_s": 1.0,
+        }
+        for index, task in enumerate(manifest.tasks)
+    ]
+    receipts_path.write_text(json.dumps(receipts), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "population-summarize",
+            str(plan_path),
+            str(receipts_path),
+            "--require-complete",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert document["manifest_digest"] == manifest.digest()
+    assert document["answered"] == len(manifest.tasks)
+    assert document["telemetry_digest"].startswith("sha256:")
+    assert document["authority"] == "search-only"
+
+
+def test_population_summarize_cli_refuses_incomplete_receipts(tmp_path) -> None:
+    manifest = build_population_manifest(
+        _plan(),
+        search_provenance_digest="sha256:" + "8" * 64,
+    )
+    plan_path = tmp_path / "plan.json"
+    receipts_path = tmp_path / "receipts.json"
+    plan_path.write_text(
+        json.dumps({"plan": {"population_manifest": manifest.canonical_dict()}}),
+        encoding="utf-8",
+    )
+    receipts_path.write_text(
+        json.dumps(
+            [
+                {
+                    "task_id": manifest.tasks[0].task_id,
+                    "state": "answered",
+                    "behavior_signature": ["partial"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "population-summarize",
+            str(plan_path),
+            str(receipts_path),
+            "--require-complete",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "population receipts incomplete" in result.output
