@@ -303,14 +303,37 @@
       "test": "tests/test_swarm_dynamics.py",
       "evidence": [
         "tests/test_swarm_dynamics.py",
+        "tests/test_population_manifest.py",
         "config/future-factory.yaml",
         "docs/future-factory.md"
       ],
-      "follow_up": "Connect real heterogeneous providers and managed-run telemetry, qualify compute accounting and verifier independence, then graduate proven contracts into Rust.",
+      "follow_up": "Connect real heterogeneous providers to the population manifest, emit managed-run behavior receipts, qualify compute accounting and verifier independence, then graduate proven contracts into Rust.",
       "public_surface": [
         "swfactory.swarm_dynamics",
         "effective independent search",
         "selective deep compute"
+      ]
+    },
+    {
+      "id": "factory.population-manifest",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "A swarm plan may be materialized into deterministic provider-neutral trajectory tasks and reduced into behavior telemetry; the manifest remains search-only, names Airflow as the scheduler, carries no credentials or mutation authority, and independent verifiers cannot inherit another trajectory's context.",
+      "owner": "workgraph+evidence",
+      "runtime_entry": "swfactory.population_manifest via swfactory.recursive_search.plan_adaptive_round",
+      "environment": "pure provider-neutral task materialization and receipt reduction; provider execution is not implied",
+      "test": "tests/test_population_manifest.py",
+      "evidence": [
+        "tests/test_population_manifest.py",
+        "src/swfactory/population_manifest.py",
+        "tests/test_recursive_search.py",
+        "docs/future-factory.md"
+      ],
+      "follow_up": "Connect provider adapters to PopulationManifest tasks and feed retained BehaviorReceipt telemetry back into managed recursive rounds without adding a second scheduler or authority path.",
+      "public_surface": [
+        "population manifest",
+        "behavior receipt",
+        "population telemetry"
       ]
     }
   ]
