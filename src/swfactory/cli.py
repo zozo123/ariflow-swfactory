@@ -1645,17 +1645,33 @@ def population_budget(
         if not isinstance(raw_plan, dict):
             raise PopulationManifestError("population plan must be a JSON object")
         manifest_document = raw_plan
+        prior_max_parallel = 1
         if isinstance(raw_plan.get("plan"), dict):
-            manifest_document = raw_plan["plan"].get("population_manifest")
+            plan_document = raw_plan["plan"]
+            manifest_document = plan_document.get("population_manifest")
+            raw_parallel = plan_document.get("max_parallel")
+            if raw_parallel is not None:
+                if type(raw_parallel) is not int or raw_parallel < 1:
+                    raise PopulationManifestError(
+                        "prior plan max_parallel must be a positive integer"
+                    )
+                prior_max_parallel = raw_parallel
         if not isinstance(manifest_document, dict):
             raise PopulationManifestError(
                 "input does not contain a population_manifest object"
             )
         manifest = population_manifest_from_document(manifest_document)
+        if manifest.tasks:
+            prior_max_parallel = min(prior_max_parallel, len(manifest.tasks))
+        else:
+            prior_max_parallel = 1
         report = load_population_execution_report(execution_report_path)
         decision = evaluate_information_budget(
             report,
-            base_budget=budget_from_manifest(manifest),
+            base_budget=budget_from_manifest(
+                manifest,
+                max_parallel=prior_max_parallel,
+            ),
             manifest=manifest,
         )
         if output_path is not None:
