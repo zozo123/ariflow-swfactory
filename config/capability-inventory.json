@@ -335,6 +335,28 @@
         "behavior receipt",
         "population telemetry"
       ]
+    },
+    {
+      "id": "factory.provider-binding",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Provider-neutral population tasks may bind deterministic diversity coordinates to allowlisted provider/model/runtime/prompt choices without changing task identity, scheduler ownership, or authority; declared required axes must resolve or the binding is refused.",
+      "owner": "workgraph+evidence",
+      "runtime_entry": "swfactory.provider_binding over swfactory.population_manifest",
+      "environment": "pure deterministic choice binding; no provider invocation or scheduling is implied",
+      "test": "tests/test_provider_binding.py",
+      "evidence": [
+        "tests/test_provider_binding.py",
+        "src/swfactory/provider_binding.py",
+        "tests/test_population_manifest.py",
+        "docs/future-factory.md"
+      ],
+      "follow_up": "Add real provider adapters that consume BoundPopulationTask values and emit BehaviorReceipt records while preserving Airflow lifecycle ownership and the search-only boundary.",
+      "public_surface": [
+        "provider binding",
+        "diversity coordinates",
+        "bound population task"
+      ]
     }
   ]
 }
