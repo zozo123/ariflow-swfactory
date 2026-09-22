@@ -97,6 +97,7 @@ protected = [
   "src/swfactory/population_adapter.py",       # backend provider/credential contract is protected
   "src/swfactory/backend_population.py",        # worker may reach providers only through backend authority
   "src/swfactory/backend/population_service.py", # paid provider effects are backend-owned and journaled
+  "src/swfactory/authority.py",            # canonical mutable-resource authority map is constitutional
   "src/swfactory/security_boundary.py",
   "src/swfactory/security_contract.py",
   "src/swfactory/worker_security.py",
