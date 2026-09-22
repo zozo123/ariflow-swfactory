@@ -101,10 +101,7 @@ class PopulationTask:
             "temperature": self.temperature,
             "independent_verification": self.independent_verification,
             "diversity_axes": list(self.diversity_axes),
-            "diversity_coordinates": [
-                {"axis": axis, "seed": seed}
-                for axis, seed in self.diversity_coordinates
-            ],
+            "diversity_coordinates": [{"axis": axis, "seed": seed} for axis, seed in self.diversity_coordinates],
             "focus_hotspots": list(self.focus_hotspots),
             "variant_digest": self.variant_digest,
         }
@@ -233,13 +230,16 @@ class PopulationTelemetry:
         if self.authority != POPULATION_MANIFEST_AUTHORITY:
             raise PopulationManifestError("population telemetry must remain search-only")
         _require_digest(self.manifest_digest, field="manifest_digest")
-        if min(
-            self.total_tasks,
-            self.receipts,
-            self.answered,
-            self.independent_verifier_answers,
-            self.unique_candidates,
-        ) < 0:
+        if (
+            min(
+                self.total_tasks,
+                self.receipts,
+                self.answered,
+                self.independent_verifier_answers,
+                self.unique_candidates,
+            )
+            < 0
+        ):
             raise PopulationManifestError("population telemetry counts must be non-negative")
         if self.receipts > self.total_tasks or self.answered > self.receipts:
             raise PopulationManifestError("population telemetry counts are inconsistent")
@@ -297,31 +297,11 @@ def behavior_receipt_from_document(document: Mapping[str, Any]) -> BehaviorRecei
         task_id=str(document["task_id"]),
         state=str(document["state"]),
         behavior_signature=tuple(str(value) for value in document.get("behavior_signature", ())),
-        candidate_digest=(
-            str(document["candidate_digest"])
-            if document.get("candidate_digest") is not None
-            else None
-        ),
-        evidence_digest=(
-            str(document["evidence_digest"])
-            if document.get("evidence_digest") is not None
-            else None
-        ),
-        provider=(
-            str(document["provider"])
-            if document.get("provider") is not None
-            else None
-        ),
-        model=(
-            str(document["model"])
-            if document.get("model") is not None
-            else None
-        ),
-        runtime=(
-            str(document["runtime"])
-            if document.get("runtime") is not None
-            else None
-        ),
+        candidate_digest=(str(document["candidate_digest"]) if document.get("candidate_digest") is not None else None),
+        evidence_digest=(str(document["evidence_digest"]) if document.get("evidence_digest") is not None else None),
+        provider=(str(document["provider"]) if document.get("provider") is not None else None),
+        model=(str(document["model"]) if document.get("model") is not None else None),
+        runtime=(str(document["runtime"]) if document.get("runtime") is not None else None),
         cost_usd=float(document.get("cost_usd", 0.0)),
         duration_s=float(document.get("duration_s", 0.0)),
     )
@@ -377,9 +357,7 @@ def population_manifest_from_document(document: Mapping[str, Any]) -> Population
                 independent_verification=bool(raw["independent_verification"]),
                 diversity_axes=tuple(str(axis) for axis in raw.get("diversity_axes", ())),
                 diversity_coordinates=tuple(
-                    (str(item["axis"]), int(item["seed"]))
-                    for item in coordinates
-                    if isinstance(item, Mapping)
+                    (str(item["axis"]), int(item["seed"])) for item in coordinates if isinstance(item, Mapping)
                 ),
                 focus_hotspots=tuple(str(value) for value in raw.get("focus_hotspots", ())),
                 variant_digest=str(raw["variant_digest"]),
@@ -422,8 +400,7 @@ def build_population_manifest(
                 (
                     axis,
                     int(
-                        _digest({**coordinate_root, "axis": axis})
-                        .removeprefix("sha256:")[:8],
+                        _digest({**coordinate_root, "axis": axis}).removeprefix("sha256:")[:8],
                         16,
                     )
                     & 0x7FFFFFFF,
@@ -437,10 +414,7 @@ def build_population_manifest(
                     "context": lane.context.value,
                     "temperature": lane.temperature,
                     "diversity_axes": list(lane.diversity_axes),
-                    "diversity_coordinates": [
-                        {"axis": axis, "seed": seed}
-                        for axis, seed in diversity_coordinates
-                    ],
+                    "diversity_coordinates": [{"axis": axis, "seed": seed} for axis, seed in diversity_coordinates],
                     "focus_hotspots": list(lane.focus_hotspots),
                 }
             )
