@@ -331,3 +331,38 @@ def test_population_telemetry_rejects_impossible_effective_search() -> None:
 
     with pytest.raises(PopulationManifestError, match="exceeds answered tasks"):
         impossible.validate()
+
+
+
+def test_same_swarm_under_different_search_provenance_has_different_task_identity() -> None:
+    first = build_population_manifest(
+        _plan(),
+        search_provenance_digest="sha256:" + "1" * 64,
+    )
+    second = build_population_manifest(
+        _plan(),
+        search_provenance_digest="sha256:" + "2" * 64,
+    )
+
+    assert first.swarm_plan_digest == second.swarm_plan_digest
+    assert [task.task_id for task in first.tasks] != [task.task_id for task in second.tasks]
+    assert {task.task_id for task in first.tasks}.isdisjoint(
+        {task.task_id for task in second.tasks}
+    )
+
+
+def test_manifest_rejects_tasks_replayed_under_another_provenance_root() -> None:
+    original = build_population_manifest(
+        _plan(),
+        search_provenance_digest="sha256:" + "3" * 64,
+    )
+    tampered = original.__class__(
+        swarm_plan_digest=original.swarm_plan_digest,
+        search_provenance_digest="sha256:" + "4" * 64,
+        phase=original.phase,
+        mode=original.mode,
+        tasks=original.tasks,
+    )
+
+    with pytest.raises(PopulationManifestError, match="do not match manifest provenance"):
+        tampered.validate()
