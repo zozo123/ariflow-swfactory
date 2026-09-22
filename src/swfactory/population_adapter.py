@@ -253,15 +253,15 @@ class HttpPopulationAdapter:
             status = int(response.code)
             raw = response.read(self.config.max_response_bytes + 1)
         if len(raw) > self.config.max_response_bytes:
-            raise PopulationManifestError("population adapter response exceeds configured limit")
+            raise PopulationProviderError("population adapter response exceeds configured limit")
         if status >= 300:
-            raise PopulationManifestError(f"population adapter returned HTTP {status}")
+            raise PopulationProviderError(f"population adapter returned HTTP {status}")
         try:
             document = json.loads(raw)
         except ValueError as error:
-            raise PopulationManifestError("population adapter returned invalid JSON") from error
+            raise PopulationProviderError("population adapter returned invalid JSON") from error
         if not isinstance(document, dict):
-            raise PopulationManifestError("population adapter response must be an object")
+            raise PopulationProviderError("population adapter response must be an object")
         allowed = {
             "output",
             "behavior_signature",
@@ -272,10 +272,10 @@ class HttpPopulationAdapter:
         }
         unknown = sorted(set(document) - allowed)
         if unknown:
-            raise PopulationManifestError("population adapter returned unsupported fields: " + ", ".join(unknown))
+            raise PopulationProviderError("population adapter returned unsupported fields: " + ", ".join(unknown))
         signature = document.get("behavior_signature", ())
         if not isinstance(signature, list) or any(not isinstance(value, str) for value in signature):
-            raise PopulationManifestError("population adapter behavior_signature must be an array of strings")
+            raise PopulationProviderError("population adapter behavior_signature must be an array of strings")
         result = PopulationAdapterResult(
             output=str(document.get("output") or ""),
             behavior_signature=tuple(signature),
@@ -288,7 +288,10 @@ class HttpPopulationAdapter:
             duration_s=float(document.get("duration_s", 0.0)),
             state=str(document.get("state", "answered")),
         )
-        result.validate()
+        try:
+            result.validate()
+        except PopulationManifestError as error:
+            raise PopulationProviderError(f"population adapter returned an invalid result: {error}") from error
         return result
 
 
@@ -305,6 +308,10 @@ def population_adapter_identity(adapter: PopulationAdapter) -> str:
             "implementation": f"{type(adapter).__module__}.{type(adapter).__qualname__}",
         }
     )
+
+
+class PopulationProviderError(OSError):
+    """A provider request was attempted but its usable outcome is not safely known."""
 
 
 class PopulationArtifactStore:
