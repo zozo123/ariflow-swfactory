@@ -135,15 +135,52 @@ class BackendPopulationRunner:
             self._candidate_artifacts[task.task_id] = (operation_key, artifact_digest)
         return receipt
 
-    def candidate_excerpt(self, task_id: str, *, max_chars: int = 8192) -> str:
-        """Read a bounded excerpt only from the committed operation that produced this task."""
+    def candidate_excerpt(
+        self,
+        task: BoundPopulationTask,
+        *,
+        artifact_digest: str | None = None,
+        max_chars: int = 8192,
+    ) -> str:
+        """Read a bounded excerpt only from the committed operation that produced this task.
 
-        try:
-            operation_key, artifact_digest = self._candidate_artifacts[task_id]
-        except KeyError as error:
-            raise PopulationExecutionAbort(
-                f"population task {task_id} has no retained candidate artifact"
-            ) from error
+        A fresh process can reconstruct the operation key from the exact task + immutable input and
+        use the artifact digest retained in the BehaviorReceipt. This makes Airflow task retries
+        read committed search evidence instead of re-running the provider.
+        """
+
+        cached = self._candidate_artifacts.get(task.task_id)
+        if cached is not None:
+            operation_key, cached_digest = cached
+            if artifact_digest is not None and artifact_digest != cached_digest:
+                raise PopulationExecutionAbort(
+                    f"population task {task.task_id} artifact digest changed across one runner"
+                )
+            artifact_digest = cached_digest
+        else:
+            if artifact_digest is None:
+                raise PopulationExecutionAbort(
+                    f"population task {task.task_id} has no retained candidate artifact"
+                )
+            try:
+                task_input = self.inputs[task.task_id]
+            except KeyError as error:
+                raise PopulationExecutionAbort(
+                    f"population task {task.task_id} has no immutable invocation input"
+                ) from error
+            invocation = PopulationInvocation(
+                task=task,
+                population_manifest_digest=self.population_manifest_digest,
+                provider_binding_digest=self.provider_binding_digest,
+                instruction=task_input.instruction,
+                context_artifact_digests=task_input.context_artifact_digests,
+                objective_digest=task_input.objective_digest,
+            )
+            invocation.validate()
+            operation_key = "population_model_call:" + hashlib.sha256(
+                (task.task_id + "\0" + invocation.digest()).encode()
+            ).hexdigest()[:24]
+
         value = self._post(
             "/population/artifact",
             {
