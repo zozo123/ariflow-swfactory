@@ -137,9 +137,7 @@ class ArtifactBlackboard:
         for artifact in self.artifacts:
             unknown = set(artifact.parents) - ids
             if unknown:
-                raise CampaignError(
-                    f"{artifact.artifact_id}: unknown parent artifacts {', '.join(sorted(unknown))}"
-                )
+                raise CampaignError(f"{artifact.artifact_id}: unknown parent artifacts {', '.join(sorted(unknown))}")
 
     def digest(self) -> str:
         self.validate()
@@ -159,14 +157,8 @@ class ArtifactBlackboard:
 
     def select(self, *, tags: Iterable[str] = (), limit: int = 16) -> tuple[ResearchArtifact, ...]:
         required = set(tags)
-        values = [
-            artifact
-            for artifact in self.artifacts
-            if not required or required.intersection(artifact.tags)
-        ]
-        return tuple(
-            sorted(values, key=lambda item: (-item.weight, item.artifact_id))[: max(0, limit)]
-        )
+        values = [artifact for artifact in self.artifacts if not required or required.intersection(artifact.tags)]
+        return tuple(sorted(values, key=lambda item: (-item.weight, item.artifact_id))[: max(0, limit)])
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -509,11 +501,7 @@ def campaign_signal(
             required_passes.append(outcome)
 
     unique_outputs = {outcome.output_head for outcome in answered if outcome.output_head}
-    disagreement = (
-        0.0
-        if len(answered) < 2
-        else (len(unique_outputs) - 1) / max(1, len(answered) - 1)
-    )
+    disagreement = 0.0 if len(answered) < 2 else (len(unique_outputs) - 1) / max(1, len(answered) - 1)
     novelty = _ratio(len(unique_outputs), len(answered))
 
     winner_strategy: Strategy | None = None
@@ -532,12 +520,8 @@ def campaign_signal(
                 attempts=len(outcomes),
                 answered=len(answered_rows),
                 evidence_complete=sum(1 for outcome in answered_rows if outcome.evidence_digest),
-                required_passes=sum(
-                    1 for outcome in answered_rows if required_set.issubset(outcome.passed)
-                ),
-                unique_outputs=len(
-                    {outcome.output_head for outcome in answered_rows if outcome.output_head}
-                ),
+                required_passes=sum(1 for outcome in answered_rows if required_set.issubset(outcome.passed)),
+                unique_outputs=len({outcome.output_head for outcome in answered_rows if outcome.output_head}),
                 cost_usd=round(sum(outcome.cost_usd for outcome in outcomes), 6),
             )
         )
@@ -1141,11 +1125,7 @@ def signal_from_document(
                 required_passes += 1
 
     unique_outputs = {str(row.get("output_head")) for row in answered_rows if row.get("output_head")}
-    disagreement = (
-        0.0
-        if len(answered_rows) < 2
-        else (len(unique_outputs) - 1) / max(1, len(answered_rows) - 1)
-    )
+    disagreement = 0.0 if len(answered_rows) < 2 else (len(unique_outputs) - 1) / max(1, len(answered_rows) - 1)
     winner_id = None
     selection = document.get("exploration_selection")
     if isinstance(selection, Mapping) and selection.get("winner") is not None:
@@ -1340,10 +1320,7 @@ def _law(
     strategies: tuple[Strategy, ...],
     signals: Sequence[RoundSignal],
 ) -> SearchLaw:
-    evidence = tuple(
-        _digest(_signal_dict(signal))
-        for signal in signals
-    )
+    evidence = tuple(_digest(_signal_dict(signal)) for signal in signals)
     raw = {
         "kind": kind.value,
         "statement": statement,
@@ -1362,11 +1339,7 @@ def _law(
 
 
 def _answered(outcome: CandidateOutcome) -> bool:
-    return (
-        outcome.state == "ok"
-        and bool(outcome.output_head)
-        and outcome.output_head != outcome.input_head
-    )
+    return outcome.state == "ok" and bool(outcome.output_head) and outcome.output_head != outcome.input_head
 
 
 def _document_answered(outcome: Mapping[str, Any]) -> bool:
