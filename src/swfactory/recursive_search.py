@@ -895,9 +895,27 @@ def plan_adaptive_round(
             swarm,
             reason=f"{swarm.reason}; information-budget={information_budget.digest()}",
         )
+    effective_posture = (
+        SearchPosture.STOP
+        if information_budget is not None and information_budget.stop_new_work
+        else base.posture
+    )
+    effective_strategies = base.strategies
+    if effective_posture == SearchPosture.STOP:
+        effective_strategies = ()
+    elif information_budget is not None:
+        strategy_limit = max(
+            1,
+            min(
+                len(base.strategies),
+                information_budget.next_budget.max_agents,
+            ),
+        )
+        effective_strategies = base.strategies[:strategy_limit]
+
     board = blackboard or ArtifactBlackboard()
     provenance = swarm.provenance(
-        posture=base.posture.value,
+        posture=effective_posture.value,
         blackboard_digest=board.digest(),
         artifact_digests=base.artifact_digests,
         law_digests=base.law_digests,
@@ -910,9 +928,13 @@ def plan_adaptive_round(
     return RecursiveRoundPlan(
         depth=base.depth,
         input_head=base.input_head,
-        posture=base.posture,
-        strategies=base.strategies,
-        max_parallel=min(base.max_parallel, active_population),
+        posture=effective_posture,
+        strategies=effective_strategies,
+        max_parallel=(
+            1
+            if effective_posture == SearchPosture.STOP
+            else min(base.max_parallel, active_population, len(effective_strategies))
+        ),
         artifact_digests=base.artifact_digests,
         law_digests=base.law_digests,
         reason=f"{base.reason}; {swarm.reason}",
