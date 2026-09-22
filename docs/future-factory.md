@@ -426,6 +426,30 @@ invented. Provider binding is still search-only data: it does not invoke a model
 mint a credential, mutate a Cell, publish, merge, approve or promote. Airflow remains the lifecycle
 scheduler and authority remains outside the provider mapping.
 
+### The offline adaptive loop is executable end to end
+
+The repository now exposes a complete search-only operator loop without pretending provider
+execution is already integrated:
+
+```text
+research-adapt --json
+  -> population-bind
+  -> provider/runtime executes the bound tasks outside this contract
+  -> BehaviorReceipt[] is retained
+  -> population-summarize --require-complete --json
+  -> research-adapt --population-telemetry ...
+```
+
+`population-summarize` revalidates every receipt against the original population manifest and
+reduces the retained population to effective independence, correlation, disagreement, verifier
+answers, cost and duration. The next `research-adapt` records the telemetry digest and full
+telemetry receipt that influenced its new swarm allocation. This makes the feedback edge replayable:
+the controller can prove not only *what* next plan it chose, but *which measured population behavior*
+caused the choice.
+
+Real provider adapters and automatic managed-run plumbing remain future work. The loop above is an
+offline/search-domain mechanism and never grants execution or promotion authority by itself.
+
 ## 12. Local crystals
 
 A local crystal is a frozen exact candidate worth verification.
