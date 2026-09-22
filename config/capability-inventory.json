@@ -278,18 +278,17 @@
       "owner": "workgraph+evidence",
       "runtime_entry": "swfactory.recursive_search; swfactory research-adapt",
       "environment": "pure search-domain logic over retained CampaignReport/evidence artifacts",
-      "test": "not yet stabilized; intentionally introduced as experimental architecture code",
+      "test": "tests/test_recursive_search.py",
       "evidence": [
-        "recursive search report with content-addressed blackboard",
-        "search_provenance_digest bound into CandidateRequest logical identity",
-        "config/future-factory.yaml"
+        "tests/test_recursive_search.py",
+        "config/future-factory.yaml",
+        "docs/future-factory.md"
       ],
       "follow_up": "Emit recursive plans from real managed campaigns, retain provenance in candidate evidence bundles, then add contract tests and Rust operator rendering before changing support.",
       "public_surface": [
-        "recursive search",
-        "search laws",
-        "artifact blackboard",
-        "research-adapt"
+        "research-adapt",
+        "swfactory.recursive_search",
+        "search provenance"
       ]
     },
     {
@@ -300,18 +299,17 @@
       "owner": "workgraph+evidence",
       "runtime_entry": "swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round",
       "environment": "pure phase-aware population planning; no provider execution is implied",
-      "test": "not yet stabilized; intentionally introduced as experimental architecture code",
+      "test": "tests/test_swarm_dynamics.py",
       "evidence": [
-        "phase-aware population plan digest",
-        "effective independent search/correlation calculation",
-        "search provenance digest on descendant candidate questions"
+        "tests/test_swarm_dynamics.py",
+        "config/future-factory.yaml",
+        "docs/future-factory.md"
       ],
       "follow_up": "Connect real heterogeneous providers and managed-run telemetry, qualify compute accounting and verifier independence, then graduate stable contracts into Rust.",
       "public_surface": [
-        "swarm dynamics",
+        "swfactory.swarm_dynamics",
         "effective independent search",
-        "selective deep compute",
-        "candidate crystal"
+        "selective deep compute"
       ]
     }
   ]
