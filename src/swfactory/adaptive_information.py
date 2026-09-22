@@ -26,7 +26,6 @@ from swfactory.cognitive_harness import marginal_information_value
 from swfactory.phase_control import ControlMode
 from swfactory.population_execution import PopulationExecutionReport
 from swfactory.population_manifest import (
-    BehaviorReceipt,
     PopulationManifest,
     PopulationManifestError,
 )
