@@ -1610,10 +1610,7 @@ def population_bind(
         typer.echo(json.dumps(document, indent=2, sort_keys=True))
         return
 
-    typer.echo(
-        f"population {manifest.digest()} -> binding {bound.digest()} "
-        f"tasks={len(bound.tasks)}"
-    )
+    typer.echo(f"population {manifest.digest()} -> binding {bound.digest()} tasks={len(bound.tasks)}")
     for task in bound.tasks:
         typer.echo(
             f"{task.task_id}: provider={task.provider or '-'} model={task.model or '-'} "
@@ -1661,11 +1658,7 @@ def population_summarize(
             raise PopulationManifestError("input does not contain a population_manifest object")
 
         manifest = population_manifest_from_document(manifest_document)
-        receipts = tuple(
-            behavior_receipt_from_document(row)
-            for row in raw_receipts
-            if isinstance(row, dict)
-        )
+        receipts = tuple(behavior_receipt_from_document(row) for row in raw_receipts if isinstance(row, dict))
         if len(receipts) != len(raw_receipts):
             raise PopulationManifestError("every population receipt must be a JSON object")
         telemetry = summarize_population(
