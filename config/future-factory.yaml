@@ -234,6 +234,31 @@ population_dynamics:
       - publish
       - approve
       - promote
+  managed_execution:
+    authority: search-only
+    lifecycle_scheduler: airflow
+    location: inside-one-already-scheduled-task
+    validates:
+      - population-manifest-digest
+      - provider-binding-digest
+      - task-order-and-identity
+      - variant-identity
+      - provider-model-runtime-receipt-binding
+      - independent-verifier-distinctness
+    emits:
+      - behavior-receipts
+      - population-telemetry
+      - canonical-execution-report
+      - report-digest
+    provider_exception: failed-search-receipt
+    may_not:
+      - create-airflow-lifecycle
+      - mint-credential
+      - mutate-cell
+      - publish
+      - approve
+      - merge
+      - promote
 
 artifact_blackboard:
   authority: exploration-only
