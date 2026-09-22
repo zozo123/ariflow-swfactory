@@ -219,6 +219,7 @@ def worktree_candidate_runner(
                     artifacts=artifacts,
                     destination=destination,
                     inherited_recipe=inherited_recipe,
+                    search_provenance_digest=request.search_provenance_digest,
                 )
             except Exception as error:  # noqa: BLE001 - evidence failure makes this candidate non-promotable.
                 return replace(
