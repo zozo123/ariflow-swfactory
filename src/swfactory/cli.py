@@ -1661,10 +1661,11 @@ def population_budget(
                 "input does not contain a population_manifest object"
             )
         manifest = population_manifest_from_document(manifest_document)
-        if manifest.tasks:
-            prior_max_parallel = min(prior_max_parallel, len(manifest.tasks))
-        else:
-            prior_max_parallel = 1
+        prior_max_parallel = (
+            min(prior_max_parallel, len(manifest.tasks))
+            if manifest.tasks
+            else 1
+        )
         report = load_population_execution_report(execution_report_path)
         decision = evaluate_information_budget(
             report,
