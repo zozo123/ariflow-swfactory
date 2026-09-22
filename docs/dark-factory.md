@@ -597,16 +597,33 @@ A self-improving factory must not drown its own human gates.
 
 Proposal entropy can remain high while enrollment rate is bounded.
 
-### P2 — adaptive search budget
+### P2 — adaptive search budget — experimental implementation exists
 
-Spend more compute only when another candidate has positive expected information value.
+The current experimental controller now reduces retained `PopulationExecutionReport` evidence into
+a content-addressed `InformationBudgetDecision`. It measures each prior lane by answer/evidence
+yield, effective independent search, pairwise correlation, disagreement pressure and compute tier,
+then applies the existing marginal-value rule:
 
-Stop when:
+```text
+value = (1 - correlation) * expected_information / compute_units
+```
 
-- one candidate dominates under the objective;
-- additional lanes are redundant;
-- the budget is exhausted;
-- uncertainty is below the configured threshold.
+It may retain or shrink measured lanes, reserve an independent verifier when disagreement remains
+high, perturb after population collapse, or drain when settled search has no positive marginal
+value. It can **never widen** the operator-declared `SwarmBudget`; the resulting decision digest is
+bound into the next recursive search plan. Managed stages retain the decision beside their execution
+report so retries replay the same compute decision rather than recomputing mutable defaults.
+
+What remains is calibration, not mechanism invention: compare predicted information value with
+realized evidence gain on retained workloads, tune thresholds, and graduate the stable pure contract
+into Rust.
+
+Stop creating new search work when:
+
+- measured marginal information is below the configured threshold and disagreement is settled;
+- additional lanes are behaviorally redundant;
+- the hard human-declared budget is exhausted;
+- the previous population was cancelled and must drain before replacement work.
 
 ### P2 — failure memory
 
