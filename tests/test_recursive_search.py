@@ -139,9 +139,16 @@ def test_adaptive_round_binds_phase_swarm_and_search_provenance() -> None:
     assert plan.search_provenance_digest.startswith("sha256:")
     assert plan.search_provenance is not None
     assert plan.search_provenance.digest() == plan.search_provenance_digest
+    assert plan.population_manifest_digest is not None
+    assert plan.population_manifest is not None
+    assert plan.population_manifest.digest() == plan.population_manifest_digest
+    assert plan.population_manifest.swarm_plan_digest == plan.swarm_plan_digest
+    assert plan.population_manifest.search_provenance_digest == plan.search_provenance_digest
     document = plan.to_dict()
     assert document["swarm_plan"]["authority"] == "search-only"
     assert document["search_provenance"]["authority"] == "search-only"
+    assert document["population_manifest"]["authority"] == "search-only"
+    assert len(document["population_manifest"]["tasks"]) >= plan.max_parallel
     assert plan.estimated_compute_units > 0
 
 
