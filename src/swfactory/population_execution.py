@@ -13,9 +13,9 @@ import json
 import threading
 import time
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from swfactory.population_manifest import (
