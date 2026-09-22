@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import threading
@@ -39,6 +40,7 @@ from swfactory.cells import (
 )
 from swfactory.control import AirflowClient, ControlError, GitHubClient, IsloClient, MetricsSource
 from swfactory.control_kernel import ControlKernel
+from swfactory.credential_lease import CredentialLeaseBroker, CredentialLeaseError, LeaseBinding, LeaseDenial
 from swfactory.deployment_profile import assert_supported_state_root
 from swfactory.doctor import _check_managed_workers
 from swfactory.durable_admission import (
@@ -168,6 +170,19 @@ class Factory:
         self.cell_store = CellStore(self.state_root / "cells.sqlite3")
         self.control = ControlKernel(self.state_root / "control", restore_gate=self.restore_gate)
         self.evidence = TrustedEvidence(self.state_root / "evidence")
+        self.lease_process_nonce = secrets.token_urlsafe(32)
+        self.leases = CredentialLeaseBroker(
+            self.state_root / "credential-leases.sqlite3",
+            providers={
+                "github.publish": self._github_publication_credential,
+                "github.read": self._github_publication_credential,
+            },
+            epoch_reader=lambda cell_id: int(self.cell_store.get(cell_id)["epoch"]),
+            on_denial=self._record_lease_denial,
+        )
+        self.cell_store.on_authority_revoked = (
+            lambda cell_id, epoch, reason: self.leases.revoke_epoch(cell_id, epoch, reason=reason)
+        )
         self.opener = urllib.request.build_opener(_NoRedirect)
         self.credentials = AirflowClient(
             self.airflow_url,
@@ -186,8 +201,31 @@ class Factory:
         self._observed_at: dict[str, float] = {}
 
     def close(self) -> None:
+        self.leases.close()
         self.cell_store.close()
         self.control.close()
+
+    def _github_publication_credential(self, _binding: LeaseBinding) -> str:
+        token = os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN") or ""
+        if not token:
+            raise CredentialLeaseError("backend has no GitHub publication credential")
+        return token
+
+    def _record_lease_denial(self, event: LeaseDenial) -> None:
+        if event.cell_id is None or event.epoch is None:
+            return
+        try:
+            cell = self.cell_store.get(event.cell_id)
+        except KeyError:
+            return
+        self.evidence.append(
+            cell_id=event.cell_id,
+            epoch=event.epoch,
+            kind="capability_denied",
+            payload=event.to_dict(),
+            policy_digest=cell.get("policy_digest"),
+            trace=TraceContext.for_cell(event.cell_id, event.epoch, "capability_denied", event.lease_id),
+        )
 
     def _line(self, name: str) -> blueprint.Blueprint:
         if not LINE_NAME.fullmatch(name):
@@ -1464,6 +1502,13 @@ class Factory:
             return build_preview(line=line.name, jobs=list(line.jobs(conf))).to_dict()
         if path == "/cells":
             return self.cell_store.list(limit=self._limit(body))
+        if path == "/leases/denials":
+            return self.leases.denials(limit=self._limit(body))
+        if path == "/leases/inspect":
+            try:
+                return self.leases.inspect(text(body, "lease_id"))
+            except KeyError as error:
+                raise Refused(404, "no such credential lease") from error
         if path == "/cells/inspect":
             return self._cell(text(body, "cell_id"))
         if path == "/cells/history":

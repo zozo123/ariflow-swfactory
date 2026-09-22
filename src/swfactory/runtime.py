@@ -99,9 +99,29 @@ def _cell_binding(job: dict[str, Any]) -> dict[str, Any] | None:
     if type(managed) is not bool:
         raise StageError("policy", "mapped job carries an invalid Factory Cell managed flag")
     policy_digest = job.get("cell_policy_digest")
-    if policy_digest is not None and (not isinstance(policy_digest, str) or not policy_digest.startswith("policy:")):
-        raise StageError("policy", "mapped job carries an invalid Factory Cell policy digest")
     generation = job.get("cell_generation")
+    if managed and os.getenv("SWF_BACKEND_URL"):
+        # A managed mapped job came through Airflow XCom. Treat every authority-shaped field in it
+        # as hostile: policy/generation are re-read from the backend CellStore, never trusted from
+        # scheduler scratch.
+        if policy_digest is not None or generation is not None:
+            raise StageError("policy", "managed XCom must not carry Factory Cell authority seals")
+        from swfactory.cell_callback import CellCallbackError, post
+
+        try:
+            authoritative = post("/cells/inspect", {"cell_id": cell_id})
+        except CellCallbackError as error:
+            raise StageError("policy", f"cannot resolve managed Factory Cell authority: {error}") from error
+        if not isinstance(authoritative, dict) or authoritative.get("cell_id") != cell_id:
+            raise StageError("policy", "backend returned invalid Factory Cell authority")
+        if authoritative.get("epoch") != epoch:
+            raise StageError("policy", "managed Factory Cell epoch is stale")
+        policy_digest = authoritative.get("policy_digest")
+        generation = authoritative.get("factory_generation")
+    if policy_digest is not None and (
+        not isinstance(policy_digest, str) or not policy_digest.startswith("policy:")
+    ):
+        raise StageError("policy", "mapped job carries an invalid Factory Cell policy digest")
     if generation is not None and not isinstance(generation, str):
         raise StageError("policy", "mapped job carries an invalid Factory Cell generation")
     if managed and not policy_digest:

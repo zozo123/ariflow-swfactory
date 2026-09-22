@@ -300,6 +300,15 @@ fn apply(function: &str, input: &Value) -> Outcome {
             Some(value) => Outcome::Value(json!(swf_domain::cell::is_cell_id(value))),
             None => Outcome::Error("is_cell_id case has no string `value`".to_string()),
         },
+        "credential_lease_binding_digest" => {
+            match serde_json::from_value::<swf_domain::CredentialLeaseBinding>(input.clone()) {
+                Ok(binding) => match binding.digest() {
+                    Ok(value) => Outcome::Value(json!(value)),
+                    Err(error) => Outcome::Error(format!("credential lease binding invalid: {error}")),
+                },
+                Err(error) => Outcome::Error(format!("credential lease fixture invalid: {error}")),
+            }
+        }
         "phase_control" => phase_control(input),
         _ => Outcome::Unhandled,
     }

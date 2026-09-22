@@ -12,6 +12,7 @@ pub mod build_exploration;
 pub mod cell;
 pub mod cognitive_harness;
 pub mod control_plane;
+pub mod credential_lease;
 pub mod doctor;
 pub mod evidence;
 pub mod factory;
@@ -28,6 +29,9 @@ pub mod snapshot;
 pub mod states;
 pub mod worker;
 
+pub use credential_lease::{
+    CredentialLeaseBinding, CredentialLeaseContractError, CREDENTIAL_LEASE_SCHEMA_VERSION,
+};
 pub use cognitive_harness::{
     classify_self_improvement, ensemble_diversity, gauge_fix, marginal_information_value,
     memory_phase, pairwise_correlation, plan_cognition, quantity_kind, validate_measurement_set,

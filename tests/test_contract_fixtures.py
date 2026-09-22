@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from swfactory.cells import is_cell_id
+from swfactory.credential_lease import LeaseBinding
 from swfactory.control import (
     NO_ISSUE,
     Gate,
@@ -189,6 +190,10 @@ def _call_is_cell_id(data: dict) -> Any:
     return is_cell_id(data["value"])
 
 
+def _call_credential_lease_binding_digest(data: dict) -> Any:
+    return LeaseBinding(**data).digest()
+
+
 def _call_phase_control(data: dict) -> Any:
     assessment = assess_phase(
         PhaseObservation(**data["observation"]),
@@ -221,6 +226,7 @@ DISPATCH = {
     "snapshot_json": _call_snapshot_json,
     "policy_digest": _call_policy_digest,
     "is_cell_id": _call_is_cell_id,
+    "credential_lease_binding_digest": _call_credential_lease_binding_digest,
     "phase_control": _call_phase_control,
 }
 

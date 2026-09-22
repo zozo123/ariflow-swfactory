@@ -13,6 +13,7 @@ from typing import Any
 from swfactory.cells import CellIdentity
 from swfactory.intake_governance import require_complete_bindings
 from swfactory.paths import normalize_target_dir, validate_target_base_branch
+from swfactory.xcom_contract import validate_xcom_document
 
 # The actor a cron tick submits itself as. The backend accepts ``airflow_run_id`` from this actor
 # alone, so a run created by Airflow's scheduler is the only thing that can be attached to.
@@ -92,10 +93,9 @@ def bind_jobs(jobs: Iterable[dict[str, Any]], bindings: Iterable[dict[str, Any]]
                 cell_id=identity_for_job(job).stable_id(),
                 cell_epoch=1,
                 cell_managed=False,
-                cell_policy_digest=None,
-                cell_generation=None,
             )
-        return out
+        validate_xcom_document(out)
+    return out
 
     rows = list(bindings)
     if not all(isinstance(raw, dict) and raw.keys() >= _BINDING_KEYS for raw in rows):
@@ -110,19 +110,13 @@ def bind_jobs(jobs: Iterable[dict[str, Any]], bindings: Iterable[dict[str, Any]]
         identity = identity_for_job(job)
         if binding.cell_id != identity.stable_id() or binding.repo != identity.repo:
             raise ValueError(f"factory cell binding mismatch for mapped job {idx}")
-        policy_digest = raw.get("policy_digest")
-        if policy_digest is not None and (
-            not isinstance(policy_digest, str) or not policy_digest.startswith("policy:")
-        ):
-            raise ValueError(f"invalid factory cell policy digest for mapped job {idx}")
-        generation = raw.get("factory_generation")
-        if generation is not None and not isinstance(generation, str):
-            raise ValueError(f"invalid factory generation for mapped job {idx}")
+        # XCom is scheduler scratch, not authority storage. The backend response may contain
+        # policy/generation so fan_out can validate the work-order response, but those seals are
+        # deliberately not copied into the mapped job/XCom document. Each managed task re-reads
+        # current authority from CellStore through the backend before constructing its context.
         job.update(
             cell_id=binding.cell_id,
             cell_epoch=binding.epoch,
             cell_managed=True,
-            cell_policy_digest=policy_digest,
-            cell_generation=generation,
         )
     return out
