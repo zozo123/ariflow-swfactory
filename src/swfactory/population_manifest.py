@@ -222,7 +222,40 @@ class PopulationTelemetry:
     authority: str = POPULATION_MANIFEST_AUTHORITY
     schema_version: int = POPULATION_MANIFEST_SCHEMA_VERSION
 
+    def validate(self) -> None:
+        if self.schema_version != POPULATION_MANIFEST_SCHEMA_VERSION:
+            raise PopulationManifestError("unsupported population telemetry schema")
+        if self.authority != POPULATION_MANIFEST_AUTHORITY:
+            raise PopulationManifestError("population telemetry must remain search-only")
+        _require_digest(self.manifest_digest, field="manifest_digest")
+        if min(
+            self.total_tasks,
+            self.receipts,
+            self.answered,
+            self.independent_verifier_answers,
+            self.unique_candidates,
+        ) < 0:
+            raise PopulationManifestError("population telemetry counts must be non-negative")
+        if self.receipts > self.total_tasks or self.answered > self.receipts:
+            raise PopulationManifestError("population telemetry counts are inconsistent")
+        if self.independent_verifier_answers > self.answered:
+            raise PopulationManifestError("independent verifier answers exceed answered tasks")
+        for field, value in (
+            ("effective_independent_search", self.effective_independent_search),
+            ("mean_correlation", self.mean_correlation),
+            ("candidate_disagreement", self.candidate_disagreement),
+            ("total_cost_usd", self.total_cost_usd),
+            ("total_duration_s", self.total_duration_s),
+        ):
+            if not math.isfinite(value) or value < 0.0:
+                raise PopulationManifestError(f"{field} must be finite and non-negative")
+        if self.mean_correlation > 1.0 or self.candidate_disagreement > 1.0:
+            raise PopulationManifestError("population correlation/disagreement must be in [0, 1]")
+        for digest in self.receipt_digests:
+            _require_digest(digest, field="receipt_digest")
+
     def canonical_dict(self) -> dict[str, Any]:
+        self.validate()
         return {
             "schema_version": self.schema_version,
             "authority": self.authority,
@@ -242,6 +275,29 @@ class PopulationTelemetry:
 
     def digest(self) -> str:
         return _digest(self.canonical_dict())
+
+
+def population_telemetry_from_document(document: Mapping[str, Any]) -> PopulationTelemetry:
+    """Rehydrate retained population telemetry and reject inconsistent counters or authority."""
+
+    telemetry = PopulationTelemetry(
+        manifest_digest=str(document["manifest_digest"]),
+        total_tasks=int(document["total_tasks"]),
+        receipts=int(document["receipts"]),
+        answered=int(document["answered"]),
+        independent_verifier_answers=int(document["independent_verifier_answers"]),
+        unique_candidates=int(document["unique_candidates"]),
+        effective_independent_search=float(document["effective_independent_search"]),
+        mean_correlation=float(document["mean_correlation"]),
+        candidate_disagreement=float(document["candidate_disagreement"]),
+        total_cost_usd=float(document["total_cost_usd"]),
+        total_duration_s=float(document["total_duration_s"]),
+        receipt_digests=tuple(str(value) for value in document.get("receipt_digests", ())),
+        authority=str(document.get("authority", POPULATION_MANIFEST_AUTHORITY)),
+        schema_version=int(document.get("schema_version", POPULATION_MANIFEST_SCHEMA_VERSION)),
+    )
+    telemetry.validate()
+    return telemetry
 
 
 def population_manifest_from_document(document: Mapping[str, Any]) -> PopulationManifest:
@@ -405,4 +461,5 @@ def summarize_population(
         total_duration_s=round(sum(receipt.duration_s for receipt in rows.values()), 6),
         receipt_digests=tuple(sorted(receipt.digest() for receipt in rows.values())),
     )
+    telemetry.validate()
     return telemetry
