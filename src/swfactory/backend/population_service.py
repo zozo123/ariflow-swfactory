@@ -27,9 +27,11 @@ from .service import Factory, Refused, text
 
 
 def operation(factory: Factory, path: str, body: dict[str, Any]) -> Any:
-    if path != "/population/execute":
-        raise Refused(404, "unknown backend population operation")
-    return _execute(factory, body)
+    if path == "/population/execute":
+        return _execute(factory, body)
+    if path == "/population/artifact":
+        return _artifact(factory, body)
+    raise Refused(404, "unknown backend population operation")
 
 
 def _managed_identity(
@@ -236,4 +238,40 @@ def _execute(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
         "operation_key": outcome.operation_key,
         "evidence_digest": outcome.evidence_digest,
         "replayed": outcome.replayed,
+    }
+
+
+
+def _artifact(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
+    _cell, cell_id, epoch, _policy_digest, operation_key = _managed_identity(factory, body)
+    artifact_digest = text(body, "artifact_digest", max_len=80)
+    max_chars = body.get("max_chars", 8192)
+    if type(max_chars) is not int or not 1 <= max_chars <= 32_768:
+        raise ValueError("max_chars must be an integer in [1, 32768]")
+
+    try:
+        row = factory.control.operations.get(operation_key)
+    except KeyError as error:
+        raise Refused(404, "population operation is not recorded") from error
+    if row.get("cell_id") != cell_id or int(row.get("epoch", -1)) != epoch:
+        raise Refused(409, "population operation belongs to another Factory Cell epoch")
+    if row.get("kind") != "population_model_call" or row.get("state") != "committed":
+        raise Refused(409, "population artifact is not backed by a committed model call")
+    result = row.get("result")
+    if not isinstance(result, dict):
+        raise Refused(409, "population operation has no committed result")
+    if result.get("candidate_artifact_digest") != artifact_digest:
+        raise Refused(409, "population artifact digest is not owned by this operation")
+
+    document = factory.population_artifacts.read(artifact_digest)
+    output = str(document["output"])
+    return {
+        "schema_version": 1,
+        "authority": "search-only",
+        "operation_key": operation_key,
+        "artifact_digest": artifact_digest,
+        "invocation_digest": document["invocation_digest"],
+        "output_sha256": document["output_sha256"],
+        "output_excerpt": output[:max_chars],
+        "truncated": len(output) > max_chars,
     }
