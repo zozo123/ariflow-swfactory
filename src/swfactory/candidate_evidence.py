@@ -71,6 +71,7 @@ class CandidateEvidenceBundle:
     inherited_recipe_sha256: str | None = None
     inherited_recipe_commit_sha: str | None = None
     inherited_recipe_path: str | None = None
+    search_provenance_digest: str | None = None
     schema_version: int = 1
 
     def canonical_dict(self) -> dict[str, Any]:
@@ -95,6 +96,8 @@ class CandidateEvidenceBundle:
             document["inherited_recipe_sha256"] = self.inherited_recipe_sha256
             document["inherited_recipe_commit_sha"] = self.inherited_recipe_commit_sha
             document["inherited_recipe_path"] = self.inherited_recipe_path
+        if self.search_provenance_digest is not None:
+            document["search_provenance_digest"] = self.search_provenance_digest
         return document
 
     def validate(self) -> None:
@@ -126,6 +129,10 @@ class CandidateEvidenceBundle:
         )
         if any(value is None for value in recipe_fields) and any(value is not None for value in recipe_fields):
             raise CandidateEvidenceError("inherited execution recipe fields must be recorded together")
+        if self.search_provenance_digest is not None:
+            search_digest = self.search_provenance_digest.removeprefix("sha256:")
+            if not _DIGEST.fullmatch(search_digest):
+                raise CandidateEvidenceError("search provenance digest is invalid")
         if self.inherited_recipe_sha256 is not None:
             if not _DIGEST.fullmatch(self.inherited_recipe_sha256):
                 raise CandidateEvidenceError("inherited execution recipe digest is invalid")
@@ -153,6 +160,7 @@ def build_candidate_evidence_bundle(
     artifacts: Mapping[str, Path],
     destination: Path,
     inherited_recipe: BoundExecutionRecipe | None = None,
+    search_provenance_digest: str | None = None,
 ) -> CandidateEvidenceBundle:
     """Retain a frozen candidate's diff and named artifacts under one manifest."""
     repo = repo.resolve()
@@ -210,6 +218,7 @@ def build_candidate_evidence_bundle(
         inherited_recipe_sha256=inherited_recipe.digest if inherited_recipe is not None else None,
         inherited_recipe_commit_sha=inherited_recipe.commit_sha if inherited_recipe is not None else None,
         inherited_recipe_path=inherited_recipe.path if inherited_recipe is not None else None,
+        search_provenance_digest=search_provenance_digest,
     )
     document = bundle.canonical_dict()
     document["manifest_digest"] = bundle.digest()
@@ -246,6 +255,11 @@ def load_candidate_evidence_bundle(destination: Path) -> CandidateEvidenceBundle
             ),
             inherited_recipe_path=(
                 str(document["inherited_recipe_path"]) if document.get("inherited_recipe_path") is not None else None
+            ),
+            search_provenance_digest=(
+                str(document["search_provenance_digest"])
+                if document.get("search_provenance_digest") is not None
+                else None
             ),
             schema_version=int(document.get("schema_version", 1)),
         )
