@@ -381,7 +381,10 @@ def execute_population_stage(
     else:
         information_budget = evaluate_information_budget(
             report,
-            base_budget=budget_from_manifest(spec.manifest),
+            base_budget=budget_from_manifest(
+                spec.manifest,
+                max_parallel=min(spec.max_parallel, len(spec.manifest.tasks)),
+            ),
             manifest=spec.manifest,
         )
         write_information_budget(information_budget_path, information_budget)
