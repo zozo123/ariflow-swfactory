@@ -121,3 +121,11 @@ def test_jammed_phase_stops_new_exploration() -> None:
         lane.role in {AgentRole.EXPLORER, AgentRole.MUTATOR} and lane.count
         for lane in plan.lanes
     )
+
+
+def test_effective_independent_search_is_a_count_not_a_probability() -> None:
+    observation = _observation(effective_independent_search=7.5)
+
+    observation.validate()
+
+    assert observation.effective_independent_search == 7.5
