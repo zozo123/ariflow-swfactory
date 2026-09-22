@@ -63,6 +63,10 @@ def test_population_manifest_materializes_every_lane_deterministically() -> None
     assert len(first.tasks) == 3
     assert len({task.task_id for task in first.tasks}) == 3
     assert len({task.variant_digest for task in first.tasks}) == 3
+    assert len({task.diversity_coordinates for task in first.tasks}) == 3
+    for task in first.tasks:
+        assert tuple(axis for axis, _seed in task.diversity_coordinates) == task.diversity_axes
+        assert all(0 <= seed <= 0x7FFFFFFF for _axis, seed in task.diversity_coordinates)
     assert first.digest().startswith("sha256:")
     verifier = next(task for task in first.tasks if task.independent_verification)
     assert verifier.role == AgentRole.VERIFIER
@@ -159,3 +163,20 @@ def test_independent_verification_cannot_inherit_context() -> None:
             bad,
             search_provenance_digest="sha256:" + "d" * 64,
         )
+
+
+def test_diversity_coordinates_change_across_replicas_but_replay_exactly() -> None:
+    plan = _plan()
+    provenance = "sha256:" + "f" * 64
+
+    manifest = build_population_manifest(plan, search_provenance_digest=provenance)
+    replay = build_population_manifest(plan, search_provenance_digest=provenance)
+
+    explorers = [task for task in manifest.tasks if task.role == AgentRole.EXPLORER]
+    replay_explorers = [task for task in replay.tasks if task.role == AgentRole.EXPLORER]
+
+    assert len(explorers) == 2
+    assert explorers[0].diversity_coordinates != explorers[1].diversity_coordinates
+    assert [task.diversity_coordinates for task in explorers] == [
+        task.diversity_coordinates for task in replay_explorers
+    ]
