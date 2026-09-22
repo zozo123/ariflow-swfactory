@@ -72,8 +72,8 @@ class SwarmBudget:
             raise ValueError("max_deep_agents must be in [0, max_agents]")
         if self.max_exact_replays < 0 or self.max_exact_replays > self.max_agents:
             raise ValueError("max_exact_replays must be in [0, max_agents]")
-        if not math.isfinite(self.max_compute_units) or self.max_compute_units <= 0:
-            raise ValueError("max_compute_units must be finite and positive")
+        if not math.isfinite(self.max_compute_units) or self.max_compute_units < 1.0:
+            raise ValueError("max_compute_units must be finite and at least one cheap compute unit")
 
 
 @dataclass(frozen=True)
@@ -453,7 +453,24 @@ def allocate_population(
     observation.validate()
     budget = budget or SwarmBudget()
     budget.validate()
-    selected_hotspots = prioritize_hotspots(hotspots, limit=max(0, budget.max_deep_agents))
+
+    # Resource pressure shrinks the search envelope before the factory reaches a jammed regime.
+    # The caller's budget remains the hard outer ceiling; this inner envelope may only narrow it.
+    resource_factor = max(0.25, 1.0 - 0.75 * observation.resource_pressure)
+    available_agents = max(1, int(round(budget.max_agents * resource_factor)))
+    planning_budget = SwarmBudget(
+        max_agents=min(budget.max_agents, available_agents),
+        max_parallel=min(budget.max_parallel, available_agents),
+        max_deep_agents=min(budget.max_deep_agents, available_agents),
+        max_exact_replays=min(budget.max_exact_replays, available_agents),
+        max_compute_units=max(1.0, budget.max_compute_units * resource_factor),
+    )
+    planning_budget.validate()
+
+    selected_hotspots = prioritize_hotspots(
+        hotspots,
+        limit=max(0, planning_budget.max_deep_agents),
+    )
     ready_crystals = tuple(
         sorted(
             (crystal for crystal in crystals if crystal.verify_ready),
@@ -462,7 +479,7 @@ def allocate_population(
                 -item.evidence_completeness,
                 item.candidate_digest,
             ),
-        )[: budget.max_exact_replays]
+        )[: planning_budget.max_exact_replays]
     )
 
     mode = assessment.recommendation.mode
@@ -471,14 +488,29 @@ def allocate_population(
     lanes: list[PopulationLane] = []
     stop_new_work = False
 
-    # Correlated populations do not deserve more width. Spend the same envelope on diversity.
+    # Correlated populations do not deserve more copies. A low effective population increases
+    # pressure to spend the remaining envelope on genuinely different search coordinates.
     independence_ratio = min(
         1.0,
-        observation.effective_independent_search / max(1.0, float(budget.max_agents)),
+        observation.effective_independent_search
+        / max(1.0, float(planning_budget.max_agents)),
     )
-    collapse_pressure = max(observation.mean_correlation, 1.0 - observation.novelty)
-    cheap_width = max(1, int(round(budget.max_agents * (0.45 + 0.35 * collapse_pressure))))
-    cheap_width = min(budget.max_agents, cheap_width)
+    independence_deficit = 1.0 - independence_ratio
+    collapse_pressure = max(
+        observation.mean_correlation,
+        1.0 - observation.novelty,
+        independence_deficit,
+    )
+    cheap_width = max(
+        1,
+        int(
+            round(
+                planning_budget.max_agents
+                * (0.45 + 0.35 * collapse_pressure)
+            )
+        ),
+    )
+    cheap_width = min(planning_budget.max_agents, cheap_width)
 
     if mode == ControlMode.DIVERGE:
         explorer = max(1, int(round(cheap_width * 0.70)))
@@ -505,12 +537,12 @@ def allocate_population(
                 ),
             ]
         )
-        if budget.max_agents - cheap_width > 0:
+        if planning_budget.max_agents - cheap_width > 0:
             lanes.append(
                 PopulationLane(
                     AgentRole.CRITIC,
                     ComputeTier.STANDARD,
-                    min(2, budget.max_agents - cheap_width),
+                    min(2, planning_budget.max_agents - cheap_width),
                     ContextPolicy.COMPACT,
                     0.35,
                     False,
@@ -523,7 +555,7 @@ def allocate_population(
         )
 
     elif mode == ControlMode.COORDINATE:
-        total = min(budget.max_agents, max(4, int(round(budget.max_agents * 0.65))))
+        total = min(planning_budget.max_agents, max(4, int(round(budget.max_agents * 0.65))))
         explore = max(1, int(round(total * 0.40)))
         synth = max(1, int(round(total * 0.20)))
         critic = max(1, int(round(total * 0.20)))
@@ -574,8 +606,8 @@ def allocate_population(
         )
 
     elif mode in {ControlMode.MEASURE, ControlMode.ANNEAL}:
-        deep = min(budget.max_deep_agents, max(1, len(selected_hotspots)))
-        standard = min(max(2, budget.max_agents - deep), max(2, budget.max_parallel))
+        deep = min(planning_budget.max_deep_agents, max(1, len(selected_hotspots)))
+        standard = min(max(2, planning_budget.max_agents - deep), max(2, planning_budget.max_parallel))
         lanes.extend(
             [
                 PopulationLane(
@@ -616,8 +648,8 @@ def allocate_population(
         )
 
     elif mode == ControlMode.VERIFY:
-        exact = min(budget.max_exact_replays, len(ready_crystals))
-        deep = min(budget.max_deep_agents, max(1, len(ready_crystals)))
+        exact = min(planning_budget.max_exact_replays, len(ready_crystals))
+        deep = min(planning_budget.max_deep_agents, max(1, len(ready_crystals)))
         if exact:
             lanes.append(
                 PopulationLane(
@@ -648,7 +680,7 @@ def allocate_population(
         )
 
     elif mode == ControlMode.PERTURB:
-        total = min(budget.max_agents, max(3, int(round(budget.max_agents * 0.50))))
+        total = min(planning_budget.max_agents, max(3, int(round(budget.max_agents * 0.50))))
         lanes.extend(
             [
                 PopulationLane(
@@ -701,7 +733,7 @@ def allocate_population(
                 PopulationLane(
                     AgentRole.VERIFIER,
                     ComputeTier.STANDARD,
-                    min(2, budget.max_agents - 1),
+                    min(2, planning_budget.max_agents - 1),
                     ContextPolicy.FROZEN,
                     0.0,
                     True,
@@ -711,7 +743,7 @@ def allocate_population(
         )
         reason = "jammed/drain: stop feeding the queue; consolidate evidence, finish verification and reclaim debt"
 
-    lanes = _fit_budget(tuple(lanes), budget)
+    lanes = _fit_budget(tuple(lanes), planning_budget)
     compute = round(sum(_lane_compute_units(lane) for lane in lanes), 6)
     plan = SwarmPlan(
         phase=phase,
@@ -723,7 +755,9 @@ def allocate_population(
         estimated_compute_units=compute,
         reason=(
             f"{reason}; effective-independent-search={observation.effective_independent_search:.3f}, "
-            f"correlation={observation.mean_correlation:.3f}, independence-ratio={independence_ratio:.3f}"
+            f"correlation={observation.mean_correlation:.3f}, "
+            f"independence-ratio={independence_ratio:.3f}, "
+            f"resource-cap={planning_budget.max_agents}/{budget.max_agents}"
         ),
     )
     plan.validate(budget)
