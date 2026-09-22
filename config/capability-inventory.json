@@ -269,6 +269,50 @@
         "many-world cognition",
         "executable epistemology"
       ]
+    },
+    {
+      "id": "factory.recursive-search",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Recursive search may extract exploration-only laws, mutate declared search posture and bind the resulting search provenance into descendant candidate identity; it cannot relax evidence or grant promotion authority.",
+      "owner": "workgraph+evidence",
+      "runtime_entry": "swfactory.recursive_search; swfactory research-adapt",
+      "environment": "pure search-domain logic over retained CampaignReport/evidence artifacts",
+      "test": "not yet stabilized; intentionally introduced as experimental architecture code",
+      "evidence": [
+        "recursive search report with content-addressed blackboard",
+        "search_provenance_digest bound into CandidateRequest logical identity",
+        "config/future-factory.yaml"
+      ],
+      "follow_up": "Emit recursive plans from real managed campaigns, retain provenance in candidate evidence bundles, then add contract tests and Rust operator rendering before changing support.",
+      "public_surface": [
+        "recursive search",
+        "search laws",
+        "artifact blackboard",
+        "research-adapt"
+      ]
+    },
+    {
+      "id": "factory.swarm-dynamics",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Population and compute allocation optimize effective independent search and disagreement resolution under a hard budget; the planner is search-only and cannot schedule Airflow or cross the authority boundary.",
+      "owner": "workgraph+evidence",
+      "runtime_entry": "swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round",
+      "environment": "pure phase-aware population planning; no provider execution is implied",
+      "test": "not yet stabilized; intentionally introduced as experimental architecture code",
+      "evidence": [
+        "phase-aware population plan digest",
+        "effective independent search/correlation calculation",
+        "search provenance digest on descendant candidate questions"
+      ],
+      "follow_up": "Connect real heterogeneous providers and managed-run telemetry, qualify compute accounting and verifier independence, then graduate stable contracts into Rust.",
+      "public_surface": [
+        "swarm dynamics",
+        "effective independent search",
+        "selective deep compute",
+        "candidate crystal"
+      ]
     }
   ]
 }
