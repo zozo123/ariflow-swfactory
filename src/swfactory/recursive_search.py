@@ -22,6 +22,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from swfactory.evolution import (
@@ -156,6 +157,96 @@ class ArtifactBlackboard:
         return tuple(
             sorted(values, key=lambda item: (-item.weight, item.artifact_id))[: max(0, limit)]
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "schema_version": RECURSIVE_SEARCH_SCHEMA_VERSION,
+            "authority": RECURSIVE_SEARCH_AUTHORITY,
+            "digest": self.digest(),
+            "artifacts": [_artifact_dict(artifact) for artifact in self.artifacts],
+        }
+
+
+def artifact_from_payload(
+    *,
+    kind: ArtifactKind,
+    producer: str,
+    payload: object,
+    candidate_id: str | None = None,
+    parents: Iterable[str] = (),
+    tags: Iterable[str] = (),
+    weight: float = 1.0,
+) -> ResearchArtifact:
+    """Turn a JSON-like payload into an immutable blackboard artifact."""
+
+    payload_digest = _digest(payload)
+    identity = _digest(
+        {
+            "kind": kind.value,
+            "producer": producer,
+            "payload_digest": payload_digest,
+            "candidate_id": candidate_id,
+            "parents": sorted(set(parents)),
+            "tags": sorted(set(tags)),
+        }
+    )
+    return ResearchArtifact(
+        artifact_id=f"artifact_{identity.removeprefix('sha256:')[:24]}",
+        kind=kind,
+        producer=producer,
+        payload_digest=payload_digest,
+        candidate_id=candidate_id,
+        parents=tuple(sorted(set(parents))),
+        tags=tuple(sorted(set(tags))),
+        weight=weight,
+    )
+
+
+def write_blackboard(path: Path, blackboard: ArtifactBlackboard) -> str:
+    """Persist the artifact-mediated coordination surface without any authority material."""
+
+    document = blackboard.to_dict()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return str(document["digest"])
+
+
+def load_blackboard(path: Path) -> ArtifactBlackboard:
+    """Load a blackboard and refuse any digest or authority drift."""
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, Mapping):
+        raise CampaignError("recursive blackboard must be a JSON object")
+    if int(raw.get("schema_version", -1)) != RECURSIVE_SEARCH_SCHEMA_VERSION:
+        raise CampaignError("unsupported recursive blackboard schema")
+    if raw.get("authority") != RECURSIVE_SEARCH_AUTHORITY:
+        raise CampaignError("recursive blackboard is not exploration-only")
+    rows = raw.get("artifacts")
+    if not isinstance(rows, list):
+        raise CampaignError("recursive blackboard has no artifacts array")
+    artifacts: list[ResearchArtifact] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise CampaignError("recursive blackboard artifact must be an object")
+        artifact = ResearchArtifact(
+            artifact_id=str(row["artifact_id"]),
+            kind=ArtifactKind(str(row["kind"])),
+            producer=str(row["producer"]),
+            payload_digest=str(row["payload_digest"]),
+            candidate_id=(str(row["candidate_id"]) if row.get("candidate_id") is not None else None),
+            parents=tuple(str(value) for value in row.get("parents", ())),
+            tags=tuple(str(value) for value in row.get("tags", ())),
+            weight=float(row.get("weight", 1.0)),
+        )
+        if row.get("digest") is not None and str(row["digest"]) != artifact.digest():
+            raise CampaignError(f"recursive artifact {artifact.artifact_id} digest mismatch")
+        artifacts.append(artifact)
+    blackboard = ArtifactBlackboard(tuple(artifacts))
+    blackboard.validate()
+    if raw.get("digest") is not None and str(raw["digest"]) != blackboard.digest():
+        raise CampaignError("recursive blackboard digest mismatch")
+    return blackboard
 
 
 @dataclass(frozen=True)
