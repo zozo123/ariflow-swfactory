@@ -267,3 +267,71 @@ def test_population_summarize_cli_refuses_incomplete_receipts(tmp_path) -> None:
 
     assert result.exit_code == 2
     assert "population receipts incomplete" in result.output
+
+
+
+def test_population_task_id_is_bound_to_variant_digest() -> None:
+    manifest = build_population_manifest(
+        _plan(),
+        search_provenance_digest="sha256:" + "7" * 64,
+    )
+    task = manifest.tasks[0]
+    tampered = task.__class__(
+        task_id="pop_" + "0" * 24,
+        lane_index=task.lane_index,
+        replica_index=task.replica_index,
+        role=task.role,
+        compute_tier=task.compute_tier,
+        context=task.context,
+        temperature=task.temperature,
+        independent_verification=task.independent_verification,
+        diversity_axes=task.diversity_axes,
+        diversity_coordinates=task.diversity_coordinates,
+        focus_hotspots=task.focus_hotspots,
+        variant_digest=task.variant_digest,
+    )
+
+    with pytest.raises(PopulationManifestError, match="does not match its variant digest"):
+        tampered.validate()
+
+
+def test_behavior_receipt_rejects_unknown_state() -> None:
+    manifest = build_population_manifest(
+        _plan(),
+        search_provenance_digest="sha256:" + "6" * 64,
+    )
+    receipt = BehaviorReceipt(
+        task_id=manifest.tasks[0].task_id,
+        state="mystery",  # type: ignore[arg-type]
+        behavior_signature=("x",),
+    )
+
+    with pytest.raises(PopulationManifestError, match="unknown behavior receipt state"):
+        receipt.validate()
+
+
+def test_population_telemetry_rejects_impossible_effective_search() -> None:
+    telemetry = summarize_population(
+        build_population_manifest(
+            _plan(),
+            search_provenance_digest="sha256:" + "5" * 64,
+        ),
+        (),
+    )
+    impossible = telemetry.__class__(
+        manifest_digest=telemetry.manifest_digest,
+        total_tasks=3,
+        receipts=1,
+        answered=1,
+        independent_verifier_answers=0,
+        unique_candidates=1,
+        effective_independent_search=2.0,
+        mean_correlation=0.0,
+        candidate_disagreement=0.0,
+        total_cost_usd=0.0,
+        total_duration_s=0.0,
+        receipt_digests=("sha256:" + "4" * 64,),
+    )
+
+    with pytest.raises(PopulationManifestError, match="exceeds answered tasks"):
+        impossible.validate()
