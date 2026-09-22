@@ -76,6 +76,7 @@ class BackendPopulationRunner:
         self.inputs = dict(inputs)
         self.timeout_s = timeout_s
         self._open = opener or urllib.request.build_opener(_NoRedirect()).open
+        self._candidate_artifacts: dict[str, tuple[str, str]] = {}
 
     def __call__(self, task: BoundPopulationTask) -> BehaviorReceipt:
         try:
@@ -108,7 +109,7 @@ class BackendPopulationRunner:
             "context_artifact_digests": list(task_input.context_artifact_digests),
             "objective_digest": task_input.objective_digest,
         }
-        response = self._post(body)
+        response = self._post("/population/execute", body)
         if response.get("invocation_digest") != invocation.digest():
             raise PopulationExecutionAbort("backend population receipt is bound to another invocation")
         if response.get("population_manifest_digest") != self.population_manifest_digest:
@@ -127,12 +128,44 @@ class BackendPopulationRunner:
             raise PopulationExecutionAbort("backend population receipt digest mismatch")
         if receipt.task_id != task.task_id:
             raise PopulationExecutionAbort("backend returned a receipt for another population task")
+        artifact_digest = response.get("candidate_artifact_digest")
+        if artifact_digest is not None:
+            if not isinstance(artifact_digest, str) or not artifact_digest.startswith("sha256:"):
+                raise PopulationExecutionAbort("backend returned an invalid candidate artifact digest")
+            self._candidate_artifacts[task.task_id] = (operation_key, artifact_digest)
         return receipt
 
-    def _post(self, body: dict[str, Any]) -> dict[str, Any]:
+    def candidate_excerpt(self, task_id: str, *, max_chars: int = 8192) -> str:
+        """Read a bounded excerpt only from the committed operation that produced this task."""
+
+        try:
+            operation_key, artifact_digest = self._candidate_artifacts[task_id]
+        except KeyError as error:
+            raise PopulationExecutionAbort(
+                f"population task {task_id} has no retained candidate artifact"
+            ) from error
+        value = self._post(
+            "/population/artifact",
+            {
+                "cell_id": self.cell_id,
+                "epoch": self.epoch,
+                "policy_digest": self.policy_digest,
+                "operation_key": operation_key,
+                "artifact_digest": artifact_digest,
+                "max_chars": max_chars,
+            },
+        )
+        if value.get("artifact_digest") != artifact_digest:
+            raise PopulationExecutionAbort("backend returned another population artifact")
+        excerpt = value.get("output_excerpt")
+        if not isinstance(excerpt, str):
+            raise PopulationExecutionAbort("backend population artifact has no text excerpt")
+        return excerpt
+
+    def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
         request = urllib.request.Request(
-            self.backend_url + "/v1/population/execute",
+            self.backend_url + "/v1" + path,
             data=payload,
             method="POST",
             headers={
