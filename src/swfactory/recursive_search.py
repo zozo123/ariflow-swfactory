@@ -20,11 +20,16 @@ import math
 import time
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from swfactory.adaptive_information import (
+    InformationBudgetDecision,
+    InformationBudgetPolicy,
+    evaluate_information_budget,
+)
 from swfactory.evolution import (
     DEFAULT_STRATEGIES,
     REQUIRED_DIMENSIONS,
@@ -38,6 +43,7 @@ from swfactory.evolution import (
 )
 from swfactory.generations import CampaignBudget, Dimension
 from swfactory.phase_control import Phase, PhaseObservation, assess
+from swfactory.population_execution import PopulationExecutionReport
 from swfactory.population_manifest import (
     PopulationManifest,
     PopulationTelemetry,
@@ -369,6 +375,8 @@ class RecursiveRoundPlan:
     population_manifest: PopulationManifest | None = None
     population_telemetry_digest: str | None = None
     population_telemetry: PopulationTelemetry | None = None
+    information_budget_digest: str | None = None
+    information_budget: InformationBudgetDecision | None = None
     estimated_compute_units: float = 0.0
     authority: str = RECURSIVE_SEARCH_AUTHORITY
 
@@ -406,6 +414,16 @@ class RecursiveRoundPlan:
             self.population_telemetry.validate()
             if self.population_telemetry_digest != self.population_telemetry.digest():
                 raise CampaignError("embedded population telemetry digest mismatch")
+        if self.information_budget is not None:
+            self.information_budget.validate()
+            if self.information_budget_digest != self.information_budget.digest():
+                raise CampaignError("embedded information budget digest mismatch")
+            if (
+                self.population_telemetry is not None
+                and self.information_budget.source_manifest_digest
+                != self.population_telemetry.manifest_digest
+            ):
+                raise CampaignError("information budget is bound to another population telemetry source")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -426,6 +444,7 @@ class RecursiveRoundPlan:
             "search_provenance_digest": self.search_provenance_digest,
             "population_manifest_digest": self.population_manifest_digest,
             "population_telemetry_digest": self.population_telemetry_digest,
+            "information_budget_digest": self.information_budget_digest,
             "estimated_compute_units": self.estimated_compute_units,
         }
         if self.swarm_plan is not None:
@@ -436,6 +455,8 @@ class RecursiveRoundPlan:
             document["population_manifest"] = self.population_manifest.canonical_dict()
         if self.population_telemetry is not None:
             document["population_telemetry"] = self.population_telemetry.canonical_dict()
+        if self.information_budget is not None:
+            document["information_budget"] = self.information_budget.canonical_dict()
         return document
 
     def digest(self) -> str:
@@ -792,6 +813,9 @@ def plan_adaptive_round(
     debt_pressure: float = 0.0,
     swarm_budget: SwarmBudget | None = None,
     population_telemetry: PopulationTelemetry | None = None,
+    population_execution_report: PopulationExecutionReport | None = None,
+    previous_population_manifest: PopulationManifest | None = None,
+    information_budget_policy: InformationBudgetPolicy | None = None,
 ) -> RecursiveRoundPlan:
     """Join recursive search, phase metacognition and population allocation.
 
@@ -816,6 +840,12 @@ def plan_adaptive_round(
         debt_pressure=debt_pressure,
     )
     phase = assess(observation, previous_phase=previous_phase)
+    if population_execution_report is not None:
+        population_execution_report.validate()
+        execution_telemetry = population_execution_report.telemetry
+        if population_telemetry is not None and population_telemetry.digest() != execution_telemetry.digest():
+            raise CampaignError("population telemetry disagrees with the retained execution report")
+        population_telemetry = execution_telemetry
     if population_telemetry is not None:
         population_telemetry.validate()
     swarm_observation = _swarm_observation(
@@ -843,12 +873,28 @@ def plan_adaptive_round(
         max_exact_replays=min(2, max(1, max_parallel)),
         max_compute_units=max(16.0, float(max_candidates * 12)),
     )
+    information_budget = None
+    if population_execution_report is not None:
+        information_budget = evaluate_information_budget(
+            population_execution_report,
+            base_budget=effective_budget,
+            manifest=previous_population_manifest,
+            policy=information_budget_policy,
+        )
+        effective_budget = information_budget.next_budget
     swarm = allocate_population(
         phase,
         swarm_observation,
         budget=effective_budget,
         hotspots=hotspots,
+        mode_override=(information_budget.mode_override if information_budget is not None else None),
+        role_caps=(information_budget.role_cap_map() if information_budget is not None else None),
     )
+    if information_budget is not None:
+        swarm = replace(
+            swarm,
+            reason=f"{swarm.reason}; information-budget={information_budget.digest()}",
+        )
     board = blackboard or ArtifactBlackboard()
     provenance = swarm.provenance(
         posture=base.posture.value,
@@ -880,6 +926,8 @@ def plan_adaptive_round(
         population_manifest=manifest,
         population_telemetry_digest=(population_telemetry.digest() if population_telemetry is not None else None),
         population_telemetry=population_telemetry,
+        information_budget_digest=(information_budget.digest() if information_budget is not None else None),
+        information_budget=information_budget,
         estimated_compute_units=swarm.estimated_compute_units,
     )
 
