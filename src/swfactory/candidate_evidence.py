@@ -349,6 +349,11 @@ def render_candidate_result(bundle: CandidateEvidenceBundle) -> str:
             if bundle.inherited_recipe_sha256 is not None
             else []
         ),
+        *(
+            [f"- Search provenance: `{bundle.search_provenance_digest}`"]
+            if bundle.search_provenance_digest is not None
+            else []
+        ),
         f"- Evidence manifest: `{bundle.digest()}`",
         "",
         "## Retained evidence",
