@@ -14,6 +14,12 @@ import os
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from swfactory.adaptive_information import (
+    budget_from_manifest,
+    evaluate_information_budget,
+    load_information_budget,
+    write_information_budget,
+)
 from swfactory.backend_population import BackendPopulationRunner, PopulationTaskInput
 from swfactory.call_accounting import CallAttempt, CallLedger
 from swfactory.execution_binding import execute_managed_population
@@ -37,6 +43,7 @@ CONTROL_FILE = "population-search.json"
 PIN_FILE = "population-search-pin.json"
 REPORT_FILE = "population-execution.json"
 BUDGET_FILE = "population-budget.json"
+INFORMATION_BUDGET_FILE = "population-information-budget.json"
 SCHEMA_VERSION = 1
 AUTHORITY = "search-only"
 DEFAULT_EXCERPT_CHARS = 4096
@@ -359,6 +366,25 @@ def execute_population_stage(
 
     _settle_population_budget(ctx, spec, ledger, budget_attempt, report)
 
+    information_budget_path = ctx.state.root / INFORMATION_BUDGET_FILE
+    if information_budget_path.is_file():
+        information_budget = load_information_budget(information_budget_path)
+        if information_budget.source_manifest_digest != spec.manifest.digest():
+            raise PopulationManifestError(
+                "retained information budget belongs to another population manifest"
+            )
+        if information_budget.source_execution_report_digest != report.digest():
+            raise PopulationManifestError(
+                "retained information budget belongs to another execution report"
+            )
+    else:
+        information_budget = evaluate_information_budget(
+            report,
+            base_budget=budget_from_manifest(spec.manifest),
+            manifest=spec.manifest,
+        )
+        write_information_budget(information_budget_path, information_budget)
+
     environment = os.environ if env is None else env
     runner = BackendPopulationRunner(
         backend_url=environment.get("SWF_BACKEND_URL", ""),
@@ -411,6 +437,18 @@ def execute_population_stage(
         f"{ctx.art}/population-execution.json",
         json.dumps(
             {**report.canonical_dict(), "report_digest": report.digest()},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+    )
+    ctx.write_artifact(
+        f"{ctx.art}/population-information-budget.json",
+        json.dumps(
+            {
+                **information_budget.canonical_dict(),
+                "decision_digest": information_budget.digest(),
+            },
             indent=2,
             sort_keys=True,
         )
