@@ -277,6 +277,45 @@ class PopulationTelemetry:
         return _digest(self.canonical_dict())
 
 
+def behavior_receipt_from_document(document: Mapping[str, Any]) -> BehaviorReceipt:
+    """Rehydrate one provider behavior receipt and re-check its bounded telemetry contract."""
+
+    receipt = BehaviorReceipt(
+        task_id=str(document["task_id"]),
+        state=str(document["state"]),
+        behavior_signature=tuple(str(value) for value in document.get("behavior_signature", ())),
+        candidate_digest=(
+            str(document["candidate_digest"])
+            if document.get("candidate_digest") is not None
+            else None
+        ),
+        evidence_digest=(
+            str(document["evidence_digest"])
+            if document.get("evidence_digest") is not None
+            else None
+        ),
+        provider=(
+            str(document["provider"])
+            if document.get("provider") is not None
+            else None
+        ),
+        model=(
+            str(document["model"])
+            if document.get("model") is not None
+            else None
+        ),
+        runtime=(
+            str(document["runtime"])
+            if document.get("runtime") is not None
+            else None
+        ),
+        cost_usd=float(document.get("cost_usd", 0.0)),
+        duration_s=float(document.get("duration_s", 0.0)),
+    )
+    receipt.validate()
+    return receipt
+
+
 def population_telemetry_from_document(document: Mapping[str, Any]) -> PopulationTelemetry:
     """Rehydrate retained population telemetry and reject inconsistent counters or authority."""
 
