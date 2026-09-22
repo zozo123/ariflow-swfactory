@@ -13,6 +13,7 @@ import json
 import threading
 import time
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
@@ -22,6 +23,8 @@ from swfactory.population_manifest import (
     PopulationManifest,
     PopulationManifestError,
     PopulationTelemetry,
+    behavior_receipt_from_document,
+    population_telemetry_from_document,
     summarize_population,
 )
 from swfactory.provider_binding import BoundPopulationTask, ProviderBindingManifest
@@ -104,6 +107,72 @@ class PopulationExecutionReport:
 
     def digest(self) -> str:
         return _digest(self.canonical_dict())
+
+
+def population_execution_report_from_document(
+    document: Mapping[str, Any],
+) -> PopulationExecutionReport:
+    """Rehydrate one retained managed-population report and re-check every binding."""
+
+    raw_receipts = document.get("receipts")
+    raw_telemetry = document.get("telemetry")
+    if not isinstance(raw_receipts, list):
+        raise PopulationManifestError("population execution receipts must be an array")
+    if not isinstance(raw_telemetry, Mapping):
+        raise PopulationManifestError("population execution telemetry must be an object")
+
+    receipts = tuple(
+        behavior_receipt_from_document(row)
+        for row in raw_receipts
+        if isinstance(row, Mapping)
+    )
+    if len(receipts) != len(raw_receipts):
+        raise PopulationManifestError("every population execution receipt must be an object")
+    report = PopulationExecutionReport(
+        population_manifest_digest=str(document["population_manifest_digest"]),
+        provider_binding_digest=str(document["provider_binding_digest"]),
+        receipts=receipts,
+        telemetry=population_telemetry_from_document(raw_telemetry),
+        cancelled=bool(document["cancelled"]),
+        started_tasks=int(document["started_tasks"]),
+        authority=str(document.get("authority", POPULATION_EXECUTION_AUTHORITY)),
+        scheduler=str(document.get("scheduler", "airflow")),
+        schema_version=int(document.get("schema_version", POPULATION_EXECUTION_SCHEMA_VERSION)),
+    )
+    report.validate()
+    return report
+
+
+def write_population_execution_report(
+    path: Path,
+    report: PopulationExecutionReport,
+) -> str:
+    """Atomically retain a canonical report plus its digest."""
+
+    document = report.canonical_dict()
+    digest = report.digest()
+    document["report_digest"] = digest
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(
+        json.dumps(document, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+    return digest
+
+
+def load_population_execution_report(path: Path) -> PopulationExecutionReport:
+    """Load and verify a retained population execution report."""
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise PopulationManifestError("population execution report must be a JSON object")
+    expected = raw.get("report_digest")
+    report = population_execution_report_from_document(raw)
+    if expected is not None and str(expected) != report.digest():
+        raise PopulationManifestError("population execution report digest mismatch")
+    return report
 
 
 class PopulationExecutor:
