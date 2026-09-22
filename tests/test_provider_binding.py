@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-import pytest
+import json
 
+import pytest
+from typer.testing import CliRunner
+
+from swfactory.cli import app
 from swfactory.population_manifest import PopulationManifestError, build_population_manifest
 from swfactory.provider_binding import (
     ProviderChoiceSet,
@@ -113,3 +117,59 @@ def test_binding_does_not_require_axes_a_lane_never_declared() -> None:
     assert all(task.provider is None for task in bound.tasks)
     assert all(task.model is not None for task in bound.tasks)
     assert all(task.runtime is not None for task in bound.tasks)
+
+
+def test_cli_binds_persisted_population_manifest(tmp_path) -> None:
+    manifest = _manifest()
+    plan_path = tmp_path / "plan.json"
+    choices_path = tmp_path / "choices.json"
+    plan_path.write_text(
+        json.dumps({"plan": {"population_manifest": manifest.canonical_dict()}}),
+        encoding="utf-8",
+    )
+    choices_path.write_text(
+        json.dumps(
+            {
+                "model": ["fast", "deep", "critic"],
+                "prompt": ["direct", "counterfactual", "decompose"],
+                "runtime": ["linux-a", "linux-b"],
+                "verifier": ["unit", "property", "adversarial"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["population-bind", str(plan_path), str(choices_path), "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert document["authority"] == "search-only"
+    assert document["scheduler"] == "airflow"
+    assert document["population_manifest_digest"] == manifest.digest()
+    assert document["provider_binding_digest"].startswith("sha256:")
+    assert len(document["binding"]["tasks"]) == len(manifest.tasks)
+
+
+def test_cli_refuses_missing_required_provider_choice(tmp_path) -> None:
+    manifest = _manifest()
+    plan_path = tmp_path / "plan.json"
+    choices_path = tmp_path / "choices.json"
+    plan_path.write_text(
+        json.dumps({"plan": {"population_manifest": manifest.canonical_dict()}}),
+        encoding="utf-8",
+    )
+    choices_path.write_text(
+        json.dumps({"runtime": ["linux-a"]}),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["population-bind", str(plan_path), str(choices_path), "--json"],
+    )
+
+    assert result.exit_code == 2
+    assert "no provider choices: model" in result.output
