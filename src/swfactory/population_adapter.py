@@ -317,13 +317,20 @@ class PopulationArtifactStore:
     def retain(self, *, invocation_digest: str, output: str) -> tuple[str, Path]:
         _require_sha256(invocation_digest, field="invocation_digest")
         raw = output.encode()
-        digest = "sha256:" + hashlib.sha256(raw).hexdigest()
-        path = self.root / (digest.removeprefix("sha256:") + ".json")
+        output_digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+        artifact_digest = _digest(
+            {
+                "invocation_digest": invocation_digest,
+                "output_sha256": output_digest,
+            }
+        )
+        path = self.root / (artifact_digest.removeprefix("sha256:") + ".json")
         document = {
             "schema_version": POPULATION_ADAPTER_SCHEMA_VERSION,
             "authority": POPULATION_ADAPTER_AUTHORITY,
+            "artifact_digest": artifact_digest,
             "invocation_digest": invocation_digest,
-            "output_sha256": digest,
+            "output_sha256": output_digest,
             "output": output,
         }
         encoded = json.dumps(document, sort_keys=True, ensure_ascii=False, indent=2) + "\n"
@@ -335,20 +342,30 @@ class PopulationArtifactStore:
             tmp = path.with_name(path.name + ".tmp")
             tmp.write_text(encoded, encoding="utf-8")
             tmp.replace(path)
-        return digest, path
+        return artifact_digest, path
 
     def read(self, digest: str) -> dict[str, Any]:
         _require_sha256(digest, field="artifact_digest")
         path = self.root / (digest.removeprefix("sha256:") + ".json")
         raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict) or raw.get("output_sha256") != digest:
+        if not isinstance(raw, dict) or raw.get("artifact_digest") != digest:
             raise PopulationManifestError("population artifact document is corrupt")
         output = raw.get("output")
-        if not isinstance(output, str):
-            raise PopulationManifestError("population artifact output is invalid")
-        actual = "sha256:" + hashlib.sha256(output.encode()).hexdigest()
-        if actual != digest:
-            raise PopulationManifestError("population artifact bytes do not match digest")
+        invocation_digest = raw.get("invocation_digest")
+        output_digest = raw.get("output_sha256")
+        if not isinstance(output, str) or not isinstance(invocation_digest, str) or not isinstance(output_digest, str):
+            raise PopulationManifestError("population artifact document is invalid")
+        actual_output = "sha256:" + hashlib.sha256(output.encode()).hexdigest()
+        if actual_output != output_digest:
+            raise PopulationManifestError("population artifact bytes do not match output digest")
+        actual_artifact = _digest(
+            {
+                "invocation_digest": invocation_digest,
+                "output_sha256": output_digest,
+            }
+        )
+        if actual_artifact != digest:
+            raise PopulationManifestError("population artifact provenance does not match digest")
         return raw
 
 
