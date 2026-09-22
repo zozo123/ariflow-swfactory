@@ -129,3 +129,69 @@ def test_effective_independent_search_is_a_count_not_a_probability() -> None:
     observation.validate()
 
     assert observation.effective_independent_search == 7.5
+
+
+def test_low_effective_independence_buys_diversity_not_duplicate_agents() -> None:
+    assessment = _phase()
+    budget = SwarmBudget(
+        max_agents=12,
+        max_parallel=8,
+        max_deep_agents=2,
+        max_exact_replays=1,
+    )
+    collapsed = allocate_population(
+        assessment,
+        _observation(
+            effective_independent_search=1.0,
+            mean_correlation=0.0,
+            novelty=1.0,
+            resource_pressure=0.0,
+        ),
+        budget=budget,
+    )
+    independent = allocate_population(
+        assessment,
+        _observation(
+            effective_independent_search=12.0,
+            mean_correlation=0.0,
+            novelty=1.0,
+            resource_pressure=0.0,
+        ),
+        budget=budget,
+    )
+
+    def search_width(plan) -> int:
+        return sum(
+            lane.count
+            for lane in plan.lanes
+            if lane.role in {AgentRole.EXPLORER, AgentRole.MUTATOR}
+        )
+
+    assert search_width(collapsed) > search_width(independent)
+
+
+def test_resource_pressure_narrows_the_population_before_jam() -> None:
+    assessment = _phase()
+    budget = SwarmBudget(
+        max_agents=12,
+        max_parallel=8,
+        max_deep_agents=2,
+        max_exact_replays=1,
+    )
+    relaxed = allocate_population(
+        assessment,
+        _observation(resource_pressure=0.0),
+        budget=budget,
+    )
+    pressured = allocate_population(
+        assessment,
+        _observation(resource_pressure=1.0),
+        budget=budget,
+    )
+
+    relaxed_count = sum(lane.count for lane in relaxed.lanes)
+    pressured_count = sum(lane.count for lane in pressured.lanes)
+
+    assert pressured_count < relaxed_count
+    assert pressured.estimated_compute_units < relaxed.estimated_compute_units
+    assert "resource-cap=3/12" in pressured.reason
