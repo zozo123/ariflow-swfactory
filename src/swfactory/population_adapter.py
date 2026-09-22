@@ -117,6 +117,7 @@ class PopulationAdapterResult:
 class PopulationAdapter(Protocol):
     provider: str
     credential_capability: str | None
+    credential_env: str | None
 
     def execute(
         self,
@@ -202,6 +203,7 @@ class HttpPopulationAdapter:
         self.config = config
         self.provider = config.provider
         self.credential_capability = config.credential_capability
+        self.credential_env = config.credential_env
         self._open = opener or urllib.request.build_opener(_NoRedirect()).open
 
     def execute(
