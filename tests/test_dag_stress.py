@@ -255,8 +255,8 @@ def test_fan_out_returned_issues_x_targets(stress: dict) -> None:
         assert enriched["cell_id"].startswith("cell_")
         assert enriched["cell_epoch"] == 1
         assert enriched["cell_managed"] is False
-        assert enriched["cell_policy_digest"] is None
-        assert enriched["cell_generation"] is None
+        assert "cell_policy_digest" not in enriched
+        assert "cell_generation" not in enriched
     assert len({job["cell_id"] for job in actual}) == len(expected)
 
 
