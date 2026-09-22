@@ -52,29 +52,6 @@ class Scm(Protocol):
         """Numeric ref -> GitHub issue; path -> front-matter markdown file."""
         ...
 
-    def search_issues(self, query: str, *, limit: int = 20) -> list[dict[str, object]]:
-        """Read-only issue search used by backend reconciliation under a scoped lease."""
-        rows = self._gh_json(
-            [
-                "gh",
-                "issue",
-                "list",
-                "--repo",
-                self.repo,
-                "--state",
-                "all",
-                "--search",
-                query,
-                "--limit",
-                str(limit),
-                "--json",
-                "url,body,title",
-            ]
-        )
-        if not isinstance(rows, list):
-            raise StageError("scm", "gh issue list returned a non-array", retryable=True)
-        return [row for row in rows if isinstance(row, dict)]
-
     def publish(
         self,
         *,
@@ -601,6 +578,29 @@ class GitHubScm:
         data = self._gh_json(["gh", "issue", "view", ref.strip(), "--repo", self.repo, "--json", _ISSUE_FIELDS])
         return _issue_from_gh(data)  # type: ignore[arg-type]
 
+    def search_issues(self, query: str, *, limit: int = 20) -> list[dict[str, object]]:
+        """Read-only issue search used by backend reconciliation under a scoped GitHub lease."""
+        rows = self._gh_json(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                self.repo,
+                "--state",
+                "all",
+                "--search",
+                query,
+                "--limit",
+                str(limit),
+                "--json",
+                "url,body,title",
+            ]
+        )
+        if not isinstance(rows, list):
+            raise StageError("scm", "gh issue list returned a non-array", retryable=True)
+        return [row for row in rows if isinstance(row, dict)]
+
     def list_open_issues(self, label: str, *, limit: int) -> list[Issue]:
         """The open issues carrying ``label``: a scheduled line's backlog (``intake_governance``).
 
@@ -768,9 +768,15 @@ class GitHubScm:
         cwd: Path | None,
         input: bytes | None = None,
     ) -> str:
+        # Ambient-token instances preserve the legacy adapter contract. Backend-issued scoped
+        # tokens get an explicit scrubbed environment so they cannot inherit a broader credential.
+        if self.token is None:
+            return _run(argv, cwd, input)
         return _run(argv, cwd, input, env=self._environment)
 
     def _gh_json(self, argv: Sequence[str]) -> object:
+        if self.token is None:
+            return _gh_json(argv)
         return _gh_json(argv, env=self._environment)
 
     @property
