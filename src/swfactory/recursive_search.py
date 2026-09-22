@@ -38,6 +38,7 @@ from swfactory.evolution import (
 )
 from swfactory.generations import CampaignBudget, Dimension
 from swfactory.phase_control import Phase, PhaseObservation, assess
+from swfactory.population_manifest import PopulationManifest, build_population_manifest
 from swfactory.swarm_dynamics import (
     DisagreementHotspot,
     SearchProvenance,
@@ -368,6 +369,8 @@ class RecursiveRoundPlan:
     search_provenance_digest: str | None = None
     swarm_plan: SwarmPlan | None = None
     search_provenance: SearchProvenance | None = None
+    population_manifest_digest: str | None = None
+    population_manifest: PopulationManifest | None = None
     estimated_compute_units: float = 0.0
     authority: str = RECURSIVE_SEARCH_AUTHORITY
 
@@ -393,6 +396,14 @@ class RecursiveRoundPlan:
             self.search_provenance.validate()
             if self.search_provenance_digest != self.search_provenance.digest():
                 raise CampaignError("embedded search provenance digest mismatch")
+        if self.population_manifest is not None:
+            self.population_manifest.validate()
+            if self.population_manifest_digest != self.population_manifest.digest():
+                raise CampaignError("embedded population manifest digest mismatch")
+            if self.swarm_plan_digest != self.population_manifest.swarm_plan_digest:
+                raise CampaignError("population manifest is bound to another swarm plan")
+            if self.search_provenance_digest != self.population_manifest.search_provenance_digest:
+                raise CampaignError("population manifest is bound to another search provenance receipt")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -411,12 +422,15 @@ class RecursiveRoundPlan:
             "phase_assessment_digest": self.phase_assessment_digest,
             "swarm_plan_digest": self.swarm_plan_digest,
             "search_provenance_digest": self.search_provenance_digest,
+            "population_manifest_digest": self.population_manifest_digest,
             "estimated_compute_units": self.estimated_compute_units,
         }
         if self.swarm_plan is not None:
             document["swarm_plan"] = self.swarm_plan.canonical_dict()
         if self.search_provenance is not None:
             document["search_provenance"] = self.search_provenance.canonical_dict()
+        if self.population_manifest is not None:
+            document["population_manifest"] = self.population_manifest.canonical_dict()
         return document
 
     def digest(self) -> str:
@@ -838,7 +852,11 @@ def plan_adaptive_round(
         artifact_digests=base.artifact_digests,
         law_digests=base.law_digests,
     )
-    active_population = max(1, sum(lane.count for lane in swarm.lanes))
+    manifest = build_population_manifest(
+        swarm,
+        search_provenance_digest=provenance.digest(),
+    )
+    active_population = max(1, len(manifest.tasks))
     return RecursiveRoundPlan(
         depth=base.depth,
         input_head=base.input_head,
@@ -854,6 +872,8 @@ def plan_adaptive_round(
         search_provenance_digest=provenance.digest(),
         swarm_plan=swarm,
         search_provenance=provenance,
+        population_manifest_digest=manifest.digest(),
+        population_manifest=manifest,
         estimated_compute_units=swarm.estimated_compute_units,
     )
 
