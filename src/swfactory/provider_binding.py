@@ -145,6 +145,39 @@ class ProviderBindingManifest:
         return _digest(self.canonical_dict())
 
 
+def provider_choices_from_document(document: Mapping[str, Any]) -> ProviderChoiceSet:
+    """Load an allowlist document without accepting unknown axes or non-string choices."""
+
+    allowed = {
+        "provider",
+        "model",
+        "runtime",
+        "prompt",
+        "context",
+        "mutation",
+        "verifier",
+        "attack_surface",
+    }
+    unknown = sorted(set(document) - allowed)
+    if unknown:
+        raise PopulationManifestError(
+            "unknown provider choice axes: " + ", ".join(unknown)
+        )
+
+    values: dict[str, tuple[str, ...]] = {}
+    for axis in allowed:
+        raw = document.get(axis, ())
+        if not isinstance(raw, (list, tuple)):
+            raise PopulationManifestError(f"provider choices for {axis!r} must be an array")
+        choices = tuple(str(value).strip() for value in raw)
+        if any(not value for value in choices):
+            raise PopulationManifestError(f"provider choices for {axis!r} must be nonempty strings")
+        if len(set(choices)) != len(choices):
+            raise PopulationManifestError(f"provider choices for {axis!r} must be distinct")
+        values[axis] = choices
+    return ProviderChoiceSet(**values)
+
+
 def _pick(
     task: PopulationTask,
     choices: ProviderChoiceSet,
