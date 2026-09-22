@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -352,6 +353,10 @@ def test_research_adapt_cli_consumes_managed_population_execution_report(tmp_pat
         )
         for index in range(4)
     )
+    telemetry = replace(
+        telemetry,
+        receipt_digests=tuple(sorted(receipt.digest() for receipt in receipts)),
+    )
     execution = PopulationExecutionReport(
         population_manifest_digest=telemetry.manifest_digest,
         provider_binding_digest="sha256:" + "9" * 64,
@@ -404,6 +409,10 @@ def test_research_adapt_refuses_two_population_feedback_sources(tmp_path: Path) 
             behavior_signature=(f"trajectory-{index}",),
         )
         for index in range(4)
+    )
+    telemetry = replace(
+        telemetry,
+        receipt_digests=tuple(sorted(receipt.digest() for receipt in receipts)),
     )
     execution = PopulationExecutionReport(
         population_manifest_digest=telemetry.manifest_digest,
