@@ -114,7 +114,6 @@ def _request(
     )
 
 
-T = TypeVar("T")
 
 
 def _lease_binding(
@@ -152,7 +151,7 @@ def _lease_binding(
     )
 
 
-def _with_github_lease(
+def _with_github_lease[T](
     factory: Factory,
     cell: dict[str, Any],
     operation_key: str,
@@ -277,6 +276,17 @@ def _publish(factory: Factory, base_branch: str, body: dict[str, Any]) -> dict[s
 
     def publish() -> dict[str, Any]:
         def apply(scoped: GitHubScm) -> dict[str, Any]:
+            # Re-observe inside the write lease before mutating. Reconciliation may have happened
+            # under a previous read lease; another publisher can win between those two moments.
+            before = judge(scoped.observe_publication(branch))
+            if before.status == "committed":
+                return dict(before.result)
+            if before.status not in {"definitely_absent"}:
+                raise StageError(
+                    "scm",
+                    f"publication preflight refused remote state: {before.detail}",
+                    retryable=before.status == "ambiguous",
+                )
             scoped.publish(
                 branch=branch,
                 patch=patch,
