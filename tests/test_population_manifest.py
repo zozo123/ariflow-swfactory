@@ -10,6 +10,7 @@ from swfactory.population_manifest import (
     BehaviorReceipt,
     PopulationManifestError,
     build_population_manifest,
+    population_manifest_from_document,
     summarize_population,
 )
 from swfactory.swarm_dynamics import (
@@ -366,3 +367,28 @@ def test_manifest_rejects_tasks_replayed_under_another_provenance_root() -> None
 
     with pytest.raises(PopulationManifestError, match="do not match manifest provenance"):
         tampered.validate()
+
+
+
+def test_persisted_population_manifest_requires_boolean_verifier_flag() -> None:
+    manifest = build_population_manifest(
+        _plan(),
+        search_provenance_digest="sha256:" + "5" * 64,
+    )
+    document = manifest.canonical_dict()
+    document["tasks"][0]["independent_verification"] = "false"
+
+    with pytest.raises(PopulationManifestError, match="must be boolean"):
+        population_manifest_from_document(document)
+
+
+def test_persisted_population_manifest_rejects_non_object_coordinates() -> None:
+    manifest = build_population_manifest(
+        _plan(),
+        search_provenance_digest="sha256:" + "6" * 64,
+    )
+    document = manifest.canonical_dict()
+    document["tasks"][0]["diversity_coordinates"].append("not-an-object")
+
+    with pytest.raises(PopulationManifestError, match="coordinate entries must be objects"):
+        population_manifest_from_document(document)
