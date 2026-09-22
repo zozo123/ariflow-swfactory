@@ -624,7 +624,10 @@ def extract_search_laws(
         laws.append(
             _law(
                 LawKind.VERIFY,
-                "search has compressed to an evidence-complete low-disagreement basin; narrow and verify exact descendants",
+                (
+                    "search has compressed to an evidence-complete low-disagreement basin; "
+                    "narrow and verify exact descendants"
+                ),
                 min(1.0, (last.evidence_rate + last.required_pass_rate + (1.0 - last.disagreement)) / 3.0),
                 max(1, last.answered),
                 ((last.winner_strategy,) if last.winner_strategy is not None else ()),
