@@ -98,6 +98,11 @@ class PopulationExecutionReport:
             raise PopulationManifestError("population execution telemetry belongs to another manifest")
         if len(self.receipts) != self.telemetry.receipts:
             raise PopulationManifestError("population execution receipt count disagrees with telemetry")
+        expected_receipts = tuple(sorted(receipt.digest() for receipt in self.receipts))
+        if expected_receipts != self.telemetry.receipt_digests:
+            raise PopulationManifestError("population execution telemetry is not bound to its receipts")
+        if self.started_tasks < len(self.receipts):
+            raise PopulationManifestError("population execution has more receipts than started tasks")
 
     def canonical_dict(self) -> dict[str, Any]:
         self.validate()
