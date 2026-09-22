@@ -173,3 +173,14 @@ def test_cli_refuses_missing_required_provider_choice(tmp_path) -> None:
 
     assert result.exit_code == 2
     assert "no provider choices: model" in result.output
+
+
+
+def test_programmatic_provider_choices_reject_duplicate_values() -> None:
+    choices = ProviderChoiceSet(
+        model=("same", "same"),
+        runtime=("linux",),
+    )
+
+    with pytest.raises(PopulationManifestError, match="must be distinct"):
+        bind_population_manifest(_manifest(), choices=choices)
