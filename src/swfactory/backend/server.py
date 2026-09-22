@@ -27,13 +27,16 @@ from swfactory.control import ControlError
 from swfactory.idempotency import OperationError
 
 from .core_service import operation as core_operation
+from .population_service import operation as population_operation
 from .scm_service import operation as scm_operation
 from .service import Factory, Refused
 
 PREFIX = "/v1"
 MAX_BODY = 64 * 1024
 MAX_SCM_BODY = 16 * 1024 * 1024
+MAX_POPULATION_BODY = 512 * 1024
 LARGE_SCM_ROUTES = {"/v1/scm/publish", "/v1/scm/open-issue"}
+POPULATION_ROUTES = {"/v1/population/execute"}
 
 
 def _json_default(value: Any) -> Any:
@@ -94,6 +97,8 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
         def _body_limit(self) -> int:
             if self.command == "POST" and self.path in LARGE_SCM_ROUTES:
                 return MAX_SCM_BODY
+            if self.command == "POST" and self.path in POPULATION_ROUTES:
+                return MAX_POPULATION_BODY
             return MAX_BODY
 
         def _read_body(self) -> dict[str, Any]:
@@ -147,6 +152,8 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                     status, payload = self._compatibility(body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/scm/"):
                     status, payload = 200, scm_operation(factory, self.path[len(PREFIX) :], body)
+                elif self.command == "POST" and self.path.startswith(PREFIX + "/population/"):
+                    status, payload = 200, population_operation(factory, self.path[len(PREFIX) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/core/"):
                     status, payload = 200, core_operation(factory, self.path[len(PREFIX) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/"):
