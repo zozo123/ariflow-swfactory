@@ -40,8 +40,10 @@ from swfactory.generations import CampaignBudget, Dimension
 from swfactory.phase_control import Phase, PhaseObservation, assess
 from swfactory.swarm_dynamics import (
     DisagreementHotspot,
+    SearchProvenance,
     SwarmBudget,
     SwarmObservation,
+    SwarmPlan,
     allocate_population,
 )
 from swfactory.work_executor import Cancellation
@@ -364,6 +366,8 @@ class RecursiveRoundPlan:
     phase_assessment_digest: str | None = None
     swarm_plan_digest: str | None = None
     search_provenance_digest: str | None = None
+    swarm_plan: SwarmPlan | None = None
+    search_provenance: SearchProvenance | None = None
     estimated_compute_units: float = 0.0
     authority: str = RECURSIVE_SEARCH_AUTHORITY
 
@@ -380,10 +384,19 @@ class RecursiveRoundPlan:
             raise CampaignError("recursive round max_parallel must be positive")
         if self.authority != RECURSIVE_SEARCH_AUTHORITY:
             raise CampaignError("recursive search plans are exploration-only")
+        if self.swarm_plan is not None:
+            if self.swarm_plan.authority != "search-only":
+                raise CampaignError("embedded swarm plan is not search-only")
+            if self.swarm_plan_digest != self.swarm_plan.digest():
+                raise CampaignError("embedded swarm plan digest mismatch")
+        if self.search_provenance is not None:
+            self.search_provenance.validate()
+            if self.search_provenance_digest != self.search_provenance.digest():
+                raise CampaignError("embedded search provenance digest mismatch")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
-        return {
+        document = {
             "schema_version": RECURSIVE_SEARCH_SCHEMA_VERSION,
             "authority": self.authority,
             "depth": self.depth,
@@ -400,6 +413,11 @@ class RecursiveRoundPlan:
             "search_provenance_digest": self.search_provenance_digest,
             "estimated_compute_units": self.estimated_compute_units,
         }
+        if self.swarm_plan is not None:
+            document["swarm_plan"] = self.swarm_plan.canonical_dict()
+        if self.search_provenance is not None:
+            document["search_provenance"] = self.search_provenance.canonical_dict()
+        return document
 
     def digest(self) -> str:
         return _digest(self.to_dict())
@@ -834,6 +852,8 @@ def plan_adaptive_round(
         phase_assessment_digest=_digest(phase.as_dict()),
         swarm_plan_digest=swarm.digest(),
         search_provenance_digest=provenance.digest(),
+        swarm_plan=swarm,
+        search_provenance=provenance,
         estimated_compute_units=swarm.estimated_compute_units,
     )
 
