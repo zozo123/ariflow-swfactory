@@ -799,9 +799,10 @@ def plan_adaptive_round(
                 impact=max(0.5, last.required_pass_rate),
             ),
         )
+    max_agents = max(1, max_candidates * 4)
     effective_budget = swarm_budget or SwarmBudget(
-        max_agents=max(1, max_candidates * 4),
-        max_parallel=max(1, max_parallel),
+        max_agents=max_agents,
+        max_parallel=max(1, min(max_parallel, max_agents)),
         max_deep_agents=max(1, min(max_parallel, 4)),
         max_exact_replays=min(2, max(1, max_parallel)),
         max_compute_units=max(16.0, float(max_candidates * 12)),
