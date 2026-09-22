@@ -6,9 +6,9 @@ from dataclasses import replace
 import pytest
 
 from swfactory.population_execution import (
-    PopulationExecutionReport,
     PopulationCancellation,
     PopulationExecutionPolicy,
+    PopulationExecutionReport,
     PopulationExecutor,
     load_population_execution_report,
     write_population_execution_report,
