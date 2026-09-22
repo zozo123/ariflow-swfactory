@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -212,3 +213,30 @@ def test_population_execution_report_rejects_digest_tampering(tmp_path) -> None:
 
     with pytest.raises(PopulationManifestError, match="report digest mismatch"):
         load_population_execution_report(path)
+
+
+
+def test_population_execution_report_rejects_telemetry_from_other_receipts() -> None:
+    manifest, binding = _bound()
+    report = PopulationExecutor(
+        lambda task: BehaviorReceipt(
+            task_id=task.task_id,
+            state="answered",
+            behavior_signature=(task.task_id,),
+        )
+    ).execute(manifest=manifest, binding=binding)
+
+    tampered = PopulationExecutionReport(
+        population_manifest_digest=report.population_manifest_digest,
+        provider_binding_digest=report.provider_binding_digest,
+        receipts=report.receipts,
+        telemetry=replace(
+            report.telemetry,
+            receipt_digests=tuple("sha256:" + str(index) * 64 for index in range(len(report.receipts))),
+        ),
+        cancelled=report.cancelled,
+        started_tasks=report.started_tasks,
+    )
+
+    with pytest.raises(PopulationManifestError, match="not bound to its receipts"):
+        tampered.validate()
