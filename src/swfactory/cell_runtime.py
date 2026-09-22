@@ -94,9 +94,6 @@ def bind_jobs(jobs: Iterable[dict[str, Any]], bindings: Iterable[dict[str, Any]]
                 cell_epoch=1,
                 cell_managed=False,
             )
-            # Legacy/direct runs have no policy seal in scheduler scratch. The explicit null keeps
-            # every mapped-job schema stable without pretending the worker has authority material.
-            job["cell_policy_digest"] = None
         validate_xcom_document(out)
         return out
 
