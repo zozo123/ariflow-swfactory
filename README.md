@@ -449,6 +449,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `factory.cognitive-harness` | `experimental` | `swfactory.cognitive_harness and swf_domain::cognitive_harness` | tests/test_cognitive_harness.py |
 | `factory.recursive-search` | `experimental` | `swfactory.recursive_search; swfactory research-adapt` | tests/test_recursive_search.py |
 | `factory.swarm-dynamics` | `experimental` | `swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round` | tests/test_swarm_dynamics.py |
+| `factory.population-manifest` | `experimental` | `swfactory.population_manifest via swfactory.recursive_search.plan_adaptive_round` | tests/test_population_manifest.py |
 
 <!-- capability-inventory:end -->
 
