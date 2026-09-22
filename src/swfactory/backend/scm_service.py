@@ -13,7 +13,7 @@ import base64
 import hashlib
 from collections.abc import Callable
 from dataclasses import asdict
-from typing import Any, TypeVar
+from typing import Any
 
 from swfactory.authority import ResourceKind
 from swfactory.core_capabilities import CoreMutationRequest
