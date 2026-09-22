@@ -555,7 +555,10 @@ def allocate_population(
         )
 
     elif mode == ControlMode.COORDINATE:
-        total = min(planning_budget.max_agents, max(4, int(round(budget.max_agents * 0.65))))
+        total = min(
+            planning_budget.max_agents,
+            max(4, int(round(planning_budget.max_agents * 0.65))),
+        )
         explore = max(1, int(round(total * 0.40)))
         synth = max(1, int(round(total * 0.20)))
         critic = max(1, int(round(total * 0.20)))
@@ -680,7 +683,10 @@ def allocate_population(
         )
 
     elif mode == ControlMode.PERTURB:
-        total = min(planning_budget.max_agents, max(3, int(round(budget.max_agents * 0.50))))
+        total = min(
+            planning_budget.max_agents,
+            max(3, int(round(planning_budget.max_agents * 0.50))),
+        )
         lanes.extend(
             [
                 PopulationLane(
