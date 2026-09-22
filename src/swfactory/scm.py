@@ -95,9 +95,7 @@ def _run(
     if argv and argv[0] == "git":
         argv = [argv[0], *_GIT_NO_AUTO_GC, *argv[1:]]
     try:
-        proc = subprocess.run(
-            argv, cwd=cwd, input=input, capture_output=True, check=False, timeout=600, env=env
-        )
+        proc = subprocess.run(argv, cwd=cwd, input=input, capture_output=True, check=False, timeout=600, env=env)
     except FileNotFoundError as e:
         raise StageError("scm", f"{argv[0]} not found on PATH", retryable=False) from e
     except subprocess.TimeoutExpired as e:
