@@ -1528,6 +1528,12 @@ def research_adapt_cmd(
         f"compute={plan.estimated_compute_units:.1f}"
     )
     typer.echo(plan.reason)
+    if plan.swarm_plan is not None:
+        lanes = ", ".join(
+            f"{lane.role.value}:{lane.count}@{lane.compute_tier.value}/{lane.context.value}"
+            for lane in plan.swarm_plan.lanes
+        )
+        typer.echo(f"swarm: {lanes}")
     for law in laws:
         typer.echo(f"{law.kind.value}: {law.statement} ({law.confidence:.2f}, n={law.support})")
 
