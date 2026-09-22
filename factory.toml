@@ -91,6 +91,7 @@ protected = [
   "src/swfactory/cognitive_harness.py",    # System1/System2/gauge/authority split is protected
   "src/swfactory/recursive_search.py",      # meta-search may adapt experiments, never itself mid-run
   "src/swfactory/swarm_dynamics.py",        # population/compute policy is human-maintained here
+  "src/swfactory/population_manifest.py",     # provider-neutral swarm execution contract is protected
   "src/swfactory/security_boundary.py",
   "src/swfactory/security_contract.py",
   "src/swfactory/worker_security.py",
