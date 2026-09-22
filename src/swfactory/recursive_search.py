@@ -878,11 +878,7 @@ def plan_adaptive_round(
         search_provenance=provenance,
         population_manifest_digest=manifest.digest(),
         population_manifest=manifest,
-        population_telemetry_digest=(
-            population_telemetry.digest()
-            if population_telemetry is not None
-            else None
-        ),
+        population_telemetry_digest=(population_telemetry.digest() if population_telemetry is not None else None),
         population_telemetry=population_telemetry,
         estimated_compute_units=swarm.estimated_compute_units,
     )
@@ -947,20 +943,12 @@ def _swarm_observation(
 ) -> SwarmObservation:
     if not signals:
         telemetry_disagreement = (
-            population_telemetry.candidate_disagreement
-            if population_telemetry is not None
-            else 1.0
+            population_telemetry.candidate_disagreement if population_telemetry is not None else 1.0
         )
         telemetry_independence = (
-            population_telemetry.effective_independent_search
-            if population_telemetry is not None
-            else 1.0
+            population_telemetry.effective_independent_search if population_telemetry is not None else 1.0
         )
-        telemetry_correlation = (
-            population_telemetry.mean_correlation
-            if population_telemetry is not None
-            else 0.0
-        )
+        telemetry_correlation = population_telemetry.mean_correlation if population_telemetry is not None else 0.0
         return SwarmObservation(
             effective_independent_search=telemetry_independence,
             mean_correlation=telemetry_correlation,
@@ -986,11 +974,7 @@ def _swarm_observation(
     )
     measured_disagreement = max(
         last.disagreement,
-        (
-            population_telemetry.candidate_disagreement
-            if population_telemetry is not None
-            else 0.0
-        ),
+        (population_telemetry.candidate_disagreement if population_telemetry is not None else 0.0),
     )
     return SwarmObservation(
         effective_independent_search=measured_independence,
@@ -1006,8 +990,7 @@ def _swarm_observation(
             0.0,
             min(
                 1.0,
-                measured_disagreement * (1.0 - last.evidence_rate)
-                + (1.0 - last.required_pass_rate) * 0.25,
+                measured_disagreement * (1.0 - last.evidence_rate) + (1.0 - last.required_pass_rate) * 0.25,
             ),
         ),
     )
