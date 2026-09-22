@@ -83,6 +83,7 @@ class CandidateRequest:
     parent_generation: str | None = None
     parent_candidate: str | None = None
     parent_decision_digest: str | None = None
+    search_provenance_digest: str | None = None
     depth: int = 0
     budget_usd: float = 0.0
     timeout_s: int = 1800
@@ -100,6 +101,7 @@ class CandidateRequest:
                 self.parent_generation or "",
                 self.parent_candidate or "",
                 self.parent_decision_digest or "",
+                self.search_provenance_digest or "",
                 str(self.depth),
             )
         ).encode()
@@ -409,6 +411,7 @@ def plan_requests(
     parent_generation: str | None = None,
     parent_candidate: str | None = None,
     parent_decision_digest: str | None = None,
+    search_provenance_digest: str | None = None,
     depth: int = 0,
 ) -> tuple[CandidateRequest, ...]:
     """Turn a budget and a list of strategies into the exact questions a campaign may ask."""
@@ -429,15 +432,20 @@ def plan_requests(
         raise CampaignError("the first experiment round cannot name a parent decision")
     if depth > 0 and not parent_candidate:
         raise CampaignError("a descendant experiment round requires the previous winner as parent_candidate")
-    if parent_decision_digest is not None:
+    for name, digest in {
+        "parent_decision_digest": parent_decision_digest,
+        "search_provenance_digest": search_provenance_digest,
+    }.items():
+        if digest is None:
+            continue
         prefix = "sha256:"
-        suffix = parent_decision_digest.removeprefix(prefix)
+        suffix = digest.removeprefix(prefix)
         if (
-            not parent_decision_digest.startswith(prefix)
+            not digest.startswith(prefix)
             or len(suffix) != 64
             or any(char not in "0123456789abcdef" for char in suffix)
         ):
-            raise CampaignError("parent_decision_digest must be a canonical sha256 digest")
+            raise CampaignError(f"{name} must be a canonical sha256 digest")
     share = round(budget.max_cost_usd / len(strategies), 6)
     return tuple(
         CandidateRequest(
@@ -449,6 +457,7 @@ def plan_requests(
             parent_generation=parent_generation,
             parent_candidate=parent_candidate,
             parent_decision_digest=parent_decision_digest,
+            search_provenance_digest=search_provenance_digest,
             depth=depth,
             budget_usd=share,
             timeout_s=budget.max_wall_s,
