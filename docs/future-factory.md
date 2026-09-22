@@ -410,6 +410,22 @@ no credential, Cell mutation, publication or promotion capability.
 Provider adapters are still future work; existence of the manifest is not a claim that heterogeneous
 providers are production-wired.
 
+### Deterministic provider binding
+
+The experimental `swfactory.provider_binding` layer consumes those provider-neutral tasks plus a
+human/operator-supplied allowlist of concrete provider, model, runtime, prompt, context, mutation,
+verifier and attack-surface choices.
+
+Each population task already carries deterministic per-axis coordinates. Binding maps each coordinate
+into the corresponding allowlisted choice, producing a `BoundPopulationTask` without changing the
+task id or variant digest. The same manifest and choice set therefore replay to the same concrete
+provider configuration.
+
+A declared required axis with no available choice fails closed. An undeclared axis is not silently
+invented. Provider binding is still search-only data: it does not invoke a model, schedule a task,
+mint a credential, mutate a Cell, publish, merge, approve or promote. Airflow remains the lifecycle
+scheduler and authority remains outside the provider mapping.
+
 ## 12. Local crystals
 
 A local crystal is a frozen exact candidate worth verification.
