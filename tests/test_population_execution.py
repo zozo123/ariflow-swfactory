@@ -8,6 +8,8 @@ from swfactory.population_execution import (
     PopulationCancellation,
     PopulationExecutionPolicy,
     PopulationExecutor,
+    load_population_execution_report,
+    write_population_execution_report,
 )
 from swfactory.population_manifest import (
     BehaviorReceipt,
@@ -164,3 +166,49 @@ def test_population_executor_can_cancel_before_start_without_inventing_receipts(
     assert report.receipts == ()
     assert report.telemetry.receipts == 0
     assert report.telemetry.total_tasks == len(manifest.tasks)
+
+
+
+def test_population_execution_report_round_trips_with_digest(tmp_path) -> None:
+    manifest, binding = _bound()
+
+    def runner(task):
+        return BehaviorReceipt(
+            task_id=task.task_id,
+            state="answered",
+            behavior_signature=(task.task_id,),
+            candidate_digest="sha256:" + "3" * 64,
+        )
+
+    report = PopulationExecutor(runner).execute(manifest=manifest, binding=binding)
+    path = tmp_path / "population-execution.json"
+
+    digest = write_population_execution_report(path, report)
+    restored = load_population_execution_report(path)
+
+    assert digest == report.digest()
+    assert restored == report
+    assert restored.telemetry == report.telemetry
+
+
+def test_population_execution_report_rejects_digest_tampering(tmp_path) -> None:
+    manifest, binding = _bound()
+    report = PopulationExecutor(
+        lambda task: BehaviorReceipt(
+            task_id=task.task_id,
+            state="answered",
+            behavior_signature=(task.task_id,),
+        )
+    ).execute(manifest=manifest, binding=binding)
+    path = tmp_path / "population-execution.json"
+    write_population_execution_report(path, report)
+
+    raw = path.read_text(encoding="utf-8").replace(
+        report.digest(),
+        "sha256:" + "0" * 64,
+        1,
+    )
+    path.write_text(raw, encoding="utf-8")
+
+    with pytest.raises(PopulationManifestError, match="report digest mismatch"):
+        load_population_execution_report(path)
