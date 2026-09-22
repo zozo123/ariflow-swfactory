@@ -226,8 +226,6 @@ def test_future_factory_contract_keeps_one_root_search_authority() -> None:
     assert [line for line in lines if line.startswith("authority:")] == ["authority: search-only"]
     assert "authority_envelope:" in lines
 
-
-
 def _population_telemetry() -> PopulationTelemetry:
     return PopulationTelemetry(
         manifest_digest="sha256:" + "a" * 64,
