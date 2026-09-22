@@ -383,7 +383,10 @@ def execute_population_stage(
             report,
             base_budget=budget_from_manifest(
                 spec.manifest,
-                max_parallel=min(spec.max_parallel, len(spec.manifest.tasks)),
+                max_parallel=min(
+                    spec.max_parallel,
+                    max(1, len(spec.manifest.tasks)),
+                ),
             ),
             manifest=spec.manifest,
         )
