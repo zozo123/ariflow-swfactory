@@ -91,20 +91,20 @@ class CandidateRequest:
     @property
     def logical_id(self) -> str:
         """Stable identity for this exact question, so a replay is recognisable as the same one."""
-        raw = "\0".join(
-            (
-                self.campaign_id,
-                self.cell_id,
-                str(self.epoch),
-                self.strategy.value,
-                self.input_head,
-                self.parent_generation or "",
-                self.parent_candidate or "",
-                self.parent_decision_digest or "",
-                self.search_provenance_digest or "",
-                str(self.depth),
-            )
-        ).encode()
+        identity_parts = [
+            self.campaign_id,
+            self.cell_id,
+            str(self.epoch),
+            self.strategy.value,
+            self.input_head,
+            self.parent_generation or "",
+            self.parent_candidate or "",
+            self.parent_decision_digest or "",
+        ]
+        if self.search_provenance_digest is not None:
+            identity_parts.append(self.search_provenance_digest)
+        identity_parts.append(str(self.depth))
+        raw = "\0".join(identity_parts).encode()
         return "cand_" + hashlib.sha256(raw).hexdigest()[:24]
 
 
