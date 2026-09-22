@@ -15,7 +15,7 @@ import json
 import math
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 from swfactory.swarm_dynamics import (
     AgentRole,
@@ -242,6 +242,53 @@ class PopulationTelemetry:
 
     def digest(self) -> str:
         return _digest(self.canonical_dict())
+
+
+def population_manifest_from_document(document: Mapping[str, Any]) -> PopulationManifest:
+    """Rehydrate a persisted population manifest and re-check every search-only invariant."""
+
+    raw_tasks = document.get("tasks")
+    if not isinstance(raw_tasks, list):
+        raise PopulationManifestError("population manifest tasks must be an array")
+    tasks: list[PopulationTask] = []
+    for raw in raw_tasks:
+        if not isinstance(raw, Mapping):
+            raise PopulationManifestError("population manifest task must be an object")
+        coordinates = raw.get("diversity_coordinates", ())
+        if not isinstance(coordinates, list):
+            raise PopulationManifestError("population diversity coordinates must be an array")
+        tasks.append(
+            PopulationTask(
+                task_id=str(raw["task_id"]),
+                lane_index=int(raw["lane_index"]),
+                replica_index=int(raw["replica_index"]),
+                role=AgentRole(str(raw["role"])),
+                compute_tier=ComputeTier(str(raw["compute_tier"])),
+                context=ContextPolicy(str(raw["context"])),
+                temperature=float(raw["temperature"]),
+                independent_verification=bool(raw["independent_verification"]),
+                diversity_axes=tuple(str(axis) for axis in raw.get("diversity_axes", ())),
+                diversity_coordinates=tuple(
+                    (str(item["axis"]), int(item["seed"]))
+                    for item in coordinates
+                    if isinstance(item, Mapping)
+                ),
+                focus_hotspots=tuple(str(value) for value in raw.get("focus_hotspots", ())),
+                variant_digest=str(raw["variant_digest"]),
+            )
+        )
+    manifest = PopulationManifest(
+        swarm_plan_digest=str(document["swarm_plan_digest"]),
+        search_provenance_digest=str(document["search_provenance_digest"]),
+        phase=str(document["phase"]),
+        mode=str(document["mode"]),
+        tasks=tuple(tasks),
+        authority=str(document.get("authority", POPULATION_MANIFEST_AUTHORITY)),
+        scheduler=str(document.get("scheduler", "airflow")),
+        schema_version=int(document.get("schema_version", POPULATION_MANIFEST_SCHEMA_VERSION)),
+    )
+    manifest.validate()
+    return manifest
 
 
 def build_population_manifest(
