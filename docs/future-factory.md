@@ -372,6 +372,44 @@ Use compute for:
 - finishing already-started verification;
 - recovery.
 
+### Executable population manifests
+
+The experimental `swfactory.population_manifest` layer turns a `SwarmPlan` into an immutable
+provider-neutral task set. It is the bridge between "allocate three verifier trajectories" and a
+runtime adapter that can actually launch those trajectories.
+
+Each task binds:
+
+- swarm-plan digest;
+- search-provenance digest;
+- role and compute tier;
+- context policy;
+- temperature;
+- diversity axes;
+- disagreement hotspots;
+- a deterministic variant digest.
+
+Replicas are different executable questions, not copies with different names. Independent
+verification tasks must use fresh or frozen context; they may not inherit another trajectory's
+conversation state.
+
+Providers return `BehaviorReceipt` records containing gauge-dependent runtime metadata plus a
+behavior signature and optional candidate/evidence digests. The reducer computes:
+
+- effective independent search;
+- mean behavioral correlation;
+- unique candidate count;
+- candidate disagreement;
+- independent-verifier answers;
+- total cost and duration.
+
+Those measurements may change the next search allocation. They remain evidence about search, not
+authority over durable reality. The manifest explicitly names Airflow as the scheduler and contains
+no credential, Cell mutation, publication or promotion capability.
+
+Provider adapters are still future work; existence of the manifest is not a claim that heterogeneous
+providers are production-wired.
+
 ## 12. Local crystals
 
 A local crystal is a frozen exact candidate worth verification.
