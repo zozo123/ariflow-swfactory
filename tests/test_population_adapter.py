@@ -10,6 +10,7 @@ from swfactory.population_adapter import (
     HttpPopulationAdapterConfig,
     PopulationArtifactStore,
     PopulationInvocation,
+    PopulationProviderError,
     http_population_adapters_from_document,
 )
 from swfactory.population_manifest import PopulationManifestError, build_population_manifest
@@ -189,3 +190,17 @@ def test_population_artifact_read_detects_byte_tampering(tmp_path: Path) -> None
 
     with pytest.raises(PopulationManifestError, match="bytes do not match"):
         store.read(digest)
+
+
+
+def test_attempted_provider_5xx_is_an_external_effect_failure() -> None:
+    adapter = HttpPopulationAdapter(
+        HttpPopulationAdapterConfig(
+            provider="model-a",
+            endpoint="https://provider.example/v1/search",
+        ),
+        opener=lambda _request, timeout=0: Response(503, {"detail": "upstream unavailable"}),
+    )
+
+    with pytest.raises(PopulationProviderError, match="HTTP 503"):
+        adapter.execute(_invocation(), credential=None)
