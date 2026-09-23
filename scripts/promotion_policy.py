@@ -112,8 +112,7 @@ class Policy:
                 raise PolicyViolation("live required-context aliases must name two distinct nonempty jobs")
             if target not in status["contexts"]:
                 raise PolicyViolation(
-                    f"live required-context alias {alias!r} targets {target!r}, "
-                    "which is not a desired required context"
+                    f"live required-context alias {alias!r} targets {target!r}, which is not a desired required context"
                 )
         return cls(
             document=document,
@@ -606,9 +605,7 @@ def audit_policy(policy: Policy, repo_root: Path) -> list[str]:
             continue
         needs = list(job.get("needs") or [])
         if needs != [target]:
-            problems.append(
-                f"live compatibility context {alias!r} must depend only on {target!r}, got {needs!r}"
-            )
+            problems.append(f"live compatibility context {alias!r} must depend only on {target!r}, got {needs!r}")
         if _fails_open_on_error(job.get("continue-on-error")):
             problems.append(f"live compatibility context {alias!r} sets continue-on-error and can fail open")
         if _condition(job) != aggregate_guard(policy):
@@ -617,18 +614,14 @@ def audit_policy(policy: Policy, repo_root: Path) -> list[str]:
             )
         runs = _run_text(job)
         if 'test "$READINESS_RESULT" = success' not in runs:
-            problems.append(
-                f"live compatibility context {alias!r} does not fail closed on its target result"
-            )
+            problems.append(f"live compatibility context {alias!r} does not fail closed on its target result")
         env = {}
         for step in job.get("steps", []):
             if isinstance(step, Mapping):
                 env.update(step.get("env") or {})
         result_expr = str(env.get("READINESS_RESULT") or "")
         if target not in result_expr or ".result" not in result_expr:
-            problems.append(
-                f"live compatibility context {alias!r} does not read the result of {target!r}"
-            )
+            problems.append(f"live compatibility context {alias!r} does not read the result of {target!r}")
 
     evidence_job = "candidate-evidence"
     if evidence_job not in release:
