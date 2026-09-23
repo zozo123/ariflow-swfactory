@@ -4,6 +4,9 @@
   "does_not_measure": "execution-reachability. A module counted here is one an import path reaches from an entrypoint. It is NOT proof that anything runs: a module imported inside a CLI command counts as wired even when the code it exposes is never entered. An empty map means no module is unimportable -- it does not mean every subsystem executes.",
   "modules": {
     "convergence_decision": "cryptographic convergence receipts; runs once a campaign consumes them",
-    "exploration_space": "orthogonal hypothesis axes; runs once a campaign enumerates them"
+    "exploration_space": "orthogonal hypothesis axes; runs once a campaign enumerates them",
+    "crystallization": "advisory crystallization policy; wire into managed campaign evidence flow before it can affect runtime search posture",
+    "formal_claims": "pure claim-certificate contract; wire into candidate readiness only after runtime trace refinement exists",
+    "justification_graph": "pure justification provenance contract; wire once retained verifier receipts feed promotion evidence"
   }
 }

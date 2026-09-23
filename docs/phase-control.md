@@ -169,6 +169,21 @@ In particular:
 
 > **Crystal means "verification posture", not "permission to promote."**
 
+
+## Phase is not freeze permission
+
+The phase controller is descriptive: it estimates the regime the search occupies. It does not
+decide that a candidate *should* be frozen merely because the current observation classifies as
+`crystal`.
+
+Freeze admission is a separate epistemic policy in `swfactory.crystallization`. It may recommend
+keeping the claim surface liquid when the specification is unstable or semantic change remains
+high, and may recommend measurement when evidence is incomplete or verifiers disagree. Even after
+freezing exact bytes, formalization can remain empirical or optional when the abstraction is weak
+or the environment is open-world.
+
+This separation prevents a low-entropy search state from being mistaken for a well-posed theorem.
+
 ## Cross-language contract
 
 Python: `swfactory.phase_control`
