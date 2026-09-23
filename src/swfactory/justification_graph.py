@@ -253,8 +253,7 @@ class JustificationGraph:
         ignored: set[str] = {
             node.payload_digest
             for node in nodes.values()
-            if node.kind in {NodeKind.EVIDENCE, NodeKind.COUNTEREXAMPLE}
-            and node.issuer not in trusted_verifiers
+            if node.kind in {NodeKind.EVIDENCE, NodeKind.COUNTEREXAMPLE} and node.issuer not in trusted_verifiers
         }
         for edge in self.edges:
             incoming[edge.conclusion].append(edge)
