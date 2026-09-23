@@ -2,7 +2,7 @@
 
 This directory contains an **experimental design model**, not a proof that the Python/Rust implementation is correct.
 
-`AuthorityKernel.tla` models one Factory Cell across epoch replacement, Airflow binding, candidate freeze/evidence/approval, ambiguous external effects, trusted authority grants, and publication. The environment may present stale effect requests and arbitrary search-phase changes. The model refuses stale effects and prevents search state from becoming authority.
+`AuthorityKernel.tla` models one Factory Cell across epoch replacement, Airflow binding, candidate freeze/evidence/approval, ambiguous external effects, trusted authority grants, and publication. The environment may present stale effect requests, arbitrary search-phase changes, and authority requests from either trusted or search sources. The model refuses stale effects, rejects search-origin authority, and blocks epoch activation while an external effect is pending or `in_doubt`.
 
 Initial invariants:
 
@@ -10,8 +10,8 @@ Initial invariants:
 - approval requires evidence for that same candidate;
 - publication requires frozen candidate = evidence = approval under the current Airflow-bound epoch;
 - an external commit belongs to the current epoch;
-- search cannot become an authority source;
-- an `in_doubt` effect has no blind retry transition and leaves that state only through observation.
+- search-origin authority requests are modeled explicitly but cannot become an authority source;
+- an `in_doubt` effect has no blind retry or epoch-activation escape and leaves that state only through observation.
 
 Run with a local TLA+/TLC installation:
 
