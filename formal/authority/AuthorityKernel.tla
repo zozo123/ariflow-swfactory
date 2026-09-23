@@ -43,6 +43,7 @@ Init ==
 
 Activate ==
   /\ epoch < MaxEpoch
+  /\ opState \in {"idle", "committed"}
   /\ epoch' = epoch + 1
   /\ boundEpoch' = 0
   /\ frozen' = "none"
@@ -76,8 +77,9 @@ Freeze(c) ==
   /\ approved' = "none"
   /\ published' = "none"
   /\ phase' = "crystal"
+  /\ authoritySource' = "none"
   /\ UNCHANGED
-       << epoch, boundEpoch, opState, opEpoch, lastExternalEpoch, authoritySource >>
+       << epoch, boundEpoch, opState, opEpoch, lastExternalEpoch >>
 
 RecordEvidence(c) ==
   /\ c \in Candidates
@@ -141,11 +143,11 @@ ObserveAbsent ==
        << epoch, boundEpoch, frozen, evidence, approved, published,
           lastExternalEpoch, phase, authoritySource >>
 
-TrustedGrant ==
-  /\ approved # "none"
-  /\ approved = evidence
-  /\ approved = frozen
-  /\ authoritySource' = "trusted"
+RequestGrant(src) ==
+  /\ src \in {"trusted", "search"}
+  /\ IF src = "trusted" /\ approved # "none" /\ approved = evidence /\ approved = frozen
+        THEN authoritySource' = "trusted"
+        ELSE authoritySource' = authoritySource
   /\ UNCHANGED
        << epoch, boundEpoch, frozen, evidence, approved, published,
           opState, opEpoch, lastExternalEpoch, phase >>
@@ -176,7 +178,7 @@ Next ==
   \/ LoseReceipt
   \/ ObserveCommitted
   \/ ObserveAbsent
-  \/ TrustedGrant
+  \/ (\E src \in {"trusted", "search"} : RequestGrant(src))
   \/ (\E c \in Candidates : Publish(c))
 
 Spec == Init /\ [][Next]_vars
