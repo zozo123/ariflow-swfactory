@@ -376,7 +376,11 @@ def test_live_protected_test_context_is_a_fail_closed_alias_for_candidate_readin
     assert "always()" in str(job["if"])
     assert job.get("continue-on-error") is not True
     assert all(step.get("continue-on-error") is not True for step in job["steps"])
-    guard = next(step for step in job["steps"] if step.get("name") == "Refuse unless exact-SHA candidate readiness succeeded")
+    guard = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Refuse unless exact-SHA candidate readiness succeeded"
+    )
     assert guard["env"]["READINESS_RESULT"] == "${{ needs.candidate-readiness.result }}"
     run = "\n".join(str(step.get("run", "")) for step in job["steps"])
     assert 'test "$READINESS_RESULT" = success' in run
