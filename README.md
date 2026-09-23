@@ -453,7 +453,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `factory.provider-binding` | `experimental` | `swfactory.provider_binding; swfactory population-bind` | tests/test_provider_binding.py |
 | `factory.population-execution` | `experimental` | `swfactory.execution_binding.execute_managed_population -> backend population route` | tests/test_population_execution.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
 | `factory.population-provider-adapter` | `experimental` | `swfactory.population_adapter.HttpPopulationAdapter via backend population service` | tests/test_population_adapter.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
-| `factory.formal-claims` | `experimental` | `swfactory.formal_claims derive_certificate; formal/authority/AuthorityKernel.tla` | tests/test_formal_claims.py |
+| `factory.formal-claims` | `experimental` | `swfactory.formal_claims; swfactory.justification_graph; swfactory.crystallization; formal/authority/AuthorityKernel.tla` | tests/test_formal_claims.py; tests/test_justification_graph.py; tests/test_crystallization.py |
 
 <!-- capability-inventory:end -->
 
