@@ -264,11 +264,7 @@ def derive_certificate(
         if any(receipt.verdict == EvidenceVerdict.REFUTES for receipt in trusted):
             refuted.append(claim.claim_id)
             continue
-        supporters = {
-            receipt.verifier
-            for receipt in trusted
-            if receipt.verdict == EvidenceVerdict.SUPPORTS
-        }
+        supporters = {receipt.verifier for receipt in trusted if receipt.verdict == EvidenceVerdict.SUPPORTS}
         if len(supporters) >= claim.min_independent_receipts:
             supported.append(claim.claim_id)
         elif claim.required:

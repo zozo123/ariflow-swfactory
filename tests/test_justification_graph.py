@@ -140,9 +140,7 @@ def test_hypergraph_projects_a_claim_only_through_trusted_derivations() -> None:
     graph, root = _graph()
     projection = graph.project(
         root_node=root,
-        trusted_verifiers=frozenset(
-            {"tlc", "model-check-admitter", "trace-checker", "claim-kernel"}
-        ),
+        trusted_verifiers=frozenset({"tlc", "model-check-admitter", "trace-checker", "claim-kernel"}),
     )
 
     assert projection.root_supported is True
@@ -183,8 +181,7 @@ def test_untrusted_evidence_cannot_mint_a_derivation() -> None:
 
     assert projection.justified is False
     assert any(
-        node.kind == NodeKind.EVIDENCE and node.payload_digest in projection.ignored_objects
-        for node in graph.nodes
+        node.kind == NodeKind.EVIDENCE and node.payload_digest in projection.ignored_objects for node in graph.nodes
     )
 
 

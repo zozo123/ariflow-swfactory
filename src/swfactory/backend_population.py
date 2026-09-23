@@ -94,9 +94,10 @@ class BackendPopulationRunner:
             objective_digest=task_input.objective_digest,
         )
         invocation.validate()
-        operation_key = "population_model_call:" + hashlib.sha256(
-            (task.task_id + "\0" + invocation.digest()).encode()
-        ).hexdigest()[:24]
+        operation_key = (
+            "population_model_call:"
+            + hashlib.sha256((task.task_id + "\0" + invocation.digest()).encode()).hexdigest()[:24]
+        )
         body = {
             "cell_id": self.cell_id,
             "epoch": self.epoch,
@@ -159,9 +160,7 @@ class BackendPopulationRunner:
             artifact_digest = cached_digest
         else:
             if artifact_digest is None:
-                raise PopulationExecutionAbort(
-                    f"population task {task.task_id} has no retained candidate artifact"
-                )
+                raise PopulationExecutionAbort(f"population task {task.task_id} has no retained candidate artifact")
             try:
                 task_input = self.inputs[task.task_id]
             except KeyError as error:
@@ -177,9 +176,10 @@ class BackendPopulationRunner:
                 objective_digest=task_input.objective_digest,
             )
             invocation.validate()
-            operation_key = "population_model_call:" + hashlib.sha256(
-                (task.task_id + "\0" + invocation.digest()).encode()
-            ).hexdigest()[:24]
+            operation_key = (
+                "population_model_call:"
+                + hashlib.sha256((task.task_id + "\0" + invocation.digest()).encode()).hexdigest()[:24]
+            )
 
         value = self._post(
             "/population/artifact",

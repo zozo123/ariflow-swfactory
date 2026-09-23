@@ -279,11 +279,7 @@ class HttpPopulationAdapter:
         result = PopulationAdapterResult(
             output=str(document.get("output") or ""),
             behavior_signature=tuple(signature),
-            evidence_digest=(
-                str(document["evidence_digest"])
-                if document.get("evidence_digest") is not None
-                else None
-            ),
+            evidence_digest=(str(document["evidence_digest"]) if document.get("evidence_digest") is not None else None),
             cost_usd=float(document.get("cost_usd", 0.0)),
             duration_s=float(document.get("duration_s", 0.0)),
             state=str(document.get("state", "answered")),
@@ -396,22 +392,14 @@ def http_population_adapters_from_document(
         }
         unknown = sorted(set(raw) - allowed)
         if unknown:
-            raise PopulationManifestError(
-                f"population adapter {provider!r} has unknown fields: {', '.join(unknown)}"
-            )
+            raise PopulationManifestError(f"population adapter {provider!r} has unknown fields: {', '.join(unknown)}")
         config = HttpPopulationAdapterConfig(
             provider=str(provider),
             endpoint=str(raw["endpoint"]),
             credential_capability=(
-                str(raw["credential_capability"])
-                if raw.get("credential_capability") is not None
-                else None
+                str(raw["credential_capability"]) if raw.get("credential_capability") is not None else None
             ),
-            credential_env=(
-                str(raw["credential_env"])
-                if raw.get("credential_env") is not None
-                else None
-            ),
+            credential_env=(str(raw["credential_env"]) if raw.get("credential_env") is not None else None),
             timeout_s=float(raw.get("timeout_s", 120.0)),
             max_response_bytes=int(raw.get("max_response_bytes", MAX_ADAPTER_RESPONSE_BYTES)),
             auth_header=str(raw.get("auth_header", "Authorization")),

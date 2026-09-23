@@ -440,6 +440,8 @@ def allocate_population(
     budget: SwarmBudget | None = None,
     hotspots: Sequence[DisagreementHotspot] = (),
     crystals: Sequence[CandidateCrystal] = (),
+    mode_override: ControlMode | None = None,
+    role_caps: Mapping[AgentRole, int] | None = None,
 ) -> SwarmPlan:
     """Map phase + information state into a bounded heterogeneous population.
 
@@ -479,7 +481,7 @@ def allocate_population(
         )[: planning_budget.max_exact_replays]
     )
 
-    mode = assessment.recommendation.mode
+    mode = mode_override or assessment.recommendation.mode
     phase = assessment.phase
     axes = ("strategy", "model", "prompt", "runtime", "context", "mutation")
     lanes: list[PopulationLane] = []
@@ -727,8 +729,9 @@ def allocate_population(
                 ),
             ]
         )
-        reason = "jammed/drain: stop feeding the queue; consolidate evidence, finish verification and reclaim debt"
+        reason = "drain: stop feeding the queue; consolidate evidence, finish verification and reclaim debt"
 
+    lanes = _apply_role_caps(tuple(lanes), role_caps)
     lanes = _fit_budget(tuple(lanes), planning_budget)
     compute = round(sum(_lane_compute_units(lane) for lane in lanes), 6)
     plan = SwarmPlan(
@@ -793,6 +796,47 @@ def hotspot_from_disagreement(
         impact=impact,
         candidate_digests=tuple(candidate_digests),
     )
+
+
+def _apply_role_caps(
+    lanes: tuple[PopulationLane, ...],
+    role_caps: Mapping[AgentRole, int] | None,
+) -> tuple[PopulationLane, ...]:
+    """Narrow previously measured roles without inventing caps for newly introduced roles."""
+
+    if role_caps is None:
+        return lanes
+    normalized: dict[AgentRole, int] = {}
+    for role, cap in role_caps.items():
+        if not isinstance(role, AgentRole):
+            role = AgentRole(str(role))
+        if type(cap) is not int or cap < 0:
+            raise ValueError("role caps must be non-negative integers")
+        normalized[role] = cap
+
+    remaining = dict(normalized)
+    capped: list[PopulationLane] = []
+    for lane in lanes:
+        if lane.role not in remaining:
+            capped.append(lane)
+            continue
+        count = min(lane.count, remaining[lane.role])
+        remaining[lane.role] -= count
+        if count <= 0:
+            continue
+        capped.append(
+            PopulationLane(
+                role=lane.role,
+                compute_tier=lane.compute_tier,
+                count=count,
+                context=lane.context,
+                temperature=lane.temperature,
+                independent_verification=lane.independent_verification,
+                diversity_axes=lane.diversity_axes,
+                focus_hotspots=lane.focus_hotspots,
+            )
+        )
+    return tuple(capped)
 
 
 def _fit_budget(lanes: tuple[PopulationLane, ...], budget: SwarmBudget) -> tuple[PopulationLane, ...]:

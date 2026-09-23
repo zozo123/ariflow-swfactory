@@ -66,10 +66,7 @@ def test_high_consequence_finite_state_claim_is_a_good_formalization_target() ->
     assert assessment.freeze_posture == FreezePosture.FREEZE
     assert assessment.formalization_fit == FormalizationFit.FORMAL
     assert assessment.should_formalize is True
-    assert (
-        recommend_evidence_method(ClaimShape.TRANSITION_SYSTEM, assessment)
-        == EvidenceMethod.MODEL_CHECK
-    )
+    assert recommend_evidence_method(ClaimShape.TRANSITION_SYSTEM, assessment) == EvidenceMethod.MODEL_CHECK
     assert recommend_evidence_method(ClaimShape.PURE_FUNCTION, assessment) == EvidenceMethod.THEOREM
 
 
@@ -79,10 +76,7 @@ def test_low_consequence_claim_can_keep_formalization_optional() -> None:
     assert assessment.freeze_posture == FreezePosture.FREEZE
     assert assessment.formalization_fit == FormalizationFit.OPTIONAL
     assert assessment.should_formalize is False
-    assert (
-        recommend_evidence_method(ClaimShape.PURE_FUNCTION, assessment)
-        == EvidenceMethod.STATIC_ANALYSIS
-    )
+    assert recommend_evidence_method(ClaimShape.PURE_FUNCTION, assessment) == EvidenceMethod.STATIC_ANALYSIS
 
 
 def test_open_world_and_performance_claims_keep_property_specific_methods() -> None:
@@ -90,7 +84,4 @@ def test_open_world_and_performance_claims_keep_property_specific_methods() -> N
 
     assert recommend_evidence_method(ClaimShape.OPEN_WORLD, assessment) == EvidenceMethod.FUZZ
     assert recommend_evidence_method(ClaimShape.PERFORMANCE, assessment) == EvidenceMethod.BENCHMARK
-    assert (
-        recommend_evidence_method(ClaimShape.EXTERNAL_INTEGRATION, assessment)
-        == EvidenceMethod.OBSERVATION
-    )
+    assert recommend_evidence_method(ClaimShape.EXTERNAL_INTEGRATION, assessment) == EvidenceMethod.OBSERVATION

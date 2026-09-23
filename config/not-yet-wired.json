@@ -5,6 +5,8 @@
   "modules": {
     "convergence_decision": "cryptographic convergence receipts; runs once a campaign consumes them",
     "exploration_space": "orthogonal hypothesis axes; runs once a campaign enumerates them",
-    "cognitive_harness": "pure cognitive domain contract is qualified but not yet imported by a managed runtime entrypoint"
+    "crystallization": "advisory crystallization policy; wire into managed campaign evidence flow before it can affect runtime search posture",
+    "formal_claims": "pure claim-certificate contract; wire into candidate readiness only after runtime trace refinement exists",
+    "justification_graph": "pure justification provenance contract; wire once retained verifier receipts feed promotion evidence"
   }
 }

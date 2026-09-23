@@ -286,7 +286,7 @@
         "config/future-factory.yaml",
         "docs/future-factory.md"
       ],
-      "follow_up": "Emit adaptive planning/telemetry automatically from real managed campaigns and expose retained planning receipts through the Rust operator surface; the offline telemetry feedback loop is already implemented.",
+      "follow_up": "Calibrate adaptive information-budget thresholds from retained managed runs, expose the resulting decisions in Rust operator surfaces, and keep promotion authority separate.",
       "public_surface": [
         "research-adapt",
         "swfactory.recursive_search",
@@ -299,8 +299,8 @@
       "support": "experimental",
       "invariant": "Population and compute allocation optimize effective independent search and disagreement resolution under a hard budget; the planner is search-only and cannot schedule Airflow or cross the authority boundary.",
       "owner": "workgraph+evidence",
-      "runtime_entry": "swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round",
-      "environment": "pure phase-aware population planning; no provider execution is implied",
+      "runtime_entry": "swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round; managed provider execution from factory.population-execution",
+      "environment": "phase-aware population planning over retained managed-run telemetry; Airflow remains the scheduler",
       "test": "tests/test_swarm_dynamics.py",
       "evidence": [
         "tests/test_swarm_dynamics.py",
@@ -308,7 +308,7 @@
         "config/future-factory.yaml",
         "docs/future-factory.md"
       ],
-      "follow_up": "Qualify heterogeneous provider gateways in live managed runs, correlate retained behavior signatures with actual provider diversity, and graduate proven contracts into Rust.",
+      "follow_up": "Use retained managed population execution to tune lane-level information budgets, qualify the adaptive thresholds on real workloads, and graduate stable contracts into Rust.",
       "public_surface": [
         "swfactory.swarm_dynamics",
         "effective independent search",
@@ -330,7 +330,7 @@
         "tests/test_recursive_search.py",
         "docs/future-factory.md"
       ],
-      "follow_up": "Qualify provider-specific managed runs and attach retained PopulationExecutionReport evidence automatically to long-horizon campaign records.",
+      "follow_up": "Qualify heterogeneous provider/runtime behavior on production workloads and tighten cost/latency calibration; managed backend provider execution and receipt-to-telemetry feedback are implemented experimentally.",
       "public_surface": [
         "population manifest",
         "behavior receipt",
@@ -377,7 +377,7 @@
         "src/swfactory/backend/population_service.py",
         "docs/future-factory.md"
       ],
-      "follow_up": "Qualify concrete provider gateways in live managed runs, add managed-run operator rendering, and graduate only the stable execution/receipt contracts into Rust.",
+      "follow_up": "Qualify backend provider adapters and adaptive information-budget thresholds on real managed workloads; keep provider credentials backend-owned and promotion authority unchanged.",
       "public_surface": [
         "managed population executor",
         "backend population runner",
@@ -408,6 +408,31 @@
         "population invocation",
         "population artifact store",
         "backend credential projection"
+      ]
+    },
+    {
+      "id": "factory.adaptive-information-budget",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Retained managed population receipts may narrow the next search envelope by measured marginal independent information, cap correlated roles, reserve verifier capacity under unresolved disagreement, or recommend a reversible measure/perturb/drain posture; the controller may never widen the declared SwarmBudget or gain lifecycle/promotion authority.",
+      "owner": "workgraph+evidence",
+      "runtime_entry": "swfactory.adaptive_information; swfactory population-budget; swfactory.recursive_search.plan_adaptive_round; managed population stage retention",
+      "environment": "pure search-domain reduction over content-addressed PopulationExecutionReport/PopulationManifest plus host-owned retained decision receipts",
+      "test": "tests/test_adaptive_information.py and tests/test_recursive_search.py",
+      "evidence": [
+        "tests/test_adaptive_information.py",
+        "tests/test_recursive_search.py",
+        "src/swfactory/adaptive_information.py",
+        "src/swfactory/population_stage.py",
+        "docs/dark-factory.md",
+        "config/future-factory.yaml"
+      ],
+      "follow_up": "Calibrate thresholds from real retained workloads, compare predicted marginal value with realized evidence gain, and graduate a stable cross-language contract into Rust before treating it as supported.",
+      "public_surface": [
+        "adaptive information budget",
+        "marginal information value",
+        "population-budget",
+        "information-budget decision"
       ]
     },
     {

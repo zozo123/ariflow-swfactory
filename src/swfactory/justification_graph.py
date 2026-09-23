@@ -284,10 +284,7 @@ class JustificationGraph:
                 for edge in incoming[node_id]
                 if edge.kind != EdgeKind.REFUTATION and edge.verifier in trusted_verifiers
             ]
-            has_support = any(
-                all(admitted(premise) for premise in edge.premises)
-                for edge in supporting
-            )
+            has_support = any(all(admitted(premise) for premise in edge.premises) for edge in supporting)
             result = has_support and not refuted(node_id)
             support_memo[node_id] = result
             return result

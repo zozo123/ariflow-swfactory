@@ -474,6 +474,35 @@ The generic adapter is a contract and gateway, not a support claim for every ven
 provider endpoints remain experimental until live-qualified. The runtime still cannot create
 Airflow lifecycle work, publish, approve, merge, or promote.
 
+### Measured marginal information now controls the next search envelope
+
+The experimental `swfactory.adaptive_information` controller closes the next loop without adding a
+scheduler. It reads the retained `PopulationExecutionReport` and, when available, the exact prior
+`PopulationManifest`. Each measured lane is reduced to answer rate, candidate/evidence yield,
+effective independent search, pairwise correlation, disagreement pressure and compute-tier cost.
+
+The controller applies the same cognitive-harness proxy already declared elsewhere:
+
+```text
+marginal_information = (1 - correlation) * expected_information / compute_units
+```
+
+The resulting `InformationBudgetDecision` may only narrow the human-declared outer `SwarmBudget`.
+It can cap redundant measured roles, reserve one independent verifier when disagreement remains
+high, switch the next search posture to `measure` or `perturb`, or recommend `drain` when the
+population is settled and no measured lane has positive marginal value. A cancelled population
+drains before replacement search is created.
+
+Managed build stages retain `population-information-budget.json` beside the execution report.
+Retries reload that exact decision by digest rather than recomputing mutable defaults. Recursive
+planning embeds the decision and its digest in the next round receipt; the swarm-plan reason also
+binds the information-budget digest, so descendant candidate identity reflects *which retained
+evidence justified the compute allocation*.
+
+This remains search-only. It cannot widen agents, parallelism, deep compute, exact replay or compute
+units beyond the declared envelope, and it cannot schedule Airflow, mint credentials, weaken
+verification, mutate Cells, publish, approve, merge or promote.
+
 ## 12. Local crystals
 
 A local crystal is a frozen exact candidate worth verification.

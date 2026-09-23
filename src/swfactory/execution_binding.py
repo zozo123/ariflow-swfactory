@@ -95,7 +95,6 @@ def execute_bound_work(
     )
 
 
-
 def execute_bound_population(
     executor: PopulationExecutor,
     *,
@@ -112,7 +111,6 @@ def execute_bound_population(
         binding=binding,
         cancellation=cancellation,
     )
-
 
 
 def execute_managed_population(

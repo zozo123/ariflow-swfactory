@@ -127,10 +127,7 @@ def test_evidence_cannot_cross_a_formal_quench() -> None:
 def test_changing_the_claim_changes_both_claim_and_quench_identity() -> None:
     first = _quench()
     second = _quench(statement="stale epochs cannot publish")
-    assert (
-        first.claim_map()["authority.stale-epoch"].digest()
-        != second.claim_map()["authority.stale-epoch"].digest()
-    )
+    assert first.claim_map()["authority.stale-epoch"].digest() != second.claim_map()["authority.stale-epoch"].digest()
     assert first.digest() != second.digest()
 
 

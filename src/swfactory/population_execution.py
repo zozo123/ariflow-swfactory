@@ -134,11 +134,7 @@ def population_execution_report_from_document(
     if not isinstance(raw_telemetry, Mapping):
         raise PopulationManifestError("population execution telemetry must be an object")
 
-    receipts = tuple(
-        behavior_receipt_from_document(row)
-        for row in raw_receipts
-        if isinstance(row, Mapping)
-    )
+    receipts = tuple(behavior_receipt_from_document(row) for row in raw_receipts if isinstance(row, Mapping))
     if len(receipts) != len(raw_receipts):
         raise PopulationManifestError("every population execution receipt must be an object")
     report = PopulationExecutionReport(

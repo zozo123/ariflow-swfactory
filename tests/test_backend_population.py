@@ -153,9 +153,7 @@ def test_backend_population_call_replays_without_duplicate_provider_spend(
         assert second["replayed"] is True
         assert first["receipt"] == second["receipt"]
         assert first["candidate_artifact_digest"] == second["candidate_artifact_digest"]
-        assert factory.population_artifacts.read(first["candidate_artifact_digest"])["output"].startswith(
-            "candidate:"
-        )
+        assert factory.population_artifacts.read(first["candidate_artifact_digest"])["output"].startswith("candidate:")
 
         serialized = json.dumps(
             {

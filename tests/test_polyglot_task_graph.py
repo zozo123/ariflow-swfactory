@@ -21,6 +21,10 @@ def test_turbo_is_an_accelerator_not_an_authority_layer() -> None:
     turbo = _turbo()
 
     assert turbo["remoteCache"] == {"enabled": False}
+    assert turbo["globalDependencies"] == [
+        "tests/fixtures/contract/*.json",
+        "tests/fixtures/contract/pyproject.toml",
+    ]
 
     flags = turbo["futureFlags"]
     assert flags["experimentalPythonWorkspaces"] is True
