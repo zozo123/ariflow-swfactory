@@ -379,6 +379,20 @@ def test_live_protected_test_context_is_a_fail_closed_alias_for_candidate_readin
     assert 'test "$READINESS_RESULT" = success' in run
 
 
+def test_policy_declares_and_audits_the_live_required_context_alias() -> None:
+    assert POLICY.live_required_aliases == (("test", "candidate-readiness"),)
+    assert promotion_policy.audit_policy(POLICY, REPO) == []
+
+
+def test_a_live_compatibility_alias_cannot_target_a_non_required_context() -> None:
+    document = {
+        **POLICY.document,
+        "live_compatibility": {"required_context_aliases": {"test": "eval-suite"}},
+    }
+    with pytest.raises(PolicyViolation, match="not a desired required context"):
+        promotion_policy.Policy.from_document(document)
+
+
 def test_the_control_plane_gate_reports_on_every_pull_request() -> None:
     """A job that only runs for some branches reports `skipped` for the rest, and a skipped
     required context is exactly the fail-open this issue is about."""
