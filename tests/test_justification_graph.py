@@ -241,3 +241,35 @@ def test_graph_identity_changes_when_any_derivation_receipt_changes() -> None:
     )
 
     assert changed.digest() != first
+
+
+def test_graph_rejects_duplicate_claim_ids_even_when_nodes_have_different_content() -> None:
+    graph, _ = _graph()
+    duplicate = _node(
+        graph.quench_digest,
+        NodeKind.CLAIM,
+        "a different statement with the same logical claim identity",
+        claim_id="authority.stale-epoch",
+    )
+    broken = JustificationGraph(graph.quench_digest, graph.nodes + (duplicate,), graph.edges)
+
+    with pytest.raises(JustificationGraphError, match="duplicate claim_id"):
+        broken.validate()
+
+
+def test_projection_reports_unreachable_untrusted_evidence_as_ignored() -> None:
+    graph, root = _graph()
+    untrusted = _node(
+        graph.quench_digest,
+        NodeKind.EVIDENCE,
+        "unconnected search-produced evidence",
+        issuer="search-agent",
+    )
+    augmented = JustificationGraph(graph.quench_digest, graph.nodes + (untrusted,), graph.edges)
+
+    projection = augmented.project(
+        root_node=root,
+        trusted_verifiers=frozenset({"tlc", "model-check-admitter", "trace-checker", "claim-kernel"}),
+    )
+
+    assert untrusted.payload_digest in projection.ignored_objects
