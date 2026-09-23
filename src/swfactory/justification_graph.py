@@ -164,6 +164,7 @@ class JustificationGraph:
             raise JustificationGraphError("justification graph requires at least one node")
 
         node_map: dict[str, JustificationNode] = {}
+        claim_ids: set[str] = set()
         for node in self.nodes:
             node.validate()
             if node.quench_digest != self.quench_digest:
@@ -171,6 +172,11 @@ class JustificationGraph:
             ident = node.digest()
             if ident in node_map:
                 raise JustificationGraphError("duplicate justification node")
+            if node.kind == NodeKind.CLAIM:
+                assert node.claim_id is not None
+                if node.claim_id in claim_ids:
+                    raise JustificationGraphError("duplicate claim_id in justification graph")
+                claim_ids.add(node.claim_id)
             node_map[ident] = node
 
         edge_ids: set[str] = set()
@@ -244,7 +250,12 @@ class JustificationGraph:
             raise JustificationGraphError("trusted verifier identities must be nonempty")
 
         incoming: dict[str, list[JustificationEdge]] = {ident: [] for ident in nodes}
-        ignored: set[str] = set()
+        ignored: set[str] = {
+            node.payload_digest
+            for node in nodes.values()
+            if node.kind in {NodeKind.EVIDENCE, NodeKind.COUNTEREXAMPLE}
+            and node.issuer not in trusted_verifiers
+        }
         for edge in self.edges:
             incoming[edge.conclusion].append(edge)
             if edge.verifier not in trusted_verifiers:
@@ -274,8 +285,6 @@ class JustificationGraph:
                 return True
             if node.kind in {NodeKind.EVIDENCE, NodeKind.COUNTEREXAMPLE}:
                 result = node.issuer in trusted_verifiers
-                if not result:
-                    ignored.add(node.payload_digest)
                 support_memo[node_id] = result
                 return result
 
