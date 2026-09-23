@@ -6,8 +6,6 @@ import pytest
 
 from swfactory.formal_claims import (
     FORMAL_CLAIMS_AUTHORITY,
-    SEARCH_AUTHORITY,
-    TRUSTED_VERIFIER_AUTHORITY,
     Claim,
     EvidenceMethod,
     EvidenceReceipt,
@@ -50,7 +48,6 @@ def _receipt(
     *,
     verifier: str,
     verdict: EvidenceVerdict = EvidenceVerdict.SUPPORTS,
-    authority: str = TRUSTED_VERIFIER_AUTHORITY,
 ) -> EvidenceReceipt:
     claim = quench.claim_map()[claim_id]
     return EvidenceReceipt(
@@ -60,8 +57,7 @@ def _receipt(
         method=claim.method,
         verdict=verdict,
         verifier=verifier,
-        evidence_digest=_digest(f"{claim_id}:{verifier}:{verdict.value}:{authority}"),
-        authority=authority,
+        evidence_digest=_digest(f"{claim_id}:{verifier}:{verdict.value}"),
     )
 
 
@@ -74,6 +70,7 @@ def test_certificate_requires_the_frozen_claims_and_declared_independence() -> N
             _receipt(quench, "authority.stale-epoch", verifier="tlc-b"),
             _receipt(quench, "behavior.no-known-crash", verifier="fuzzer"),
         ],
+        trusted_verifiers=frozenset({"tlc-a", "tlc-b", "fuzzer"}),
     )
     assert certificate.supported_claims == (
         "authority.stale-epoch",
@@ -87,13 +84,12 @@ def test_certificate_requires_the_frozen_claims_and_declared_independence() -> N
 
 def test_search_can_propose_evidence_but_cannot_mint_truth() -> None:
     quench = _quench()
-    search_receipt = _receipt(
+    search_receipt = _receipt(quench, "behavior.no-known-crash", verifier="agent-17")
+    certificate = derive_certificate(
         quench,
-        "behavior.no-known-crash",
-        verifier="agent-17",
-        authority=SEARCH_AUTHORITY,
+        [search_receipt],
+        trusted_verifiers=frozenset({"independent-fuzzer"}),
     )
-    certificate = derive_certificate(quench, [search_receipt])
     assert "behavior.no-known-crash" not in certificate.supported_claims
     assert "behavior.no-known-crash" in certificate.unresolved_required_claims
     assert search_receipt.evidence_digest in certificate.ignored_evidence
@@ -113,6 +109,7 @@ def test_trusted_refutation_dominates_support() -> None:
                 verdict=EvidenceVerdict.REFUTES,
             ),
         ],
+        trusted_verifiers=frozenset({"fuzzer-a", "counterexample-checker"}),
     )
     assert "behavior.no-known-crash" in certificate.refuted_claims
     assert "behavior.no-known-crash" not in certificate.supported_claims
@@ -124,7 +121,7 @@ def test_evidence_cannot_cross_a_formal_quench() -> None:
     changed = _quench(statement="stale epochs cannot publish")
     receipt = _receipt(quench, "authority.stale-epoch", verifier="tlc")
     with pytest.raises(FormalClaimError, match="different Formal Quench"):
-        derive_certificate(changed, [receipt])
+        derive_certificate(changed, [receipt], trusted_verifiers=frozenset({"tlc"}))
 
 
 def test_changing_the_claim_changes_both_claim_and_quench_identity() -> None:
@@ -145,10 +142,9 @@ def test_evidence_method_is_property_specific_not_globally_ranked() -> None:
         verdict=EvidenceVerdict.SUPPORTS,
         verifier="proof-assistant",
         evidence_digest=_digest("wrong-method"),
-        authority=TRUSTED_VERIFIER_AUTHORITY,
     )
     with pytest.raises(FormalClaimError, match="evidence method"):
-        derive_certificate(quench, [wrong_method])
+        derive_certificate(quench, [wrong_method], trusted_verifiers=frozenset({"proof-assistant"}))
 
 
 def test_duplicate_verifier_identity_does_not_fake_independence() -> None:
@@ -159,6 +155,7 @@ def test_duplicate_verifier_identity_does_not_fake_independence() -> None:
             _receipt(quench, "authority.stale-epoch", verifier="tlc"),
             _receipt(quench, "authority.stale-epoch", verifier="tlc"),
         ],
+        trusted_verifiers=frozenset({"tlc"}),
     )
     assert "authority.stale-epoch" in certificate.unresolved_required_claims
     assert certificate.meets_claim_policy is False
