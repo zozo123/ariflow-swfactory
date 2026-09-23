@@ -105,7 +105,7 @@ def test_a_mandatory_leg_may_not_be_downgraded_to_advisory_in_the_same_policy() 
         promotion_policy.Policy.from_document(
             {
                 **POLICY.document,
-                "checks": {"mandatory": ["test"], "advisory": ["test"]},
+                "checks": {"mandatory": ["test-core"], "advisory": ["test-core"]},
             }
         )
 
@@ -362,6 +362,21 @@ def test_the_aggregate_job_fans_in_exactly_the_mandatory_legs() -> None:
 def test_the_aggregate_job_evaluates_the_policy_rather_than_open_coding_it() -> None:
     text = (REPO / ".github/workflows/ci.yml").read_text()
     assert "scripts/promotion_policy.py gate" in text
+
+
+def test_live_protected_test_context_is_a_fail_closed_alias_for_candidate_readiness() -> None:
+    """The repository currently protects `test`, not `candidate-readiness`.
+
+    Until the live setting is updated, the historical context must transitively mean readiness,
+    rather than continuing to mean only the fast Python leg.
+    """
+    job = _workflow("ci.yml")["jobs"]["test"]
+
+    assert job["needs"] == ["candidate-readiness"]
+    assert "always()" in str(job["if"])
+    assert job.get("continue-on-error") is not True
+    run = "\n".join(str(step.get("run", "")) for step in job["steps"])
+    assert 'test "$READINESS_RESULT" = success' in run
 
 
 def test_the_control_plane_gate_reports_on_every_pull_request() -> None:
