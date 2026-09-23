@@ -135,8 +135,10 @@ an evidence method, required/optional status, and minimum independent verifier c
 
 An `EvidenceReceipt` binds to both the quench digest and claim digest.
 
-Receipts with `authority=search` are retained but cannot justify or refute a claim. A search-found
-counterexample must be checked by a trusted verifier before it changes the justified claim set.
+Receipts cannot self-declare trust. Certificate derivation receives the trusted-verifier set from
+outside the evidence object; untrusted/search receipts are retained but cannot justify or refute a
+claim. A search-found counterexample must be checked by a trusted verifier before it changes the
+justified claim set.
 
 A trusted refutation dominates supporting receipts.
 
