@@ -414,25 +414,31 @@
       "id": "factory.formal-claims",
       "state": "experimental",
       "support": "experimental",
-      "invariant": "The factory may derive only claim-scoped evidence judgments bound to one frozen artifact/assumptions/model/policy/claim context; search output cannot mint truth or promotion authority.",
+      "invariant": "The factory may derive only claim-scoped judgments bound to one frozen artifact/assumptions/model/policy context; compound claims retain a typed acyclic justification graph, search output cannot mint truth or promotion authority, and crystallization/formalization remain selective when the specification or abstraction is not ready.",
       "owner": "evidence+authority",
-      "runtime_entry": "swfactory.formal_claims derive_certificate; formal/authority/AuthorityKernel.tla",
-      "environment": "pure evidence-domain contract plus an experimental TLA+ authority-kernel model; no claim that arbitrary generated software is decidable or that the runtime refines the model",
-      "test": "tests/test_formal_claims.py",
+      "runtime_entry": "swfactory.formal_claims; swfactory.justification_graph; swfactory.crystallization; formal/authority/AuthorityKernel.tla",
+      "environment": "pure evidence/search-domain contracts plus an experimental TLA+ authority-kernel model; crystallization assessment is advisory/search-only, and no claim is made that arbitrary generated software is decidable or that the runtime refines the model",
+      "test": "tests/test_formal_claims.py; tests/test_justification_graph.py; tests/test_crystallization.py",
       "evidence": [
         "tests/test_formal_claims.py",
+        "tests/test_justification_graph.py",
+        "tests/test_crystallization.py",
         "src/swfactory/formal_claims.py",
+        "src/swfactory/justification_graph.py",
+        "src/swfactory/crystallization.py",
         "formal/authority/AuthorityKernel.tla",
         "formal/authority/AuthorityKernel.cfg",
         "docs/formal-correctness.md"
       ],
-      "follow_up": "Add a required TLC model-check job and a canonical runtime trace projection from ControlKernel/CoreCapabilityRuntime events into the formal action vocabulary before claiming implementation refinement.",
+      "follow_up": "Add a required TLC model-check job and canonical runtime trace projection from ControlKernel/CoreCapabilityRuntime into the formal action vocabulary; then bind that refinement receipt into the justification graph before strengthening any implementation claim.",
       "public_surface": [
         "Formal Quench",
         "claim certificate",
         "claim-scoped correctness",
         "formal authority model",
-        "computation cannot mint truth"
+        "computation cannot mint truth",
+        "justification hypergraph",
+        "selective crystallization"
       ]
     }
   ]
