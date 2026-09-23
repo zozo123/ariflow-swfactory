@@ -453,6 +453,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `factory.provider-binding` | `experimental` | `swfactory.provider_binding; swfactory population-bind` | tests/test_provider_binding.py |
 | `factory.population-execution` | `experimental` | `swfactory.execution_binding.execute_managed_population -> backend population route` | tests/test_population_execution.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
 | `factory.population-provider-adapter` | `experimental` | `swfactory.population_adapter.HttpPopulationAdapter via backend population service` | tests/test_population_adapter.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
+| `factory.formal-claims` | `experimental` | `swfactory.formal_claims derive_certificate; formal/authority/AuthorityKernel.tla` | tests/test_formal_claims.py |
 
 <!-- capability-inventory:end -->
 
@@ -492,7 +493,7 @@ acceptance standard and explain the remaining enforcement work.
 | Operate Cells, jobs, approvals, and deliveries | [CLI/TUI](docs/swf.md), [backend API](docs/factory-backend.md) |
 | Design lifecycle and parallel work | [Lifecycle](docs/lifecycle.md), [architecture](docs/design.md) |
 | Receive work and recover interruptions | [Webhooks](docs/webhooks.md), [run recovery](docs/run-recovery.md) |
-| Evaluate behavior and control proposals | [Phase control](docs/phase-control.md), [Evals](docs/evals.md), [non-equilibrium control doctrine](docs/non-equilibrium-factory.md) |
+| Evaluate behavior and control proposals | [Phase control](docs/phase-control.md), [formal correctness](docs/formal-correctness.md), [Evals](docs/evals.md), [non-equilibrium control doctrine](docs/non-equilibrium-factory.md) |
 | Extend or review the factory | [Contributing](CONTRIBUTING.md), [review policy](REVIEW.md), [changelog](CHANGELOG.md) |
 
 Contribute a coherent change with an explicit invariant, failure behavior, evidence, and a plan to
