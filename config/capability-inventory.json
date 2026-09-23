@@ -409,6 +409,31 @@
         "population artifact store",
         "backend credential projection"
       ]
+    },
+    {
+      "id": "factory.formal-claims",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "The factory may derive only claim-scoped evidence judgments bound to one frozen artifact/assumptions/model/policy/claim context; search output cannot mint truth or promotion authority.",
+      "owner": "evidence+authority",
+      "runtime_entry": "swfactory.formal_claims derive_certificate; formal/authority/AuthorityKernel.tla",
+      "environment": "pure evidence-domain contract plus an experimental TLA+ authority-kernel model; no claim that arbitrary generated software is decidable or that the runtime refines the model",
+      "test": "tests/test_formal_claims.py",
+      "evidence": [
+        "tests/test_formal_claims.py",
+        "src/swfactory/formal_claims.py",
+        "formal/authority/AuthorityKernel.tla",
+        "formal/authority/AuthorityKernel.cfg",
+        "docs/formal-correctness.md"
+      ],
+      "follow_up": "Add a required TLC model-check job and a canonical runtime trace projection from ControlKernel/CoreCapabilityRuntime events into the formal action vocabulary before claiming implementation refinement.",
+      "public_surface": [
+        "Formal Quench",
+        "claim certificate",
+        "claim-scoped correctness",
+        "formal authority model",
+        "computation cannot mint truth"
+      ]
     }
   ]
 }
