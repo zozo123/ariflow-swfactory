@@ -113,8 +113,7 @@ class FormalQuench:
         _require_digest(self.artifact_digest, "artifact_digest")
         _require_digest(self.assumptions_digest, "assumptions_digest")
         _require_digest(self.model_digest, "model_digest")
-        if not self.policy_digest.strip():
-            raise FormalClaimError("policy_digest must be nonempty")
+        _require_digest(self.policy_digest, "policy_digest")
         if not self.claims:
             raise FormalClaimError("a Formal Quench requires at least one claim")
         seen: set[str] = set()
@@ -245,7 +244,9 @@ def derive_certificate(
             raise FormalClaimError(f"evidence references unknown claim {receipt.claim_id!r}")
         if receipt.claim_digest != claim.digest():
             raise FormalClaimError(f"{receipt.claim_id}: evidence claim digest does not match frozen claim")
-        if receipt.method != claim.method:
+        if receipt.method != claim.method and (
+            receipt.verdict != EvidenceVerdict.REFUTES or receipt.verifier not in trusted_verifiers
+        ):
             raise FormalClaimError(
                 f"{receipt.claim_id}: evidence method {receipt.method.value!r} does not match "
                 f"frozen method {claim.method.value!r}"
