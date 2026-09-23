@@ -608,6 +608,13 @@ def audit_policy(policy: Policy, repo_root: Path) -> list[str]:
             problems.append(f"live compatibility context {alias!r} must depend only on {target!r}, got {needs!r}")
         if _fails_open_on_error(job.get("continue-on-error")):
             problems.append(f"live compatibility context {alias!r} sets continue-on-error and can fail open")
+        for step in _steps(job):
+            if _fails_open_on_error(step.get("continue-on-error")):
+                label = step.get("name") or step.get("run") or step.get("uses") or "<step>"
+                problems.append(
+                    f"live compatibility context {alias!r} has a continue-on-error step "
+                    f"({str(label).splitlines()[0][:60]!r}); a failed step there still leaves the job green"
+                )
         if _condition(job) != aggregate_guard(policy):
             problems.append(
                 f"live compatibility context {alias!r} must use the same always-on main guard as {target!r}"
@@ -620,8 +627,12 @@ def audit_policy(policy: Policy, repo_root: Path) -> list[str]:
             if isinstance(step, Mapping):
                 env.update(step.get("env") or {})
         result_expr = str(env.get("READINESS_RESULT") or "")
-        if target not in result_expr or ".result" not in result_expr:
-            problems.append(f"live compatibility context {alias!r} does not read the result of {target!r}")
+        expected_result_expr = "${{ needs." + target + ".result }}"
+        if result_expr != expected_result_expr:
+            problems.append(
+                f"live compatibility context {alias!r} must read {target!r} directly; "
+                f"expected {expected_result_expr!r}, got {result_expr!r}"
+            )
 
     evidence_job = "candidate-evidence"
     if evidence_job not in release:
