@@ -115,11 +115,7 @@ def _report(
                 state="answered",
                 behavior_signature=signature,
                 candidate_digest="sha256:" + candidate_char * 64,
-                evidence_digest=(
-                    "sha256:" + "e" * 64
-                    if task.independent_verification
-                    else None
-                ),
+                evidence_digest=("sha256:" + "e" * 64 if task.independent_verification else None),
                 provider="provider",
                 model=task.role.value,
                 runtime="runtime",
@@ -285,7 +281,6 @@ def test_information_budget_round_trips_and_rejects_digest_tampering(tmp_path) -
     path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(ValueError, match="decision digest mismatch"):
         load_information_budget(path)
-
 
 
 def test_population_budget_cli_replays_lane_economics(tmp_path) -> None:

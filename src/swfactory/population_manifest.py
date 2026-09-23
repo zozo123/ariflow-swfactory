@@ -97,10 +97,7 @@ def _variant_digest(
             "context": context.value,
             "temperature": temperature,
             "diversity_axes": list(diversity_axes),
-            "diversity_coordinates": [
-                {"axis": axis, "seed": seed}
-                for axis, seed in diversity_coordinates
-            ],
+            "diversity_coordinates": [{"axis": axis, "seed": seed} for axis, seed in diversity_coordinates],
             "focus_hotspots": list(focus_hotspots),
         }
     )
@@ -207,9 +204,7 @@ class PopulationManifest:
                 task.diversity_axes,
             )
             if task.diversity_coordinates != expected_coordinates:
-                raise PopulationManifestError(
-                    f"{task.task_id}: diversity coordinates do not match manifest provenance"
-                )
+                raise PopulationManifestError(f"{task.task_id}: diversity coordinates do not match manifest provenance")
             expected_variant = _variant_digest(
                 coordinate_root,
                 compute_tier=task.compute_tier,
@@ -220,9 +215,7 @@ class PopulationManifest:
                 focus_hotspots=task.focus_hotspots,
             )
             if task.variant_digest != expected_variant:
-                raise PopulationManifestError(
-                    f"{task.task_id}: variant digest does not match manifest provenance"
-                )
+                raise PopulationManifestError(f"{task.task_id}: variant digest does not match manifest provenance")
             if task.task_id in ids:
                 raise PopulationManifestError(f"duplicate population task id {task.task_id}")
             if task.variant_digest in variants:
@@ -449,9 +442,7 @@ def population_manifest_from_document(document: Mapping[str, Any]) -> Population
                 temperature=float(raw["temperature"]),
                 independent_verification=independent_verification,
                 diversity_axes=tuple(str(axis) for axis in raw.get("diversity_axes", ())),
-                diversity_coordinates=tuple(
-                    (str(item["axis"]), int(item["seed"])) for item in coordinates
-                ),
+                diversity_coordinates=tuple((str(item["axis"]), int(item["seed"])) for item in coordinates),
                 focus_hotspots=tuple(str(value) for value in raw.get("focus_hotspots", ())),
                 variant_digest=str(raw["variant_digest"]),
             )

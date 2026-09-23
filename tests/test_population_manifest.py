@@ -54,6 +54,7 @@ def _plan() -> SwarmPlan:
         reason="test population",
     )
 
+
 def test_population_manifest_materializes_every_lane_deterministically() -> None:
     plan = _plan()
     provenance = "sha256:" + "a" * 64
@@ -76,6 +77,7 @@ def test_population_manifest_materializes_every_lane_deterministically() -> None
     assert verifier.role == AgentRole.VERIFIER
     assert verifier.context == ContextPolicy.FRESH
     assert verifier.focus_hotspots == ("hotspot-a",)
+
 
 def test_population_telemetry_measures_effective_independence_not_agent_count() -> None:
     manifest = build_population_manifest(
@@ -123,6 +125,7 @@ def test_population_telemetry_measures_effective_independence_not_agent_count() 
     assert telemetry.total_cost_usd == 1.2
     assert telemetry.manifest_digest == manifest.digest()
 
+
 def test_population_receipts_must_belong_to_the_manifest() -> None:
     manifest = build_population_manifest(
         _plan(),
@@ -136,6 +139,7 @@ def test_population_receipts_must_belong_to_the_manifest() -> None:
 
     with pytest.raises(PopulationManifestError, match="unknown population task"):
         summarize_population(manifest, (foreign,))
+
 
 def test_independent_verification_cannot_inherit_context() -> None:
     bad = SwarmPlan(
@@ -165,6 +169,7 @@ def test_independent_verification_cannot_inherit_context() -> None:
             search_provenance_digest="sha256:" + "d" * 64,
         )
 
+
 def test_diversity_coordinates_change_across_replicas_but_replay_exactly() -> None:
     plan = _plan()
     provenance = "sha256:" + "f" * 64
@@ -180,6 +185,7 @@ def test_diversity_coordinates_change_across_replicas_but_replay_exactly() -> No
     assert [task.diversity_coordinates for task in explorers] == [
         task.diversity_coordinates for task in replay_explorers
     ]
+
 
 def test_population_summarize_cli_emits_reusable_telemetry(tmp_path) -> None:
     manifest = build_population_manifest(
@@ -223,6 +229,7 @@ def test_population_summarize_cli_emits_reusable_telemetry(tmp_path) -> None:
     assert document["telemetry_digest"].startswith("sha256:")
     assert document["authority"] == "search-only"
 
+
 def test_population_summarize_cli_refuses_incomplete_receipts(tmp_path) -> None:
     manifest = build_population_manifest(
         _plan(),
@@ -261,6 +268,7 @@ def test_population_summarize_cli_refuses_incomplete_receipts(tmp_path) -> None:
     assert result.exit_code == 2
     assert "population receipts incomplete" in result.output
 
+
 def test_population_task_id_is_bound_to_variant_digest() -> None:
     manifest = build_population_manifest(
         _plan(),
@@ -285,6 +293,7 @@ def test_population_task_id_is_bound_to_variant_digest() -> None:
     with pytest.raises(PopulationManifestError, match="does not match its variant digest"):
         tampered.validate()
 
+
 def test_behavior_receipt_rejects_unknown_state() -> None:
     manifest = build_population_manifest(
         _plan(),
@@ -298,6 +307,7 @@ def test_behavior_receipt_rejects_unknown_state() -> None:
 
     with pytest.raises(PopulationManifestError, match="unknown behavior receipt state"):
         receipt.validate()
+
 
 def test_population_telemetry_rejects_impossible_effective_search() -> None:
     telemetry = summarize_population(
@@ -338,9 +348,8 @@ def test_same_swarm_under_different_search_provenance_has_different_task_identit
 
     assert first.swarm_plan_digest == second.swarm_plan_digest
     assert [task.task_id for task in first.tasks] != [task.task_id for task in second.tasks]
-    assert {task.task_id for task in first.tasks}.isdisjoint(
-        {task.task_id for task in second.tasks}
-    )
+    assert {task.task_id for task in first.tasks}.isdisjoint({task.task_id for task in second.tasks})
+
 
 def test_manifest_rejects_tasks_replayed_under_another_provenance_root() -> None:
     original = build_population_manifest(
@@ -369,6 +378,7 @@ def test_persisted_population_manifest_requires_boolean_verifier_flag() -> None:
 
     with pytest.raises(PopulationManifestError, match="must be boolean"):
         population_manifest_from_document(document)
+
 
 def test_persisted_population_manifest_rejects_non_object_coordinates() -> None:
     manifest = build_population_manifest(

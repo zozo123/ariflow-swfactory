@@ -1504,16 +1504,12 @@ def research_adapt_cmd(
 
         blackboard = load_blackboard(blackboard_path) if blackboard_path is not None else ArtifactBlackboard()
         if population_telemetry_path is not None and population_execution_report_path is not None:
-            raise CampaignError(
-                "--population-telemetry and --population-execution-report are mutually exclusive"
-            )
+            raise CampaignError("--population-telemetry and --population-execution-report are mutually exclusive")
         population_telemetry = None
         population_execution_report = None
         previous_population_manifest = None
         if population_execution_report_path is not None:
-            population_execution_report = load_population_execution_report(
-                population_execution_report_path
-            )
+            population_execution_report = load_population_execution_report(population_execution_report_path)
             population_telemetry = population_execution_report.telemetry
         elif population_telemetry_path is not None:
             raw_telemetry = json.loads(population_telemetry_path.read_text(encoding="utf-8"))
@@ -1523,24 +1519,16 @@ def research_adapt_cmd(
 
         if previous_population_plan_path is not None:
             if population_execution_report is None:
-                raise CampaignError(
-                    "--previous-population-plan requires --population-execution-report"
-                )
-            raw_previous = json.loads(
-                previous_population_plan_path.read_text(encoding="utf-8")
-            )
+                raise CampaignError("--previous-population-plan requires --population-execution-report")
+            raw_previous = json.loads(previous_population_plan_path.read_text(encoding="utf-8"))
             if not isinstance(raw_previous, dict):
                 raise CampaignError("previous population plan must be a JSON object")
             manifest_document = raw_previous
             if isinstance(raw_previous.get("plan"), dict):
                 manifest_document = raw_previous["plan"].get("population_manifest")
             if not isinstance(manifest_document, dict):
-                raise CampaignError(
-                    "previous population plan does not contain a population_manifest object"
-                )
-            previous_population_manifest = population_manifest_from_document(
-                manifest_document
-            )
+                raise CampaignError("previous population plan does not contain a population_manifest object")
+            previous_population_manifest = population_manifest_from_document(manifest_document)
 
         plan = plan_adaptive_round(
             signals,
@@ -1652,20 +1640,12 @@ def population_budget(
             raw_parallel = plan_document.get("max_parallel")
             if raw_parallel is not None:
                 if type(raw_parallel) is not int or raw_parallel < 1:
-                    raise PopulationManifestError(
-                        "prior plan max_parallel must be a positive integer"
-                    )
+                    raise PopulationManifestError("prior plan max_parallel must be a positive integer")
                 prior_max_parallel = raw_parallel
         if not isinstance(manifest_document, dict):
-            raise PopulationManifestError(
-                "input does not contain a population_manifest object"
-            )
+            raise PopulationManifestError("input does not contain a population_manifest object")
         manifest = population_manifest_from_document(manifest_document)
-        prior_max_parallel = (
-            min(prior_max_parallel, len(manifest.tasks))
-            if manifest.tasks
-            else 1
-        )
+        prior_max_parallel = min(prior_max_parallel, len(manifest.tasks)) if manifest.tasks else 1
         report = load_population_execution_report(execution_report_path)
         decision = evaluate_information_budget(
             report,

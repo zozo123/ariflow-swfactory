@@ -228,6 +228,7 @@ def test_future_factory_contract_keeps_one_root_search_authority() -> None:
     assert [line for line in lines if line.startswith("authority:")] == ["authority: search-only"]
     assert "authority_envelope:" in lines
 
+
 def _population_telemetry() -> PopulationTelemetry:
     return PopulationTelemetry(
         manifest_digest="sha256:" + "a" * 64,
@@ -326,7 +327,6 @@ def test_research_adapt_cli_consumes_retained_population_telemetry(tmp_path: Pat
     document = json.loads(result.stdout)
     assert document["plan"]["population_telemetry_digest"] == telemetry.digest()
     assert document["plan"]["population_telemetry"]["manifest_digest"] == telemetry.manifest_digest
-
 
 
 def test_research_adapt_cli_consumes_managed_population_execution_report(tmp_path: Path) -> None:
@@ -476,10 +476,7 @@ def test_settled_correlated_execution_stops_recursive_strategy_spawning() -> Non
     assert plan.information_budget.stop_new_work is True
     assert plan.swarm_plan is not None
     assert plan.swarm_plan.stop_new_work is True
-    assert all(
-        lane.role.value not in {"explorer", "mutator"}
-        for lane in plan.swarm_plan.lanes
-    )
+    assert all(lane.role.value not in {"explorer", "mutator"} for lane in plan.swarm_plan.lanes)
 
 
 def test_research_adapt_refuses_two_population_feedback_sources(tmp_path: Path) -> None:

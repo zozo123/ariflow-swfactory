@@ -344,9 +344,7 @@ def evaluate_information_budget(
         return _cancelled_decision(report, base_budget=base_budget, policy=policy)
 
     lanes = (
-        _lane_information(manifest, report, policy)
-        if manifest is not None
-        else (_global_information(report, policy),)
+        _lane_information(manifest, report, policy) if manifest is not None else (_global_information(report, policy),)
     )
     all_below = all(lane.marginal_information_value < policy.min_value_per_compute_unit for lane in lanes)
     telemetry = report.telemetry
@@ -356,14 +354,9 @@ def evaluate_information_budget(
     )
     collapsed = (
         telemetry.mean_correlation >= policy.correlation_collapse
-        and telemetry.effective_independent_search
-        <= max(1.0, float(max(1, telemetry.answered)) * 0.35)
+        and telemetry.effective_independent_search <= max(1.0, float(max(1, telemetry.answered)) * 0.35)
     )
-    settled = (
-        telemetry.answered > 0
-        and telemetry.candidate_disagreement <= policy.settled_disagreement
-        and all_below
-    )
+    settled = telemetry.answered > 0 and telemetry.candidate_disagreement <= policy.settled_disagreement and all_below
 
     mode_override: ControlMode | None = None
     stop_new_work = False
@@ -394,23 +387,12 @@ def evaluate_information_budget(
         if manifest is None:
             retained = _global_retained_count(report, policy, base_budget)
         retained = max(1, min(base_budget.max_agents, retained))
-        deep = sum(
-            lane.recommended_count
-            for lane in lanes
-            if lane.compute_tier == ComputeTier.DEEP
-        )
-        exact = sum(
-            lane.recommended_count
-            for lane in lanes
-            if lane.compute_tier == ComputeTier.EXACT_REPLAY
-        )
+        deep = sum(lane.recommended_count for lane in lanes if lane.compute_tier == ComputeTier.DEEP)
+        exact = sum(lane.recommended_count for lane in lanes if lane.compute_tier == ComputeTier.EXACT_REPLAY)
         deep = max(deep, verifier_reserve)
         deep = min(base_budget.max_deep_agents, deep)
         exact = min(base_budget.max_exact_replays, exact)
-        compute = sum(
-            lane.recommended_count * lane.compute_units_per_task
-            for lane in lanes
-        )
+        compute = sum(lane.recommended_count * lane.compute_units_per_task for lane in lanes)
         if manifest is None:
             # A global reducer has no tier breakdown. Preserve only the fraction of the declared
             # compute envelope justified by measured effective independence.
@@ -488,11 +470,7 @@ def information_budget_from_document(document: Mapping[str, Any]) -> Information
     )
     if len(lanes) != len(raw_lanes):
         raise ValueError("information budget lane entries must be objects")
-    caps = tuple(
-        (AgentRole(str(row["role"])), int(row["cap"]))
-        for row in raw_caps
-        if isinstance(row, Mapping)
-    )
+    caps = tuple((AgentRole(str(row["role"])), int(row["cap"])) for row in raw_caps if isinstance(row, Mapping))
     if len(caps) != len(raw_caps):
         raise ValueError("information budget role caps must be objects")
     mode = document.get("mode_override")

@@ -420,8 +420,7 @@ class RecursiveRoundPlan:
                 raise CampaignError("embedded information budget digest mismatch")
             if (
                 self.population_telemetry is not None
-                and self.information_budget.source_manifest_digest
-                != self.population_telemetry.manifest_digest
+                and self.information_budget.source_manifest_digest != self.population_telemetry.manifest_digest
             ):
                 raise CampaignError("information budget is bound to another population telemetry source")
 
@@ -896,9 +895,7 @@ def plan_adaptive_round(
             reason=f"{swarm.reason}; information-budget={information_budget.digest()}",
         )
     effective_posture = (
-        SearchPosture.STOP
-        if information_budget is not None and information_budget.stop_new_work
-        else base.posture
+        SearchPosture.STOP if information_budget is not None and information_budget.stop_new_work else base.posture
     )
     effective_strategies = base.strategies
     if effective_posture == SearchPosture.STOP:

@@ -192,7 +192,6 @@ def test_population_artifact_read_detects_byte_tampering(tmp_path: Path) -> None
         store.read(digest)
 
 
-
 def test_attempted_provider_5xx_is_an_external_effect_failure() -> None:
     adapter = HttpPopulationAdapter(
         HttpPopulationAdapterConfig(

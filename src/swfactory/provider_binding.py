@@ -161,11 +161,7 @@ def provider_binding_manifest_from_document(
     raw_tasks = document.get("tasks")
     if not isinstance(raw_tasks, list):
         raise PopulationManifestError("provider binding tasks must be an array")
-    tasks = tuple(
-        bound_population_task_from_document(row)
-        for row in raw_tasks
-        if isinstance(row, Mapping)
-    )
+    tasks = tuple(bound_population_task_from_document(row) for row in raw_tasks if isinstance(row, Mapping))
     if len(tasks) != len(raw_tasks):
         raise PopulationManifestError("every provider binding task must be an object")
     manifest = ProviderBindingManifest(
@@ -188,30 +184,12 @@ def bound_population_task_from_document(document: Mapping[str, Any]) -> BoundPop
         provider=(str(document["provider"]) if document.get("provider") is not None else None),
         model=(str(document["model"]) if document.get("model") is not None else None),
         runtime=(str(document["runtime"]) if document.get("runtime") is not None else None),
-        prompt_variant=(
-            str(document["prompt_variant"])
-            if document.get("prompt_variant") is not None
-            else None
-        ),
-        context_variant=(
-            str(document["context_variant"])
-            if document.get("context_variant") is not None
-            else None
-        ),
-        mutation_variant=(
-            str(document["mutation_variant"])
-            if document.get("mutation_variant") is not None
-            else None
-        ),
-        verifier_variant=(
-            str(document["verifier_variant"])
-            if document.get("verifier_variant") is not None
-            else None
-        ),
+        prompt_variant=(str(document["prompt_variant"]) if document.get("prompt_variant") is not None else None),
+        context_variant=(str(document["context_variant"]) if document.get("context_variant") is not None else None),
+        mutation_variant=(str(document["mutation_variant"]) if document.get("mutation_variant") is not None else None),
+        verifier_variant=(str(document["verifier_variant"]) if document.get("verifier_variant") is not None else None),
         attack_surface_variant=(
-            str(document["attack_surface_variant"])
-            if document.get("attack_surface_variant") is not None
-            else None
+            str(document["attack_surface_variant"]) if document.get("attack_surface_variant") is not None else None
         ),
         binding_digest=str(document["binding_digest"]),
         authority=str(document.get("authority", PROVIDER_BINDING_AUTHORITY)),

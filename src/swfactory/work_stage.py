@@ -142,9 +142,7 @@ def _population_search(ctx: stages.Ctx) -> tuple[str, list[str], dict[str, float
             "population_disagreement": float(report.telemetry.candidate_disagreement),
             "population_cost_usd": float(report.telemetry.total_cost_usd),
             "population_next_agents": float(information_budget.next_budget.max_agents),
-            "population_next_compute_units": float(
-                information_budget.next_budget.max_compute_units
-            ),
+            "population_next_compute_units": float(information_budget.next_budget.max_compute_units),
             "population_information_stop": float(information_budget.stop_new_work),
         },
     )
