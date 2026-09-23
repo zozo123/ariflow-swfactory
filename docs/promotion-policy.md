@@ -8,6 +8,12 @@ candidate manifest, and the protected-paths gate armed itself only for branches 
 Four green ticks, one enforced boundary, and not the same one. That is issue
 [#2048](https://github.com/zozo123/ariflow-swfactory/issues/2048).
 
+The live repository still requires the historical `test` context. Until an administrator applies
+the desired protection policy, that name is retained only as a **fail-closed compatibility alias**:
+`test -> candidate-readiness -> {test-core, eval-suite, airflow-parity, airflow-main, rust,
+contract-equivalence}`. It no longer means the fast Python suite alone. The policy audit checks this
+dependency so the compatibility bridge cannot silently become shallow again.
+
 The boundary is now expressed as code in three files that must agree with each other:
 
 | File | What it is |
@@ -20,7 +26,7 @@ The boundary is now expressed as code in three files that must agree with each o
 
 ## What must be green, and what must not be able to be skipped
 
-Mandatory legs — `test`, `eval-suite`, `airflow-parity`, `airflow-main`, `rust`,
+Mandatory legs — `test-core`, `eval-suite`, `airflow-parity`, `airflow-main`, `rust`,
 `contract-equivalence` — fan into `candidate-readiness`, which refuses to seal evidence unless each
 one reported `success`.
 

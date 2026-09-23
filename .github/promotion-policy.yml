@@ -39,11 +39,18 @@ branch_protection:
   allow_force_pushes: false
   allow_deletions: false
 
+# Temporary fail-closed aliases for contexts that the live repository still requires today.
+# These do NOT change the desired branch-protection payload above. They make a historical required
+# context semantically depend on the desired aggregate until an administrator applies this policy.
+live_compatibility:
+  required_context_aliases:
+    test: candidate-readiness
+
 checks:
   # Every leg the supported release surface rests on. `candidate-readiness` refuses to seal
   # evidence unless each of these reported `success` -- not skipped, not cancelled, not neutral.
   mandatory:
-    - test
+    - test-core
     - eval-suite
     - airflow-parity
     - airflow-main

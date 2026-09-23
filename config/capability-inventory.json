@@ -101,7 +101,7 @@
       "owner": "security+evidence",
       "runtime_entry": "swfactory demo",
       "environment": "local sandbox with scripted fixtures",
-      "test": "ci:test required job (its e2e demo step) plus tests/test_stages_scripted.py",
+      "test": "ci:test-core mandatory leg (its e2e demo step) plus tests/test_stages_scripted.py",
       "evidence": [
         "candidate-readiness-core artifact"
       ],

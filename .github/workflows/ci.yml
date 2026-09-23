@@ -8,7 +8,7 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
-  test:
+  test-core:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -238,14 +238,15 @@ jobs:
   # tested checkout (GitHub's PR merge candidate) together with a digest of every required job's
   # result. If HEAD changes, concurrency cancels this run and a new manifest must be produced.
   #
-  # `candidate-readiness` is a required status context on main and the mandatory legs it fans in
+  # `candidate-readiness` is the declared required aggregate. Until the live settings are updated,
+  # the already-protected `test` context below aliases it fail-closed. The mandatory legs it fans in
   # are declared in .github/promotion-policy.yml -- one file, applied to the live settings by
   # scripts/promotion_policy.py and diffed against them on every run of promotion-policy.yml.
   # Adding a mandatory leg means editing that file and this `needs:` list together; the audit
   # fails when they disagree. release.yml consumes the manifest this job seals.
   candidate-readiness:
     if: always() && (github.event_name == 'push' || github.base_ref == 'main')
-    needs: [test, eval-suite, airflow-parity, airflow-main, rust, contract-equivalence]
+    needs: [test-core, eval-suite, airflow-parity, airflow-main, rust, contract-equivalence]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -257,7 +258,7 @@ jobs:
       HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
       TESTED_SHA: ${{ github.sha }}
-      TEST_RESULT: ${{ needs.test.result }}
+      TEST_CORE_RESULT: ${{ needs.test-core.result }}
       EVAL_RESULT: ${{ needs.eval-suite.result }}
       AIRFLOW_PARITY_RESULT: ${{ needs.airflow-parity.result }}
       AIRFLOW_MAIN_RESULT: ${{ needs.airflow-main.result }}
@@ -299,7 +300,7 @@ jobs:
       - name: Refuse any mandatory leg that is not success (skipped and cancelled included)
         run: >-
           uv run python scripts/promotion_policy.py gate
-          --result "test=$TEST_RESULT"
+          --result "test-core=$TEST_CORE_RESULT"
           --result "eval-suite=$EVAL_RESULT"
           --result "airflow-parity=$AIRFLOW_PARITY_RESULT"
           --result "airflow-main=$AIRFLOW_MAIN_RESULT"
@@ -324,7 +325,7 @@ jobs:
               > ".factory/candidate-evidence/${name}.txt"
             test "$result" = success
           }
-          record test "$TEST_RESULT"
+          record test-core "$TEST_CORE_RESULT"
           record eval-suite "$EVAL_RESULT"
           record airflow-parity "$AIRFLOW_PARITY_RESULT"
           record airflow-main "$AIRFLOW_MAIN_RESULT"
@@ -336,7 +337,7 @@ jobs:
           --head-sha "$HEAD_SHA"
           --base-sha "$BASE_SHA"
           --tested-sha "$TESTED_SHA"
-          --required test=.factory/candidate-evidence/test.txt
+          --required test-core=.factory/candidate-evidence/test-core.txt
           --required eval-suite=.factory/candidate-evidence/eval-suite.txt
           --required airflow-parity=.factory/candidate-evidence/airflow-parity.txt
           --required airflow-main=.factory/candidate-evidence/airflow-main.txt
@@ -351,3 +352,21 @@ jobs:
             .factory/candidate-readiness.json
             .factory/candidate-evidence/*.txt
           if-no-files-found: error
+
+
+  # Compatibility enforcement for the branch protection that is live today. The declared desired
+  # state requires candidate-readiness directly, but main still requires the historical `test`
+  # context. Keep that name as a fail-closed alias over the exact-SHA readiness fan-in so the live
+  # protection cannot merge around readiness while an administrator applies the declared policy.
+  test:
+    if: always() && (github.event_name == 'push' || github.base_ref == 'main')
+    needs: [candidate-readiness]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Refuse unless exact-SHA candidate readiness succeeded
+        env:
+          READINESS_RESULT: ${{ needs.candidate-readiness.result }}
+        run: |
+          printf 'candidate-readiness=%s\n' "$READINESS_RESULT"
+          test "$READINESS_RESULT" = success

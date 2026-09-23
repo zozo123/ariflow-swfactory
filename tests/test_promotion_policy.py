@@ -105,7 +105,7 @@ def test_a_mandatory_leg_may_not_be_downgraded_to_advisory_in_the_same_policy() 
         promotion_policy.Policy.from_document(
             {
                 **POLICY.document,
-                "checks": {"mandatory": ["test"], "advisory": ["test"]},
+                "checks": {"mandatory": ["test-core"], "advisory": ["test-core"]},
             }
         )
 
@@ -362,6 +362,73 @@ def test_the_aggregate_job_fans_in_exactly_the_mandatory_legs() -> None:
 def test_the_aggregate_job_evaluates_the_policy_rather_than_open_coding_it() -> None:
     text = (REPO / ".github/workflows/ci.yml").read_text()
     assert "scripts/promotion_policy.py gate" in text
+
+
+def test_live_protected_test_context_is_a_fail_closed_alias_for_candidate_readiness() -> None:
+    """The repository currently protects `test`, not `candidate-readiness`.
+
+    Until the live setting is updated, the historical context must transitively mean readiness,
+    rather than continuing to mean only the fast Python leg.
+    """
+    job = _workflow("ci.yml")["jobs"]["test"]
+
+    assert job["needs"] == ["candidate-readiness"]
+    assert "always()" in str(job["if"])
+    assert job.get("continue-on-error") is not True
+    assert all(step.get("continue-on-error") is not True for step in job["steps"])
+    guard = next(
+        step for step in job["steps"] if step.get("name") == "Refuse unless exact-SHA candidate readiness succeeded"
+    )
+    assert guard["env"]["READINESS_RESULT"] == "${{ needs.candidate-readiness.result }}"
+    run = "\n".join(str(step.get("run", "")) for step in job["steps"])
+    assert 'test "$READINESS_RESULT" = success' in run
+
+
+def test_policy_declares_and_audits_the_live_required_context_alias() -> None:
+    assert POLICY.live_required_aliases == (("test", "candidate-readiness"),)
+    assert promotion_policy.audit_policy(POLICY, REPO) == []
+
+
+def test_a_live_compatibility_alias_cannot_target_a_non_required_context() -> None:
+    document = {
+        **POLICY.document,
+        "live_compatibility": {"required_context_aliases": {"test": "eval-suite"}},
+    }
+    with pytest.raises(PolicyViolation, match="not a desired required context"):
+        promotion_policy.Policy.from_document(document)
+
+
+def _audit_with_ci_rewrite(tmp_path: Path, rewrite) -> list[str]:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    ci_text = (REPO / ".github/workflows/ci.yml").read_text()
+    (workflows / "ci.yml").write_text(rewrite(ci_text))
+    for name in ("control-plane-gate.yml", "release.yml"):
+        (workflows / name).write_text((REPO / ".github/workflows" / name).read_text())
+    return promotion_policy.audit_policy(POLICY, tmp_path)
+
+
+def test_live_alias_audit_rejects_step_level_continue_on_error(tmp_path: Path) -> None:
+    marker = "      - name: Refuse unless exact-SHA candidate readiness succeeded\n"
+
+    def rewrite(text: str) -> str:
+        assert marker in text
+        return text.replace(marker, marker + "        continue-on-error: true\n", 1)
+
+    problems = _audit_with_ci_rewrite(tmp_path, rewrite)
+    assert any("continue-on-error step" in problem for problem in problems)
+
+
+def test_live_alias_audit_rejects_expression_that_can_synthesize_success(tmp_path: Path) -> None:
+    direct = "${{ needs.candidate-readiness.result }}"
+    bypass = "${{ case(true, 'success', needs.candidate-readiness.result) }}"
+
+    def rewrite(text: str) -> str:
+        assert direct in text
+        return text.replace(direct, bypass, 1)
+
+    problems = _audit_with_ci_rewrite(tmp_path, rewrite)
+    assert any("must read 'candidate-readiness' directly" in problem for problem in problems)
 
 
 def test_the_control_plane_gate_reports_on_every_pull_request() -> None:

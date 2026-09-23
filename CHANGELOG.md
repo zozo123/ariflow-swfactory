@@ -6,6 +6,13 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Close the live branch-protection gap without weakening the declared policy: the historical protected
+  `test` context is now a fail-closed compatibility aggregate over exact-SHA `candidate-readiness`,
+  while the former fast Python job is the mandatory `test-core` leg. The promotion-policy audit
+  verifies this alias until maintainers apply the desired `candidate-readiness` / `protected-paths`
+  protection directly.
+
+
 - Add experimental **adaptive marginal-information budgeting**: retained managed population execution reports are reduced into content-addressed `InformationBudgetDecision` receipts that measure lane-level independent information, correlation, evidence/candidate yield and compute-tier cost. The controller may shrink correlated lanes, reserve independent verification under disagreement, perturb after collapse, or drain when settled search has no positive marginal value, but it can never widen the human-declared `SwarmBudget` or gain lifecycle/promotion authority. Managed build stages retain the decision and `research-adapt` binds its digest into the next recursive search plan.
 
 - Add experimental **managed population execution**: provider-bound search tasks run with bounded in-stage concurrency inside an already scheduled Airflow task. The Airflow worker carries only the factory backend URL/token; each paid model call is revalidated and journaled by the trusted backend, any provider credential is projected there through an attempt-bound lease, provider/model/runtime identity is receipt-bound, duplicate verifier bindings fail closed, provider output is retained as an invocation-bound content-addressed artifact, telemetry is bound to the exact receipt digests, and canonical execution reports can feed the next `research-adapt` round directly. This path still cannot create Airflow lifecycle work, publish, approve, merge, or promote.

@@ -38,7 +38,7 @@ uv run swfactory approve <dag_run_id> plan          #   shared URL (islo share s
 ```
 
 `.github/CODEOWNERS` (`* @zozo123`) plus branch protection (`gh api -X PUT
-repos/<owner/repo>/branches/main/protection`: 1 review, code owners, `test` status check) make the
+repos/<owner/repo>/branches/main/protection`: 1 review, code owners, `test` status check, currently a fail-closed alias of `candidate-readiness`) make the
 human the required reviewer.
 
 ## Gateway, environment, snapshot
