@@ -250,20 +250,33 @@ class JustificationGraph:
             if edge.verifier not in trusted_verifiers:
                 ignored.add(edge.receipt_digest)
 
-        memo: dict[str, bool] = {}
+        support_memo: dict[str, bool] = {}
+        refute_memo: dict[str, bool] = {}
+
+        def refuted(node_id: str) -> bool:
+            if node_id in refute_memo:
+                return refute_memo[node_id]
+            result = any(
+                edge.verifier in trusted_verifiers
+                and edge.kind == EdgeKind.REFUTATION
+                and all(admitted(premise) for premise in edge.premises)
+                for edge in incoming[node_id]
+            )
+            refute_memo[node_id] = result
+            return result
 
         def admitted(node_id: str) -> bool:
-            if node_id in memo:
-                return memo[node_id]
+            if node_id in support_memo:
+                return support_memo[node_id]
             node = nodes[node_id]
             if node.kind in {NodeKind.ARTIFACT, NodeKind.ASSUMPTION, NodeKind.MODEL}:
-                memo[node_id] = True
+                support_memo[node_id] = True
                 return True
             if node.kind in {NodeKind.EVIDENCE, NodeKind.COUNTEREXAMPLE}:
                 result = node.issuer in trusted_verifiers
                 if not result:
                     ignored.add(node.payload_digest)
-                memo[node_id] = result
+                support_memo[node_id] = result
                 return result
 
             supporting = [
@@ -271,17 +284,13 @@ class JustificationGraph:
                 for edge in incoming[node_id]
                 if edge.kind != EdgeKind.REFUTATION and edge.verifier in trusted_verifiers
             ]
-            result = any(all(admitted(premise) for premise in edge.premises) for edge in supporting)
-            memo[node_id] = result
-            return result
-
-        def refuted(node_id: str) -> bool:
-            return any(
-                edge.verifier in trusted_verifiers
-                and edge.kind == EdgeKind.REFUTATION
-                and all(admitted(premise) for premise in edge.premises)
-                for edge in incoming[node_id]
+            has_support = any(
+                all(admitted(premise) for premise in edge.premises)
+                for edge in supporting
             )
+            result = has_support and not refuted(node_id)
+            support_memo[node_id] = result
+            return result
 
         supported_claims: list[str] = []
         refuted_claims: list[str] = []
