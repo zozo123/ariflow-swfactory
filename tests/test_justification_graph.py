@@ -128,7 +128,7 @@ def _graph(*, include_counterexample: bool = False) -> tuple[JustificationGraph,
                 EdgeKind.REFUTATION,
                 "counterexample-elimination",
                 (counterexample.digest(),),
-                root.digest(),
+                local_claim.digest(),
                 verifier="counterexample-checker",
             )
         )
@@ -168,9 +168,10 @@ def test_counterexample_cuts_the_root_even_when_a_support_path_exists() -> None:
     )
 
     assert projection.root_supported is False
-    assert projection.root_refuted is True
+    assert projection.root_refuted is False
     assert projection.justified is False
-    assert "promotion.preconditions" in projection.refuted_claims
+    assert "authority.stale-epoch" in projection.refuted_claims
+    assert "promotion.preconditions" not in projection.supported_claims
 
 
 def test_untrusted_evidence_cannot_mint_a_derivation() -> None:
