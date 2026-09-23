@@ -181,7 +181,14 @@ def recommend_evidence_method(
     """Choose a claim-shaped evidence method without pretending one method dominates all others."""
 
     if assessment.formalization_fit == FormalizationFit.DEFER:
-        return EvidenceMethod.TEST
+        return {
+            ClaimShape.TRANSITION_SYSTEM: EvidenceMethod.BOUNDED_EXHAUSTIVE,
+            ClaimShape.PURE_FUNCTION: EvidenceMethod.TEST,
+            ClaimShape.OPEN_WORLD: EvidenceMethod.FUZZ,
+            ClaimShape.PERFORMANCE: EvidenceMethod.BENCHMARK,
+            ClaimShape.EXTERNAL_INTEGRATION: EvidenceMethod.OBSERVATION,
+            ClaimShape.HEURISTIC: EvidenceMethod.FUZZ,
+        }[shape]
     if shape == ClaimShape.TRANSITION_SYSTEM:
         if assessment.formalization_fit == FormalizationFit.FORMAL:
             return EvidenceMethod.MODEL_CHECK
