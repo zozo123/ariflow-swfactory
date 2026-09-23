@@ -39,6 +39,8 @@ class EvidenceMethod(StrEnum):
     BOUNDED_EXHAUSTIVE = "bounded-exhaustive"
     MODEL_CHECK = "model-check"
     THEOREM = "theorem"
+    BENCHMARK = "benchmark"
+    OBSERVATION = "observation"
 
 
 class EvidenceVerdict(StrEnum):
