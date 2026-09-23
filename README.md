@@ -438,7 +438,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `recovery.external-effects` | `supported` | `swfactory.idempotency.OperationJournal and swfactory.operation_recovery` | tests/test_recovery_acceptance.py |
 | `workgraph.serial` | `supported` | `swfactory.work_stage.build_and_test (the Airflow build task dags/blueprints.py selects) -> bounded Plan.work execution` | tests/test_workgraph_stage_execution.py |
 | `workgraph.provider-fork` | `experimental` | `swfactory.work_executor.WorkExecutor and swfactory.execution_binding` | tests/test_work_executor.py (parallel fan-out, conflict, crash and cancellation scenarios) |
-| `sandbox.local-scripted` | `test_only` | `swfactory demo` | ci:test required job (its e2e demo step) plus tests/test_stages_scripted.py |
+| `sandbox.local-scripted` | `test_only` | `swfactory demo` | ci:test-core mandatory leg (its e2e demo step) plus tests/test_stages_scripted.py |
 | `sandbox.srt` | `experimental` | `swfactory.sandbox.SrtSandbox` | ci:srt-smoke plus the SrtSandbox argv contracts in tests/test_sandbox_argv.py |
 | `sandbox.docker` | `experimental` | `swfactory.sandbox Docker path` | ci:docker-smoke |
 | `factory.generations` | `experimental` | `generation manifests and parent-owned promotion path` | tests/test_generation_contract.py |
