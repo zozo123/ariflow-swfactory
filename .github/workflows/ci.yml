@@ -238,7 +238,8 @@ jobs:
   # tested checkout (GitHub's PR merge candidate) together with a digest of every required job's
   # result. If HEAD changes, concurrency cancels this run and a new manifest must be produced.
   #
-  # `candidate-readiness` is a required status context on main and the mandatory legs it fans in
+  # `candidate-readiness` is the declared required aggregate. Until the live settings are updated,
+  # the already-protected `test` context below aliases it fail-closed. The mandatory legs it fans in
   # are declared in .github/promotion-policy.yml -- one file, applied to the live settings by
   # scripts/promotion_policy.py and diffed against them on every run of promotion-policy.yml.
   # Adding a mandatory leg means editing that file and this `needs:` list together; the audit
