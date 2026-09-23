@@ -78,6 +78,7 @@
     }
   },
   "globalDependencies": [
-    "tests/fixtures/contract/**"
+    "tests/fixtures/contract/*.json",
+    "tests/fixtures/contract/pyproject.toml"
   ]
 }

@@ -448,11 +448,12 @@ A merge callback already in flight is not interrupted or rolled back.
 | `factory.phase-control` | `experimental` | `swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess and swf phase are read-only` | tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json |
 | `factory.cognitive-harness` | `experimental` | `swfactory.cognitive_harness and swf_domain::cognitive_harness` | tests/test_cognitive_harness.py |
 | `factory.recursive-search` | `experimental` | `swfactory.recursive_search; swfactory research-adapt` | tests/test_recursive_search.py |
-| `factory.swarm-dynamics` | `experimental` | `swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round` | tests/test_swarm_dynamics.py |
+| `factory.swarm-dynamics` | `experimental` | `swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round; managed provider execution from factory.population-execution` | tests/test_swarm_dynamics.py |
 | `factory.population-manifest` | `experimental` | `swfactory.population_manifest via swfactory.recursive_search.plan_adaptive_round; swfactory population-summarize` | tests/test_population_manifest.py |
 | `factory.provider-binding` | `experimental` | `swfactory.provider_binding; swfactory population-bind` | tests/test_provider_binding.py |
-| `factory.population-execution` | `experimental` | `swfactory.execution_binding.execute_managed_population -> backend population route` | tests/test_population_execution.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
-| `factory.population-provider-adapter` | `experimental` | `swfactory.population_adapter.HttpPopulationAdapter via backend population service` | tests/test_population_adapter.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
+| `factory.population-execution` | `experimental` | `swfactory.execution_binding.execute_managed_population -> swfactory.backend_population.BackendPopulationRunner -> /v1/population/execute -> swfactory.backend.population_service` | tests/test_population_execution.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
+| `factory.population-provider-adapter` | `experimental` | `swfactory.population_adapter.HttpPopulationAdapter via swfactory.backend.population_service` | tests/test_population_adapter.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
+| `factory.adaptive-information-budget` | `experimental` | `swfactory.adaptive_information; swfactory population-budget; swfactory.recursive_search.plan_adaptive_round; managed population stage retention` | tests/test_adaptive_information.py and tests/test_recursive_search.py |
 
 <!-- capability-inventory:end -->
 

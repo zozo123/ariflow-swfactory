@@ -1447,7 +1447,14 @@ def research_adapt_cmd(
         Path | None,
         typer.Option(
             "--population-execution-report",
-            help="optional retained managed population execution report; uses its verified telemetry",
+            help="optional retained managed population execution report; drives verified adaptive budget",
+        ),
+    ] = None,
+    previous_population_plan_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--previous-population-plan",
+            help="optional prior research-adapt/manifest JSON for lane-level information budgeting",
         ),
     ] = None,
     json_out: Annotated[bool, typer.Option("--json", help="machine-readable recursive search plan")] = False,
@@ -1456,7 +1463,10 @@ def research_adapt_cmd(
 
     from swfactory.evolution import CampaignError
     from swfactory.population_execution import load_population_execution_report
-    from swfactory.population_manifest import population_telemetry_from_document
+    from swfactory.population_manifest import (
+        population_manifest_from_document,
+        population_telemetry_from_document,
+    )
     from swfactory.recursive_search import (
         ArtifactBlackboard,
         extract_search_laws,
@@ -1494,19 +1504,31 @@ def research_adapt_cmd(
 
         blackboard = load_blackboard(blackboard_path) if blackboard_path is not None else ArtifactBlackboard()
         if population_telemetry_path is not None and population_execution_report_path is not None:
-            raise CampaignError(
-                "--population-telemetry and --population-execution-report are mutually exclusive"
-            )
+            raise CampaignError("--population-telemetry and --population-execution-report are mutually exclusive")
         population_telemetry = None
+        population_execution_report = None
+        previous_population_manifest = None
         if population_execution_report_path is not None:
-            population_telemetry = load_population_execution_report(
-                population_execution_report_path
-            ).telemetry
+            population_execution_report = load_population_execution_report(population_execution_report_path)
+            population_telemetry = population_execution_report.telemetry
         elif population_telemetry_path is not None:
             raw_telemetry = json.loads(population_telemetry_path.read_text(encoding="utf-8"))
             if not isinstance(raw_telemetry, dict):
                 raise CampaignError("population telemetry must be a JSON object")
             population_telemetry = population_telemetry_from_document(raw_telemetry)
+
+        if previous_population_plan_path is not None:
+            if population_execution_report is None:
+                raise CampaignError("--previous-population-plan requires --population-execution-report")
+            raw_previous = json.loads(previous_population_plan_path.read_text(encoding="utf-8"))
+            if not isinstance(raw_previous, dict):
+                raise CampaignError("previous population plan must be a JSON object")
+            manifest_document = raw_previous
+            if isinstance(raw_previous.get("plan"), dict):
+                manifest_document = raw_previous["plan"].get("population_manifest")
+            if not isinstance(manifest_document, dict):
+                raise CampaignError("previous population plan does not contain a population_manifest object")
+            previous_population_manifest = population_manifest_from_document(manifest_document)
 
         plan = plan_adaptive_round(
             signals,
@@ -1516,6 +1538,8 @@ def research_adapt_cmd(
             max_candidates=max_candidates,
             max_parallel=max_parallel,
             population_telemetry=population_telemetry,
+            population_execution_report=population_execution_report,
+            previous_population_manifest=previous_population_manifest,
         )
         laws = extract_search_laws(signals)
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, CampaignError) as error:
@@ -1562,8 +1586,110 @@ def research_adapt_cmd(
         typer.echo(
             f"population: tasks={len(plan.population_manifest.tasks)} manifest={plan.population_manifest_digest}"
         )
+    if plan.information_budget is not None:
+        decision = plan.information_budget
+        typer.echo(
+            "information-budget: "
+            f"agents={decision.next_budget.max_agents}/{decision.base_budget.max_agents} "
+            f"compute={decision.next_budget.max_compute_units:.1f}/"
+            f"{decision.base_budget.max_compute_units:.1f} "
+            f"mode={(decision.mode_override.value if decision.mode_override is not None else 'hold')}"
+        )
     for law in laws:
         typer.echo(f"{law.kind.value}: {law.statement} ({law.confidence:.2f}, n={law.support})")
+
+
+@app.command("population-budget")
+def population_budget(
+    plan_path: Annotated[
+        Path,
+        typer.Argument(help="prior research-adapt JSON or direct population-manifest JSON"),
+    ],
+    execution_report_path: Annotated[
+        Path,
+        typer.Argument(help="retained managed population execution report JSON"),
+    ],
+    output_path: Annotated[
+        Path | None,
+        typer.Option("--output", help="optional path to retain the canonical budget decision"),
+    ] = None,
+    json_out: Annotated[bool, typer.Option("--json", help="emit the adaptive budget decision")] = False,
+) -> None:
+    """Reduce retained population evidence into the next search-only compute envelope."""
+
+    from swfactory.adaptive_information import (
+        budget_from_manifest,
+        evaluate_information_budget,
+        write_information_budget,
+    )
+    from swfactory.population_execution import load_population_execution_report
+    from swfactory.population_manifest import (
+        PopulationManifestError,
+        population_manifest_from_document,
+    )
+
+    try:
+        raw_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        if not isinstance(raw_plan, dict):
+            raise PopulationManifestError("population plan must be a JSON object")
+        manifest_document = raw_plan
+        prior_max_parallel = 1
+        if isinstance(raw_plan.get("plan"), dict):
+            plan_document = raw_plan["plan"]
+            manifest_document = plan_document.get("population_manifest")
+            raw_parallel = plan_document.get("max_parallel")
+            if raw_parallel is not None:
+                if type(raw_parallel) is not int or raw_parallel < 1:
+                    raise PopulationManifestError("prior plan max_parallel must be a positive integer")
+                prior_max_parallel = raw_parallel
+        if not isinstance(manifest_document, dict):
+            raise PopulationManifestError("input does not contain a population_manifest object")
+        manifest = population_manifest_from_document(manifest_document)
+        prior_max_parallel = min(prior_max_parallel, len(manifest.tasks)) if manifest.tasks else 1
+        report = load_population_execution_report(execution_report_path)
+        decision = evaluate_information_budget(
+            report,
+            base_budget=budget_from_manifest(
+                manifest,
+                max_parallel=prior_max_parallel,
+            ),
+            manifest=manifest,
+        )
+        if output_path is not None:
+            write_information_budget(output_path, decision)
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        PopulationManifestError,
+    ) as error:
+        typer.echo(f"population budget: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    document = {
+        **decision.canonical_dict(),
+        "decision_digest": decision.digest(),
+    }
+    if json_out:
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        return
+
+    typer.echo(
+        f"information budget {decision.digest()}: "
+        f"agents={decision.next_budget.max_agents}/{decision.base_budget.max_agents} "
+        f"compute={decision.next_budget.max_compute_units:.1f}/"
+        f"{decision.base_budget.max_compute_units:.1f} "
+        f"mode={(decision.mode_override.value if decision.mode_override is not None else 'hold')}"
+    )
+    for lane in decision.lanes:
+        typer.echo(
+            f"lane {lane.lane_index} {lane.role.value}/{lane.compute_tier.value}: "
+            f"{lane.recommended_count}/{lane.task_count} "
+            f"value={lane.marginal_information_value:.6f} "
+            f"corr={lane.mean_correlation:.3f} {lane.action.value}"
+        )
 
 
 @app.command("population-bind")

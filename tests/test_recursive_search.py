@@ -228,6 +228,7 @@ def test_future_factory_contract_keeps_one_root_search_authority() -> None:
     assert [line for line in lines if line.startswith("authority:")] == ["authority: search-only"]
     assert "authority_envelope:" in lines
 
+
 def _population_telemetry() -> PopulationTelemetry:
     return PopulationTelemetry(
         manifest_digest="sha256:" + "a" * 64,
@@ -328,7 +329,6 @@ def test_research_adapt_cli_consumes_retained_population_telemetry(tmp_path: Pat
     assert document["plan"]["population_telemetry"]["manifest_digest"] == telemetry.manifest_digest
 
 
-
 def test_research_adapt_cli_consumes_managed_population_execution_report(tmp_path: Path) -> None:
     report_path = tmp_path / "campaign.json"
     execution_path = tmp_path / "population-execution.json"
@@ -382,6 +382,101 @@ def test_research_adapt_cli_consumes_managed_population_execution_report(tmp_pat
     document = json.loads(result.stdout)
     assert document["plan"]["population_telemetry_digest"] == telemetry.digest()
     assert document["plan"]["population_telemetry"]["manifest_digest"] == telemetry.manifest_digest
+    assert document["plan"]["information_budget_digest"].startswith("sha256:")
+    assert document["plan"]["information_budget"]["source_execution_report_digest"] == execution.digest()
+    assert document["plan"]["information_budget"]["next_budget"]["max_agents"] <= 4
+
+
+def test_adaptive_round_binds_managed_execution_budget_into_swarm_identity() -> None:
+    telemetry = _population_telemetry()
+    receipts = tuple(
+        BehaviorReceipt(
+            task_id=f"pop_{index:024x}",
+            state="answered",
+            behavior_signature=("same" if index < 3 else "counterfactual",),
+        )
+        for index in range(4)
+    )
+    telemetry = replace(
+        telemetry,
+        receipt_digests=tuple(sorted(receipt.digest() for receipt in receipts)),
+    )
+    execution = PopulationExecutionReport(
+        population_manifest_digest=telemetry.manifest_digest,
+        provider_binding_digest="sha256:" + "7" * 64,
+        receipts=receipts,
+        telemetry=telemetry,
+        cancelled=False,
+        started_tasks=4,
+    )
+
+    plan = plan_adaptive_round(
+        (_round(disagreement=0.8, evidence=1, required=1),),
+        depth=1,
+        input_head="abc123",
+        max_candidates=4,
+        max_parallel=4,
+        population_execution_report=execution,
+    )
+
+    assert plan.information_budget is not None
+    assert plan.information_budget_digest == plan.information_budget.digest()
+    assert plan.population_telemetry == telemetry
+    assert plan.swarm_plan is not None
+    assert f"information-budget={plan.information_budget_digest}" in plan.swarm_plan.reason
+    assert plan.max_parallel <= plan.information_budget.next_budget.max_agents
+
+
+def test_settled_correlated_execution_stops_recursive_strategy_spawning() -> None:
+    receipts = tuple(
+        BehaviorReceipt(
+            task_id=f"pop_{index:024x}",
+            state="answered",
+            behavior_signature=("same-path", "same-tool"),
+            candidate_digest="sha256:" + "1" * 64,
+        )
+        for index in range(4)
+    )
+    telemetry = PopulationTelemetry(
+        manifest_digest="sha256:" + "a" * 64,
+        total_tasks=4,
+        receipts=4,
+        answered=4,
+        independent_verifier_answers=0,
+        unique_candidates=1,
+        effective_independent_search=1.0,
+        mean_correlation=1.0,
+        candidate_disagreement=0.0,
+        total_cost_usd=1.0,
+        total_duration_s=4.0,
+        receipt_digests=tuple(sorted(receipt.digest() for receipt in receipts)),
+    )
+    execution = PopulationExecutionReport(
+        population_manifest_digest=telemetry.manifest_digest,
+        provider_binding_digest="sha256:" + "6" * 64,
+        receipts=receipts,
+        telemetry=telemetry,
+        cancelled=False,
+        started_tasks=4,
+    )
+
+    plan = plan_adaptive_round(
+        (_round(disagreement=0.0, novelty=0.25, evidence=4, required=4),),
+        depth=1,
+        input_head="abc123",
+        max_candidates=4,
+        max_parallel=4,
+        population_execution_report=execution,
+    )
+
+    assert plan.posture.value == "stop"
+    assert plan.strategies == ()
+    assert plan.max_parallel == 1
+    assert plan.information_budget is not None
+    assert plan.information_budget.stop_new_work is True
+    assert plan.swarm_plan is not None
+    assert plan.swarm_plan.stop_new_work is True
+    assert all(lane.role.value not in {"explorer", "mutator"} for lane in plan.swarm_plan.lanes)
 
 
 def test_research_adapt_refuses_two_population_feedback_sources(tmp_path: Path) -> None:

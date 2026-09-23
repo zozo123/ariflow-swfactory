@@ -8,6 +8,7 @@ import pytest
 from swfactory.population_execution import (
     PopulationCancellation,
     PopulationExecutionPolicy,
+    PopulationExecutionReport,
     PopulationExecutor,
     load_population_execution_report,
     write_population_execution_report,
@@ -169,7 +170,6 @@ def test_population_executor_can_cancel_before_start_without_inventing_receipts(
     assert report.telemetry.total_tasks == len(manifest.tasks)
 
 
-
 def test_population_execution_report_round_trips_with_digest(tmp_path) -> None:
     manifest, binding = _bound()
 
@@ -213,7 +213,6 @@ def test_population_execution_report_rejects_digest_tampering(tmp_path) -> None:
 
     with pytest.raises(PopulationManifestError, match="report digest mismatch"):
         load_population_execution_report(path)
-
 
 
 def test_population_execution_report_rejects_telemetry_from_other_receipts() -> None:

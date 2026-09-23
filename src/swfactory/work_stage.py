@@ -115,8 +115,9 @@ def _with_population_guidance(prompt: str, guidance: str) -> str:
 
 
 def _population_search(ctx: stages.Ctx) -> tuple[str, list[str], dict[str, float]]:
+    from swfactory.adaptive_information import load_information_budget
     from swfactory.population_manifest import PopulationManifestError
-    from swfactory.population_stage import execute_population_stage
+    from swfactory.population_stage import INFORMATION_BUDGET_FILE, execute_population_stage
 
     try:
         result = execute_population_stage(ctx)
@@ -125,10 +126,12 @@ def _population_search(ctx: stages.Ctx) -> tuple[str, list[str], dict[str, float
     if result is None:
         return "", [], {}
     report, guidance = result
+    information_budget = load_information_budget(ctx.state.root / INFORMATION_BUDGET_FILE)
     return (
         guidance,
         [
             f"{ctx.art}/population-execution.json",
+            f"{ctx.art}/population-information-budget.json",
             f"{ctx.art}/population-search.md",
         ],
         {
@@ -138,6 +141,9 @@ def _population_search(ctx: stages.Ctx) -> tuple[str, list[str], dict[str, float
             "population_correlation": float(report.telemetry.mean_correlation),
             "population_disagreement": float(report.telemetry.candidate_disagreement),
             "population_cost_usd": float(report.telemetry.total_cost_usd),
+            "population_next_agents": float(information_budget.next_budget.max_agents),
+            "population_next_compute_units": float(information_budget.next_budget.max_compute_units),
+            "population_information_stop": float(information_budget.stop_new_work),
         },
     )
 

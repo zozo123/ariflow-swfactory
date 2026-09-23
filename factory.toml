@@ -91,6 +91,7 @@ protected = [
   "src/swfactory/cognitive_harness.py",    # System1/System2/gauge/authority split is protected
   "src/swfactory/recursive_search.py",      # meta-search may adapt experiments, never itself mid-run
   "src/swfactory/swarm_dynamics.py",        # population/compute policy is human-maintained here
+  "src/swfactory/adaptive_information.py",   # measured search-budget policy cannot rewrite itself mid-run
   "src/swfactory/population_manifest.py",     # provider-neutral swarm execution contract is protected
   "src/swfactory/provider_binding.py",       # provider choice binding cannot self-widen mid-run
   "src/swfactory/population_execution.py",     # managed search fan-out cannot widen its own authority

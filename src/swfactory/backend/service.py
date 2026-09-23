@@ -210,13 +210,11 @@ class Factory:
                 raise ValueError(f"population adapter {provider!r} has credential capability without env")
             previous = capability_envs.setdefault(capability, env_name)
             if previous != env_name:
-                raise ValueError(
-                    f"population capability {capability!r} maps to multiple credential env names"
-                )
+                raise ValueError(f"population capability {capability!r} maps to multiple credential env names")
 
         for capability, env_name in capability_envs.items():
-            credential_providers[capability] = (
-                lambda _binding, credential_env=env_name: self._population_credential(credential_env)
+            credential_providers[capability] = lambda _binding, credential_env=env_name: self._population_credential(
+                credential_env
             )
 
         self.lease_process_nonce = secrets.token_urlsafe(32)
@@ -261,9 +259,7 @@ class Factory:
     def _population_credential(env_name: str) -> str:
         value = os.getenv(env_name) or ""
         if not value:
-            raise CredentialLeaseError(
-                f"backend population credential env {env_name!r} is not configured"
-            )
+            raise CredentialLeaseError(f"backend population credential env {env_name!r} is not configured")
         return value
 
     def _record_lease_denial(self, event: LeaseDenial) -> None:

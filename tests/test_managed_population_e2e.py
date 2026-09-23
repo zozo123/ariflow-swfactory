@@ -162,9 +162,7 @@ def test_managed_population_runs_through_backend_without_provider_secret_on_work
         assert second.telemetry.answered == len(manifest.tasks)
         assert adapter.calls == len(manifest.tasks), "second managed execution must replay backend receipts"
         assert adapter.credentials == [SECRET] * len(manifest.tasks)
-        assert [receipt.digest() for receipt in first.receipts] == [
-            receipt.digest() for receipt in second.receipts
-        ]
+        assert [receipt.digest() for receipt in first.receipts] == [receipt.digest() for receipt in second.receipts]
 
         visible = json.dumps(
             {

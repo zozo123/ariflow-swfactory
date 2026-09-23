@@ -11,9 +11,16 @@ import hashlib
 import json
 import math
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
+from swfactory.adaptive_information import (
+    budget_from_manifest,
+    evaluate_information_budget,
+    load_information_budget,
+    write_information_budget,
+)
 from swfactory.backend_population import BackendPopulationRunner, PopulationTaskInput
 from swfactory.call_accounting import CallAttempt, CallLedger
 from swfactory.execution_binding import execute_managed_population
@@ -37,6 +44,7 @@ CONTROL_FILE = "population-search.json"
 PIN_FILE = "population-search-pin.json"
 REPORT_FILE = "population-execution.json"
 BUDGET_FILE = "population-budget.json"
+INFORMATION_BUDGET_FILE = "population-information-budget.json"
 SCHEMA_VERSION = 1
 AUTHORITY = "search-only"
 DEFAULT_EXCERPT_CHARS = 4096
@@ -76,9 +84,7 @@ class PopulationStageSpec:
         if set(self.inputs) != set(manifest_ids):
             missing = sorted(set(manifest_ids) - set(self.inputs))
             extra = sorted(set(self.inputs) - set(manifest_ids))
-            raise PopulationManifestError(
-                f"population stage input task set differs; missing={missing} extra={extra}"
-            )
+            raise PopulationManifestError(f"population stage input task set differs; missing={missing} extra={extra}")
         if not 1 <= self.max_parallel <= 64:
             raise PopulationManifestError("population stage max_parallel must be in [1, 64]")
         if not math.isfinite(self.max_cost_usd) or self.max_cost_usd <= 0.0:
@@ -86,9 +92,7 @@ class PopulationStageSpec:
         if not 256 <= self.excerpt_chars <= 8192:
             raise PopulationManifestError("population stage excerpt_chars must be in [256, 8192]")
         if not self.excerpt_chars <= self.total_excerpt_chars <= 32_768:
-            raise PopulationManifestError(
-                "population stage total_excerpt_chars must be >= excerpt_chars and <= 32768"
-            )
+            raise PopulationManifestError("population stage total_excerpt_chars must be >= excerpt_chars and <= 32768")
         for task in self.binding.tasks:
             task_input = self.inputs[task.task_id]
             PopulationInvocation(
@@ -147,9 +151,7 @@ def population_stage_spec_from_document(document: Mapping[str, Any]) -> Populati
             )
         instruction = raw.get("instruction")
         if not isinstance(instruction, str):
-            raise PopulationManifestError(
-                f"population stage input {task_id!r} instruction must be a string"
-            )
+            raise PopulationManifestError(f"population stage input {task_id!r} instruction must be a string")
         objective = raw.get("objective_digest")
         if objective is not None and not isinstance(objective, str):
             raise PopulationManifestError(
@@ -168,9 +170,7 @@ def population_stage_spec_from_document(document: Mapping[str, Any]) -> Populati
         max_parallel=int(document.get("max_parallel", 8)),
         max_cost_usd=float(document.get("max_cost_usd", 1.0)),
         excerpt_chars=int(document.get("excerpt_chars", DEFAULT_EXCERPT_CHARS)),
-        total_excerpt_chars=int(
-            document.get("total_excerpt_chars", DEFAULT_TOTAL_EXCERPT_CHARS)
-        ),
+        total_excerpt_chars=int(document.get("total_excerpt_chars", DEFAULT_TOTAL_EXCERPT_CHARS)),
         authority=str(document.get("authority", AUTHORITY)),
         schema_version=int(document.get("schema_version", SCHEMA_VERSION)),
     )
@@ -261,8 +261,7 @@ def _budget_attempt(ctx: Any, spec: PopulationStageSpec) -> tuple[CallLedger, Ca
 
     if spec.max_cost_usd > remaining + 1e-9:
         raise PopulationManifestError(
-            f"population search needs a {spec.max_cost_usd:.4f} USD reservation "
-            f"but only {remaining:.4f} USD remains"
+            f"population search needs a {spec.max_cost_usd:.4f} USD reservation but only {remaining:.4f} USD remains"
         )
     attempt = ledger.reserve(
         stage="population_search",
@@ -314,8 +313,7 @@ def _settle_population_budget(
     stages.seed_budget(ctx, refresh=True)
     if actual > spec.max_cost_usd + 1e-9:
         raise PopulationManifestError(
-            f"population provider reported {actual:.4f} USD, above the declared "
-            f"{spec.max_cost_usd:.4f} USD ceiling"
+            f"population provider reported {actual:.4f} USD, above the declared {spec.max_cost_usd:.4f} USD ceiling"
         )
 
 
@@ -358,6 +356,27 @@ def execute_population_stage(
             raise
 
     _settle_population_budget(ctx, spec, ledger, budget_attempt, report)
+
+    information_budget_path = ctx.state.root / INFORMATION_BUDGET_FILE
+    if information_budget_path.is_file():
+        information_budget = load_information_budget(information_budget_path)
+        if information_budget.source_manifest_digest != spec.manifest.digest():
+            raise PopulationManifestError("retained information budget belongs to another population manifest")
+        if information_budget.source_execution_report_digest != report.digest():
+            raise PopulationManifestError("retained information budget belongs to another execution report")
+    else:
+        information_budget = evaluate_information_budget(
+            report,
+            base_budget=budget_from_manifest(
+                spec.manifest,
+                max_parallel=min(
+                    spec.max_parallel,
+                    max(1, len(spec.manifest.tasks)),
+                ),
+            ),
+            manifest=spec.manifest,
+        )
+        write_information_budget(information_budget_path, information_budget)
 
     environment = os.environ if env is None else env
     runner = BackendPopulationRunner(
@@ -411,6 +430,18 @@ def execute_population_stage(
         f"{ctx.art}/population-execution.json",
         json.dumps(
             {**report.canonical_dict(), "report_digest": report.digest()},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+    )
+    ctx.write_artifact(
+        f"{ctx.art}/population-information-budget.json",
+        json.dumps(
+            {
+                **information_budget.canonical_dict(),
+                "decision_digest": information_budget.digest(),
+            },
             indent=2,
             sort_keys=True,
         )

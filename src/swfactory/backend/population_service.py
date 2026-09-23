@@ -241,7 +241,6 @@ def _execute(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-
 def _artifact(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
     _cell, cell_id, epoch, _policy_digest, operation_key = _managed_identity(factory, body)
     artifact_digest = text(body, "artifact_digest", max_len=80)
