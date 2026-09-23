@@ -43,7 +43,7 @@ checks:
   # Every leg the supported release surface rests on. `candidate-readiness` refuses to seal
   # evidence unless each of these reported `success` -- not skipped, not cancelled, not neutral.
   mandatory:
-    - test
+    - test-core
     - eval-suite
     - airflow-parity
     - airflow-main
