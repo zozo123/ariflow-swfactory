@@ -24,12 +24,14 @@ def _node(
     statement: str,
     *,
     issuer: str | None = None,
+    claim_id: str | None = None,
 ) -> JustificationNode:
     return JustificationNode(
         quench_digest=quench,
         kind=kind,
         statement=statement,
         payload_digest=_digest(statement),
+        claim_id=claim_id,
         issuer=issuer,
     )
 
@@ -65,16 +67,23 @@ def _graph(*, include_counterexample: bool = False) -> tuple[JustificationGraph,
         "TLC explored the declared authority model",
         issuer="tlc",
     )
-    local_claim = _node(quench, NodeKind.CLAIM, "stale epochs cannot commit")
+    local_claim = _node(
+        quench,
+        NodeKind.CLAIM,
+        "stale epochs cannot commit",
+        claim_id="authority.stale-epoch",
+    )
     refinement = _node(
         quench,
         NodeKind.REFINEMENT,
         "observed runtime trace conforms to modeled transition vocabulary",
+        claim_id="refinement.runtime-authority-model",
     )
     root = _node(
         quench,
         NodeKind.CLAIM,
         "publication preconditions hold for this frozen candidate",
+        claim_id="promotion.preconditions",
     )
 
     edges = [
@@ -139,7 +148,7 @@ def test_hypergraph_projects_a_claim_only_through_trusted_derivations() -> None:
     assert projection.root_supported is True
     assert projection.root_refuted is False
     assert projection.justified is True
-    assert root in projection.supported_claims
+    assert "promotion.preconditions" in projection.supported_claims
     assert projection.graph_digest == graph.digest()
 
 
@@ -161,7 +170,7 @@ def test_counterexample_cuts_the_root_even_when_a_support_path_exists() -> None:
     assert projection.root_supported is False
     assert projection.root_refuted is True
     assert projection.justified is False
-    assert root in projection.refuted_claims
+    assert "promotion.preconditions" in projection.refuted_claims
 
 
 def test_untrusted_evidence_cannot_mint_a_derivation() -> None:
@@ -189,8 +198,8 @@ def test_graph_rejects_cross_quench_nodes() -> None:
 
 def test_graph_rejects_cycles_in_the_derivation_projection() -> None:
     quench = _digest("cycle-quench")
-    a = _node(quench, NodeKind.CLAIM, "claim a")
-    b = _node(quench, NodeKind.CLAIM, "claim b")
+    a = _node(quench, NodeKind.CLAIM, "claim a", claim_id="a")
+    b = _node(quench, NodeKind.CLAIM, "claim b", claim_id="b")
     edges = (
         _edge(
             quench,
