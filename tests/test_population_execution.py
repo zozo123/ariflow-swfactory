@@ -8,6 +8,7 @@ import pytest
 from swfactory.population_execution import (
     PopulationCancellation,
     PopulationExecutionPolicy,
+    PopulationExecutionReport,
     PopulationExecutor,
     load_population_execution_report,
     write_population_execution_report,
