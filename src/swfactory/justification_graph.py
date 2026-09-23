@@ -59,6 +59,7 @@ class JustificationNode:
     kind: NodeKind
     statement: str
     payload_digest: str
+    claim_id: str | None = None
     issuer: str | None = None
 
     def validate(self) -> None:
@@ -66,6 +67,11 @@ class JustificationNode:
         _require_digest(self.payload_digest, "payload_digest")
         if not self.statement.strip():
             raise JustificationGraphError("node statement must be nonempty")
+        if self.kind in {NodeKind.CLAIM, NodeKind.REFINEMENT}:
+            if self.claim_id is None or not self.claim_id.strip():
+                raise JustificationGraphError(f"{self.kind.value} nodes require a claim_id")
+        elif self.claim_id is not None:
+            raise JustificationGraphError(f"{self.kind.value} nodes may not declare a claim_id")
         if self.kind in {NodeKind.EVIDENCE, NodeKind.COUNTEREXAMPLE}:
             if self.issuer is None or not self.issuer.strip():
                 raise JustificationGraphError(f"{self.kind.value} nodes require an issuer")
@@ -81,6 +87,7 @@ class JustificationNode:
                 "kind": self.kind.value,
                 "statement": self.statement,
                 "payload_digest": self.payload_digest,
+                "claim_id": self.claim_id,
                 "issuer": self.issuer,
             }
         )
@@ -132,6 +139,7 @@ class JustificationProjection:
     quench_digest: str
     graph_digest: str
     root_node: str
+    root_claim_id: str
     root_supported: bool
     root_refuted: bool
     supported_claims: tuple[str, ...]
@@ -282,9 +290,9 @@ class JustificationGraph:
                 continue
             is_refuted = refuted(ident)
             if is_refuted:
-                refuted_claims.append(ident)
+                refuted_claims.append(node.claim_id or ident)
             elif admitted(ident):
-                supported_claims.append(ident)
+                supported_claims.append(node.claim_id or ident)
 
         root_refuted = refuted(root_node)
         root_supported = admitted(root_node) and not root_refuted
@@ -292,6 +300,7 @@ class JustificationGraph:
             quench_digest=self.quench_digest,
             graph_digest=self.digest(),
             root_node=root_node,
+            root_claim_id=nodes[root_node].claim_id or root_node,
             root_supported=root_supported,
             root_refuted=root_refuted,
             supported_claims=tuple(supported_claims),
