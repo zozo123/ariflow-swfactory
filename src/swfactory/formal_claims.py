@@ -24,9 +24,6 @@ from typing import Iterable
 
 FORMAL_CLAIMS_SCHEMA_VERSION = 1
 FORMAL_CLAIMS_AUTHORITY = "evidence-only"
-TRUSTED_VERIFIER_AUTHORITY = "trusted-verifier"
-SEARCH_AUTHORITY = "search"
-
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -150,9 +147,10 @@ class FormalQuench:
 class EvidenceReceipt:
     """A verifier result for exactly one claim in exactly one quench.
 
-    Search systems may emit receipts, but authority=search receipts never justify or refute a
-    claim. A search-produced counterexample must be checked by a trusted verifier before it changes
-    the justified claim set. This is the epistemic analogue of "compute cannot mint authority".
+    Search systems may emit receipts, but a receipt cannot self-declare trust. The authority plane
+    supplies the trusted verifier set to certificate derivation. A search-produced counterexample
+    must be checked by one of those verifiers before it changes the justified claim set. This is the
+    epistemic analogue of "compute cannot mint authority".
     """
 
     quench_digest: str
@@ -162,7 +160,6 @@ class EvidenceReceipt:
     verdict: EvidenceVerdict
     verifier: str
     evidence_digest: str
-    authority: str
 
     def validate(self) -> None:
         _require_digest(self.quench_digest, "quench_digest")
@@ -172,8 +169,6 @@ class EvidenceReceipt:
             raise FormalClaimError("evidence claim_id must be nonempty")
         if not self.verifier.strip():
             raise FormalClaimError("evidence verifier must be nonempty")
-        if not self.authority.strip():
-            raise FormalClaimError("evidence authority must be nonempty")
 
 
 @dataclass(frozen=True)
@@ -213,9 +208,15 @@ class ClaimCertificate:
         return _canonical_digest(self.as_dict())
 
 
-def derive_certificate(quench: FormalQuench, receipts: Iterable[EvidenceReceipt]) -> ClaimCertificate:
+def derive_certificate(
+    quench: FormalQuench,
+    receipts: Iterable[EvidenceReceipt],
+    *,
+    trusted_verifiers: frozenset[str],
+) -> ClaimCertificate:
     """Derive the justified claim set without allowing evidence to drift across questions.
 
+    Trust is an input from the authority boundary; a receipt cannot self-declare itself trusted.
     A refutation by a trusted verifier dominates supporting receipts for the same claim. Otherwise
     a claim is supported only after its configured number of distinct trusted verifier identities
     have produced supporting receipts using the claim declared method.
@@ -224,6 +225,8 @@ def derive_certificate(quench: FormalQuench, receipts: Iterable[EvidenceReceipt]
     """
 
     quench.validate()
+    if any(not verifier.strip() for verifier in trusted_verifiers):
+        raise FormalClaimError("trusted verifier identities must be nonempty")
     quench_digest = quench.digest()
     claims = quench.claim_map()
     grouped: dict[str, list[EvidenceReceipt]] = {claim_id: [] for claim_id in claims}
@@ -245,7 +248,7 @@ def derive_certificate(quench: FormalQuench, receipts: Iterable[EvidenceReceipt]
                 f"{receipt.claim_id}: evidence method {receipt.method.value!r} does not match "
                 f"frozen method {claim.method.value!r}"
             )
-        if receipt.authority != TRUSTED_VERIFIER_AUTHORITY:
+        if receipt.verifier not in trusted_verifiers:
             ignored.append(receipt.evidence_digest)
             continue
         grouped[receipt.claim_id].append(receipt)
