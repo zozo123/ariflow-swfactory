@@ -91,6 +91,8 @@ claim meaning.
 | `bounded-exhaustive` | the declared finite state/input region was exhausted |
 | `model-check` | the stated invariant holds in the explored formal model |
 | `theorem` | a proof checker accepted the theorem under explicit definitions/axioms |
+| `benchmark` | the declared performance experiment measured the stated quantity under its environment |
+| `observation` | an external/open-world behavior was observed under the retained integration context |
 
 The claim text must reflect the method’s scope.
 
@@ -144,6 +146,119 @@ A trusted refutation dominates supporting receipts.
 
 The resulting `ClaimCertificate.meets_claim_policy` is **not promotion authority**. It is an
 evidence predicate that the existing authority plane may consume.
+
+
+## The certificate is a projection of a justification hypergraph
+
+A flat list of evidence is useful for display, but it is not the strongest mathematical object.
+Compound conclusions depend jointly on premises, and one lemma may feed several conclusions.
+The canonical provenance shape is therefore a typed, content-addressed **justification hypergraph**:
+
+```text
+J_Q = (V, E)
+```
+
+for one frozen Formal Quench `Q`.
+
+Nodes are typed as artifact, assumption, model, evidence, counterexample, refinement, or claim.
+A derivation is a hyperedge:
+
+```text
+{v1, v2, ..., vn} --rule/verifier/receipt--> conclusion
+```
+
+The ordinary dependency projection must be acyclic. Every node and edge is content-addressed, so the
+graph digest commits to the exact artifact, assumptions, evidence, verifier receipts, refinement
+claims, and inference structure.
+
+For example:
+
+```text
+model + TLC receipt
+        |
+        v
+[stale epochs cannot commit] ----+
+                                  |
+artifact + model                  |
+        |                         |
+        v                         v
+[runtime refines model] + assumptions
+                  |
+                  v
+      [publication preconditions]
+```
+
+`swfactory.justification_graph` checks the structural contract and projects trusted support and
+refutation. It deliberately does **not** pretend to replay the semantics of TLC, Lean, a fuzzer, or
+an external system. Those verifiers produce receipts; the graph ensures they cannot drift across
+the frozen question or self-assert trust.
+
+The useful end-state is **justification-carrying promotion**, not a vague "proof-carrying" label:
+
+```text
+artifact + justification_graph_root + authority_receipt
+```
+
+with four laws:
+
+```text
+No claim without a derivation.
+No derivation without its assumptions.
+No proof transport without an explicit refinement argument.
+No justified claim implies authority.
+```
+
+A trusted counterexample creates a graph cut: the refuted claim and every downstream conclusion
+that needs it lose justification. In the phase metaphor, this is the formal meaning of melting a
+false crystal.
+
+## Knowing when *not* to crystallize is part of correctness
+
+Phase classification and freeze policy answer different questions.
+
+A phase says what the search currently looks like. A freeze/quench decision asks whether stopping
+semantic motion is epistemically justified. Therefore:
+
+> **Observed crystal is descriptive; crystallization admission is selective.**
+
+`swfactory.crystallization` keeps the decision advisory and orthogonal to authority. It separates
+three outcomes:
+
+- **keep-liquid** — do not freeze while the specification is moving, candidate entropy remains high,
+  or the implementation is still changing materially;
+- **measure** — stop widening and gather evidence while coverage is incomplete or independent
+  verifiers disagree;
+- **freeze** — exact bytes are stable enough to bind evidence, after which formalization may still
+  be empirical, optional, or formal.
+
+Even after freezing, formal proof may be the wrong instrument. Prefer empirical evidence when the
+abstraction is too weak or the environment is too open/volatile. Formalization becomes a strong fit
+only when the claim has a credible abstraction, the semantics are stable enough to freeze, and the
+consequence of error justifies the cost.
+
+This creates an explicit negative capability:
+
+```text
+unstable spec            -> keep liquid
+high candidate entropy   -> keep liquid
+high semantic velocity   -> keep liquid
+evidence gaps            -> measure
+verifier disagreement    -> measure
+weak abstraction         -> freeze + empirical verification
+open-world behavior      -> freeze + fuzz/observation
+performance claim        -> freeze + benchmark
+finite transition safety -> optional/model-check/formal, depending on risk
+pure mathematical kernel -> optional/theorem, when the abstraction is the implementation
+```
+
+The thresholds are policy, not universal constants. The default policy is conservative and
+replaceable; its output remains `search-only`.
+
+This avoids two symmetric mistakes:
+
+1. crystallizing too early and turning a local minimum into doctrine;
+2. formalizing the wrong abstraction and mistaking proof strength for system truth.
+
 
 ## What should be formalized first
 
@@ -290,5 +405,6 @@ AdvertisedClaims subseteq SupportedClaims
 OutputAuthority subseteq ExplicitlyGrantedAuthority
 ```
 
-> **Explore nondeterministically, converge empirically, certify only bounded propositions, and never
-> allow confidence or computation to masquerade as proof or permission.**
+> **Explore nondeterministically, preserve the option to stay liquid, freeze only stable questions,
+> construct explicit derivations for bounded claims, and never allow confidence or computation to
+> masquerade as proof or permission.**
