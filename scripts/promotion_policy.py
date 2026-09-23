@@ -82,6 +82,7 @@ class Policy:
     control_plane_exemption_label: str
     factory_identities: tuple[str, ...]
     evidence_artifact_prefix: str
+    live_required_aliases: tuple[tuple[str, str], ...]
 
     @classmethod
     def from_document(cls, document: Mapping[str, Any]) -> Policy:
@@ -102,6 +103,18 @@ class Policy:
             raise PolicyViolation("policy declares no mandatory checks")
         control_plane = document["control_plane"]
         release = document["release"]
+        aliases_doc = document.get("live_compatibility", {}).get("required_context_aliases", {})
+        if not isinstance(aliases_doc, Mapping):
+            raise PolicyViolation("live_compatibility.required_context_aliases must be a mapping")
+        aliases = tuple(sorted((str(alias), str(target)) for alias, target in aliases_doc.items()))
+        for alias, target in aliases:
+            if not alias.strip() or not target.strip() or alias == target:
+                raise PolicyViolation("live required-context aliases must name two distinct nonempty jobs")
+            if target not in status["contexts"]:
+                raise PolicyViolation(
+                    f"live required-context alias {alias!r} targets {target!r}, "
+                    "which is not a desired required context"
+                )
         return cls(
             document=document,
             repository=str(document["repository"]),
@@ -122,6 +135,7 @@ class Policy:
             control_plane_exemption_label=str(control_plane["exemption_label"]),
             factory_identities=tuple(control_plane["factory_identities"]),
             evidence_artifact_prefix=str(release["evidence_artifact_prefix"]),
+            live_required_aliases=aliases,
         )
 
 
@@ -584,6 +598,37 @@ def audit_policy(policy: Policy, repo_root: Path) -> list[str]:
             )
         if _fails_open_on_error(job.get("continue-on-error")):
             problems.append(f"required context {context!r} sets continue-on-error and cannot refuse anything")
+
+    for alias, target in policy.live_required_aliases:
+        job = ci.get(alias)
+        if job is None:
+            problems.append(f"live compatibility context {alias!r} is not produced by ci.yml")
+            continue
+        needs = list(job.get("needs") or [])
+        if needs != [target]:
+            problems.append(
+                f"live compatibility context {alias!r} must depend only on {target!r}, got {needs!r}"
+            )
+        if _fails_open_on_error(job.get("continue-on-error")):
+            problems.append(f"live compatibility context {alias!r} sets continue-on-error and can fail open")
+        if _condition(job) != aggregate_guard(policy):
+            problems.append(
+                f"live compatibility context {alias!r} must use the same always-on main guard as {target!r}"
+            )
+        runs = _run_text(job)
+        if 'test "$READINESS_RESULT" = success' not in runs:
+            problems.append(
+                f"live compatibility context {alias!r} does not fail closed on its target result"
+            )
+        env = {}
+        for step in job.get("steps", []):
+            if isinstance(step, Mapping):
+                env.update(step.get("env") or {})
+        result_expr = str(env.get("READINESS_RESULT") or "")
+        if target not in result_expr or ".result" not in result_expr:
+            problems.append(
+                f"live compatibility context {alias!r} does not read the result of {target!r}"
+            )
 
     evidence_job = "candidate-evidence"
     if evidence_job not in release:
