@@ -85,3 +85,12 @@ def test_open_world_and_performance_claims_keep_property_specific_methods() -> N
     assert recommend_evidence_method(ClaimShape.OPEN_WORLD, assessment) == EvidenceMethod.FUZZ
     assert recommend_evidence_method(ClaimShape.PERFORMANCE, assessment) == EvidenceMethod.BENCHMARK
     assert recommend_evidence_method(ClaimShape.EXTERNAL_INTEGRATION, assessment) == EvidenceMethod.OBSERVATION
+
+
+def test_measure_posture_keeps_claim_specific_empirical_methods() -> None:
+    assessment = assess_crystallization(_context(evidence_coverage=0.40))
+
+    assert assessment.freeze_posture == FreezePosture.MEASURE
+    assert assessment.formalization_fit == FormalizationFit.DEFER
+    assert recommend_evidence_method(ClaimShape.PERFORMANCE, assessment) == EvidenceMethod.BENCHMARK
+    assert recommend_evidence_method(ClaimShape.EXTERNAL_INTEGRATION, assessment) == EvidenceMethod.OBSERVATION
