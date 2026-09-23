@@ -25,7 +25,7 @@ def _quench(*, statement: str = "stale epochs cannot mutate") -> FormalQuench:
         artifact_digest=_digest("artifact"),
         assumptions_digest=_digest("assumptions"),
         model_digest=_digest("authority-model"),
-        policy_digest="policy:formal-test",
+        policy_digest=_digest("policy:formal-test"),
         claims=(
             Claim(
                 claim_id="authority.stale-epoch",
@@ -158,4 +158,51 @@ def test_duplicate_verifier_identity_does_not_fake_independence() -> None:
         trusted_verifiers=frozenset({"tlc"}),
     )
     assert "authority.stale-epoch" in certificate.unresolved_required_claims
+    assert certificate.meets_claim_policy is False
+
+
+def test_policy_digest_is_content_bound_and_changes_quench_identity() -> None:
+    first = _quench()
+    second = FormalQuench(
+        artifact_digest=first.artifact_digest,
+        assumptions_digest=first.assumptions_digest,
+        model_digest=first.model_digest,
+        policy_digest=_digest("policy:formal-test-v2"),
+        claims=first.claims,
+    )
+
+    assert first.digest() != second.digest()
+
+    malformed = FormalQuench(
+        artifact_digest=first.artifact_digest,
+        assumptions_digest=first.assumptions_digest,
+        model_digest=first.model_digest,
+        policy_digest="policy:formal-test",
+        claims=first.claims,
+    )
+    with pytest.raises(FormalClaimError, match="policy_digest must be sha256"):
+        malformed.validate()
+
+
+def test_trusted_counterexample_may_refute_with_its_actual_method() -> None:
+    quench = _quench()
+    claim = quench.claim_map()["authority.stale-epoch"]
+    counterexample = EvidenceReceipt(
+        quench_digest=quench.digest(),
+        claim_id=claim.claim_id,
+        claim_digest=claim.digest(),
+        method=EvidenceMethod.FUZZ,
+        verdict=EvidenceVerdict.REFUTES,
+        verifier="counterexample-checker",
+        evidence_digest=_digest("trusted-fuzz-counterexample"),
+    )
+
+    certificate = derive_certificate(
+        quench,
+        [counterexample],
+        trusted_verifiers=frozenset({"counterexample-checker"}),
+    )
+
+    assert "authority.stale-epoch" in certificate.refuted_claims
+    assert "authority.stale-epoch" not in certificate.supported_claims
     assert certificate.meets_claim_policy is False
