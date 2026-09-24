@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -198,10 +199,8 @@ def test_redeem_does_not_hold_broker_lock_while_reading_epoch(tmp_path: Path) ->
 
     def read_epoch(_cell_id: str) -> int:
         broker = broker_ref["broker"]
-        acquired = broker.lock.acquire(blocking=False)
-        seen.append(acquired)
-        if acquired:
-            broker.lock.release()
+        is_owned = getattr(broker.lock, "_is_owned", lambda: False)
+        seen.append(not bool(is_owned()))
         return 3
 
     broker = CredentialLeaseBroker(
