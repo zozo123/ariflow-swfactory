@@ -6,6 +6,8 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-09-24
+
 - Close the live branch-protection gap without weakening the declared policy: the historical protected
   `test` context is now a fail-closed compatibility aggregate over exact-SHA `candidate-readiness`,
   while the former fast Python job is the mandatory `test-core` leg. The promotion-policy audit
@@ -142,6 +144,8 @@ All notable changes to this project will be documented here. The format follows
   builds a `Ctx` per task and that path's contract is that it performs no host I/O.
 
 ### Fixed
+
+- Harden the managed credential boundary before release: managed fan-out now validates the final XCom document; generation/authority seals are rejected recursively; lease epoch/attempt values match the Rust u64 contract without coercion; redeem no longer inverts the CellStore/broker lock order and credential materialization is serialized with revocation; and credential-bearing proxy URLs are refused before a coding cell inherits them. Adversarial regression tests cover each boundary.
 
 - Docker work containers carry the Cell identity and are reclaimed by it (#2052, the #2035 orphan).
   `DockerSandbox.argv` emitted `docker run --rm --init` with no `--label`/`--name`, `close()` was the
