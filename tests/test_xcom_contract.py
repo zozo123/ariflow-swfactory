@@ -53,6 +53,7 @@ def test_xcom_contract_rejects_authority_and_secret_fields(document: object) -> 
     with pytest.raises(XComContractError, match="forbidden"):
         validate_xcom_document(document)
 
+
 def test_managed_fan_out_validates_existing_job_fields_before_xcom() -> None:
     job = _job()
     job["GH_TOKEN"] = "must-not-reach-xcom"
