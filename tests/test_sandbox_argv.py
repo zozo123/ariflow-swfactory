@@ -1336,6 +1336,4 @@ def test_agent_cell_environment_rejects_proxy_credentials() -> None:
 
 
 def test_agent_cell_environment_allows_credential_free_proxy() -> None:
-    assert cell_env({"HTTPS_PROXY": "http://proxy.example:8080"}) == {
-        "HTTPS_PROXY": "http://proxy.example:8080"
-    }
+    assert cell_env({"HTTPS_PROXY": "http://proxy.example:8080"}) == {"HTTPS_PROXY": "http://proxy.example:8080"}
