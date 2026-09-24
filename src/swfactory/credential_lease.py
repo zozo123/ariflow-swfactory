@@ -60,10 +60,11 @@ class LeaseBinding:
                 raise ValueError(f"{name} must be a nonempty bounded string")
         if not is_cell_id(self.cell_id):
             raise ValueError("credential lease requires a valid Factory Cell id")
-        if self.epoch < 1:
-            raise ValueError("credential lease epoch must be positive")
-        if self.attempt_number < 1:
-            raise ValueError("credential lease attempt_number must be positive")
+        max_u64 = 2**64 - 1
+        if type(self.epoch) is not int or not 1 <= self.epoch <= max_u64:
+            raise ValueError("credential lease epoch must be an integer in [1, 2**64 - 1]")
+        if type(self.attempt_number) is not int or not 1 <= self.attempt_number <= max_u64:
+            raise ValueError("credential lease attempt_number must be an integer in [1, 2**64 - 1]")
         if not self.policy_digest.startswith("policy:"):
             raise ValueError("credential lease requires a canonical policy digest")
 
@@ -100,9 +101,9 @@ class LeaseBinding:
                 task_instance_id=str(raw["task_instance_id"]),
                 stage_id=str(raw["stage_id"]),
                 sandbox_id=str(raw["sandbox_id"]),
-                attempt_number=int(raw["attempt_number"]),
+                attempt_number=raw["attempt_number"],
                 cell_id=str(raw["cell_id"]),
-                epoch=int(raw["epoch"]),
+                epoch=raw["epoch"],
                 operation_key=str(raw["operation_key"]),
                 policy_digest=str(raw["policy_digest"]),
             )
@@ -281,6 +282,7 @@ class CredentialLeaseBroker:
         if len(process_nonce) < _MIN_NONCE_LEN:
             raise ValueError(f"process_nonce must contain at least {_MIN_NONCE_LEN} characters")
         clock = time.time() if now is None else now
+        current_epoch = self.epoch_reader(binding.cell_id) if self.epoch_reader is not None else None
         with self.lock, self.db:
             row = self.db.execute(
                 "SELECT * FROM credential_leases WHERE lease_id=?",
@@ -297,7 +299,7 @@ class CredentialLeaseBroker:
                 self._deny(handle.lease_id, "expired", binding=binding, row=row, now=clock)
             if not hmac.compare_digest(str(row["binding_digest"]), binding.digest()):
                 self._deny(handle.lease_id, "binding_mismatch", binding=binding, row=row, now=clock)
-            if self.epoch_reader is not None and self.epoch_reader(binding.cell_id) != binding.epoch:
+            if current_epoch is not None and current_epoch != binding.epoch:
                 self._deny(handle.lease_id, "stale_epoch", binding=binding, row=row, now=clock)
 
             process_hash = _hash_secret(process_nonce)
@@ -320,10 +322,10 @@ class CredentialLeaseBroker:
             if provider is None:
                 self._deny(handle.lease_id, "provider_unavailable", binding=binding, row=row, now=clock)
 
-        value = provider(binding)
-        if not isinstance(value, str) or not value:
-            raise CredentialLeaseError(f"trusted provider for {capability!r} returned no credential")
-        return value
+            value = provider(binding)
+            if not isinstance(value, str) or not value:
+                raise CredentialLeaseError(f"trusted provider for {capability!r} returned no credential")
+            return value
 
     def revoke(
         self,

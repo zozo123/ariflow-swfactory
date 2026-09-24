@@ -118,4 +118,5 @@ def bind_jobs(jobs: Iterable[dict[str, Any]], bindings: Iterable[dict[str, Any]]
             cell_epoch=binding.epoch,
             cell_managed=True,
         )
+    validate_xcom_document(out)
     return out

@@ -12,6 +12,8 @@ FORBIDDEN_XCOM_KEYS = frozenset(
     {
         "policy_digest",
         "cell_policy_digest",
+        "cell_generation",
+        "factory_generation",
         "lease",
         "lease_id",
         "lease_handle",

@@ -37,6 +37,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
+from urllib.parse import urlsplit
 
 from swfactory.cells import CellIdentity
 from swfactory.cleanup_receipt import CleanupReceipt, CleanupStatus
@@ -263,7 +264,19 @@ LOCAL_AGENT_CREDENTIALS = frozenset({"ANTHROPIC_API_KEY"})
 def cell_env(env: Mapping[str, str]) -> dict[str, str]:
     """Project a hostile host environment onto the small set a coding cell may inherit."""
 
-    return {key: value for key, value in env.items() if key in CELL_ENV_ALLOWLIST}
+    projected: dict[str, str] = {}
+    for key, value in env.items():
+        if key not in CELL_ENV_ALLOWLIST:
+            continue
+        if key in {"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"}:
+            try:
+                parsed = urlsplit(value)
+            except ValueError as error:
+                raise StageError("policy", f"{key} is not a valid proxy URL") from error
+            if parsed.username is not None or parsed.password is not None:
+                raise StageError("policy", f"{key} contains proxy credentials and cannot enter a coding cell")
+        projected[key] = value
+    return projected
 
 
 def scrub_env(env: Mapping[str, str]) -> dict[str, str]:
