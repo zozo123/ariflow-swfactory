@@ -235,9 +235,7 @@ def test_revoke_waits_until_provider_materialization_finishes(tmp_path: Path) ->
         handle = broker.mint(_binding(), capability="github.publish")
 
         redeem_thread = threading.Thread(
-            target=lambda: results.append(
-                broker.redeem(handle, _binding(), process_nonce="process-nonce-0001")
-            )
+            target=lambda: results.append(broker.redeem(handle, _binding(), process_nonce="process-nonce-0001"))
         )
         redeem_thread.start()
         assert entered.wait(timeout=2)
