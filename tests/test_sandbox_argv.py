@@ -1330,6 +1330,7 @@ def test_new_pass_env_credentials_fail_closed(monkeypatch: pytest.MonkeyPatch, t
     with pytest.raises(StageError, match="unsupported sandbox credential passthrough"):
         sandbox.run_agent("true")
 
+
 def test_agent_cell_environment_rejects_proxy_credentials() -> None:
     with pytest.raises(StageError, match="proxy credentials"):
         cell_env({"HTTP_PROXY": "http://user:password@proxy.example:8080"})
