@@ -184,6 +184,7 @@ def test_wildcard_capability_is_refused_even_when_a_provider_exists(tmp_path: Pa
     finally:
         broker.close()
 
+
 @pytest.mark.parametrize("field", ["epoch", "attempt_number"])
 @pytest.mark.parametrize("value", [True, "3", 2**64])
 def test_binding_rejects_values_outside_rust_u64_contract(field: str, value: object) -> None:
