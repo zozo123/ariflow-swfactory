@@ -182,3 +182,78 @@ def test_wildcard_capability_is_refused_even_when_a_provider_exists(tmp_path: Pa
             broker.mint(_binding(), capability="github")
     finally:
         broker.close()
+
+@pytest.mark.parametrize("field", ["epoch", "attempt_number"])
+@pytest.mark.parametrize("value", [True, "3", 2**64])
+def test_binding_rejects_values_outside_rust_u64_contract(field: str, value: object) -> None:
+    raw = _binding().canonical()
+    raw[field] = value
+    with pytest.raises((CredentialLeaseError, ValueError), match=field):
+        LeaseBinding.from_untrusted(raw)
+
+
+def test_redeem_does_not_hold_broker_lock_while_reading_epoch(tmp_path: Path) -> None:
+    seen = []
+    broker_ref: dict[str, CredentialLeaseBroker] = {}
+
+    def read_epoch(_cell_id: str) -> int:
+        broker = broker_ref["broker"]
+        acquired = broker.lock.acquire(blocking=False)
+        seen.append(acquired)
+        if acquired:
+            broker.lock.release()
+        return 3
+
+    broker = CredentialLeaseBroker(
+        tmp_path / "leases.sqlite3",
+        providers={"github.publish": lambda _binding: "raw"},
+        epoch_reader=read_epoch,
+    )
+    broker_ref["broker"] = broker
+    try:
+        handle = broker.mint(_binding(), capability="github.publish")
+        assert broker.redeem(handle, _binding(), process_nonce="process-nonce-0001") == "raw"
+        assert seen and all(seen)
+    finally:
+        broker.close()
+
+
+def test_revoke_waits_until_provider_materialization_finishes(tmp_path: Path) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    results: list[str] = []
+
+    def provider(_binding: LeaseBinding) -> str:
+        entered.set()
+        assert release.wait(timeout=2)
+        return "raw"
+
+    broker = CredentialLeaseBroker(
+        tmp_path / "leases.sqlite3",
+        providers={"github.publish": provider},
+    )
+    try:
+        handle = broker.mint(_binding(), capability="github.publish")
+
+        redeem_thread = threading.Thread(
+            target=lambda: results.append(
+                broker.redeem(handle, _binding(), process_nonce="process-nonce-0001")
+            )
+        )
+        redeem_thread.start()
+        assert entered.wait(timeout=2)
+
+        revoked: list[bool] = []
+        revoke_thread = threading.Thread(target=lambda: revoked.append(broker.revoke(handle.lease_id)))
+        revoke_thread.start()
+        revoke_thread.join(timeout=0.05)
+        assert revoke_thread.is_alive()
+
+        release.set()
+        redeem_thread.join(timeout=2)
+        revoke_thread.join(timeout=2)
+
+        assert results == ["raw"]
+        assert revoked == [True]
+    finally:
+        broker.close()
