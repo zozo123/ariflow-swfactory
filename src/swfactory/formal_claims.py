@@ -254,7 +254,7 @@ class ClaimCertificate:
     def unresolved_formalization_uncertainties(self) -> dict[str, list[str]]:
         return {
             claim_id: sorted(axis.value for axis in assessment.uncertainty_axes)
-            for claim_id, assessment in self.formalization_register
+            for claim_id, _, assessment in self.formalization_register
             if assessment.uncertainty_axes
         }
 

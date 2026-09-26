@@ -290,7 +290,7 @@ For each claim, retain a rationale and the next action that would reduce the unc
 may remain even when the mathematical claim is machine-checkable. This prevents a proof about a clean
 abstraction from being mistaken for a proof about deployed behavior. The register is bound into claim
 and quench digests and surfaced in the certificate. Its classification supplies no evidence and grants
-no promotion authority.
+no promotion authority. A required claim without an assessment remains unresolved.
 
 ```text
 claim: stale epochs cannot mutate
