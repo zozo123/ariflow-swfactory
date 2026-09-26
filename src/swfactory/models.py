@@ -77,7 +77,7 @@ class TestResult(BoundaryModel):
 
     @property
     def ok(self) -> bool:
-        return self.report_valid and self.total > 0 and self.exit_code == 0 and self.failed == 0 and self.errors == 0
+        return self.report_valid and self.total > 0 and self.passed > 0 and self.exit_code == 0 and self.failed == 0 and self.errors == 0
 
 
 class Finding(BoundaryModel):

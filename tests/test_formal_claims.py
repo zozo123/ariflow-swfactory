@@ -11,7 +11,10 @@ from swfactory.formal_claims import (
     EvidenceReceipt,
     EvidenceVerdict,
     FormalClaimError,
+    FormalizationAssessment,
+    Formalizability,
     FormalQuench,
+    UncertaintyAxis,
     derive_certificate,
 )
 
@@ -32,11 +35,23 @@ def _quench(*, statement: str = "stale epochs cannot mutate") -> FormalQuench:
                 statement=statement,
                 method=EvidenceMethod.MODEL_CHECK,
                 min_independent_receipts=2,
+                formalization=FormalizationAssessment(
+                    status=Formalizability.MACHINE_CHECKABLE,
+                    uncertainty_axes=(UncertaintyAxis.IMPLEMENTATION_REFINEMENT,),
+                    rationale="The invariant is precise in the bounded authority model; implementation refinement remains open.",
+                    next_step="Project trusted runtime traces into the model action vocabulary.",
+                ),
             ),
             Claim(
                 claim_id="behavior.no-known-crash",
                 statement="no crash was observed in the declared fuzz campaign",
                 method=EvidenceMethod.FUZZ,
+                formalization=FormalizationAssessment(
+                    status=Formalizability.EMPIRICAL_ONLY,
+                    uncertainty_axes=(UncertaintyAxis.OPEN_ENVIRONMENT, UncertaintyAxis.VERIFIER_SCOPE),
+                    rationale="This claim reports one fuzz campaign, not a universal theorem.",
+                    next_step="Retain the campaign inputs, runtime, and coverage boundary.",
+                ),
             ),
         ),
     )
@@ -80,6 +95,58 @@ def test_certificate_requires_the_frozen_claims_and_declared_independence() -> N
     assert certificate.unresolved_required_claims == ()
     assert certificate.meets_claim_policy is True
     assert certificate.authority == FORMAL_CLAIMS_AUTHORITY
+
+
+
+def test_certificate_exposes_uncertainty_and_blocks_unassessed_required_claims() -> None:
+    quench = FormalQuench(
+        artifact_digest=_digest("artifact"),
+        assumptions_digest=_digest("assumptions"),
+        model_digest=_digest("model"),
+        policy_digest=_digest("policy"),
+        claims=(
+            Claim(
+                claim_id="behavior.unassessed",
+                statement="the operation always completes",
+                method=EvidenceMethod.TEST,
+            ),
+        ),
+    )
+    certificate = derive_certificate(
+        quench,
+        [_receipt(quench, "behavior.unassessed", verifier="test-runner")],
+        trusted_verifiers=frozenset({"test-runner"}),
+    )
+
+    assert "behavior.unassessed" in certificate.unassessed_formalization_claims
+    assert certificate.meets_claim_policy is False
+    assert certificate.as_dict()["formalization_register"]["behavior.unassessed"]["status"] == "unassessed"
+
+
+def test_formalization_uncertainty_is_bound_into_the_frozen_claim() -> None:
+    first = _quench()
+    original = first.claim_map()["authority.stale-epoch"]
+    changed = Claim(
+        claim_id=original.claim_id,
+        statement=original.statement,
+        method=original.method,
+        min_independent_receipts=original.min_independent_receipts,
+        formalization=FormalizationAssessment(
+            status=Formalizability.MACHINE_CHECKABLE,
+            uncertainty_axes=(UncertaintyAxis.MODEL_FIDELITY,),
+            rationale="The model may omit persisted operation-journal behavior.",
+            next_step="Add journal states to the model and compare.",
+        ),
+    )
+    second = FormalQuench(
+        artifact_digest=first.artifact_digest,
+        assumptions_digest=first.assumptions_digest,
+        model_digest=first.model_digest,
+        policy_digest=first.policy_digest,
+        claims=(changed, first.claim_map()["behavior.no-known-crash"]),
+    )
+
+    assert first.digest() != second.digest()
 
 
 def test_search_can_propose_evidence_but_cannot_mint_truth() -> None:
