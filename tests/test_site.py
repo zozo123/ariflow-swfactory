@@ -121,13 +121,13 @@ def test_homepage_explains_the_actual_algorithm_and_authorities() -> None:
     """Require the homepage to describe the algorithm and authority boundary."""
     source, _ = parse_page("index.html")
 
-    assert "Issue in. Verified PR out." in source
+    assert "Explore freely. Release with evidence." in source
     assert "issue -&gt;" not in source
-    assert "issue -> cell -> airflow -> sandbox -> evidence -> pull request" in source
+    assert "commission -> cell -> airflow -> craft -> evidence -> stewarded release" in source
     assert "Airflow is the only lifecycle scheduler" in source
     assert "one durable Factory Cell" in source
     assert "(cell_id, epoch, operation_key)" in source
-    assert "Humans keep final merge authority" in source
+    assert "People retain final merge authority" in source
     assert "Matter, motion, and authority" in source
     assert "accelerate motion != mint authority" in source
     assert "an accelerator may change time-to-answer, never the answer" in source
