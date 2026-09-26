@@ -1,6 +1,6 @@
-# Airflow Software Factory
+# Software Atelier
 
-**Durable intent. Disposable execution. Deterministic convergence.**
+**Creative exploration. Bounded execution. Evidence-bound release.**
 
 [![CI](https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml/badge.svg)](https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
@@ -8,19 +8,18 @@
 [![Alpha](https://img.shields.io/badge/status-alpha-orange)](#status-and-verification)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-The factory is an **atelier for software**: agents can explore and refine within a defined work
-order, while the managed lifecycle keeps intent, evidence, and release authority accountable. Turn
-GitHub work orders into reviewable pull requests through specification, plan, human approval,
-implementation, tests, review, and retained evidence. Apache Airflow owns the managed lifecycle;
-isolated coding workers perform the work; the trusted factory publishes the result. People decide
-what reaches `main`. See the [software atelier workflow](docs/software-atelier.md) for the method and
-its current runtime boundaries.
+Bring a GitHub work order to an **atelier for software**. People and agents investigate and refine
+the commissioned change inside bounded work cells. Apache Airflow owns the managed lifecycle;
+Factory Cell identity and epoch fence managed effects; the trusted control plane publishes a
+reviewable pull request with retained evidence. People decide what reaches `main`. See the
+[software atelier workflow](docs/software-atelier.md) for the method and its current runtime
+boundaries.
 
 [Quickstart](#quickstart) · [Software atelier](docs/software-atelier.md) · [Liquid methodology](#the-liquid-methodology) · [Physics](#physics-of-the-factory) ·
 [Future factory](docs/future-factory.md) · [Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
 [Illustrated walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Agent skills](#agent-skills)
 
-![A software change moving through work cells from issue to reviewed pull request](site/factory-line.webp)
+![A commissioned software change moving through isolated work cells toward a reviewed release](site/factory-line.webp)
 
 ## Quickstart
 
