@@ -260,6 +260,46 @@ This avoids two symmetric mistakes:
 2. formalizing the wrong abstraction and mistaking proof strength for system truth.
 
 
+## Formalizability and the uncertainty register
+
+Formalizability is a scoped engineering assessment, not a decision procedure over arbitrary programs.
+For each required claim, record one disposition:
+
+| Disposition | Meaning |
+| --- | --- |
+| `machine-checkable` | The claim has precise semantics in the declared model and a named machine checker can evaluate the obligation. The proof has not necessarily passed. |
+| `bounded-only` | The checker covers a stated finite bound; the claim must not be advertised beyond it. |
+| `empirical-only` | The claim concerns an open or volatile environment and requires observation, testing, fuzzing, or benchmarking. |
+| `unassessed` | No defensible verification route has been selected. A required unassessed claim keeps its certificate unresolved. |
+
+Do not record “unformalizable” as a general theorem about a software property. A property may be
+unprovable in one logic, intractable for one budget, or undefinable in one abstraction while still
+being expressible another way. Record the boundary that makes the current method inadequate.
+
+A disposition is not a truth verdict. Keep independent uncertainty axes beside it:
+
+- **Specification** — what the requirement means is ambiguous or incomplete.
+- **Assumptions** — relevant premises are unstated or unvalidated.
+- **Model fidelity** — the model may omit behavior that matters.
+- **Implementation refinement** — the model has not been shown to describe this implementation.
+- **Open environment** — external services, load, timing, or users exceed the closed model.
+- **Verifier scope** — the checker, search bound, instrumentation, or coverage is limited.
+- **Cost** — a stronger verification route exceeds available effort or compute.
+
+For each claim, retain a rationale and the next action that would reduce the uncertainty. Several axes
+may remain even when the mathematical claim is machine-checkable. This prevents a proof about a clean
+abstraction from being mistaken for a proof about deployed behavior. The register is bound into claim
+and quench digests and surfaced in the certificate. Its classification supplies no evidence and grants
+no promotion authority. A required claim without an assessment remains unresolved.
+
+```text
+claim: stale epochs cannot mutate
+disposition: machine-checkable
+unknown: implementation-refinement
+basis: the model checker can explore the declared finite transition model
+next: project trusted runtime events into model actions and check retained traces
+```
+
 ## What should be formalized first
 
 Do not attempt to prove arbitrary generated applications. Formalize the small control plane whose

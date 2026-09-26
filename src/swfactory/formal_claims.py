@@ -19,10 +19,10 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
-FORMAL_CLAIMS_SCHEMA_VERSION = 1
+FORMAL_CLAIMS_SCHEMA_VERSION = 2
 FORMAL_CLAIMS_AUTHORITY = "evidence-only"
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -41,6 +41,56 @@ class EvidenceMethod(StrEnum):
     THEOREM = "theorem"
     BENCHMARK = "benchmark"
     OBSERVATION = "observation"
+
+
+class Formalizability(StrEnum):
+    """Verification tractability under a declared scope, not a truth verdict."""
+
+    UNASSESSED = "unassessed"
+    MACHINE_CHECKABLE = "machine-checkable"
+    BOUNDED_ONLY = "bounded-only"
+    EMPIRICAL_ONLY = "empirical-only"
+
+
+class UncertaintyAxis(StrEnum):
+    SPECIFICATION = "specification"
+    ASSUMPTIONS = "assumptions"
+    MODEL_FIDELITY = "model-fidelity"
+    IMPLEMENTATION_REFINEMENT = "implementation-refinement"
+    OPEN_ENVIRONMENT = "open-environment"
+    VERIFIER_SCOPE = "verifier-scope"
+    COST = "cost"
+
+
+@dataclass(frozen=True)
+class FormalizationAssessment:
+    """How a claim can be verified and which uncertainties remain."""
+
+    status: Formalizability = Formalizability.UNASSESSED
+    uncertainty_axes: tuple[UncertaintyAxis, ...] = ()
+    rationale: str = "No formalizability assessment has been recorded."
+    next_step: str = "Assess claim scope, assumptions, model, and verifier before accepting it."
+
+    def validate(self) -> None:
+        if not isinstance(self.status, Formalizability):
+            raise FormalClaimError("formalization status must be a Formalizability value")
+        if any(not isinstance(axis, UncertaintyAxis) for axis in self.uncertainty_axes):
+            raise FormalClaimError("formalization uncertainty axes must be UncertaintyAxis values")
+        if len(set(self.uncertainty_axes)) != len(self.uncertainty_axes):
+            raise FormalClaimError("formalization uncertainty axes must be unique")
+        if not self.rationale.strip():
+            raise FormalClaimError("formalization assessment rationale must be nonempty")
+        if not self.next_step.strip():
+            raise FormalClaimError("formalization assessment next_step must be nonempty")
+
+    def canonical_dict(self) -> dict[str, object]:
+        self.validate()
+        return {
+            "status": self.status.value,
+            "uncertainty_axes": sorted(axis.value for axis in self.uncertainty_axes),
+            "rationale": self.rationale,
+            "next_step": self.next_step,
+        }
 
 
 class EvidenceVerdict(StrEnum):
@@ -73,6 +123,7 @@ class Claim:
     method: EvidenceMethod
     required: bool = True
     min_independent_receipts: int = 1
+    formalization: FormalizationAssessment = field(default_factory=FormalizationAssessment)
 
     def validate(self) -> None:
         if not self.claim_id.strip() or len(self.claim_id) > 160:
@@ -81,6 +132,7 @@ class Claim:
             raise FormalClaimError(f"{self.claim_id}: statement must be nonempty")
         if self.min_independent_receipts < 1:
             raise FormalClaimError(f"{self.claim_id}: min_independent_receipts must be positive")
+        self.formalization.validate()
 
     def digest(self) -> str:
         self.validate()
@@ -91,6 +143,7 @@ class Claim:
                 "method": self.method.value,
                 "required": self.required,
                 "min_independent_receipts": self.min_independent_receipts,
+                "formalization": self.formalization.canonical_dict(),
             }
         )
 
@@ -176,8 +229,8 @@ class EvidenceReceipt:
 class ClaimCertificate:
     """Derived claim status for one Formal Quench.
 
-    This is evidence state, not lifecycle authority. meets_claim_policy is therefore a predicate an
-    authority gate may consume; it is never itself permission to promote.
+    This combines evidence state with a complete verification-route classification. It is not
+    lifecycle authority and never grants permission to promote.
     """
 
     quench_digest: str
@@ -186,11 +239,32 @@ class ClaimCertificate:
     unresolved_required_claims: tuple[str, ...]
     ignored_evidence: tuple[str, ...]
     evidence_digests: tuple[str, ...]
+    formalization_register: tuple[tuple[str, bool, FormalizationAssessment], ...]
     authority: str = FORMAL_CLAIMS_AUTHORITY
 
     @property
+    def unassessed_formalization_claims(self) -> tuple[str, ...]:
+        return tuple(
+            claim_id
+            for claim_id, required, assessment in self.formalization_register
+            if required and assessment.status == Formalizability.UNASSESSED
+        )
+
+    @property
+    def unresolved_formalization_uncertainties(self) -> dict[str, list[str]]:
+        return {
+            claim_id: sorted(axis.value for axis in assessment.uncertainty_axes)
+            for claim_id, _, assessment in self.formalization_register
+            if assessment.uncertainty_axes
+        }
+
+    @property
     def meets_claim_policy(self) -> bool:
-        return not self.refuted_claims and not self.unresolved_required_claims
+        return (
+            not self.refuted_claims
+            and not self.unresolved_required_claims
+            and not self.unassessed_formalization_claims
+        )
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -202,6 +276,12 @@ class ClaimCertificate:
             "unresolved_required_claims": list(self.unresolved_required_claims),
             "ignored_evidence": list(self.ignored_evidence),
             "evidence_digests": list(self.evidence_digests),
+            "formalization_register": {
+                claim_id: {"required": required, **assessment.canonical_dict()}
+                for claim_id, required, assessment in self.formalization_register
+            },
+            "unassessed_formalization_claims": list(self.unassessed_formalization_claims),
+            "unresolved_formalization_uncertainties": self.unresolved_formalization_uncertainties,
             "meets_claim_policy": self.meets_claim_policy,
         }
 
@@ -278,4 +358,8 @@ def derive_certificate(
         unresolved_required_claims=tuple(unresolved_required),
         ignored_evidence=tuple(sorted(set(ignored))),
         evidence_digests=tuple(sorted(set(all_evidence))),
+        formalization_register=tuple(
+            (claim.claim_id, claim.required, claim.formalization)
+            for claim in sorted(quench.claims, key=lambda value: value.claim_id)
+        ),
     )
