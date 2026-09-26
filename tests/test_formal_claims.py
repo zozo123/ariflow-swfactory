@@ -104,7 +104,6 @@ def test_certificate_requires_the_frozen_claims_and_declared_independence() -> N
     }
 
 
-
 def test_certificate_exposes_uncertainty_and_blocks_unassessed_required_claims() -> None:
     quench = FormalQuench(
         artifact_digest=_digest("artifact"),
