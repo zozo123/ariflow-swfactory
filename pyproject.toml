@@ -1,12 +1,12 @@
 [project]
 name = "swfactory"
 version = "2.3.0"
-description = "Apache Airflow software factory: GitHub work orders become verified pull requests through isolated agent work cells and human release gates."
+description = "Airflow-governed software atelier for commissioned changes, isolated agent work, retained evidence, and human release authority."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12,<3.13"
 authors = [{ name = "zozo123" }]
-keywords = ["airflow", "ai-agents", "software-factory", "devsecops", "automation"]
+keywords = ["airflow", "ai-agents", "software-atelier", "software-factory", "devsecops", "automation"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
