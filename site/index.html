@@ -5,24 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="swfactory turns GitHub issues into reviewed pull requests using Apache Airflow, isolated agent work cells, deterministic gates, and retained evidence."
+      content="A software atelier for commissioned work: agents investigate and refine in bounded cells, Airflow governs the lifecycle, and evidence supports human release decisions."
     />
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1114" />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="swfactory | Issue in. Verified PR out." />
+    <meta property="og:title" content="Software Atelier | swfactory" />
     <meta
       property="og:description"
-      content="A small, explicit software factory: GitHub defines the work, Airflow schedules it, agents edit in sandboxes, and evidence gates delivery."
+      content="Explore and refine commissioned software work in bounded agent cells. Airflow governs lifecycle; scoped evidence and human authority govern release."
     />
     <meta property="og:url" content="https://zozo123.github.io/ariflow-swfactory/" />
-    <meta property="og:image" content="https://zozo123.github.io/ariflow-swfactory/social-card.png" />
+    <meta property="og:image" content="https://zozo123.github.io/ariflow-swfactory/social-card.svg" />
+    <meta property="og:image:alt" content="Software Atelier: explore freely, release with evidence" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="canonical" href="https://zozo123.github.io/ariflow-swfactory/" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="manifest" href="site.webmanifest" />
     <link rel="stylesheet" href="styles.css" />
-    <title>swfactory | Issue in. Verified PR out.</title>
+    <title>Software Atelier | swfactory</title>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to content</a>
@@ -31,7 +32,8 @@
       <div class="shell nav">
         <a class="brand" href="#top">swfactory</a>
         <nav aria-label="Primary navigation">
-          <a href="#algorithm">Algorithm</a>
+          <a href="#algorithm">Method</a>
+          <a href="#evidence">Evidence</a>
           <a href="#physics">Physics</a>
           <a href="#factory-demo">Walkthrough</a>
           <a href="#sandboxes">Sandboxes</a>
@@ -44,11 +46,11 @@
 
     <main id="main-content" class="shell">
       <section id="top" class="hero">
-        <p class="label">Apache Airflow software factory</p>
-        <h1>Issue in. Verified PR out.</h1>
+        <p class="label">An Airflow-governed software atelier</p>
+        <h1>Explore freely. Release with evidence.</h1>
         <p class="lede">
-          GitHub says what to change. Airflow owns the lifecycle. A coding agent works in an
-          isolated cell. Deterministic gates decide what can ship.
+          Bring a commissioned change. Agents investigate and refine it in bounded work cells.
+          Airflow governs the lifecycle; scoped evidence and human decisions govern release.
         </p>
         <div class="actions">
           <a class="primary" href="#quickstart">Run the local demo</a>
@@ -57,10 +59,10 @@
       </section>
 
       <section id="algorithm">
-        <h2>The algorithm</h2>
+        <h2>The atelier process</h2>
         <ol class="steps">
           <li>
-            <strong>1. Take a work order.</strong>
+            <strong>1. Commission the work.</strong>
             <span>A GitHub issue selects a versioned blueprint and target.</span>
           </li>
           <li>
@@ -68,24 +70,45 @@
             <span>The Cell owns issue, target, epoch, state, and evidence.</span>
           </li>
           <li>
-            <strong>3. Let Airflow schedule it.</strong>
+            <strong>3. Let Airflow guide the lifecycle.</strong>
             <span>Airflow is the only lifecycle scheduler: retries, waits, approvals, and cancellation.</span>
           </li>
           <li>
-            <strong>4. Run edits in disposable compute.</strong>
+            <strong>4. Craft in disposable compute.</strong>
             <span>The agent gets a bounded job and sandbox. It does not get release authority.</span>
           </li>
           <li>
-            <strong>5. Check the result.</strong>
-            <span>Tests, review, policy, hashes, and evidence are machine-checkable gates.</span>
+            <strong>5. Verify the exact candidate.</strong>
+            <span>Tests and review produce scoped evidence; missing checks and unresolved limits stay visible.</span>
           </li>
           <li>
-            <strong>6. Publish one result.</strong>
-            <span>The trusted control plane creates the PR. Humans keep final merge authority.</span>
+            <strong>6. Steward release.</strong>
+            <span>The trusted control plane creates the PR. People retain final merge authority.</span>
           </li>
         </ol>
-        <p class="formula" aria-label="Factory algorithm">
-          issue -> cell -> airflow -> sandbox -> evidence -> pull request
+        <p class="formula" aria-label="Atelier lifecycle">
+          commission -> cell -> airflow -> craft -> evidence -> stewarded release
+        </p>
+        <div class="note">
+          The default managed line uses one governed implementation path today. Parallel candidate
+          sketching is a future capability, not a claim about the default runtime.
+        </div>
+      </section>
+
+      <section id="evidence">
+        <h2>Evidence has a scope.</h2>
+        <p>
+          Every important release claim should name the exact candidate, assumptions, verification
+          method, result, and remaining uncertainty. A proof establishes its theorem under its
+          definitions and axioms; it does not automatically prove that deployed software refines
+          the model. Tests, fuzzing, benchmarks, and observations answer different questions.
+        </p>
+        <p class="note">
+          The atelier records what is known, what remains fuzzy, and the next useful check.
+          Formalizability is not a proof verdict, and evidence never grants release authority.
+          <a href="https://github.com/zozo123/ariflow-swfactory/blob/main/docs/software-atelier.md">
+            Read the verification and uncertainty method.
+          </a>
         </p>
       </section>
 
@@ -97,7 +120,7 @@
           publication state are <strong>matter</strong>. Agents, sandboxes, builds, task graphs,
           and caches are <strong>motion</strong>.
         </p>
-        <p class="formula" aria-label="Factory physics">
+        <p class="formula" aria-label="Atelier invariant">
           accelerate motion != mint authority
         </p>
         <ul class="plain-list">
@@ -114,7 +137,7 @@
       </section>
 
       <section id="factory-demo">
-        <h2>One work order, end to end</h2>
+        <h2>One commission, end to end</h2>
         <p>
           The drawing follows a single issue from the operator console to a pull request a person
           merges: where Airflow maps the work into cells, which two stages stop and wait for a

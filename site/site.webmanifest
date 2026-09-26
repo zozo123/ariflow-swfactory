@@ -1,7 +1,7 @@
 {
-  "name": "swfactory",
-  "short_name": "swfactory",
-  "description": "Airflow-native software delivery with isolated AI agents and human gates.",
+  "name": "Software Atelier (swfactory)",
+  "short_name": "Atelier",
+  "description": "An Airflow-governed atelier for commissioned software, bounded agent work, evidence, and human release decisions.",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#ffffff",
