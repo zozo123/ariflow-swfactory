@@ -8,12 +8,15 @@
 [![Alpha](https://img.shields.io/badge/status-alpha-orange)](#status-and-verification)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-Turn GitHub work orders into reviewable pull requests through a defined process: specification,
-plan, human approval, implementation, tests, review, and retained evidence. Apache Airflow owns the
-managed lifecycle; isolated coding workers perform the work; the trusted factory publishes the result.
-People decide what reaches `main`.
+The factory is an **atelier for software**: agents can explore and refine within a defined work
+order, while the managed lifecycle keeps intent, evidence, and release authority accountable. Turn
+GitHub work orders into reviewable pull requests through specification, plan, human approval,
+implementation, tests, review, and retained evidence. Apache Airflow owns the managed lifecycle;
+isolated coding workers perform the work; the trusted factory publishes the result. People decide
+what reaches `main`. See the [software atelier workflow](docs/software-atelier.md) for the method and
+its current runtime boundaries.
 
-[Quickstart](#quickstart) · [Liquid methodology](#the-liquid-methodology) · [Physics](#physics-of-the-factory) ·
+[Quickstart](#quickstart) · [Software atelier](docs/software-atelier.md) · [Liquid methodology](#the-liquid-methodology) · [Physics](#physics-of-the-factory) ·
 [Future factory](docs/future-factory.md) · [Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
 [Illustrated walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Agent skills](#agent-skills)
 
