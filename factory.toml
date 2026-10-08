@@ -43,8 +43,8 @@ source = "src"
 tests = "tests"
 
 # Read-only inside the work cell. This list reaches the agent two ways: `guard_deny_rules` turns
-# every entry into a Claude Code `permissions.deny` rule (all five backends), and srt/docker
-# additionally enforce it in the kernel (`denyWrite` / a `:ro` bind mount). islo and toolset have
+# every entry into a Claude Code `permissions.deny` rule (every backend), and srt/docker
+# additionally enforce it in the kernel (`denyWrite` / a `:ro` bind mount). islo, toolset and boat have
 # no `set_protected`, so on the production backend these are agent-enforced only -- which is why
 # `.github/workflows/control-plane-gate.yml` re-checks the same list against the base revision.
 #

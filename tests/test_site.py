@@ -146,10 +146,10 @@ def test_sandbox_table_is_complete_and_honest() -> None:
         "daytona",
         "e2b",
         "tensorlake",
-        "box / ascii",
+        "boat",
     ]
     assert "policy support is backend-specific" in source.lower()
-    assert source.count("custom backend required") == 4
+    assert source.count("custom backend required") == 3
     assert "--sandbox toolset" in source
     assert "The factory owns the issue-to-PR route" in source
     assert set(page.fragment_links) <= set(page.ids)

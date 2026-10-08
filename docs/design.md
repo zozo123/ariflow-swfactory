@@ -87,7 +87,7 @@ and an extra `hotfix` PR label. A blueprint is validated by `swfactory.blueprint
 | `[limits]` | build/review iterations, turns, USD per stage / per **job**, `stage_timeout_h`, `max_parallel_jobs` | `budget_usd_per_stage <= budget_usd` |
 | `[policy.<stage>]` | `extra_allowed_tools`, `model` | additive path-scoped file/search tools only; no shell, web, task, or MCP tools; no writes in read-only stages |
 | `[review]` / `[deliver]` | `nit_cap`; PR `labels` | |
-| `[sandbox]` | `kind` (`local\|srt\|docker\|islo\|toolset`), provider settings, `ttl_s`, `idle_s`, `snapshot`, toolset `backend` / absolute `workdir` | `ttl_s > max gate timeout`; unsupported policy is an error |
+| `[sandbox]` | `kind` (`local\|srt\|docker\|islo\|toolset\|boat`), provider settings, `ttl_s`, `idle_s`, `snapshot`, toolset `backend` / absolute `workdir` | `ttl_s > max gate timeout`; unsupported policy is an error |
 
 Operational `SWF_*` env vars override blueprint values and CLI flags. Job identity does not:
 `issue`, `repo`, `target_dir`, `base_branch`, `run_id`, and `blueprint` are rebound from the mapped
@@ -234,7 +234,7 @@ uv run swfactory run --issue 1 --sandbox toolset            # backend sbx (relea
 SWF_TOOLSET_BACKEND=islo uv run swfactory run --issue 1 --sandbox toolset
 ```
 
-Hosted providers such as Daytona, E2B, Tensorlake, and Box by ASCII use the same seam through a
+Hosted providers such as Daytona, E2B, and Tensorlake use the same seam through a
 custom `package.module:Class` backend. The repository does not ship those vendor adapters. An
 adapter must implement the Airflow-compatible lifecycle and prove reconnectability, output and
 timeout bounds, confined file access, policy enforcement, cleanup, and expiry before production

@@ -25,11 +25,11 @@ They share create, execute, file, and destroy primitives, but they are not secur
 | Daytona | hosted stateful sandbox | fast persistent agent cells | use SDK lifecycle, TTL, network controls, and idempotent identity |
 | E2B | hosted cloud sandbox | ephemeral tool or agent cells | set secure mode, bounded timeout, and explicit internet policy |
 | Tensorlake | hosted MicroVM sandbox | persistent cells and scalable verification | use named sandboxes, termination/timeout, and explicit egress rules |
-| Box by ASCII | persistent full Linux VM | repositories needing Docker, desktop, or long-lived state | use `no_env` unless account secrets are intentionally required |
+| Boat (boat.dev, formerly Box by ASCII) | persistent full Linux VM | repositories needing Docker, desktop, or long-lived state | use `no_env` unless account secrets are intentionally required |
 
-The repository ships direct `local`, `srt`, `docker`, and `islo` runtimes. Its `toolset` seam ships
+The repository ships direct `local`, `srt`, `docker`, `islo`, and `boat` (boat.dev, formerly Box by ASCII; scripted agent only) runtimes. Its `toolset` seam ships
 the Apache Airflow `sbx` backend and accepts a custom backend as
-`SWF_TOOLSET_BACKEND=package.module:Class`. Daytona, E2B, Tensorlake, and Box by ASCII should enter
+`SWF_TOOLSET_BACKEND=package.module:Class`. Daytona, E2B, and Tensorlake should enter
 through that adapter seam only after the adapter proves every requested policy field. Do not claim
 a provider is supported merely because its SDK can execute a command.
 
