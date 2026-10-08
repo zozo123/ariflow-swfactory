@@ -22,6 +22,7 @@ use swf_app::submit::Submission;
 use swf_domain::evidence::DeliveryReport;
 use swf_domain::model::{Gate, JobRow, Run, SandboxRef};
 use swf_domain::rollup::{age, job_index, stage_progress};
+use swf_domain::states;
 
 use crate::term::Term;
 
@@ -646,8 +647,8 @@ pub fn verb(decision: swf_app::gates::Decision) -> &'static str {
 pub fn state_word(state: &str, term: &Term) -> String {
     match state {
         "success" => term.good(state),
-        "failed" | "upstream_failed" => term.bad(state),
-        "awaiting_input" | "deferred" | "up_for_retry" => term.warn(state),
+        _ if states::is_failed(state) => term.bad(state),
+        _ if states::is_gate_parked(state) || state == "up_for_retry" => term.warn(state),
         _ => state.to_string(),
     }
 }

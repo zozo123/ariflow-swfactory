@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use swf_adapters::airflow::Auth as WireAuth;
+use swf_adapters::error::ErrorKind;
 
 /// The name of the context that exists even when nothing is configured.
 pub const BUILTIN_CONTEXT: &str = "local";
@@ -118,21 +119,12 @@ pub enum ContextError {
 }
 
 impl ContextError {
-    /// The `kind` of the `--json` error envelope (`00-architecture.md` §C.2).
-    pub fn kind(&self) -> &'static str {
+    /// Which row of the exit-code table this error is (`00-architecture.md` §C.2).
+    pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::NotFound { .. } => "not_found",
-            Self::MissingEnv { .. } => "auth",
-            _ => "operational",
-        }
-    }
-
-    /// The process exit code this error implies.
-    pub fn exit_code(&self) -> i32 {
-        match self {
-            Self::NotFound { .. } => 3,
-            Self::MissingEnv { .. } => 4,
-            _ => 1,
+            Self::NotFound { .. } => ErrorKind::NotFound,
+            Self::MissingEnv { .. } => ErrorKind::Auth,
+            _ => ErrorKind::Operational,
         }
     }
 
@@ -761,8 +753,7 @@ password_env = "AIRFLOW_PASSWORD"
         let err = store
             .resolve(Some("prd"))
             .expect_err("typo must not resolve");
-        assert_eq!(err.exit_code(), 3);
-        assert_eq!(err.kind(), "not_found");
+        assert_eq!(err.kind(), ErrorKind::NotFound);
     }
 
     #[test]
@@ -794,7 +785,7 @@ password_env = "AIRFLOW_PASSWORD"
         let path = dir.path().join(CONFIG_FILE);
         std::fs::write(&path, "version = 2\n").expect("write");
         let err = ContextStore::open_at(&path).expect_err("version 2");
-        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.kind(), ErrorKind::Operational);
         std::fs::write(&path, "default = \"x\"\n").expect("write");
         assert!(ContextStore::open_at(&path).is_err(), "version is required");
     }
@@ -879,7 +870,11 @@ password_env = "AIRFLOW_PASSWORD"
             var: "SWF_TEST_TOKEN_THAT_IS_UNSET".into(),
         };
         let err = auth.resolve().expect_err("unset");
-        assert_eq!(err.exit_code(), 4, "a missing credential is exit 4");
+        assert_eq!(
+            err.kind(),
+            ErrorKind::Auth,
+            "a missing credential is exit 4"
+        );
         assert!(err.to_string().contains("SWF_TEST_TOKEN_THAT_IS_UNSET"));
         assert_eq!(auth.env_vars(), vec!["SWF_TEST_TOKEN_THAT_IS_UNSET"]);
         assert!(matches!(Auth::None.resolve(), Ok(WireAuth::None)));

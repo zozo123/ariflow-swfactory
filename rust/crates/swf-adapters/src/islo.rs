@@ -31,10 +31,6 @@ use crate::traits::{first_timestamp, CommandRunner, Sandboxes, CREATED_KEYS, SUB
 /// The status `islo` reports for a sandbox that is already gone.
 pub const DELETED_STATUS: &str = "deleted";
 
-/// The environment variable the Python reads the owner from, kept so an operator's existing shell
-/// still works.
-pub const OWNER_ENV: &str = "SWF_SANDBOX_OWNER";
-
 /// Sandboxes as seen through `islo`.
 pub struct IsloCli {
     owner: String,
@@ -77,26 +73,10 @@ impl IsloCli {
     /// Fetch the provider's listing as raw text.
     async fn listing(&self, cancel: &CancellationToken) -> Result<String> {
         let argv = self.list_argv();
-        let output = self
-            .runner
+        self.runner
             .run(&argv, SUBPROCESS_TIMEOUT, cancel)
-            .await
-            .map_err(|err| match err {
-                AdapterError::Unreachable { detail, .. } => AdapterError::Unreachable {
-                    what: "islo".to_string(),
-                    detail,
-                },
-                other => other,
-            })?;
-        if output.code != 0 {
-            return Err(AdapterError::refused(format!(
-                "{} failed rc={}: {}",
-                argv.join(" "),
-                output.code,
-                output.message()
-            )));
-        }
-        Ok(output.stdout)
+            .await?
+            .checked(&argv)
     }
 }
 
@@ -222,15 +202,10 @@ impl Sandboxes for IsloCli {
         }
 
         let argv = self.remove_argv(name);
-        let output = self.runner.run(&argv, SUBPROCESS_TIMEOUT, cancel).await?;
-        if output.code != 0 {
-            return Err(AdapterError::refused(format!(
-                "{} failed rc={}: {}",
-                argv.join(" "),
-                output.code,
-                output.message()
-            )));
-        }
+        self.runner
+            .run(&argv, SUBPROCESS_TIMEOUT, cancel)
+            .await?
+            .checked(&argv)?;
         Ok(argv)
     }
 }
@@ -238,64 +213,17 @@ impl Sandboxes for IsloCli {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-    use std::time::Duration;
 
-    use crate::traits::CommandOutput;
+    use crate::error::ErrorKind;
+    use crate::traits::{CommandOutput, ScriptedRunner};
 
-    /// A runner that replays a script and remembers every argv, so a refusal can be proven to have
-    /// run nothing rather than merely to have returned an error.
-    #[derive(Default)]
-    struct FakeRunner {
-        calls: Mutex<Vec<Vec<String>>>,
-        replies: Mutex<Vec<CommandOutput>>,
-    }
-
-    impl FakeRunner {
-        fn new(replies: Vec<CommandOutput>) -> Arc<Self> {
-            Arc::new(Self {
-                calls: Mutex::new(Vec::new()),
-                replies: Mutex::new(replies),
-            })
-        }
-
-        fn listing(json: &str) -> Arc<Self> {
-            Self::new(vec![
-                CommandOutput {
-                    code: 0,
-                    stdout: json.to_string(),
-                    stderr: String::new(),
-                },
-                CommandOutput::default(),
-            ])
-        }
-
-        fn seen(&self) -> Vec<Vec<String>> {
-            self.calls.lock().unwrap_or_else(|e| e.into_inner()).clone()
-        }
-    }
-
-    #[async_trait]
-    impl CommandRunner for FakeRunner {
-        async fn run(
-            &self,
-            argv: &[String],
-            _timeout: Duration,
-            cancel: &CancellationToken,
-        ) -> Result<CommandOutput> {
-            if cancel.is_cancelled() {
-                return Err(AdapterError::Cancelled);
-            }
-            self.calls
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(argv.to_vec());
-            let mut replies = self.replies.lock().unwrap_or_else(|e| e.into_inner());
-            if replies.is_empty() {
-                return Ok(CommandOutput::default());
-            }
-            Ok(replies.remove(0))
-        }
+    /// `islo ls` answers this listing, and every later command exits 0.
+    fn listed(json: &str) -> Arc<ScriptedRunner> {
+        ScriptedRunner::new(vec![Ok(CommandOutput {
+            code: 0,
+            stdout: json.to_string(),
+            stderr: String::new(),
+        })])
     }
 
     const MINE: &str = r#"[
@@ -306,13 +234,13 @@ mod tests {
         {"name": "swf-theirs-deadbeef", "status": "running", "created_by": "amy@corp.com"}
     ]"#;
 
-    fn islo(runner: Arc<FakeRunner>) -> IsloCli {
+    fn islo(runner: Arc<ScriptedRunner>) -> IsloCli {
         IsloCli::new("  me@corp.com ", runner)
     }
 
     #[tokio::test]
     async fn the_listing_is_never_widened_to_everyone() {
-        let runner = FakeRunner::listing(MINE);
+        let runner = listed(MINE);
         islo(runner.clone())
             .list(&CancellationToken::new())
             .await
@@ -326,7 +254,7 @@ mod tests {
 
     #[tokio::test]
     async fn listing_keeps_only_live_sandboxes_this_owner_created() {
-        let boxes = islo(FakeRunner::listing(MINE))
+        let boxes = islo(listed(MINE))
             .list(&CancellationToken::new())
             .await
             .expect("a listing");
@@ -345,7 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unconfigured_owner_lists_nothing_and_removes_nothing() {
-        let runner = FakeRunner::listing(MINE);
+        let runner = listed(MINE);
         let client = IsloCli::new("   ", runner.clone());
         assert!(client
             .list(&CancellationToken::new())
@@ -357,8 +285,8 @@ mod tests {
             .await
             .expect_err("refused");
         assert_eq!(
-            err.exit_code(),
-            1,
+            err.kind(),
+            ErrorKind::Operational,
             "a refusal is operational, not an auth failure"
         );
         assert!(err.to_string().contains("no sandbox owner configured"));
@@ -370,7 +298,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_sandbox_that_is_not_factory_named_is_refused_without_a_listing() {
-        let runner = FakeRunner::listing(MINE);
+        let runner = listed(MINE);
         let err = islo(runner.clone())
             .remove("prod-db", &CancellationToken::new())
             .await
@@ -384,7 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_teammates_sandbox_is_refused_even_though_it_is_factory_named() {
-        let runner = FakeRunner::listing(MINE);
+        let runner = listed(MINE);
         let err = islo(runner.clone())
             .remove("swf-theirs-deadbeef", &CancellationToken::new())
             .await
@@ -396,7 +324,7 @@ mod tests {
 
     #[tokio::test]
     async fn removal_re_lists_immediately_before_acting() {
-        let runner = FakeRunner::listing(MINE);
+        let runner = listed(MINE);
         let argv = islo(runner.clone())
             .remove("swf-demo-1a2b3c4d", &CancellationToken::new())
             .await
@@ -418,7 +346,7 @@ mod tests {
     async fn a_sandbox_deleted_between_the_screen_and_the_key_press_is_refused() {
         let listing = r#"[{"name": "swf-demo-1a2b3c4d", "status": "deleted",
                            "created_by": "me@corp.com"}]"#;
-        let err = islo(FakeRunner::listing(listing))
+        let err = islo(listed(listing))
             .remove("swf-demo-1a2b3c4d", &CancellationToken::new())
             .await
             .expect_err("already gone");
@@ -428,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn an_unreadable_listing_refuses_rather_than_assuming_ownership() {
         for listing in ["not json", "null", "42", "[]", r#"{"a": 1}"#] {
-            let err = islo(FakeRunner::listing(listing))
+            let err = islo(listed(listing))
                 .remove("swf-demo-1a2b3c4d", &CancellationToken::new())
                 .await
                 .expect_err("silence is not permission");
@@ -457,17 +385,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_failing_islo_rm_reports_its_stderr() {
-        let runner = FakeRunner::new(vec![
-            CommandOutput {
+        let runner = ScriptedRunner::new(vec![
+            Ok(CommandOutput {
                 code: 0,
                 stdout: MINE.to_string(),
                 stderr: String::new(),
-            },
-            CommandOutput {
+            }),
+            Ok(CommandOutput {
                 code: 2,
                 stdout: String::new(),
                 stderr: "sandbox is locked".to_string(),
-            },
+            }),
         ]);
         let err = islo(runner)
             .remove("swf-demo-1a2b3c4d", &CancellationToken::new())

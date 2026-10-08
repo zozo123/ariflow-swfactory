@@ -25,13 +25,6 @@ use tokio_util::sync::CancellationToken;
 use crate::error::{AdapterError, Result};
 use crate::traits::{CommandRunner, Deliveries, PrHead, SUBPROCESS_TIMEOUT};
 
-/// The label the factory puts on everything it opens.
-pub const DEFAULT_LABEL: &str = "factory";
-
-/// How many pull requests or issues one listing asks for. The herd table shows far fewer; the
-/// margin is there so a busy repo does not hide the row an operator is looking for.
-pub const DEFAULT_LIST_LIMIT: u32 = 30;
-
 /// The fields `gh pr list` must return for the herd table. Order is part of the contract only in
 /// the sense that the tests pin it — `gh` itself does not care — but a *missing* field silently
 /// becomes an empty column, so the list is written once, here.
@@ -148,21 +141,10 @@ impl GhCli {
 
     /// Run one `gh` command and return its stdout, or classify why it failed.
     async fn run(&self, argv: Vec<String>, cancel: &CancellationToken) -> Result<String> {
-        let output = self
-            .runner
+        self.runner
             .run(&argv, SUBPROCESS_TIMEOUT, cancel)
-            .await
-            .map_err(|err| annotate_missing_tool(err, &argv))?;
-        if output.code != 0 {
-            // The Python's exact phrasing, because this text reaches `Snapshot.errors`.
-            return Err(AdapterError::refused(format!(
-                "{} failed rc={}: {}",
-                argv.join(" "),
-                output.code,
-                output.message()
-            )));
-        }
-        Ok(output.stdout)
+            .await?
+            .checked(&argv)
     }
 
     /// Parse `gh`'s stdout as a JSON array. An empty or `null` body is an empty list, not an
@@ -187,20 +169,6 @@ impl GhCli {
 /// Build an argv without repeating `.to_string()` at every element.
 fn argv<'a>(parts: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     parts.into_iter().map(str::to_string).collect()
-}
-
-/// A tool that is not installed is *unreachable*, not a failure of the request.
-///
-/// The distinction is the difference between `swf doctor` saying "install gh" (exit 5, fixable)
-/// and saying "the PR list is broken" (exit 1, mysterious).
-fn annotate_missing_tool(err: AdapterError, argv: &[String]) -> AdapterError {
-    match err {
-        AdapterError::Unreachable { detail, .. } => AdapterError::Unreachable {
-            what: argv.first().cloned().unwrap_or_default(),
-            detail,
-        },
-        other => other,
-    }
 }
 
 /// `gh` reports labels as objects; the herd table wants names.
@@ -328,85 +296,38 @@ impl Deliveries for GhCli {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-    use std::time::Duration;
 
-    use crate::traits::CommandOutput;
+    use crate::error::ErrorKind;
+    use crate::traits::{CommandOutput, ScriptedRunner};
 
-    /// A runner that answers from a script and records every argv it was given.
-    #[derive(Default)]
-    struct FakeRunner {
-        calls: Mutex<Vec<Vec<String>>>,
-        reply: Mutex<Vec<Result<CommandOutput>>>,
+    /// `gh` exits 0 with this stdout.
+    fn ok(stdout: &str) -> Arc<ScriptedRunner> {
+        ScriptedRunner::new(vec![Ok(CommandOutput {
+            code: 0,
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+        })])
     }
 
-    impl FakeRunner {
-        fn ok(stdout: &str) -> Arc<Self> {
-            let runner = Self::default();
-            runner
-                .reply
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(Ok(CommandOutput {
-                    code: 0,
-                    stdout: stdout.to_string(),
-                    stderr: String::new(),
-                }));
-            Arc::new(runner)
-        }
-
-        fn failing(code: i32, stderr: &str) -> Arc<Self> {
-            let runner = Self::default();
-            runner
-                .reply
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(Ok(CommandOutput {
-                    code,
-                    stdout: String::new(),
-                    stderr: stderr.to_string(),
-                }));
-            Arc::new(runner)
-        }
-
-        fn seen(&self) -> Vec<Vec<String>> {
-            self.calls.lock().unwrap_or_else(|e| e.into_inner()).clone()
-        }
+    /// `gh` exits `code` with this stderr.
+    fn failing(code: i32, stderr: &str) -> Arc<ScriptedRunner> {
+        ScriptedRunner::new(vec![Ok(CommandOutput {
+            code,
+            stdout: String::new(),
+            stderr: stderr.to_string(),
+        })])
     }
 
-    #[async_trait]
-    impl CommandRunner for FakeRunner {
-        async fn run(
-            &self,
-            argv: &[String],
-            _timeout: Duration,
-            cancel: &CancellationToken,
-        ) -> Result<CommandOutput> {
-            if cancel.is_cancelled() {
-                return Err(AdapterError::Cancelled);
-            }
-            self.calls
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(argv.to_vec());
-            let mut replies = self.reply.lock().unwrap_or_else(|e| e.into_inner());
-            if replies.is_empty() {
-                return Ok(CommandOutput::default());
-            }
-            replies.remove(0)
-        }
-    }
-
-    fn gh(runner: Arc<FakeRunner>) -> GhCli {
+    fn gh(runner: Arc<ScriptedRunner>) -> GhCli {
         GhCli::new("acme/widgets", runner)
     }
 
     #[tokio::test]
     async fn pr_list_argv_is_the_one_the_spec_pins() {
-        let runner = FakeRunner::ok("[]");
+        let runner = ok("[]");
         let client = gh(runner.clone());
         let prs = client
-            .prs(DEFAULT_LABEL, DEFAULT_LIST_LIMIT, &CancellationToken::new())
+            .prs("factory", 30, &CancellationToken::new())
             .await
             .expect("an empty repo is not an error");
         assert!(prs.is_empty());
@@ -432,7 +353,7 @@ mod tests {
 
     #[tokio::test]
     async fn issue_list_argv_is_the_one_the_spec_pins() {
-        let runner = FakeRunner::ok("[]");
+        let runner = ok("[]");
         gh(runner.clone())
             .issues("factory", 30, &CancellationToken::new())
             .await
@@ -457,7 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn pr_view_web_answers_the_argv_it_ran_rather_than_claiming_success() {
-        let runner = FakeRunner::ok("");
+        let runner = ok("");
         let ran = gh(runner.clone())
             .pr_view(1234, &CancellationToken::new())
             .await
@@ -479,7 +400,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_branch_name_is_an_argument_and_never_a_command() {
-        let runner = FakeRunner::ok("[]");
+        let runner = ok("[]");
         let hostile = "factory/42-r1; rm -rf /";
         gh(runner.clone())
             .pr_for_branch(hostile, &CancellationToken::new())
@@ -495,7 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_pull_request_row_is_flattened_and_scrubbed() {
-        let runner = FakeRunner::ok(
+        let runner = ok(
             r#"[{"number": 7, "title": "fix\u001b[2J thing", "url": "https://x/7",
                  "labels": [{"name": "factory"}, {"name": "agent-authored"}],
                  "state": "OPEN", "headRefName": "factory/42-r1",
@@ -515,7 +436,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_row_without_a_number_is_dropped_rather_than_rendered_as_pr_zero() {
-        let runner = FakeRunner::ok(r#"[{"title": "no number"}, {"number": 3, "title": "ok"}]"#);
+        let runner = ok(r#"[{"title": "no number"}, {"number": 3, "title": "ok"}]"#);
         let prs = gh(runner)
             .prs("factory", 30, &CancellationToken::new())
             .await
@@ -526,12 +447,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_non_zero_exit_carries_the_trimmed_stderr() {
-        let runner = FakeRunner::failing(1, "  gh: could not resolve to a Repository.  \n");
+        let runner = failing(1, "  gh: could not resolve to a Repository.  \n");
         let err = gh(runner)
             .prs("factory", 30, &CancellationToken::new())
             .await
             .expect_err("a broken repo is an error");
-        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.kind(), ErrorKind::Operational);
         let text = err.to_string();
         assert!(text.contains("rc=1"), "{text}");
         assert!(
@@ -543,17 +464,17 @@ mod tests {
 
     #[tokio::test]
     async fn an_empty_stdout_is_an_empty_list_and_bad_json_is_an_error() {
-        let empty = gh(FakeRunner::ok("   \n"))
+        let empty = gh(ok("   \n"))
             .issues("factory", 30, &CancellationToken::new())
             .await
             .expect("silence means nothing matched");
         assert!(empty.is_empty());
 
-        let err = gh(FakeRunner::ok("{not json"))
+        let err = gh(ok("{not json"))
             .issues("factory", 30, &CancellationToken::new())
             .await
             .expect_err("garbage is not silence");
-        assert_eq!(err.kind(), "operational");
+        assert_eq!(err.kind(), ErrorKind::Operational);
     }
 
     #[tokio::test]
@@ -573,9 +494,8 @@ mod tests {
 
     #[tokio::test]
     async fn checks_reads_the_rollup_out_of_a_single_pr_view() {
-        let runner = FakeRunner::ok(
-            r#"{"statusCheckRollup": [{"conclusion": "FAILURE"}, {"conclusion": "SUCCESS"}]}"#,
-        );
+        let runner =
+            ok(r#"{"statusCheckRollup": [{"conclusion": "FAILURE"}, {"conclusion": "SUCCESS"}]}"#);
         let summary = gh(runner)
             .checks(7, &CancellationToken::new())
             .await
@@ -587,7 +507,7 @@ mod tests {
     async fn a_cancelled_caller_gets_no_subprocess_answer() {
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let err = gh(FakeRunner::ok("[]"))
+        let err = gh(ok("[]"))
             .prs("factory", 30, &cancel)
             .await
             .expect_err("cancelled");

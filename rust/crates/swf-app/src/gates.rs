@@ -41,7 +41,7 @@ use std::time::Duration;
 
 use swf_adapters::airflow::{GATE_APPROVE, GATE_REJECT};
 use swf_adapters::traits::Runs;
-use swf_domain::ids::{GateId, JobId};
+use swf_domain::ids::GateId;
 use swf_domain::model::{Gate, JobRow, Snapshot, TaskState};
 use swf_domain::rollup::{job_state, stage_progress};
 use swf_domain::sanitize::{sanitize_block, sanitize_line};
@@ -381,15 +381,7 @@ pub async fn review(
     id: &GateId,
     cancel: &CancellationToken,
 ) -> Result<GateReview> {
-    let listing = runs.pending_gates(cancel).await?;
-    let gate = listing
-        .gates_matching(id)
-        .ok_or_else(|| not_pending(id, &listing.rows))?;
-    let tasks = runs
-        .task_states(&id.job.run(), cancel)
-        .await
-        .map(|page| page.rows)
-        .unwrap_or_default();
+    let (gate, tasks) = pending_gate(runs, id, cancel).await?;
 
     let job_tasks: Vec<TaskState> = tasks
         .iter()
@@ -564,18 +556,31 @@ async fn read(
     id: &GateId,
     cancel: &CancellationToken,
 ) -> Result<(Gate, bool, String)> {
+    let (gate, tasks) = pending_gate(runs, id, cancel).await?;
+    let ready = is_ready(&gate, &tasks);
+    let state = task_state_of(&gate, &tasks);
+    Ok((gate, ready, state))
+}
+
+/// The pending gate `id` names and its run's task instances: the read every decision starts from.
+async fn pending_gate(
+    runs: &dyn Runs,
+    id: &GateId,
+    cancel: &CancellationToken,
+) -> Result<(Gate, Vec<TaskState>)> {
     let listing = runs.pending_gates(cancel).await?;
     let gate = listing
-        .gates_matching(id)
+        .rows
+        .iter()
+        .find(|g| g.id() == *id)
+        .cloned()
         .ok_or_else(|| not_pending(id, &listing.rows))?;
     let tasks = runs
         .task_states(&id.job.run(), cancel)
         .await
         .map(|page| page.rows)
         .unwrap_or_default();
-    let ready = is_ready(&gate, &tasks);
-    let state = task_state_of(&gate, &tasks);
-    Ok((gate, ready, state))
+    Ok((gate, tasks))
 }
 
 /// Why a gate is not in the pending list any more.
@@ -595,31 +600,6 @@ fn not_pending(id: &GateId, pending: &[Gate]) -> OpsError {
         OpsError::not_found(format!("no gate {id} is waiting for an answer"))
             .with_hint("swf gates list")
     }
-}
-
-/// Find one gate in a page by identity, so the lookup is written once.
-trait GateLookup {
-    /// The gate matching `id`, if the page has it.
-    fn gates_matching(&self, id: &GateId) -> Option<Gate>;
-}
-
-impl GateLookup for swf_adapters::traits::Page<Gate> {
-    fn gates_matching(&self, id: &GateId) -> Option<Gate> {
-        self.rows
-            .iter()
-            .find(|gate| {
-                gate.dag_id == id.job.dag_id
-                    && gate.run_id == id.job.run_id
-                    && gate.map_index == id.job.map_index
-                    && gate.task_id == id.task_id
-            })
-            .cloned()
-    }
-}
-
-/// The job a gate belongs to, for a caller holding only the gate.
-pub fn job_of(gate: &Gate) -> JobId {
-    gate.job()
 }
 
 // ---------------------------------------------------------------------------- selection

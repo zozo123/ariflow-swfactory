@@ -15,8 +15,6 @@
 //! carries the credential, because collapsing them makes "wrong URL" and "wrong token" produce the
 //! same red line — and those two have completely different fixes.
 
-use std::time::Duration;
-
 use serde_json::Value;
 use swf_adapters::error::AdapterError;
 use swf_adapters::traits::{CommandRunner, Runs, SUBPROCESS_TIMEOUT};
@@ -358,9 +356,6 @@ fn first_line(primary: &str, secondary: &str) -> String {
 fn one_line(err: &AdapterError) -> String {
     sanitize_line(&err.to_string())
 }
-
-/// The subprocess deadline these checks use, re-exported so a caller can say what it waited for.
-pub const CHECK_TIMEOUT: Duration = SUBPROCESS_TIMEOUT;
 
 #[cfg(test)]
 mod tests {

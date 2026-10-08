@@ -21,6 +21,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use crate::ids::{GateId, JobId, RunRef, UNMAPPED};
+use crate::rollup::py_str;
 use crate::states;
 
 /// The issue a job row shows when the issue genuinely cannot be known yet. Printing `-` is the
@@ -391,21 +392,6 @@ impl Run {
     /// The run this is, addressable without a job index.
     pub fn id(&self) -> RunRef {
         RunRef::new(self.dag_id.clone(), self.run_id.clone())
-    }
-}
-
-/// Render a JSON value the way Python's `str()` would, because `Run.issues` stringifies whatever
-/// was in `conf` and the fixtures pin `42 -> "42"`, `true -> "True"`, `null -> "None"`.
-///
-/// Containers are the one divergence: Python would print a repr with single quotes, this prints
-/// JSON. No real `conf` nests a list inside `issues`, and JSON is the more useful thing to see.
-fn py_str(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.clone(),
-        Value::Bool(true) => "True".to_string(),
-        Value::Bool(false) => "False".to_string(),
-        Value::Null => "None".to_string(),
-        other => other.to_string(),
     }
 }
 
@@ -854,25 +840,17 @@ impl Snapshot {
 
     /// The run a job row belongs to, for a detail pane that was handed only an identity.
     pub fn run(&self, id: &RunRef) -> Option<&Run> {
-        self.runs
-            .iter()
-            .find(|r| r.dag_id == id.dag_id && r.run_id == id.run_id)
+        self.runs.iter().find(|r| r.id() == *id)
     }
 
     /// The job row for one identity, or `None` if the pass no longer contains it.
     pub fn job(&self, id: &JobId) -> Option<&JobRow> {
-        self.jobs()
-            .find(|j| j.dag_id == id.dag_id && j.run_id == id.run_id && j.map_index == id.map_index)
+        self.jobs().find(|j| j.id() == *id)
     }
 
     /// The gate for one identity, or `None` if it has been answered since the pass.
     pub fn gate(&self, id: &GateId) -> Option<&Gate> {
-        self.gates.iter().find(|g| {
-            g.dag_id == id.job.dag_id
-                && g.run_id == id.job.run_id
-                && g.map_index == id.job.map_index
-                && g.task_id == id.task_id
-        })
+        self.gates.iter().find(|g| g.id() == *id)
     }
 }
 

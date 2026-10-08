@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use swf_adapters::airflow::{AirflowApi, Auth};
-use swf_adapters::error::AdapterError;
+use swf_adapters::error::{AdapterError, ErrorKind};
 use swf_adapters::traits::Runs;
 use swf_domain::ids::{JobId, RunRef};
 use tokio_util::sync::CancellationToken;
@@ -265,8 +265,7 @@ async fn a_401_that_stays_a_401_gives_up_rather_than_minting_forever() {
         .await
         .expect_err("a wrong password is the operator's to read");
 
-    assert_eq!(err.exit_code(), 4);
-    assert_eq!(err.kind(), "auth");
+    assert_eq!(err.kind(), ErrorKind::Auth);
     assert!(err.to_string().contains("Not authenticated"), "{err}");
     let seen = server.received_requests().await.unwrap_or_default();
     assert_eq!(
@@ -295,7 +294,7 @@ async fn a_static_token_that_expired_is_reported_and_not_retried() {
         .await
         .expect_err("nothing to re-mint with");
 
-    assert_eq!(err.exit_code(), 4);
+    assert_eq!(err.kind(), ErrorKind::Auth);
     assert_eq!(
         server.received_requests().await.unwrap_or_default().len(),
         1,
@@ -327,11 +326,10 @@ async fn a_403_that_is_not_an_invalid_jwt_is_operational_and_never_re_minted() {
         .expect_err("a permission decision");
 
     assert_eq!(
-        err.exit_code(),
-        1,
+        err.kind(),
+        ErrorKind::Operational,
         "retrying a permission decision is never right"
     );
-    assert_eq!(err.kind(), "operational");
     let seen = server.received_requests().await.unwrap_or_default();
     assert_eq!(seen.len(), 2, "mint, then one PATCH — no second attempt");
 }
@@ -351,8 +349,7 @@ async fn a_missing_run_is_not_found_and_not_a_generic_failure() {
         .await
         .expect_err("no such run");
 
-    assert_eq!(err.exit_code(), 3);
-    assert_eq!(err.kind(), "not_found");
+    assert_eq!(err.kind(), ErrorKind::NotFound);
     assert!(err.to_string().contains("was not found"), "{err}");
 }
 
@@ -422,8 +419,7 @@ async fn answering_a_gate_someone_else_already_answered_is_a_conflict() {
         .await
         .expect_err("the second is a race, not a crash");
 
-    assert_eq!(err.exit_code(), 6);
-    assert_eq!(err.kind(), "conflict");
+    assert_eq!(err.kind(), ErrorKind::Conflict);
     assert!(err.to_string().contains("already been updated"), "{err}");
 }
 
@@ -467,7 +463,7 @@ async fn a_body_that_is_not_json_is_a_decode_failure_and_not_a_panic() {
         .expect_err("a proxy in the way");
 
     assert!(matches!(err, AdapterError::Decode { .. }), "{err:?}");
-    assert_eq!(err.exit_code(), 1);
+    assert_eq!(err.kind(), ErrorKind::Operational);
     assert!(err.to_string().contains("proxy error"), "{err}");
 }
 
@@ -511,7 +507,11 @@ async fn cancelling_mid_flight_abandons_the_request_instead_of_racing_the_next_o
         .expect_err("the operator moved on");
 
     assert!(err.is_cancelled());
-    assert_eq!(err.kind(), "operational", "and never rendered as a failure");
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Cancelled,
+        "and never rendered as a failure"
+    );
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "a cancelled call must not wait out the server"
@@ -587,7 +587,7 @@ async fn a_trigger_with_nothing_to_work_on_is_refused_before_the_request() {
         .trigger("factory", &["   ".to_string()], &CancellationToken::new())
         .await
         .expect_err("no issues is not a run");
-    assert_eq!(err.exit_code(), 1);
+    assert_eq!(err.kind(), ErrorKind::Operational);
     assert!(server
         .received_requests()
         .await
@@ -752,8 +752,7 @@ async fn an_unreachable_server_is_told_apart_from_one_that_refused() {
         .await
         .expect_err("nothing is listening");
 
-    assert_eq!(err.exit_code(), 5);
-    assert_eq!(err.kind(), "unreachable");
+    assert_eq!(err.kind(), ErrorKind::Unreachable);
 }
 
 #[tokio::test]
@@ -832,7 +831,7 @@ async fn a_token_endpoint_that_answers_without_a_token_is_an_auth_failure() {
         .list_dags("swfactory", &CancellationToken::new())
         .await
         .expect_err("no token, no requests");
-    assert_eq!(err.exit_code(), 4);
+    assert_eq!(err.kind(), ErrorKind::Auth);
     assert!(err.to_string().contains("no access_token"), "{err}");
 }
 

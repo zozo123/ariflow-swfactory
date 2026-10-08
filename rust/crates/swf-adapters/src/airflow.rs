@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use reqwest::{Client, Method, StatusCode};
+use reqwest::{Client, Method};
 use serde_json::{json, Map, Value};
 use swf_domain::ids::{GateId, JobId, RunRef};
 use swf_domain::model::{Gate, JobRow, Run, TaskState, Timestamp};
@@ -956,12 +956,6 @@ impl Runs for AirflowApi {
     }
 }
 
-/// Whether a status is one this client re-mints for. Exposed for the tests that pin §11's table.
-pub fn is_auth_status(status: StatusCode, detail: &str) -> bool {
-    status == StatusCode::UNAUTHORIZED
-        || (status == StatusCode::FORBIDDEN && detail.contains("Invalid JWT token"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1174,13 +1168,5 @@ mod tests {
         assert!(!AirflowApi::with_defaults("http://x", Auth::None)
             .expect("client builds")
             .can_remint());
-    }
-
-    #[test]
-    fn the_auth_statuses_are_the_ones_section_eleven_names() {
-        assert!(is_auth_status(StatusCode::UNAUTHORIZED, "Token Expired"));
-        assert!(is_auth_status(StatusCode::FORBIDDEN, "Invalid JWT token"));
-        assert!(!is_auth_status(StatusCode::FORBIDDEN, "Forbidden"));
-        assert!(!is_auth_status(StatusCode::NOT_FOUND, "gone"));
     }
 }

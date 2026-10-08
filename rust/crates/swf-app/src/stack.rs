@@ -17,7 +17,7 @@
 //! This module never touches `deploy/islo/*`. That is a production deployment with its own script,
 //! its own credentials and its own blast radius.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -485,12 +485,6 @@ pub fn find_repo_root() -> Option<PathBuf> {
             return None;
         }
     }
-}
-
-/// True when this path looks like a factory checkout — used by callers that want to explain why
-/// `swf stack` has nothing to drive.
-pub fn is_repo_root(path: &Path) -> bool {
-    path.join(COMPOSE_FILE).is_file()
 }
 
 #[cfg(test)]
