@@ -98,8 +98,8 @@ def test_the_budget_never_more_than_doubles() -> None:
 
 
 def test_the_policy_declares_it_shapes_proposals_and_nothing_else() -> None:
-    """The same discipline `liquid_annealing` and `exploration_entropy` hold: these numbers carry
-    no authority. A hotter loop asks for different work; it never lowers the bar for finishing it."""
+    """The same discipline `liquid_annealing` holds: these numbers carry no authority. A hotter
+    loop asks for different work; it never lowers the bar for finishing it."""
     assert evaluate(_obs()).to_dict()["authority"] == "proposal-shaping-only"
 
 

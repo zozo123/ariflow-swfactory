@@ -456,7 +456,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `factory.population-execution` | `experimental` | `swfactory.execution_binding.execute_managed_population -> swfactory.backend_population.BackendPopulationRunner -> /v1/population/execute -> swfactory.backend.population_service` | tests/test_population_execution.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
 | `factory.population-provider-adapter` | `experimental` | `swfactory.population_adapter.HttpPopulationAdapter via swfactory.backend.population_service` | tests/test_population_adapter.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
 | `factory.adaptive-information-budget` | `experimental` | `swfactory.adaptive_information; swfactory population-budget; swfactory.recursive_search.plan_adaptive_round; managed population stage retention` | tests/test_adaptive_information.py and tests/test_recursive_search.py |
-| `factory.formal-claims` | `experimental` | `swfactory.formal_claims; swfactory.justification_graph; swfactory.crystallization; formal/authority/AuthorityKernel.tla` | tests/test_formal_claims.py; tests/test_justification_graph.py; tests/test_crystallization.py |
+| `factory.formal-claims` | `experimental` | `formal/authority/AuthorityKernel.tla` | formal/authority/AuthorityKernel.tla (TLC model; not run in CI) |
 | `autonomous.issue-to-merge` | `experimental` | `swfactory.backend.autonomous_service.operation -> Airflow autonomous DAG` | tests/test_autonomy.py and tests/test_dag_parity.py |
 
 <!-- capability-inventory:end -->

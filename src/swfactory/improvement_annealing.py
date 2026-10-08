@@ -1,11 +1,10 @@
 """Annealing for the improvement loop's own schedule: when to exploit, when to explore.
 
 `liquid_annealing` anneals a review: defect evidence raises temperature, and a candidate
-crystallizes only when the ordinary invariants already hold. `exploration_entropy` lets
-exploration vary its ordering while keeping the entropy token as evidence that never reaches
-promotion. Both govern how one candidate is examined.
+crystallizes only when the ordinary invariants already hold. It governs how one candidate is
+examined.
 
-Neither governs what the factory chooses to work on. `self_improvement` proposes the same way
+It does not govern what the factory chooses to work on. `self_improvement` proposes the same way
 whether it is retiring debt every cycle or has retired none in twenty: it demotes whatever has
 stalled and proposes the next-heaviest thing, forever. That is a loop with no escape from a local
 minimum -- it will circle the easy half of its backlog and never take on the item that actually
