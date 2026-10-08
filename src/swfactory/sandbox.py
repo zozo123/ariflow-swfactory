@@ -26,6 +26,7 @@ No environment passthrough exists on this protocol, by design.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -37,7 +38,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -47,7 +48,7 @@ from swfactory.cells import CellIdentity
 from swfactory.cleanup_receipt import CleanupReceipt, CleanupStatus
 from swfactory.config import Config
 from swfactory.idempotency import OperationRef
-from swfactory.models import RunResult, StageError
+from swfactory.models import TIMEOUT_EXIT_CODE, RunResult, StageError
 from swfactory.paths import confined_path, confined_posix_path, normalize_relative_path
 from swfactory.sandbox_governance import (
     CleanupDebt,
@@ -58,10 +59,10 @@ from swfactory.sandbox_governance import (
 )
 from swfactory.state import RunState
 
-# Exit code reported when a command is killed by the timeout (mirrors coreutils `timeout`).
-TIMEOUT_EXIT_CODE = 124
 # Bound for the short control-plane calls (`islo cp`, `islo rm`, `islo resume`, `test -e`).
 _CONTROL_TIMEOUT_S = 300
+# Bound for creating a remote cell and cloning the target into it (`islo use`, `git clone`).
+_PROVISION_TIMEOUT_S = 1200
 
 # srt: npm package used when no `srt` binary is on PATH, and the settings file location.
 SRT_NPM_PACKAGE = "@anthropic-ai/sandbox-runtime"
@@ -182,35 +183,50 @@ SCRUB_EXACT = frozenset(
         "ENV",
         "DATABASE_URL",
         "DOCKER_AUTH_CONFIG",
-        "HF_TOKEN",
         "KUBECONFIG",
         "NETRC",
-        "NODE_AUTH_TOKEN",
-        "NPM_TOKEN",
         "SSH_AUTH_SOCK",
     }
 )
 
 
-def owns_sandbox(list_json: str, name: str, *, owner: str | None = None) -> bool:
-    """True iff ``name`` appears in this ``islo ls --output json`` listing (own scope) and, when
-    ``owner`` is given, its ``created_by`` equals ``owner``. Pure; used before every ``islo rm``."""
+def islo_rows(list_json: str) -> list[dict]:
+    """The entries of an ``islo ls --output json`` listing. Pure. Tolerates a JSON array or an
+    object wrapping one (its first list value); anything else is empty, and non-objects are dropped."""
     try:
         data = json.loads(list_json or "")
     except ValueError:
-        return False
+        return []
     if isinstance(data, dict):
         data = next((v for v in data.values() if isinstance(v, list)), [])
     if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _creator(item: Mapping[str, Any]) -> str:
+    return str(item.get("created_by") or "").strip().lower()
+
+
+def owns_sandbox(list_json: str, name: str, *, owner: str | None = None) -> bool:
+    """True iff the first ``name`` entry of this listing (own scope) is not deleted and, when
+    ``owner`` is given, its ``created_by`` equals ``owner``. Pure; used before every ``islo rm``."""
+    item = next((it for it in islo_rows(list_json) if it.get("name") == name), None)
+    if item is None or item.get("status") == "deleted":
         return False
-    for item in data:
-        if not isinstance(item, dict) or item.get("name") != name:
-            continue
-        if item.get("status") == "deleted":
-            return False
-        creator = str(item.get("created_by") or "").strip().lower()
-        return not owner or creator == owner.strip().lower()
-    return False
+    return not owner or _creator(item) == owner.strip().lower()
+
+
+def owned_sandboxes(list_json: str, owner: str) -> list[dict]:
+    """Entries of an ``islo ls --output json`` listing whose ``created_by`` is ``owner``.
+
+    Pure. Drops deleted entries and anything whose creator is missing or different; without an
+    owner nothing is returned. Never call ``islo ls --all`` to feed this.
+    """
+    owner = (owner or "").strip().lower()
+    if not owner:
+        return []
+    return [item for item in islo_rows(list_json) if item.get("status") != "deleted" and _creator(item) == owner]
 
 
 #: The factory's own operational namespace. `Config` reads it with `env_prefix="SWF_"`, so any of
@@ -298,7 +314,7 @@ def scrub_env(env: Mapping[str, str]) -> dict[str, str]:
         # AIRFLOW_TOKEN both ended in it and both survived the scrub, which handed the operator's
         # authority to the process running model-written code. The allow-list was written against
         # other people's credential names and never checked against ours.
-        and not key.endswith(("_API_KEY", "_ACCESS_TOKEN", "_AUTH_TOKEN", "_TOKEN", "_PASSWORD", "_SECRET", "_KEY"))
+        and not key.endswith(("_TOKEN", "_PASSWORD", "_SECRET", "_KEY"))
     }
 
 
@@ -374,23 +390,27 @@ class LocalSandbox:
         so initialising an empty directory stays the orchestrator's own action."""
         if (self.root / ".git").exists():
             return
-        res = LocalSandbox.run(self, "git init -q -b main")
+        res = LocalSandbox._launch(self, "git init -q -b main", cwd=None, agent=False, timeout_s=1800)
         if not res.ok:
             raise StageError("sandbox", f"git init failed in {self.root}: {res.stderr.strip()}")
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
-        """Run ``cmd`` without host login profiles restoring credentials after the scrub."""
+        """Run a credential-free command; its exit code propagates."""
+        return self._launch(cmd, cwd=cwd, agent=False, timeout_s=timeout_s)
+
+    def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
+        """Run only the model process, with the backend's agent credential scope."""
+        return self._launch(cmd, cwd=None, agent=True, timeout_s=timeout_s)
+
+    def _launch(self, cmd: str, *, cwd: str | None, agent: bool, timeout_s: int) -> RunResult:
+        """``bash`` on the host without login profiles restoring credentials after the scrub. ``agent``
+        changes nothing here: the development-only local escape hatch uses the host's Claude login."""
         return _run_subprocess(
             ["bash", "--noprofile", "--norc", "-c", cmd],
             cwd=self._abs(cwd) if cwd else self.root,
             env=scrub_env(os.environ),
             timeout_s=timeout_s,
         )
-
-    def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
-        """Development-only agent path; the local escape hatch uses the host's Claude login."""
-
-        return self.run(cmd, timeout_s=timeout_s)
 
     def read(self, path: str) -> str:
         """Read a UTF-8 file relative to ``workdir``; raises ``FileNotFoundError``."""
@@ -417,7 +437,25 @@ class LocalSandbox:
             raise StageError("policy", str(e)) from e
 
 
-class SrtSandbox(LocalSandbox):
+class _ConfinedHost(LocalSandbox):
+    """A host directory whose commands launch through a subclass's confining ``argv`` (srt or
+    docker) with the ``cell_env`` allow-list; the ``pass_env`` credentials reach only ``run_agent``."""
+
+    def __init__(self, workdir: Path, *, pass_env: Sequence[str] = ()) -> None:
+        super().__init__(workdir)
+        self.pass_env = tuple(pass_env)
+
+    def env(self, *, agent: bool = False) -> dict[str, str]:
+        """Allow-listed host env; model credentials exist only for ``run_agent``."""
+        return _credential_env(self.pass_env if agent else ())
+
+    def _launch(self, cmd: str, *, cwd: str | None, agent: bool, timeout_s: int) -> RunResult:
+        return _run_subprocess(
+            self.argv(cmd, cwd=cwd, agent=agent), cwd=self.root, env=self.env(agent=agent), timeout_s=timeout_s
+        )
+
+
+class SrtSandbox(_ConfinedHost):
     """A host directory whose commands run under the Anthropic Sandbox Runtime (``srt``).
 
     ``read``/``write``/``exists`` are the orchestrator's own file access (unconfined, like
@@ -429,9 +467,9 @@ class SrtSandbox(LocalSandbox):
     identity must travel as ``git -c user.name=...``, never ``git config``), shell rc files,
     ``.mcp.json``, Git metadata, shell profiles and IDE configuration.
 
-    Ordinary commands receive ``scrub_env(os.environ)``. Only ``run_agent`` adds the explicit
-    ``pass_env`` allowlist (copied from the host only when present), so target verification cannot
-    inherit the model credential. Nothing else crosses the boundary.
+    Ordinary commands receive the ``cell_env(os.environ)`` allow-list. Only ``run_agent`` adds the
+    explicit ``pass_env`` allowlist (copied from the host only when present), so target verification
+    cannot inherit the model credential. Nothing else crosses the boundary.
     """
 
     def __init__(
@@ -442,11 +480,10 @@ class SrtSandbox(LocalSandbox):
         protected: Sequence[str] = (),
         pass_env: Sequence[str] = (),
     ) -> None:
-        super().__init__(workdir)
+        super().__init__(workdir, pass_env=pass_env)
         self.name = f"srt:{self.root.name}"
         self.allowed_domains = tuple(allowed_domains)
         self.protected = tuple(protected)
-        self.pass_env = tuple(pass_env)
         self.settings_path = self.root / SRT_SETTINGS_PATH
 
     def settings(self) -> dict:
@@ -496,21 +533,22 @@ class SrtSandbox(LocalSandbox):
         except (OSError, ValueError):
             return False
 
-    def argv(self, cmd: str, *, cwd: str | None = None) -> list[str]:
-        """``srt -s <settings> -c 'cd <cwd> && <cmd>'`` (``npx`` fallback when srt is absent)."""
+    def argv(self, cmd: str, *, cwd: str | None = None, agent: bool = False) -> list[str]:
+        """``srt -s <settings> -c 'cd <cwd> && <cmd>'`` (``npx`` fallback when srt is absent).
+        ``agent`` is ignored: srt scopes the credential through ``env`` alone."""
         run_cwd = str(self._abs(cwd)) if cwd else self.workdir
         script = f"cd {shlex.quote(run_cwd)} && {cmd}"
         return [*_srt_bin(), "-s", str(self.settings_path), "-c", script]
 
     def env(self, *, agent: bool = False) -> dict[str, str]:
-        """Scrubbed host env, with agent credentials only for the model process.
+        """Allow-listed host env, with agent credentials only for the model process.
 
         GitHub's setup-uv exports ``UV_CACHE_DIR`` under ``$RUNNER_TEMP``. That path is outside
         the SRT write allowlist, so forwarding it makes ``uv sync`` fail read-only. Always pin uv
         to the sandbox-owned cache under ``.factory/uv-cache`` while preserving the exact credential
         allowlist.
         """
-        env = _credential_env(self.pass_env if agent else ())
+        env = super().env(agent=agent)
         env["UV_CACHE_DIR"] = str(self.root / ".factory" / "uv-cache")
         return env
 
@@ -526,21 +564,13 @@ class SrtSandbox(LocalSandbox):
         self.write_settings()
         self._host_git_init()
 
-    def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
-        """Run a credential-free command under srt; its exit code propagates."""
+    def _launch(self, cmd: str, *, cwd: str | None, agent: bool, timeout_s: int) -> RunResult:
         if not self._settings_current():  # settings() reflects paths that appeared since
             self.write_settings()
-        return _run_subprocess(self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s)
-
-    def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
-        """Run only the model process with the explicitly allowlisted credential."""
-
-        if not self._settings_current():
-            self.write_settings()
-        return _run_subprocess(self.argv(cmd), cwd=self.root, env=self.env(agent=True), timeout_s=timeout_s)
+        return super()._launch(cmd, cwd=cwd, agent=agent, timeout_s=timeout_s)
 
 
-class DockerSandbox(LocalSandbox):
+class DockerSandbox(_ConfinedHost):
     """A host directory whose commands each run in a fresh ``docker run --rm`` container.
 
     In-place model like ``SrtSandbox``: the workdir is bind-mounted read-write at the SAME
@@ -549,8 +579,8 @@ class DockerSandbox(LocalSandbox):
     access on the host, and ``git init`` in ``ensure`` runs host-side. Confinement is the
     container: the process sees only the workdir (plus ``.claude``/``.github`` and the
     ``protected`` globs' literal prefixes re-mounted read-only), the image, a cache volume and
-    the ``network`` given (``"none"`` = no egress). The docker CLI itself runs with
-    ``scrub_env(os.environ)``. Only ``run_agent`` adds the ``pass_env`` allowlist (``-e NAME``,
+    the ``network`` given (``"none"`` = no egress). The docker CLI itself runs with the
+    ``cell_env(os.environ)`` allow-list. Only ``run_agent`` adds the ``pass_env`` allowlist (``-e NAME``,
     value read from the CLI's env — never in argv) or, with ``credentials="host"``, mounts the
     host's ``~/.claude`` + ``~/.claude.json`` into the container ``$HOME``. Target verification
     receives neither credential mode.
@@ -579,7 +609,7 @@ class DockerSandbox(LocalSandbox):
         home: str = DOCKER_HOME,
         state: RunState | None = None,
     ) -> None:
-        super().__init__(workdir)
+        super().__init__(workdir, pass_env=pass_env)
         # Required, not optional: a container without the Cell/epoch/run stamp is the orphan #2035
         # describes -- alive after its docker client died, attributable to nobody.
         identity.validate()
@@ -588,7 +618,6 @@ class DockerSandbox(LocalSandbox):
         self.receipts: list[dict[str, Any]] = []  # what the last close() observed, for callers without state
         self.name = f"docker:{self.root.name}"
         self.image = image
-        self.pass_env = tuple(pass_env)
         self.credentials = credentials
         self.protected = tuple(protected)
         self.network = network
@@ -662,31 +691,6 @@ class DockerSandbox(LocalSandbox):
                     argv += ["-e", k]
         return [*argv, self.image, "bash", "-lc", cmd]
 
-    def env(self, *, agent: bool = False) -> dict[str, str]:
-        """Docker CLI environment; model credentials exist only for ``run_agent``."""
-
-        return _credential_env(self.pass_env if agent else ())
-
-    def ensure(self) -> None:
-        """Create the directory and ``git init`` host-side (see ``_host_git_init``); everything
-        after this point runs in a container."""
-        self.root.mkdir(parents=True, exist_ok=True)
-        self._host_git_init()
-
-    def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
-        """Run ``cmd`` in a fresh credential-free container."""
-        return _run_subprocess(self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s)
-
-    def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
-        """Run only the model process with the API key or mounted Claude login."""
-
-        return _run_subprocess(
-            self.argv(cmd, agent=True),
-            cwd=self.root,
-            env=self.env(agent=True),
-            timeout_s=timeout_s,
-        )
-
     def close(self) -> None:
         """Reclaim the containers this identity labelled, and record what happened.
 
@@ -732,15 +736,8 @@ class DockerSandbox(LocalSandbox):
         ref = OperationRef.build(
             self.identity.cell_id, self.identity.epoch, "sandbox_cleanup", resource_id, self.identity.attempt_id
         )
-        return CleanupReceipt.build(
-            cell_id=self.identity.cell_id,
-            epoch=self.identity.epoch,
-            operation_key=ref.key,
-            provider="docker",
-            resource_id=resource_id,
-            status=status,
-            requested_at=requested_at,
-            detail=detail,
+        return CleanupReceipt.for_operation(
+            ref, resource_id, status, provider="docker", requested_at=requested_at, detail=detail
         ).to_dict()
 
     def _record(self, receipts: list[dict[str, Any]]) -> None:
@@ -829,6 +826,98 @@ def _dedupe(items: Sequence[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
 
+# ---------------------------------------------------------------- remote cells (islo, toolset, boat)
+
+
+def _confine(root: str, workdir: str, path: str) -> str:
+    """``path`` (relative to ``workdir`` unless absolute), refused unless it stays under ``root``."""
+    try:
+        return confined_posix_path(root, path if path.startswith("/") else posixpath.join(workdir, path))
+    except ValueError as e:
+        raise StageError("policy", str(e)) from e
+
+
+def _checkout_dir(repo_root: str, target: str) -> str:
+    """The target directory inside the checkout at ``repo_root`` (``""`` = the root itself)."""
+    target = normalize_relative_path(target, field="target_dir", allow_empty=True)
+    return posixpath.join(repo_root, target) if target else repo_root
+
+
+def load_handle(state: RunState | None, file: str) -> dict | None:
+    """The remote cell's handle persisted in host-owned run state, or ``None`` without one.
+    Raises ``ValueError`` for a record that is not an object with a non-empty ``sandbox_id``."""
+    if state is None or not state.has_control(file):
+        return None
+    record = json.loads(state.read_control(file))
+    sandbox_id = record.get("sandbox_id") if isinstance(record, dict) else None
+    if not isinstance(sandbox_id, str) or not sandbox_id.strip():
+        raise ValueError("sandbox id is empty")
+    return record
+
+
+def save_handle(state: RunState | None, file: str, record: Mapping[str, object]) -> None:
+    """Persist the handle the moment it exists, so a retried or restarted task reconnects to it."""
+    if state is not None:
+        state.write_control(file, json.dumps(record, separators=(",", ":")) + "\n")
+
+
+def provision_checkout(
+    exec_: Callable[..., RunResult], *, repo_root: str, workdir: str, source: str | None, branch: str
+) -> tuple[str, RunResult] | None:
+    """``mkdir`` the repo root, ``git clone --depth 1`` the public ``source`` into it unless it is
+    already a work tree, and prove the target dir exists (create it when there is no source).
+
+    ``exec_(cmd, *, cwd, timeout_s)`` runs one command in the cell. Returns the first failing
+    ``(step, result)`` -- step ``mkdir``, ``clone`` or ``target`` -- or ``None`` once it is ready.
+    """
+    made = exec_(f"mkdir -p {shlex.quote(repo_root)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
+    if not made.ok:
+        return "mkdir", made
+    in_tree = exec_("git rev-parse --is-inside-work-tree", cwd=repo_root, timeout_s=_CONTROL_TIMEOUT_S).ok
+    if source and not in_tree:
+        clone = (
+            f"git clone --depth 1 --branch {shlex.quote(branch)} "
+            f"{shlex.quote(source)} {shlex.quote(posixpath.basename(repo_root))}"
+        )
+        cloned = exec_(clone, cwd=posixpath.dirname(repo_root) or "/", timeout_s=_PROVISION_TIMEOUT_S)
+        if not cloned.ok:
+            return "clone", cloned
+    command = f"test -d {shlex.quote(workdir)}" if source else f"mkdir -p {shlex.quote(workdir)}"
+    present = exec_(command, cwd=repo_root, timeout_s=_CONTROL_TIMEOUT_S)
+    return None if present.ok else ("target", present)
+
+
+def fold_exec(res: Any, *, tag: str, started: float, timeout_exit: int | None = None) -> RunResult:
+    """A provider's exec outcome (``models.ExecResult`` or a duck-typed one) as a ``RunResult``.
+
+    Truncation and termination have no ``RunResult`` field. Dropping them would let truncated
+    output or a dead sandbox read as a clean result, so they are folded into stderr (visible,
+    tagged ``[tag]``) and into a non-zero exit code. ``timeout_exit`` replaces the exit code of a
+    command killed at its timeout; without it the provider's own code stands.
+    """
+    terminated = bool(getattr(res, "sandbox_terminated", False))
+    notes = [
+        note
+        for note, flag in (
+            ("stdout truncated", getattr(res, "stdout_truncated", False)),
+            ("stderr truncated", getattr(res, "stderr_truncated", False)),
+            ("sandbox terminated", terminated),
+        )
+        if flag
+    ]
+    timed_out = bool(res.timed_out)
+    exit_code = res.exit_code if isinstance(res.exit_code, int) else 1
+    if timed_out and timeout_exit is not None:
+        exit_code = timeout_exit
+    return RunResult(
+        exit_code=exit_code or (1 if notes or timed_out else 0),
+        stdout=str(res.stdout or ""),
+        stderr="\n".join([str(res.stderr or ""), *(f"[{tag}] {note}" for note in notes)]).strip(),
+        duration_s=round(time.monotonic() - started, 3),
+        timed_out=timed_out or terminated,
+    )
+
+
 class IsloSandbox:
     """An islo MicroVM created from ``--source`` (read-only clone) and addressed by a stable name.
 
@@ -860,10 +949,8 @@ class IsloSandbox:
         self.idle_s = idle_s
         self.snapshot = snapshot
         self.factory_root = Path(factory_root)
-        repo_name = _repo_name(source)
-        self.repo_root = f"/workspace/{repo_name}"
-        target = normalize_relative_path(target_dir, field="target_dir", allow_empty=True)
-        self.workdir = posixpath.join(self.repo_root, target) if target else self.repo_root
+        self.repo_root = f"/workspace/{_repo_name(source)}"
+        self.workdir = _checkout_dir(self.repo_root, target_dir)
 
     def argv(self, cmd: str, *, cwd: str | None = None, create: bool = False) -> list[str]:
         """Build the ``islo use`` argv for ``cmd``.
@@ -894,7 +981,7 @@ class IsloSandbox:
             if self.snapshot:
                 argv += ["--snapshot", self.snapshot]
             return [*argv, "--output", "plain", "--", "true"]
-        run_cwd = self._cwd(cwd) if cwd else self.workdir
+        run_cwd = _confine(self.workdir, self.workdir, cwd) if cwd else self.workdir
         script = f"cd {shlex.quote(run_cwd)} && {cmd}"
         # `--output json`, not `plain`: islo prints its own status lines ("→ Reconnecting to existing
         # sandbox ...") with println!, i.e. onto the COMMAND's stdout, in every mode but json (islo
@@ -908,7 +995,7 @@ class IsloSandbox:
             self.argv("true", create=True),
             cwd=self.factory_root,
             env=None,
-            timeout_s=_CONTROL_TIMEOUT_S * 4,
+            timeout_s=_PROVISION_TIMEOUT_S,
         )
         if not res.ok:
             raise StageError(
@@ -928,17 +1015,17 @@ class IsloSandbox:
 
     def read(self, path: str) -> str:
         """Copy the file out with ``islo cp`` and return its text; missing -> FileNotFoundError."""
-        remote = f"{self.name}:{self._abs(path)}"
+        remote = f"{self.name}:{_confine(self.repo_root, self.workdir, path)}"
         with tempfile.TemporaryDirectory(prefix="swf-cp-") as tmp:
             local = Path(tmp) / "file"
             res = self._cp(remote, str(local))
             if not res.ok or not local.exists():
-                raise FileNotFoundError(f"{self.name}:{self._abs(path)} ({res.stderr.strip()})")
+                raise FileNotFoundError(f"{remote} ({res.stderr.strip()})")
             return local.read_text(encoding="utf-8")
 
     def write(self, path: str, content: str) -> None:
         """Copy ``content`` into the sandbox with ``islo cp``, creating parent directories."""
-        abs_path = self._abs(path)
+        abs_path = _confine(self.repo_root, self.workdir, path)
         parent = posixpath.dirname(abs_path)
         if parent and parent != self.workdir:
             mk = self.run(f"mkdir -p {shlex.quote(parent)}", timeout_s=_CONTROL_TIMEOUT_S)
@@ -953,7 +1040,8 @@ class IsloSandbox:
 
     def exists(self, path: str) -> bool:
         """True if ``test -e`` succeeds inside the sandbox."""
-        res = self.run(f"test -e {shlex.quote(self._abs(path))}", timeout_s=_CONTROL_TIMEOUT_S)
+        abs_path = _confine(self.repo_root, self.workdir, path)
+        res = self.run(f"test -e {shlex.quote(abs_path)}", timeout_s=_CONTROL_TIMEOUT_S)
         return res.exit_code == 0
 
     def close(self) -> None:
@@ -977,20 +1065,6 @@ class IsloSandbox:
     @staticmethod
     def _control(argv: list[str]) -> RunResult:
         return _run_subprocess(argv, cwd=None, env=None, timeout_s=_CONTROL_TIMEOUT_S)
-
-    def _abs(self, path: str) -> str:
-        try:
-            value = path if path.startswith("/") else posixpath.join(self.workdir, path)
-            return confined_posix_path(self.repo_root, value)
-        except ValueError as e:
-            raise StageError("policy", str(e)) from e
-
-    def _cwd(self, path: str) -> str:
-        try:
-            value = path if path.startswith("/") else posixpath.join(self.workdir, path)
-            return confined_posix_path(self.workdir, value)
-        except ValueError as e:
-            raise StageError("policy", str(e)) from e
 
 
 def _repo_name(source: str) -> str:
@@ -1118,37 +1192,23 @@ class ToolsetSandbox:
         self._terminated = False
 
     def _restore_id(self) -> None:
-        if self.sandbox_id is not None or self.state is None:
-            return
-        if not self.state.has_control(TOOLSET_STATE_FILE):
+        if self.sandbox_id is not None:
             return
         try:
-            record = json.loads(self.state.read_control(TOOLSET_STATE_FILE))
+            record = load_handle(self.state, TOOLSET_STATE_FILE)
+            if record is None:
+                return
             if record.get("backend") != self.backend_identity:
                 raise ValueError("backend identity changed")
-            sandbox_id = record["sandbox_id"]
-            if not isinstance(sandbox_id, str) or not sandbox_id.strip():
-                raise ValueError("sandbox id is empty")
-        except (AttributeError, KeyError, TypeError, ValueError) as e:
+        except ValueError as e:
             raise StageError("policy", f"invalid toolset sandbox state: {e}") from e
-        self.sandbox_id = sandbox_id
+        self.sandbox_id = record["sandbox_id"]
         self._terminated = bool(record.get("terminated", False))
 
     def _persist_id(self) -> None:
-        if self.state is None or self.sandbox_id is None:
-            return
-        self.state.write_control(
-            TOOLSET_STATE_FILE,
-            json.dumps(
-                {
-                    "backend": self.backend_identity,
-                    "sandbox_id": self.sandbox_id,
-                    "terminated": self._terminated,
-                },
-                separators=(",", ":"),
-            )
-            + "\n",
-        )
+        if self.sandbox_id is not None:
+            handle = {"backend": self.backend_identity, "sandbox_id": self.sandbox_id, "terminated": self._terminated}
+            save_handle(self.state, TOOLSET_STATE_FILE, handle)
 
     def _spec(self):
         """Concrete isolation requirements; a backend must enforce them or refuse creation."""
@@ -1194,27 +1254,21 @@ class ToolsetSandbox:
                 raise StageError("sandbox", "toolset backend returned an empty sandbox id")
             self.sandbox_id = sandbox_id
             self._persist_id()
-        made = self._run_backend(f"mkdir -p {shlex.quote(self.repo_root)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
-        if not made.ok:
-            raise StageError("sandbox", f"toolset repository root failed: {made.stderr[-800:]}")
-        repo_check = self._run_backend(
-            "git rev-parse --is-inside-work-tree",
-            cwd=self.repo_root,
-            timeout_s=_CONTROL_TIMEOUT_S,
+        failed = provision_checkout(
+            self._run_backend,
+            repo_root=self.repo_root,
+            workdir=self.workdir,
+            source=self.source,
+            branch=self.base_branch,
         )
-        if self.source and not repo_check.ok:
-            parent = posixpath.dirname(self.repo_root) or "/"
-            clone = (
-                f"git clone --depth 1 --branch {shlex.quote(self.base_branch)} "
-                f"{shlex.quote(self.source)} {shlex.quote(posixpath.basename(self.repo_root))}"
-            )
-            result = self._run_backend(clone, cwd=parent, timeout_s=_CONTROL_TIMEOUT_S * 4)
-            if not result.ok:
-                raise StageError("sandbox", f"toolset checkout failed: {result.stderr[-800:]}")
-        command = f"test -d {shlex.quote(self.workdir)}" if self.source else f"mkdir -p {shlex.quote(self.workdir)}"
-        result = self._run_backend(command, cwd=self.repo_root, timeout_s=_CONTROL_TIMEOUT_S)
-        if not result.ok:
-            raise StageError("sandbox", f"toolset target directory is unavailable: {result.stderr[-800:]}")
+        if failed is not None:
+            step, result = failed
+            what = {
+                "mkdir": "repository root failed",
+                "clone": "checkout failed",
+                "target": "target directory is unavailable",
+            }[step]
+            raise StageError("sandbox", f"toolset {what}: {result.stderr[-800:]}")
 
     def _check_alive(self) -> None:
         if self._terminated:
@@ -1229,7 +1283,8 @@ class ToolsetSandbox:
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
         """Run ``cmd`` in the sandbox; the backend has no cwd, so it travels in the command."""
-        return self._run_backend(cmd, cwd=self._cwd(cwd) if cwd else self.workdir, timeout_s=timeout_s)
+        run_cwd = _confine(self.workdir, self.workdir, cwd) if cwd else self.workdir
+        return self._run_backend(cmd, cwd=run_cwd, timeout_s=timeout_s)
 
     def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
         """Run the model process using authentication declared in the backend's sandbox spec."""
@@ -1242,50 +1297,14 @@ class ToolsetSandbox:
         res = self.backend.run_command(
             self._id(), script, timeout=float(timeout_s), max_output_bytes=TOOLSET_MAX_OUTPUT_BYTES
         )
-        # The backend reports three conditions our RunResult has no field for. Dropping them
-        # would let truncated output or a dead sandbox read as a clean result, so they are folded
-        # into stderr (visible) and, for termination, into a non-zero exit code.
-        notes = [
-            n
-            for n, flag in (
-                ("stdout truncated", getattr(res, "stdout_truncated", False)),
-                ("stderr truncated", getattr(res, "stderr_truncated", False)),
-                ("sandbox terminated", getattr(res, "sandbox_terminated", False)),
-            )
-            if flag
-        ]
-        stderr = "\n".join([str(res.stderr or ""), *(f"[toolset] {n}" for n in notes)]).strip()
-        terminated = bool(getattr(res, "sandbox_terminated", False))
-        if terminated:
+        if getattr(res, "sandbox_terminated", False):
             # Keep the handle for cleanup, but never continue old stage records in a fresh VM.
             self._terminated = True
             self._persist_id()
-        exit_code = res.exit_code if isinstance(res.exit_code, int) else 1
-        degraded = bool(notes) or bool(res.timed_out)
-        return RunResult(
-            exit_code=exit_code or (1 if degraded else 0),
-            stdout=str(res.stdout or ""),
-            stderr=stderr,
-            duration_s=round(time.monotonic() - started, 3),
-            timed_out=bool(res.timed_out) or terminated,
-        )
-
-    def _abs(self, path: str) -> str:
-        try:
-            value = path if path.startswith("/") else posixpath.join(self.workdir, path)
-            return confined_posix_path(self.repo_root, value)
-        except ValueError as e:
-            raise StageError("policy", str(e)) from e
-
-    def _cwd(self, path: str) -> str:
-        try:
-            value = path if path.startswith("/") else posixpath.join(self.workdir, path)
-            return confined_posix_path(self.workdir, value)
-        except ValueError as e:
-            raise StageError("policy", str(e)) from e
+        return fold_exec(res, tag="toolset", started=started)
 
     def read(self, path: str) -> str:
-        abs_path = self._abs(path)
+        abs_path = _confine(self.repo_root, self.workdir, path)
         if not self.run(f"test -f {shlex.quote(abs_path)}", timeout_s=_CONTROL_TIMEOUT_S).ok:
             raise FileNotFoundError(abs_path)
         try:
@@ -1296,7 +1315,7 @@ class ToolsetSandbox:
             raise StageError("sandbox", f"toolset could not read {abs_path}: {e}") from e
 
     def write(self, path: str, content: str) -> None:
-        abs_path = self._abs(path)
+        abs_path = _confine(self.repo_root, self.workdir, path)
         parent = abs_path.rsplit("/", 1)[0]
         if parent:
             result = self._run_backend(f"mkdir -p {shlex.quote(parent)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
@@ -1305,7 +1324,8 @@ class ToolsetSandbox:
         self.backend.write_file(self._id(), abs_path, content.encode("utf-8"))
 
     def exists(self, path: str) -> bool:
-        return self.run(f"test -e {shlex.quote(self._abs(path))}", timeout_s=_CONTROL_TIMEOUT_S).ok
+        abs_path = _confine(self.repo_root, self.workdir, path)
+        return self.run(f"test -e {shlex.quote(abs_path)}", timeout_s=_CONTROL_TIMEOUT_S).ok
 
     def close(self) -> None:
         """Destroy the sandbox; retain the handle on failure for explicit cleanup reconciliation."""
@@ -1321,17 +1341,15 @@ class ToolsetSandbox:
             self.state.clear_control(TOOLSET_STATE_FILE)
 
 
-def _docker_identity(cfg: Config, issue_id: str, run_dir: Path | None) -> SandboxIdentity:
+def _docker_identity(cfg: Config, issue_id: str, state: RunState | None) -> SandboxIdentity:
     """The Cell/epoch this run executes as, read from the host-owned ``cell.json`` that
     ``runtime._prepare_ctx`` writes before the sandbox exists -- the evidence ``stages.cell_evidence``
     trusts, never a job dict. A direct run has no binding and is labelled as the Cell it would be at
     epoch 1, so the backend sweep can still attribute (and refuse to touch) its containers; the
     attempt is the run id, so two runs of one Cell never share a container identity."""
     binding: dict[str, Any] = {}
-    if run_dir is not None:
-        state = RunState(run_dir)
-        if state.has_control("cell.json"):
-            binding = json.loads(state.read_control("cell.json"))
+    if state is not None and state.has_control("cell.json"):
+        binding = json.loads(state.read_control("cell.json"))
     cell_id = binding.get("cell_id") or CellIdentity(cfg.repo, cfg.target_dir, issue_id).stable_id()
     return SandboxIdentity("docker", str(cell_id), int(binding.get("epoch") or 1), cfg.run_id)
 
@@ -1351,6 +1369,7 @@ def make_sandbox(
     call); ``repo`` (owner/name) makes the islo sandbox name unique per (issue, target).
     """
     claude_env = ("ANTHROPIC_API_KEY",) if cfg.agent == "claude" else ()
+    state = RunState(run_dir) if run_dir is not None else None
     if cfg.sandbox == "local":
         return LocalSandbox(Path(cfg.workdir))
     if cfg.sandbox == "srt":
@@ -1362,8 +1381,8 @@ def make_sandbox(
         )
     if cfg.sandbox == "toolset":
         repo_root = cfg.toolset_workdir.rstrip("/") or "/workspace/repo"
-        target = normalize_relative_path(cfg.target_dir, field="target_dir", allow_empty=True)
-        workdir = posixpath.join(repo_root, target) if target else repo_root
+        workdir = _checkout_dir(repo_root, cfg.target_dir)
+        agent_env = {k: os.environ[k] for k in claude_env if k in os.environ}
         backend_kwargs = {}
         if cfg.toolset_backend == "sbx":
             backend_kwargs = {
@@ -1371,8 +1390,6 @@ def make_sandbox(
                 "image": cfg.toolset_sbx_image,
             }
         elif cfg.toolset_backend == "smolvm":
-            import hashlib
-
             # Bind the VM to this run and target before the backend sends its create request.
             identity = f"{cfg.repo}\0{cfg.target_dir}\0{issue_id}\0{cfg.run_id}"
             backend_kwargs = {
@@ -1381,30 +1398,30 @@ def make_sandbox(
                 "cpus": cfg.toolset_smolvm_cpus,
                 "memory_mb": cfg.toolset_smolvm_memory_mb,
                 "machine_name": "swf-smol-" + hashlib.sha256(identity.encode()).hexdigest()[:32],
-                "state": RunState(run_dir) if run_dir is not None else None,
-                "env": {k: os.environ[k] for k in claude_env if k in os.environ},
+                "state": state,
+                "env": agent_env,
             }
         return ToolsetSandbox(
             load_toolset_backend(cfg.toolset_backend, **backend_kwargs),
             workdir=workdir,
-            env={k: os.environ[k] for k in claude_env if k in os.environ},
+            env=agent_env,
             allow_egress_to=_dedupe([*cfg.srt_allowed_domains, *SRT_CLAUDE_DOMAINS, "github.com"]),
             repo_root=repo_root,
             source=f"https://github.com/{cfg.repo}.git",
             base_branch=cfg.base_branch,
-            state=RunState(run_dir) if run_dir is not None else None,
+            state=state,
         )
     if cfg.sandbox == "docker":
         return DockerSandbox(
             Path(cfg.workdir),
             image=cfg.docker_image,
-            identity=_docker_identity(cfg, issue_id, run_dir),
+            identity=_docker_identity(cfg, issue_id, state),
             pass_env=claude_env if cfg.docker_credentials == "env" else (),
             credentials=cfg.docker_credentials,
             protected=protected,
             network=cfg.docker_network,
             user=cfg.docker_user or default_docker_user(),
-            state=RunState(run_dir) if run_dir is not None else None,
+            state=state,
         )
     if cfg.sandbox == "boat":
         # Imported lazily like smolvm: the boat module owns the transport and the VM cell, and
@@ -1420,7 +1437,7 @@ def make_sandbox(
             base_branch=cfg.base_branch,
             target_dir=cfg.target_dir,
             ttl_s=cfg.sandbox_ttl_s,
-            state=RunState(run_dir) if run_dir is not None else None,
+            state=state,
         )
     return IsloSandbox(
         cfg.sandbox_name(issue_id, repo),

@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
+from swfactory.backend_http import no_redirect_open
 from swfactory.security_contract import redact_text
 
 ENDPOINT = "https://api.linear.app/graphql"
@@ -88,6 +89,11 @@ class LinearPreview:
         return f"linear:{self.workspace_id}:{self.issue_id}"
 
     @property
+    def terminal(self) -> bool:
+        """Archived or in a closed workflow state: no new work may start from it."""
+        return bool(self.archived_at) or self.state_type in {"completed", "canceled", "duplicate"}
+
+    @property
     def intent_digest(self) -> str:
         content = {
             "source_key": self.source_key,
@@ -110,64 +116,82 @@ class LinearPreview:
         }
 
 
-def parse_preview(payload: object, *, workspace_id: str, project_id: str, issue_id: str) -> LinearPreview:
-    """Validate a complete GraphQL read without treating its status as delivery evidence."""
-    workspace_id, project_id, issue_id = map(_uuid, (workspace_id, project_id, issue_id))
+def _unwrap(payload: object) -> dict[str, Any]:
+    """The source fields of one complete GraphQL read, flat and not yet validated."""
     if not isinstance(payload, dict) or payload.get("errors"):
         raise LinearSourceError("Linear returned GraphQL errors or an invalid document")
     try:
         data = payload["data"]
         organization, issue = data["organization"], data["issue"]
-        if _uuid(organization["id"]) != workspace_id:
-            raise LinearSourceError("Linear workspace differs from the configured workspace")
-        if _uuid(issue["id"]) != issue_id:
-            raise LinearSourceError("Linear issue differs from the requested UUID")
-        if _uuid(issue["project"]["id"]) != project_id:
-            raise LinearSourceError("Linear project differs from the configured project")
-        identifier = _text(issue["identifier"])
-        if not re.fullmatch(r"[A-Z][A-Z0-9_]*-[1-9][0-9]*", identifier):
-            raise LinearSourceError("Linear response has an invalid display identifier")
-        workspace_slug = _text(organization["urlKey"])
-        if not re.fullmatch(r"[a-zA-Z0-9_-]+", workspace_slug):
-            raise LinearSourceError("Linear response has an invalid workspace URL key")
-        url = _text(issue["url"])
-        try:
-            parsed = urlsplit(url)
-        except ValueError:
-            raise LinearSourceError("Linear response has an invalid canonical issue URL") from None
-        expected_path = f"/{workspace_slug}/issue/{identifier}"
-        if (
-            any(character.isspace() for character in url)
-            or parsed.scheme != "https"
-            or parsed.netloc != "linear.app"
-            or parsed.query
-            or parsed.fragment
-            or not (parsed.path == expected_path or parsed.path.startswith(expected_path + "/"))
-        ):
-            raise LinearSourceError("Linear response has an invalid canonical issue URL")
-        state_type = _text(issue["state"]["type"])
-        if state_type not in {"triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"}:
-            raise LinearSourceError("Linear response has an unsupported workflow state")
-        return LinearPreview(
-            workspace_id=workspace_id,
-            issue_id=issue_id,
-            identifier=identifier,
-            url=url,
-            team_id=_uuid(issue["team"]["id"]),
-            project_id=project_id,
-            title=_text(issue["title"]),
-            description="" if issue["description"] is None else _text(issue["description"], empty=True),
-            updated_at=_timestamp(issue["updatedAt"]),
-            state_type=state_type,
-            archived_at=None if issue["archivedAt"] is None else _timestamp(issue["archivedAt"]),
-        )
+        return {
+            "workspace_id": organization["id"],
+            "workspace_slug": organization["urlKey"],
+            "issue_id": issue["id"],
+            "identifier": issue["identifier"],
+            "url": issue["url"],
+            "team_id": issue["team"]["id"],
+            "project_id": issue["project"]["id"],
+            "title": issue["title"],
+            "description": issue["description"],
+            "updated_at": issue["updatedAt"],
+            "state_type": issue["state"]["type"],
+            "archived_at": issue["archivedAt"],
+        }
     except (KeyError, TypeError, AttributeError):
         raise LinearSourceError("Linear response is missing required source fields") from None
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+def validate_fields(fields: dict[str, Any], *, workspace_id: str, project_id: str, issue_id: str) -> LinearPreview:
+    """Validate flat source fields (``_unwrap``'s shape) against the configured and requested identity."""
+    workspace_id, project_id, issue_id = map(_uuid, (workspace_id, project_id, issue_id))
+    if _uuid(fields["workspace_id"]) != workspace_id:
+        raise LinearSourceError("Linear workspace differs from the configured workspace")
+    if _uuid(fields["issue_id"]) != issue_id:
+        raise LinearSourceError("Linear issue differs from the requested UUID")
+    if _uuid(fields["project_id"]) != project_id:
+        raise LinearSourceError("Linear project differs from the configured project")
+    identifier = _text(fields["identifier"])
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*-[1-9][0-9]*", identifier):
+        raise LinearSourceError("Linear response has an invalid display identifier")
+    workspace_slug = _text(fields["workspace_slug"])
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", workspace_slug):
+        raise LinearSourceError("Linear response has an invalid workspace URL key")
+    url = _text(fields["url"])
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        raise LinearSourceError("Linear response has an invalid canonical issue URL") from None
+    expected_path = f"/{workspace_slug}/issue/{identifier}"
+    if (
+        any(character.isspace() for character in url)
+        or parsed.scheme != "https"
+        or parsed.netloc != "linear.app"
+        or parsed.query
+        or parsed.fragment
+        or not (parsed.path == expected_path or parsed.path.startswith(expected_path + "/"))
+    ):
+        raise LinearSourceError("Linear response has an invalid canonical issue URL")
+    state_type = _text(fields["state_type"])
+    if state_type not in {"triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"}:
+        raise LinearSourceError("Linear response has an unsupported workflow state")
+    return LinearPreview(
+        workspace_id=workspace_id,
+        issue_id=issue_id,
+        identifier=identifier,
+        url=url,
+        team_id=_uuid(fields["team_id"]),
+        project_id=project_id,
+        title=_text(fields["title"]),
+        description="" if fields["description"] is None else _text(fields["description"], empty=True),
+        updated_at=_timestamp(fields["updated_at"]),
+        state_type=state_type,
+        archived_at=None if fields["archived_at"] is None else _timestamp(fields["archived_at"]),
+    )
+
+
+def parse_preview(payload: object, *, workspace_id: str, project_id: str, issue_id: str) -> LinearPreview:
+    """Validate a complete GraphQL read without treating its status as delivery evidence."""
+    return validate_fields(_unwrap(payload), workspace_id=workspace_id, project_id=project_id, issue_id=issue_id)
 
 
 @dataclass(frozen=True)
@@ -199,7 +223,7 @@ class LinearSource:
             method="POST",
         )
         try:
-            with urllib.request.build_opener(_NoRedirect()).open(request, timeout=15) as response:
+            with no_redirect_open(request, timeout=15) as response:
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as error:
             error.close()
@@ -218,7 +242,7 @@ class LinearSource:
         if self.api_key in preview.title or self.api_key in preview.description:
             raise LinearSourceError("Linear source response contains the controller credential")
         if admission:
-            if preview.archived_at or preview.state_type in {"completed", "canceled", "duplicate"}:
+            if preview.terminal:
                 raise LinearSourceError("Linear issue is archived or terminal; new work cannot be admitted")
             try:
                 relations = payload["data"]["issue"]["inverseRelations"]

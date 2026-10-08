@@ -83,6 +83,7 @@ protected = [
   "src/swfactory/approval_policy.py",
   "src/swfactory/backend/scm_service.py",
   "src/swfactory/backend_scm.py",
+  "src/swfactory/backend_http.py",
   "src/swfactory/security_contract.py",
   "src/swfactory/accepted_inputs.py",
   "src/swfactory/linear_source.py",

@@ -20,12 +20,11 @@ import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from swfactory.models import StageError
+from swfactory.models import TIMEOUT_EXIT_CODE, ExecResult, StageError
 from swfactory.state import RunState
 
 _CONTROL_LIMIT = 1024 * 1024
@@ -40,15 +39,14 @@ class SmolvmError(StageError):
         super().__init__("sandbox", message, retryable=False)
 
 
-@dataclass(frozen=True)
-class SmolvmExecResult:
-    exit_code: int
-    stdout: str = ""
-    stderr: str = ""
-    timed_out: bool = False
-    stdout_truncated: bool = False
-    stderr_truncated: bool = False
-    sandbox_terminated: bool = False
+SmolvmExecResult = ExecResult
+
+
+def _read_limited(response: Any, what: str) -> bytes:
+    data = response.read(_CONTROL_LIMIT + 1)
+    if len(data) > _CONTROL_LIMIT:
+        raise SmolvmError(f"SmolVM {what} response exceeds limit")
+    return data
 
 
 class _UnixHTTPConnection(http.client.HTTPConnection):
@@ -154,9 +152,7 @@ class SmolvmSandboxBackend:
 
     def _json(self, method: str, path: str, body: Any = None, *, timeout: float = 30) -> tuple[int, dict]:
         with self._response(method, path, body, time.monotonic() + timeout) as (response, _):
-            data = response.read(_CONTROL_LIMIT + 1)
-            if len(data) > _CONTROL_LIMIT:
-                raise SmolvmError("SmolVM control response exceeds limit")
+            data = _read_limited(response, "control")
             if response.status >= 400:
                 # Do not echo server bodies, which can contain submitted environment values.
                 return response.status, {}
@@ -177,10 +173,8 @@ class SmolvmSandboxBackend:
         with self._response("GET", "/health", None, deadline, root=True) as (response, _):
             if response.status != 200:
                 raise SmolvmError(f"SmolVM health returned HTTP {response.status}")
-            data = response.read(_CONTROL_LIMIT + 1)
+            data = _read_limited(response, "health")
             self._remaining(deadline)
-            if len(data) > _CONTROL_LIMIT:
-                raise SmolvmError("SmolVM health response exceeds limit")
             try:
                 health = json.loads(data)
             except (ValueError, UnicodeError) as exc:
@@ -197,6 +191,12 @@ class SmolvmSandboxBackend:
             if self.state is not None:
                 self.state.write_control(f"smolvm/{name}.json", json.dumps(record, sort_keys=True))
             self._records[name] = dict(record)
+
+    def _begin(self, name: str) -> None:
+        # Journalled before the request: a worker that dies mid-operation is fenced on next use.
+        record = self._ready(name)
+        record["inflight"] = True
+        self._save(name, record)
 
     def _finish(self, name: str) -> None:
         # Cancellation may have destroyed the VM while a command/upload response was in flight.
@@ -357,9 +357,7 @@ class SmolvmSandboxBackend:
             raise ValueError("command must be text without NUL")
         if not math.isfinite(timeout) or timeout <= 0 or type(max_output_bytes) is not int or max_output_bytes <= 0:
             raise ValueError("timeout and max_output_bytes must be positive")
-        record = self._ready(sandbox)
-        record["inflight"] = True
-        self._save(sandbox, record)
+        self._begin(sandbox)
         output = {"stdout": bytearray(), "stderr": bytearray()}
         truncated = {"stdout": False, "stderr": False}
         exit_code = None
@@ -407,7 +405,7 @@ class SmolvmSandboxBackend:
                     event, data, size = "", [], 0
             # SmolVM reserves 124 for timeout but cannot distinguish a guest's own exit 124.
             # Conservatively terminate this attempt for either case.
-            if exit_code == 124:
+            if exit_code == TIMEOUT_EXIT_CODE:
                 self.destroy(sandbox)
             else:
                 self._finish(sandbox)
@@ -421,16 +419,16 @@ class SmolvmSandboxBackend:
             if not isinstance(error, Exception):
                 raise
             if isinstance(error, TimeoutError) or time.monotonic() >= deadline:
-                return SmolvmExecResult(124, timed_out=True, sandbox_terminated=True)
+                return SmolvmExecResult(TIMEOUT_EXIT_CODE, timed_out=True, sandbox_terminated=True)
             raise SmolvmError("SmolVM execution failed; attempt terminated, start a new factory run") from None
         return SmolvmExecResult(
             exit_code,
             output["stdout"].decode("utf-8", "replace"),
             output["stderr"].decode("utf-8", "replace"),
-            timed_out=exit_code == 124,
+            timed_out=exit_code == TIMEOUT_EXIT_CODE,
             stdout_truncated=truncated["stdout"],
             stderr_truncated=truncated["stderr"],
-            sandbox_terminated=exit_code == 124,
+            sandbox_terminated=exit_code == TIMEOUT_EXIT_CODE,
         )
 
     @staticmethod
@@ -439,6 +437,17 @@ class SmolvmSandboxBackend:
             raise ValueError("file path must be absolute without traversal")
         return path
 
+    def _b64_script(self, sandbox: str, script: str, *, max_output_bytes: int, what: str) -> bytes:
+        """Run ``script`` (which ends in ``| base64``) and decode its stdout; exit 66 is a missing file."""
+        result = self.run_command(
+            sandbox, "bash -o pipefail -c " + shlex.quote(script), timeout=120, max_output_bytes=max_output_bytes
+        )
+        if result.exit_code == 66:
+            raise FileNotFoundError("file is absent or not a regular file")
+        if result.exit_code or result.stdout_truncated or result.stderr_truncated:
+            raise SmolvmError(f"SmolVM {what} failed or was truncated")
+        return base64.b64decode("".join(result.stdout.split()), validate=True)
+
     def read_file(self, sandbox: str, path: str, *, max_bytes: int) -> bytes:
         if type(max_bytes) is not int or not 0 <= max_bytes <= _FILE_LIMIT:
             raise ValueError(f"max_bytes must be between 0 and {_FILE_LIMIT}")
@@ -446,17 +455,7 @@ class SmolvmSandboxBackend:
         # Native GET buffers the full file on the server. Bound the read INSIDE the guest,
         # using exec's filesystem, including for procfs, FIFOs and concurrently growing files.
         script = f"test -f {path} || exit 66; head -c {max_bytes + 1} -- {path} | base64"
-        result = self.run_command(
-            sandbox,
-            "bash -o pipefail -c " + shlex.quote(script),
-            timeout=120,
-            max_output_bytes=(max_bytes + 1) * 2 + 4096,
-        )
-        if result.exit_code == 66:
-            raise FileNotFoundError("file is absent or not a regular file")
-        if result.exit_code or result.stdout_truncated or result.stderr_truncated:
-            raise SmolvmError("SmolVM file read failed or was truncated")
-        raw = base64.b64decode("".join(result.stdout.split()), validate=True)
+        raw = self._b64_script(sandbox, script, max_output_bytes=(max_bytes + 1) * 2 + 4096, what="file read")
         if len(raw) > max_bytes:
             raise SmolvmError("SmolVM file exceeds max_bytes")
         return raw
@@ -465,9 +464,7 @@ class SmolvmSandboxBackend:
         path = self._path(path)
         if not isinstance(content, bytes) or len(content) > _FILE_LIMIT:
             raise ValueError(f"file content must be bytes, at most {_FILE_LIMIT} bytes")
-        record = self._ready(sandbox)
-        record["inflight"] = True
-        self._save(sandbox, record)
+        self._begin(sandbox)
         try:
             status, _ = self._json(
                 "PUT", f"/machines/{sandbox}/files/{quote(path.lstrip('/'), safe='/')}", content, timeout=120
@@ -482,10 +479,6 @@ class SmolvmSandboxBackend:
     def list_directory(self, sandbox: str, path: str) -> list[tuple[str, bool]]:
         path = shlex.quote(self._path(path))
         script = f"find {path} -mindepth 1 -maxdepth 1 -printf '%f\\0%y\\0' | base64"
-        result = self.run_command(
-            sandbox, "bash -o pipefail -c " + shlex.quote(script), timeout=120, max_output_bytes=_CONTROL_LIMIT
-        )
-        if result.exit_code or result.stdout_truncated or result.stderr_truncated:
-            raise SmolvmError("SmolVM directory listing failed or was truncated")
-        fields = base64.b64decode("".join(result.stdout.split()), validate=True).decode().split("\0")
+        raw = self._b64_script(sandbox, script, max_output_bytes=_CONTROL_LIMIT, what="directory listing")
+        fields = raw.decode().split("\0")
         return [(fields[i], fields[i + 1] == "d") for i in range(0, len(fields) - 1, 2)]

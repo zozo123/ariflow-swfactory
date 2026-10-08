@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,7 +32,6 @@ from swfactory.cells import (
 from swfactory.idempotency import MutationOutcome, OperationJournal, OperationRef, RetryBudget
 from swfactory.liquid_security_runtime import Capability, SecurityContext
 from swfactory.liquid_security_runtime import authorize as authorize_capability
-from swfactory.liquid_workgraph_runtime import WorkNode, WorkPlan, compile_workgraph
 from swfactory.security_contract import CanonicalPolicy, MutationEnvelope, redact
 from swfactory.trust_evidence import TrustedEvidence, validate_mutation_policy
 
@@ -199,10 +198,6 @@ class CoreCapabilityRuntime:
         )
         self._airflow_evidence_once(cell=cell, binding=binding, operation_key_value=key)
         return cell
-
-    def compile_work(self, nodes: Iterable[WorkNode], *, max_width: int = 7) -> WorkPlan:
-        """Compile bounded issue-local work. The returned graph is not a lifecycle scheduler."""
-        return compile_workgraph(nodes, max_width=max_width)
 
     def execute_external(
         self,

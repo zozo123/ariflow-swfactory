@@ -294,3 +294,10 @@ def test_resume_backend_is_a_no_op_without_a_backend(monkeypatch: pytest.MonkeyP
 def test_resume_backend_reports_an_unreachable_backend(no_backend: str) -> None:
     with pytest.raises(CellCallbackError, match="unavailable"):
         cell_callback.resume_backend()
+
+
+def test_a_token_the_backend_would_refuse_is_never_sent(backend: Backend, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SWF_BACKEND_TOKEN", "b" * 31 + " ")
+    with pytest.raises(CellCallbackError, match="require SWF_BACKEND_URL and SWF_BACKEND_TOKEN"):
+        cell_callback.resume_backend()
+    assert backend.posts == []

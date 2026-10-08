@@ -255,9 +255,6 @@ class RunState:
     def has_artifact(self, relative: str) -> bool:
         return self._path(relative, artifacts=True).is_file()
 
-    def mirror_artifact(self, sandbox: Sandbox, relative: str) -> None:
-        sandbox.write(relative, self.read_artifact(relative))
-
     def mirror_all(self, sandbox: Sandbox) -> None:
         if not self.artifacts.is_dir():
             return

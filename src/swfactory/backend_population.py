@@ -8,12 +8,10 @@ backend performs lease projection, provider execution, artifact retention, journ
 from __future__ import annotations
 
 import hashlib
-import json
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from swfactory.backend_http import ResponseTooLarge, no_redirect_open, post_json, valid_backend_token
 from swfactory.models import StageError
 from swfactory.population_adapter import PopulationInvocation
 from swfactory.population_execution import PopulationExecutionAbort
@@ -26,11 +24,6 @@ from swfactory.provider_binding import BoundPopulationTask
 from swfactory.webhook import _safe_backend_base
 
 MAX_BACKEND_POPULATION_RESPONSE = 2 * 1024 * 1024
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, _req, _fp, _code, _msg, _headers, _newurl):
-        return None
 
 
 @dataclass(frozen=True)
@@ -55,13 +48,12 @@ class BackendPopulationRunner:
         provider_binding_digest: str,
         inputs: dict[str, PopulationTaskInput],
         timeout_s: float = 180.0,
-        opener=None,
     ) -> None:
         try:
             self.backend_url = _safe_backend_base(backend_url)
         except ValueError as error:
             raise StageError("policy", f"managed population backend URL is invalid: {error}") from error
-        if len(backend_token) < 32 or any(char.isspace() for char in backend_token):
+        if not valid_backend_token(backend_token):
             raise StageError("policy", "managed population execution requires a valid SWF_BACKEND_TOKEN")
         if epoch < 1 or not cell_id.strip():
             raise StageError("policy", "managed population execution requires a valid Cell epoch")
@@ -75,10 +67,10 @@ class BackendPopulationRunner:
         self.provider_binding_digest = provider_binding_digest
         self.inputs = dict(inputs)
         self.timeout_s = timeout_s
-        self._open = opener or urllib.request.build_opener(_NoRedirect()).open
         self._candidate_artifacts: dict[str, tuple[str, str]] = {}
 
-    def __call__(self, task: BoundPopulationTask) -> BehaviorReceipt:
+    def _invocation_and_key(self, task: BoundPopulationTask) -> tuple[PopulationInvocation, str]:
+        """The exact invocation for ``task`` and the operation key a fresh process re-derives from it."""
         try:
             task_input = self.inputs[task.task_id]
         except KeyError as error:
@@ -98,6 +90,10 @@ class BackendPopulationRunner:
             "population_model_call:"
             + hashlib.sha256((task.task_id + "\0" + invocation.digest()).encode()).hexdigest()[:24]
         )
+        return invocation, operation_key
+
+    def __call__(self, task: BoundPopulationTask) -> BehaviorReceipt:
+        invocation, operation_key = self._invocation_and_key(task)
         body = {
             "cell_id": self.cell_id,
             "epoch": self.epoch,
@@ -106,9 +102,9 @@ class BackendPopulationRunner:
             "population_manifest_digest": self.population_manifest_digest,
             "provider_binding_digest": self.provider_binding_digest,
             "task": task.canonical_dict() | {"binding_digest": task.binding_digest},
-            "instruction": task_input.instruction,
-            "context_artifact_digests": list(task_input.context_artifact_digests),
-            "objective_digest": task_input.objective_digest,
+            "instruction": invocation.instruction,
+            "context_artifact_digests": list(invocation.context_artifact_digests),
+            "objective_digest": invocation.objective_digest,
         }
         response = self._post("/population/execute", body)
         if response.get("invocation_digest") != invocation.digest():
@@ -161,25 +157,7 @@ class BackendPopulationRunner:
         else:
             if artifact_digest is None:
                 raise PopulationExecutionAbort(f"population task {task.task_id} has no retained candidate artifact")
-            try:
-                task_input = self.inputs[task.task_id]
-            except KeyError as error:
-                raise PopulationExecutionAbort(
-                    f"population task {task.task_id} has no immutable invocation input"
-                ) from error
-            invocation = PopulationInvocation(
-                task=task,
-                population_manifest_digest=self.population_manifest_digest,
-                provider_binding_digest=self.provider_binding_digest,
-                instruction=task_input.instruction,
-                context_artifact_digests=task_input.context_artifact_digests,
-                objective_digest=task_input.objective_digest,
-            )
-            invocation.validate()
-            operation_key = (
-                "population_model_call:"
-                + hashlib.sha256((task.task_id + "\0" + invocation.digest()).encode()).hexdigest()[:24]
-            )
+            _, operation_key = self._invocation_and_key(task)
 
         value = self._post(
             "/population/artifact",
@@ -200,41 +178,30 @@ class BackendPopulationRunner:
         return excerpt
 
     def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
-        request = urllib.request.Request(
-            self.backend_url + "/v1" + path,
-            data=payload,
-            method="POST",
-            headers={
-                "Authorization": "Bearer " + self.backend_token,
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-        )
         try:
-            response = self._open(request, timeout=self.timeout_s)
-        except urllib.error.HTTPError as error:
-            response = error
+            status, value = post_json(
+                self.backend_url,
+                self.backend_token,
+                "/v1" + path,
+                body,
+                timeout=self.timeout_s,
+                limit=MAX_BACKEND_POPULATION_RESPONSE,
+                opener=no_redirect_open,
+            )
+        except ResponseTooLarge:
+            raise PopulationExecutionAbort("factory backend population response exceeds limit") from None
+        except ValueError as error:
+            raise PopulationExecutionAbort("factory backend population route returned invalid JSON") from error
         except OSError as error:
             raise PopulationExecutionAbort(
                 f"factory backend unavailable during population execution: {error}",
                 retryable=True,
             ) from error
-        with response:
-            status = int(response.code)
-            raw = response.read(MAX_BACKEND_POPULATION_RESPONSE + 1)
-        if len(raw) > MAX_BACKEND_POPULATION_RESPONSE:
-            raise PopulationExecutionAbort("factory backend population response exceeds limit")
-        try:
-            value = json.loads(raw) if raw else {}
-        except ValueError as error:
-            raise PopulationExecutionAbort("factory backend population route returned invalid JSON") from error
-        if not isinstance(value, dict):
-            raise PopulationExecutionAbort("factory backend population route returned a non-object")
         if status >= 300:
-            detail = str(value.get("detail") or f"HTTP {status}")[:500]
             raise PopulationExecutionAbort(
-                f"factory backend population operation refused: {detail}",
+                f"factory backend population operation refused: {value[:500]}",
                 retryable=status >= 500,
             )
+        if not isinstance(value, dict):
+            raise PopulationExecutionAbort("factory backend population route returned a non-object")
         return value

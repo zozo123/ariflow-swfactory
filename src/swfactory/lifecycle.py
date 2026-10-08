@@ -17,6 +17,7 @@ from pydantic import Field, model_validator
 
 from swfactory.models import AgentRole, BoundaryModel, Plan, PlanTask
 from swfactory.paths import validate_identifier
+from swfactory.workgraph import waves
 
 Execution = Literal["external", "airflow_stage", "inside_stage"]
 
@@ -43,58 +44,16 @@ class ManagedGraph(BoundaryModel):
     @model_validator(mode="after")
     def _valid_dag(self) -> ManagedGraph:
         validate_identifier(self.issue_id, field="issue_id")
-        ids = [node.id for node in self.nodes]
-        if len(ids) != len(set(ids)):
-            raise ValueError("managed graph node ids must be unique")
-        known = set(ids)
-        by_id = {node.id: node for node in self.nodes}
-        for node in self.nodes:
-            unknown = sorted(set(node.depends_on) - known)
-            if unknown:
-                raise ValueError(f"managed node {node.id!r} has unknown dependencies {unknown}")
-            if node.id in node.depends_on:
-                raise ValueError(f"managed node {node.id!r} cannot depend on itself")
-
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def visit(node_id: str) -> None:
-            if node_id in visited:
-                return
-            if node_id in visiting:
-                raise ValueError(f"managed graph contains a cycle at {node_id!r}")
-            visiting.add(node_id)
-            for parent in by_id[node_id].depends_on:
-                visit(parent)
-            visiting.remove(node_id)
-            visited.add(node_id)
-
-        for node_id in ids:
-            visit(node_id)
+        waves(self.nodes)
         return self
-
-    def layers(self) -> list[list[ManagedNode]]:
-        remaining = {node.id: node for node in self.nodes}
-        done: set[str] = set()
-        layers: list[list[ManagedNode]] = []
-        while remaining:
-            layer = [node for node in self.nodes if node.id in remaining and set(node.depends_on) <= done]
-            if not layer:
-                raise ValueError("managed graph is cyclic")
-            layers.append(layer)
-            done.update(node.id for node in layer)
-            for node in layer:
-                remaining.pop(node.id, None)
-        return layers
 
     def fork_candidates(self) -> list[list[str]]:
         """Parallel-safe inside-stage nodes in the same wave; runtime support is not implied."""
-        groups: list[list[str]] = []
-        for layer in self.layers():
-            candidates = [node.id for node in layer if node.execution == "inside_stage" and node.parallel_safe]
-            if len(candidates) > 1:
-                groups.append(candidates)
-        return groups
+        groups = [
+            [node.id for node in wave.nodes if node.execution == "inside_stage" and node.parallel_safe]
+            for wave in waves(self.nodes)
+        ]
+        return [group for group in groups if len(group) > 1]
 
     def to_mermaid(self) -> str:
         lines = ["flowchart LR"]

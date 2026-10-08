@@ -10,9 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -29,6 +28,7 @@ from swfactory.population_manifest import (
     summarize_population,
 )
 from swfactory.provider_binding import BoundPopulationTask, ProviderBindingManifest
+from swfactory.work_executor import Cancellation as PopulationCancellation
 
 POPULATION_EXECUTION_SCHEMA_VERSION = 1
 POPULATION_EXECUTION_AUTHORITY = "search-only"
@@ -55,18 +55,6 @@ class PopulationExecutionAbort(StageError):
 
     def __init__(self, message: str, *, retryable: bool = False) -> None:
         super().__init__("agent", message, retryable=retryable)
-
-
-class PopulationCancellation:
-    def __init__(self) -> None:
-        self._event = threading.Event()
-
-    def cancel(self) -> None:
-        self._event.set()
-
-    @property
-    def cancelled(self) -> bool:
-        return self._event.is_set()
 
 
 class PopulationRunner(Protocol):
@@ -356,29 +344,3 @@ class PopulationExecutor:
             cost_usd=receipt.cost_usd,
             duration_s=receipt.duration_s,
         )
-
-
-def execute_population(
-    manifest: PopulationManifest,
-    binding: ProviderBindingManifest,
-    runner: Callable[[BoundPopulationTask], BehaviorReceipt],
-    *,
-    max_parallel: int = 8,
-    require_complete: bool = True,
-    require_distinct_independent_verifiers: bool = True,
-    cancellation: PopulationCancellation | None = None,
-) -> PopulationExecutionReport:
-    """Convenience entry point for one already-scheduled Airflow task."""
-
-    return PopulationExecutor(
-        runner,
-        PopulationExecutionPolicy(
-            max_parallel=max_parallel,
-            require_complete=require_complete,
-            require_distinct_independent_verifiers=require_distinct_independent_verifiers,
-        ),
-    ).execute(
-        manifest=manifest,
-        binding=binding,
-        cancellation=cancellation,
-    )

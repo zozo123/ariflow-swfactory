@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 import threading
 import time
 import uuid
@@ -26,7 +25,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from swfactory.cells import is_cell_id
-from swfactory.store_schema import ensure_named_schema, guard_before_ddl
+from swfactory.store_schema import connect_write, ensure_named_schema, guard_before_ddl
 
 OutcomeStatus = Literal["committed", "definitely_absent", "ambiguous", "divergent", "refused"]
 OperationState = Literal["intent", "in_doubt", "reconciling", "committed", "exhausted", "refused"]
@@ -114,13 +113,9 @@ class OperationJournal:
     """
 
     def __init__(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=FULL")
+        self.db = connect_write(path)
         self._migrate()
 
     def close(self) -> None:

@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
-import urllib.error
-import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal
 
+from swfactory.backend_http import ResponseTooLarge, post_json, valid_backend_token
 from swfactory.models import Issue, StageError
 from swfactory.publication_identity import PublicationIdentity
 from swfactory.scm import parse_issue_file
@@ -49,7 +47,7 @@ class BackendScm:
         self.source_blueprint_digest = source_blueprint_digest
         if not self.backend_url:
             raise StageError("policy", "managed GitHub SCM requires SWF_BACKEND_URL")
-        if len(self.backend_token) < 32 or any(c.isspace() for c in self.backend_token):
+        if not valid_backend_token(self.backend_token):
             raise StageError("policy", "managed GitHub SCM requires a valid SWF_BACKEND_TOKEN")
         if not policy_digest.startswith("policy:"):
             raise StageError("policy", "managed GitHub SCM requires a Factory Cell policy digest")
@@ -151,41 +149,20 @@ class BackendScm:
         }
 
     def _post(self, path: str, body: dict[str, Any], *, timeout: int = 30) -> Any:
-        payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
-        request = urllib.request.Request(
-            self.backend_url + "/v1" + path,
-            data=payload,
-            method="POST",
-            headers={
-                "Authorization": "Bearer " + self.backend_token,
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-        )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                raw = response.read(20 * 1024 * 1024 + 1)
-                status = response.status
-        except urllib.error.HTTPError as error:
-            raw = error.read(8192)
-            status = error.code
+            status, value = post_json(
+                self.backend_url, self.backend_token, "/v1" + path, body, timeout=timeout, limit=20 * 1024 * 1024
+            )
+        except ResponseTooLarge:
+            raise StageError("scm", "factory backend SCM response exceeds limit") from None
+        except ValueError as error:
+            raise StageError("scm", "factory backend SCM returned invalid JSON") from error
         except OSError as error:
             raise StageError(
                 "scm",
                 f"factory backend unavailable during managed SCM operation: {error}",
                 retryable=True,
             ) from error
-        if len(raw) > 20 * 1024 * 1024:
-            raise StageError("scm", "factory backend SCM response exceeds limit")
-        try:
-            value = json.loads(raw) if raw else {}
-        except ValueError as error:
-            raise StageError("scm", "factory backend SCM returned invalid JSON") from error
         if status >= 300:
-            detail = value.get("detail", f"HTTP {status}") if isinstance(value, dict) else f"HTTP {status}"
-            raise StageError(
-                "scm",
-                f"factory backend SCM refused operation: {detail}",
-                retryable=status >= 500,
-            )
+            raise StageError("scm", f"factory backend SCM refused operation: {value}", retryable=status >= 500)
         return value

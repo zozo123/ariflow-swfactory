@@ -33,7 +33,7 @@ import shlex
 import shutil
 import time
 import xml.etree.ElementTree as ET
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +47,7 @@ from swfactory import accepted_inputs
 from swfactory import metrics as metrics_mod
 from swfactory.agent import POLICIES, Agent, Policy, render_prompt
 from swfactory.approval_policy import GateMode, check_recorded, replay_approval
+from swfactory.blueprint import CANONICAL_ORDER, Blueprint, ReviewSpec
 from swfactory.call_accounting import CallLedger
 from swfactory.config import (
     FACTORY_ROOT,
@@ -74,11 +75,11 @@ from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
 from swfactory.state import JournalCorruption, RunBusyError, RunState
 
 if TYPE_CHECKING:
-    from swfactory.blueprint import Blueprint
+    from swfactory.harness_efficiency import PackedReviewDiff
 
-CANONICAL_ORDER: tuple[str, ...] = ("intent", "spec", "plan", "build_and_test", "review", "deliver")
-NIT_CAP = 3  # REVIEW.md: at most 3 nits per review (blueprint.review.nit_cap overrides)
-DEFAULT_LABELS: tuple[str, ...] = ("factory", "agent-authored")  # blueprint.labels overrides
+# The ``blueprint=None`` defaults are the blueprint schema's own; a blueprint overrides each.
+NIT_CAP = ReviewSpec().nit_cap  # REVIEW.md: at most 3 nits per review
+DEFAULT_LABELS: tuple[str, ...] = tuple(Blueprint.model_fields["labels"].get_default(call_default_factory=True))
 _GIT_BOT = f"git -c user.name={shlex.quote(BOT_NAME)} -c user.email={shlex.quote(BOT_EMAIL)}"
 PREVIEW_CHARS = 4000  # StageResult.preview: head of the gate artifact shown to the approver
 # crabbox providers that run in place: no file download step exists (or is needed) for junit.
@@ -88,7 +89,6 @@ STARTED_FILE = ".factory/started"
 STAGES_LOG = ".factory/stages.jsonl"  # sandbox COPY of the stage log (audit trail, never trusted)
 RUN_STAGES_LOG = "stages.jsonl"  # authoritative log: <run_dir>/state/stages.jsonl (orchestrator)
 HOOKS_LOG = ".factory/hooks.jsonl"  # swf_guard.py decisions, appended by the hook in the sandbox
-SEVERITIES: tuple[str, ...] = ("blocker", "major", "minor", "nit")
 # `git add -A` that skips special files: the Anthropic Sandbox Runtime on Linux binds /dev/null
 # style stubs over shell/git rc names in the cwd, which git refuses to stage.
 GIT_ADD_ALL = (
@@ -184,10 +184,6 @@ class Gate(NamedTuple):
     artifact: str
     mode: GateMode = "human"
 
-    @property
-    def auto(self) -> bool:
-        return self.mode == "auto"
-
 
 Stage = Callable[[Ctx], StageResult]
 Approver = Callable[[Gate, Ctx], Approval]
@@ -273,6 +269,15 @@ def _persisted(ctx: Ctx) -> list[StageResult]:
         raise StageError("policy", f"run journal is corrupt: {e}") from e
 
 
+def persisted_cost(ctx: Ctx) -> float:
+    """What the stage log says this run spent: the sum of every record's ``cost_usd``."""
+    return sum(record.cost_usd for record in _persisted(ctx))
+
+
+def _artifact_sha256(ctx: Ctx, path: str) -> str:
+    return hashlib.sha256(ctx.read_artifact(path).encode("utf-8")).hexdigest()
+
+
 def _done(ctx: Ctx, stage: str) -> StageResult | None:
     """The latest completed (non-skipped) record of ``stage`` in this run, if any."""
     recs = [r for r in _persisted(ctx) if r.stage == stage and r.status != "skipped"]
@@ -288,18 +293,26 @@ def _pipeline(ctx: Ctx) -> tuple[Stage | Gate, ...]:
     return ctx.blueprint.pipeline() if ctx.blueprint else PIPELINE
 
 
+@contextlib.contextmanager
+def owned(state: RunState, operation: str) -> Iterator[None]:
+    """Own ``operation`` on the run: a busy run is a retryable sandbox error, a corrupt journal a
+    policy error."""
+    try:
+        with state.exclusive(operation):
+            yield
+    except RunBusyError as error:
+        raise StageError("sandbox", str(error), retryable=True) from error
+    except JournalCorruption as error:
+        raise StageError("policy", str(error)) from error
+
+
 def _owned[OwnedResult](fn: Callable[..., OwnedResult]) -> Callable[..., OwnedResult]:
     """Acquire ownership before any stage check, budget read or sandbox mutation."""
 
     @functools.wraps(fn)
     def wrapper(ctx: Ctx, *args: Any, **kwargs: Any) -> OwnedResult:
-        try:
-            with ctx.state.exclusive(fn.__name__):
-                return fn(ctx, *args, **kwargs)
-        except RunBusyError as error:
-            raise StageError("sandbox", str(error), retryable=True) from error
-        except JournalCorruption as error:
-            raise StageError("policy", str(error)) from error
+        with owned(ctx.state, fn.__name__):
+            return fn(ctx, *args, **kwargs)
 
     return wrapper
 
@@ -333,6 +346,19 @@ def _timed(fn: Stage) -> Stage:
         return result
 
     return _owned(wrapper)
+
+
+def _resumable(fn: Stage) -> Stage:
+    """``_timed``, plus the idempotent re-run: a stage this run's host log already holds as
+    completed returns ``_skipped`` of that record instead of running again."""
+
+    @functools.wraps(fn)
+    def resume(ctx: Ctx) -> StageResult:
+        if prior := _done(ctx, fn.__name__):
+            return _skipped(prior)
+        return fn(ctx)
+
+    return _timed(resume)
 
 
 def _append_stage(ctx: Ctx, result: StageResult) -> None:
@@ -386,7 +412,7 @@ def _persisted_spend(ctx: Ctx) -> float:
         # was spent by calls the ledger never saw, so it is adopted once as the floor. If the ledger
         # already has call rows (a run that predates the floor row itself), the ledger governs and
         # the floor is zero: summing the stage log on top would double-count those very calls.
-        floor = ledger.adopt_floor(0.0 if ledger.records() else sum(r.cost_usd for r in _persisted(ctx)))
+        floor = ledger.adopt_floor(0.0 if ledger.records() else persisted_cost(ctx))
     return round(floor + ledger.charged_usd(), 6)
 
 
@@ -683,7 +709,7 @@ def _test_numbers(tr: TestResult) -> dict[str, float]:
     return {
         "tests_passed": float(tr.ok),
         "tests_failed": float(tr.failed + tr.errors),
-        "tests_count": float(tr.passed + tr.failed + tr.errors + tr.skipped),
+        "tests_count": float(tr.total),
     }
 
 
@@ -750,13 +776,6 @@ def setup(ctx: Ctx) -> StageResult:
     sb = ctx.sb
     # One definition of "the execution policy", shared with the epoch pin: two lists here and in
     # accepted_inputs would drift, and a knob present in only one of them is fenced by neither.
-    policy_sha256 = hashlib.sha256(
-        json.dumps(
-            accepted_inputs.policy_document(ctx.cfg, ctx.blueprint),
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
     identity = _dumps(
         {
             "schema": 3,  # bumped with the policy document: schema 2 hashed a narrower policy
@@ -766,7 +785,7 @@ def setup(ctx: Ctx) -> StageResult:
             "repo": ctx.cfg.repo,
             "target_dir": ctx.cfg.target_dir,
             "base_branch": ctx.cfg.base_branch,
-            "policy_sha256": policy_sha256,
+            "policy_sha256": accepted_inputs.policy_sha256(ctx.cfg, ctx.blueprint),
         }
     )
     if ctx.state.has_control("identity.json"):
@@ -823,12 +842,10 @@ def setup(ctx: Ctx) -> StageResult:
     return StageResult(stage="setup", duration_s=duration)
 
 
-@_timed
+@_resumable
 def intent(ctx: Ctx) -> StageResult:
     """No agent: the originator's words, verbatim, under a small front matter."""
     path = f"{ctx.art}/intent.md"
-    if prior := _done(ctx, "intent"):
-        return _skipped(prior)
     meta = {
         "id": ctx.issue.id,
         "title": ctx.issue.title,
@@ -851,12 +868,10 @@ def _document_only(text: str) -> str:
     return text.rstrip()
 
 
-@_timed
+@_resumable
 def spec(ctx: Ctx) -> StageResult:
     """Agent (read-only) turns intent.md into spec.md."""
     path = f"{ctx.art}/spec.md"
-    if prior := _done(ctx, "spec"):
-        return _skipped(prior)
     prompt = render_prompt("spec", issue_id=ctx.issue.id, intent=ctx.read_artifact(f"{ctx.art}/intent.md"))
     res = _agent(ctx, "spec", 1, prompt, None)
     if not res.text.strip():
@@ -865,12 +880,10 @@ def spec(ctx: Ctx) -> StageResult:
     return StageResult(stage="spec", artifacts=[path])
 
 
-@_timed
+@_resumable
 def plan(ctx: Ctx) -> StageResult:
     """Agent (read-only) produces a typed Plan -> plan.json + rendered plan.md."""
     json_path, md_path = f"{ctx.art}/plan.json", f"{ctx.art}/plan.md"
-    if prior := _done(ctx, "plan"):
-        return _skipped(prior)
     prompt = render_prompt(
         "plan",
         issue_id=ctx.issue.id,
@@ -948,7 +961,7 @@ def _plan_fidelity(ctx: Ctx, base: str) -> list[Finding]:
 def _review_policy(ctx: Ctx) -> str:
     if ctx.state.has_control("review-policy.md"):
         return ctx.state.read_control("review-policy.md")
-    policy = ctx.blueprint.review.policy if ctx.blueprint else "REVIEW.md"
+    policy = ctx.blueprint.review.policy if ctx.blueprint else ReviewSpec().policy
     text = _read_or(ctx, policy)
     if not text.strip():
         packaged = FACTORY_ROOT / policy
@@ -976,15 +989,52 @@ def _tests_blocker(ctx: Ctx, tr: TestResult, output: str) -> Finding:
     )
 
 
-@_timed
+def review_context(
+    ctx: Ctx, base: str, numbers: dict[str, float], *, fanout: int = 1, saved_key: str
+) -> tuple[str, PackedReviewDiff | None]:
+    """The diff one review round reads, packed when the harness can, and the packed diff itself.
+
+    Adds the round's byte counters to ``numbers``; ``saved_key`` names the saving, which is
+    ``saved_bytes_per_prompt x fanout`` (the per-prompt saving at the default fanout of 1).
+    """
+    diff = _sh(ctx, f"git diff {base}..HEAD -- . {_exclude(ctx)}")
+    from swfactory.harness_efficiency import pack_review_diff
+
+    packed = pack_review_diff(
+        ctx,
+        diff=diff,
+        base_sha=base,
+        head_sha=_assert_workspace_head(ctx, "review context"),
+        fanout=fanout,
+    )
+    if packed is None:
+        return diff, None
+    for key, attribute in (
+        ("review_context_source_bytes", "source_bytes"),
+        ("review_context_prompt_bytes", "prompt_bytes"),
+        (saved_key, "estimated_replayed_bytes_avoided"),
+    ):
+        numbers[key] = numbers.get(key, 0.0) + float(getattr(packed, attribute))
+    return packed.prompt_text, packed
+
+
+def fix_and_retest(ctx: Ctx, prompt: str, *, fixes: int, fallback: str, numbers: dict[str, float]) -> Finding | None:
+    """Review fix ``fixes``: agent call ``fix.<max_build_iterations + fixes>``, commit, re-run the
+    suite. Returns the ``_tests_blocker`` a red suite leaves, None when it is green."""
+    res = _agent(ctx, "fix", ctx.cfg.max_build_iterations + fixes, prompt, BuildSummary)
+    commit(ctx, stage="fix", msg=f"fix: {_summary_line(res, fallback)}")
+    tr, output = run_tests(ctx)
+    numbers.update(_test_numbers(tr))
+    return None if tr.ok else _tests_blocker(ctx, tr, output)
+
+
+@_resumable
 def review(ctx: Ctx) -> StageResult:
     """Agent review (Review schema) with the nit cap and plan fidelity enforced in code; blockers
     trigger at most ``max_review_fixes`` fix + test + re-review rounds. A fix that leaves the
     suite red is itself a blocker (``_tests_blocker``): the stage cannot end ``ok`` on red tests.
     Review fixes are agent calls ``fix.<max_build_iterations + k>`` (see module docstring)."""
     path = f"{ctx.art}/review.json"
-    if prior := _done(ctx, "review"):
-        return _skipped(prior)
     _assert_workspace_head(ctx, "review")
     base = ctx.state.read_control("base").strip()
     spec_text = _read_or(ctx, f"{ctx.art}/spec.md")  # "(none)" when the line has no spec stage
@@ -993,26 +1043,7 @@ def review(ctx: Ctx) -> StageResult:
     rv, dropped, fixes = Review(verdict="approve"), 0, 0
     tests_blocker: Finding | None = None
     for k in range(ctx.cfg.max_review_fixes + 1):
-        diff = _sh(ctx, f"git diff {base}..HEAD -- . {_exclude(ctx)}")
-        from swfactory.harness_efficiency import pack_review_diff
-
-        packed_diff = pack_review_diff(
-            ctx,
-            diff=diff,
-            base_sha=base,
-            head_sha=_assert_workspace_head(ctx, "review context"),
-        )
-        review_diff = packed_diff.prompt_text if packed_diff is not None else diff
-        if packed_diff is not None:
-            numbers["review_context_source_bytes"] = numbers.get("review_context_source_bytes", 0.0) + float(
-                packed_diff.source_bytes
-            )
-            numbers["review_context_prompt_bytes"] = numbers.get("review_context_prompt_bytes", 0.0) + float(
-                packed_diff.prompt_bytes
-            )
-            numbers["review_context_saved_bytes"] = numbers.get("review_context_saved_bytes", 0.0) + float(
-                packed_diff.saved_bytes_per_prompt
-            )
+        review_diff, _packed = review_context(ctx, base, numbers, saved_key="review_context_saved_bytes")
         prompt = render_prompt(
             "review",
             issue_id=ctx.issue.id,
@@ -1036,12 +1067,9 @@ def review(ctx: Ctx) -> StageResult:
             failures="Review blockers:\n" + _format_findings(rv.blockers),
             protected=_protected(ctx, "fix"),
         )
-        iteration = ctx.cfg.max_build_iterations + fixes
-        fix_res = _agent(ctx, "fix", iteration, fix_prompt, BuildSummary)
-        commit(ctx, stage="fix", msg=f"fix: {_summary_line(fix_res, 'address review blockers')}")
-        tr, output = run_tests(ctx)
-        numbers.update(_test_numbers(tr))
-        tests_blocker = None if tr.ok else _tests_blocker(ctx, tr, output)
+        tests_blocker = fix_and_retest(
+            ctx, fix_prompt, fixes=fixes, fallback="address review blockers", numbers=numbers
+        )
     record = {
         "verdict": "request_changes" if rv.blockers else "approve",  # REVIEW.md contract
         "findings": [f.model_dump() for f in rv.findings],
@@ -1049,7 +1077,7 @@ def review(ctx: Ctx) -> StageResult:
         "fixes": fixes,
     }
     ctx.write_artifact(path, _dumps(record))
-    counts = {s: sum(1 for f in rv.findings if f.severity == s) for s in SEVERITIES}
+    counts = metrics_mod.severity_counts(rv.findings)
     numbers.update(
         {
             "blockers": float(counts["blocker"]),
@@ -1119,7 +1147,7 @@ def record_approval(ctx: Ctx, approval: Approval) -> None:
     """
     path = f"{ctx.art}/approvals.json"
     artifact = _gate_artifact(ctx, approval.gate)
-    digest = hashlib.sha256(ctx.read_artifact(artifact).encode("utf-8")).hexdigest()
+    digest = _artifact_sha256(ctx, artifact)
     cell_id, cell_epoch, _managed = cell_evidence(ctx)
     # `require`, not `digest_of`: an unpinned run returns None, and `None == None` used to
     # validate a whole approval set with null digests. Publication must fail closed.
@@ -1215,7 +1243,7 @@ def pr_body(
     url = f" ({ctx.issue.url})" if ctx.issue.url else ""
     parts.append(f"## Intent\n{ctx.issue.title}{url}")
     lines = [f"## Review — {len(findings)} finding(s)"]
-    for sev in SEVERITIES:
+    for sev in metrics_mod.SEVERITIES:
         group = [f for f in findings if f.severity == sev]
         if not group:
             continue
@@ -1300,10 +1328,9 @@ def _validate_approvals(ctx: Ctx, approvals: list[Approval]) -> tuple[bool, str 
         processed.add(gate.name)
         artifact = f"{ctx.art}/{gate.artifact}"
         try:
-            content = ctx.read_artifact(artifact)
+            expected = _artifact_sha256(ctx, artifact)
         except FileNotFoundError as e:
             raise StageError("policy", f"approved artifact is missing: {artifact}") from e
-        expected = hashlib.sha256(content.encode("utf-8")).hexdigest()
         if approval.artifact_sha256 != expected:
             raise StageError("policy", f"approval for {gate.name} does not match its artifact")
         # Continuation is the third enforcement point: the recorded chain is re-checked against the
@@ -1377,7 +1404,7 @@ def deliver(ctx: Ctx) -> StageResult:
         ctx,
         stages,
         approvals,
-        total_cost_usd=sum(record.cost_usd for record in _persisted(ctx)),
+        total_cost_usd=persisted_cost(ctx),
     )
     _copy_audit_logs(ctx)
     cleared = ctx.sb.run(f"rm -rf -- {shlex.quote(ctx.art)}")
@@ -1412,18 +1439,17 @@ def deliver(ctx: Ctx) -> StageResult:
 
         if not isinstance(ctx.scm, BackendScm) or blocked:
             raise StageError("policy", "autonomous publication requires passing managed evidence")
-        test_results = [stage.numbers["tests_passed"] for stage in stages if "tests_passed" in stage.numbers]
         ctx.scm.autonomous_evidence = {
             "revision": load_policy().revision,
             "agent": ctx.agent.kind,
-            "tests_passed": bool(test_results) and test_results[-1] == 1.0,
+            "tests_passed": metrics_mod.tests_passed(stages),
             "review_verdict": rv.verdict,
             "blockers": blockers,
-            "cost_usd": sum(record.cost_usd for record in _persisted(ctx)),
+            "cost_usd": persisted_cost(ctx),
             "budget_usd": ctx.cfg.max_budget_usd,
             "approvals": [approval.model_dump(mode="json") for approval in approvals],
             "artifact_digests": {
-                name: hashlib.sha256(ctx.read_artifact(f"{ctx.art}/{name}").encode()).hexdigest()
+                name: _artifact_sha256(ctx, f"{ctx.art}/{name}")
                 for name in ("intent.md", "plan.md", "plan.json", "review.json", "metrics.json", "approvals.json")
             },
         }
@@ -1524,7 +1550,6 @@ def build_report(ctx: Ctx, approvals: list[Approval]) -> RunReport:
     """Summarise ``ctx.stages`` into a RunReport."""
     stages = ctx.stages
     pr_url = next((s.artifacts[0] for s in stages if s.stage == "deliver" and s.artifacts), None)
-    tests = [s.numbers["tests_passed"] for s in stages if "tests_passed" in s.numbers]
     return RunReport(
         run_id=ctx.cfg.run_id,
         issue_id=ctx.issue.id,
@@ -1535,8 +1560,8 @@ def build_report(ctx: Ctx, approvals: list[Approval]) -> RunReport:
         stages=list(stages),
         approvals=approvals,
         pr_url=pr_url,
-        tests_passed=bool(tests) and tests[-1] == 1.0,
-        total_cost_usd=round(sum(s.cost_usd for s in _persisted(ctx)), 6),
+        tests_passed=metrics_mod.tests_passed(stages),
+        total_cost_usd=round(persisted_cost(ctx), 6),
     )
 
 

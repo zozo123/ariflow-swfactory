@@ -27,8 +27,9 @@ from swfactory.sandbox import _literal_prefix
 ROOT = Path(__file__).resolve().parents[1]
 
 # Editing any of these from inside a work cell is how a self-hosted run would widen its own cage:
-# they define the tool policy, the sandbox confinement, and the stage that applies the protected
-# list. They must be refused for both writing stages, not just for ``fix``.
+# they define the tool policy, the sandbox confinement, the stage that applies the protected list,
+# and the transport that carries the backend token. They must be refused for both writing stages,
+# not just for ``fix``.
 CONFINEMENT = (
     "src/swfactory/agent.py",
     "src/swfactory/sandbox.py",
@@ -38,6 +39,7 @@ CONFINEMENT = (
     "src/swfactory/security_boundary.py",
     "src/swfactory/security_contract.py",
     "src/swfactory/worker_security.py",
+    "src/swfactory/backend_http.py",
 )
 
 # What governs every later run rather than this one: a cell that edits these changes the rules the

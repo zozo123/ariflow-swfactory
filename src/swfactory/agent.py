@@ -41,24 +41,20 @@ GUARD_DENY = (
 # Edit/Write/MultiEdit/NotebookEdit; the Write(...) twins are belt-and-braces. ``docs/factory/**``
 # (the artifact chain) and ``.factory/**`` (stage scratch, hook log) are the orchestrator's:
 # the agent must not be able to forge review.json / approvals.json / plan.json or its own audit.
+_GUARDED = (
+    "REVIEW.md",
+    "bands.yaml",
+    "factory.toml",
+    ".git/**",
+    ".claude/**",
+    ".github/**",
+    "docs/factory/**",
+    ".factory/**",
+)
 GUARD_PATH_DENY = (
-    "Edit(REVIEW.md)",
-    "Edit(bands.yaml)",
-    "Edit(factory.toml)",
-    "Edit(.git/**)",
-    "Edit(.claude/**)",
-    "Edit(.github/**)",
-    "Edit(docs/factory/**)",
-    "Edit(.factory/**)",
+    *(f"Edit({p})" for p in _GUARDED),
     "Read(.claude/hooks/**)",
-    "Write(REVIEW.md)",
-    "Write(bands.yaml)",
-    "Write(factory.toml)",
-    "Write(.git/**)",
-    "Write(.claude/**)",
-    "Write(.github/**)",
-    "Write(docs/factory/**)",
-    "Write(.factory/**)",
+    *(f"Write({p})" for p in _GUARDED),
 )
 GUARD_MATCHER = "Edit|Write|MultiEdit|NotebookEdit|Bash"
 _FIXTURE_EXTS = ("patch", "json", "md")
@@ -144,15 +140,18 @@ def render_prompt(stage: str, **vars: Any) -> str:
 # ---------------------------------------------------------------- guard
 
 
+def _twins(g: str) -> list[str]:
+    """``Edit(g)``, ``Edit(g/**)`` and their ``Write`` twins."""
+    return [f"{tool}({path})" for tool in ("Edit", "Write") for path in (g, f"{g}/**")]
+
+
 def guard_deny_rules(protected: Sequence[str]) -> list[str]:
-    """``permissions.deny`` for a write stage: Bash/Read rules, fixed path rules, and per
-    protected glob ``g`` (trailing slash dropped) ``Edit(g)``, ``Edit(g/**)`` + Write twins."""
+    """``permissions.deny`` for a write stage: Bash/Read rules, fixed path rules, and the
+    ``_twins`` of every protected glob (trailing slash dropped)."""
     rules = [*GUARD_DENY, *GUARD_PATH_DENY]
     for entry in protected:
-        g = entry.strip().rstrip("/")
-        if not g:
-            continue
-        rules += [f"Edit({g})", f"Edit({g}/**)", f"Write({g})", f"Write({g}/**)"]
+        if g := entry.strip().rstrip("/"):
+            rules += _twins(g)
     return list(dict.fromkeys(rules))
 
 
@@ -239,11 +238,8 @@ class ClaudeAgent:
         protected: Sequence[str] = (),
     ) -> AgentResult:
         """Write the prompt, guard the checkout if needed, run claude, parse the envelope."""
-        art = Config.artifacts_dir(issue_id)
-        prompt_path = f".factory/prompt.{stage}.{iteration}.md"
+        prompt_path = _stage_io(sb, issue_id, stage, iteration, prompt)
         out_path = f".factory/agent.{stage}.{iteration}.json"
-        sb.run(f"mkdir -p .factory {shlex.quote(art + '/agent')}")
-        sb.write(prompt_path, prompt)
         if policy.writes:
             install_guard(sb, protected)
         cmd = self.argv(prompt_path=prompt_path, out_path=out_path, policy=policy, schema=schema, cfg=cfg)
@@ -261,8 +257,7 @@ class ClaudeAgent:
                 retryable=True,
             ) from e
         result, envelope = _parse_envelope(raw, schema, stderr=res.stderr)
-        envelope["stage"], envelope["iteration"] = stage, iteration
-        sb.write(f"{art}/agent/{stage}.{iteration}.json", _dumps(envelope))
+        _write_envelope(sb, issue_id, stage, iteration, envelope)
         if cfg.record_dir:
             _record(sb, Path(cfg.record_dir), stage, iteration, result, policy, cfg.run_id)
         return result
@@ -363,6 +358,20 @@ def _dumps(obj: Any) -> str:
     return json.dumps(obj, indent=2, sort_keys=True) + "\n"
 
 
+def _stage_io(sb: Sandbox, issue_id: str, stage: str, iteration: int, prompt: str) -> str:
+    """Create factory scratch and the artifact ``agent/`` dir, write the prompt, return its path."""
+    prompt_path = f".factory/prompt.{stage}.{iteration}.md"
+    sb.run(f"mkdir -p .factory {shlex.quote(Config.artifacts_dir(issue_id) + '/agent')}")
+    sb.write(prompt_path, prompt)
+    return prompt_path
+
+
+def _write_envelope(sb: Sandbox, issue_id: str, stage: str, iteration: int, envelope: dict) -> None:
+    """The raw result envelope, stamped with its stage, at ``<artifacts_dir>/agent/<stage>.<iteration>.json``."""
+    stamped = {**envelope, "stage": stage, "iteration": iteration}
+    sb.write(f"{Config.artifacts_dir(issue_id)}/agent/{stage}.{iteration}.json", _dumps(stamped))
+
+
 # ---------------------------------------------------------------- scripted
 
 
@@ -409,9 +418,7 @@ class ScriptedAgent:
         """Replay the fixture for (stage, iteration); cost and turns are always zero."""
         path = self.fixture(stage, iteration)
         text = path.read_text(encoding="utf-8")
-        art = Config.artifacts_dir(issue_id)
-        sb.run(f"mkdir -p .factory {shlex.quote(art + '/agent')}")
-        sb.write(f".factory/prompt.{stage}.{iteration}.md", prompt)
+        _stage_io(sb, issue_id, stage, iteration, prompt)
         if path.suffix == ".patch":
             result = self._apply_patch(sb, text, name=path.name, policy=policy, schema=schema)
         elif path.suffix == ".json":
@@ -421,13 +428,11 @@ class ScriptedAgent:
         envelope = {
             "agent": "scripted",
             "fixture": str(path),
-            "stage": stage,
-            "iteration": iteration,
             "is_error": result.is_error,
             "subtype": result.subtype,
             "structured_output": result.data,
         }
-        sb.write(f"{art}/agent/{stage}.{iteration}.json", _dumps(envelope))
+        _write_envelope(sb, issue_id, stage, iteration, envelope)
         return result
 
     @staticmethod

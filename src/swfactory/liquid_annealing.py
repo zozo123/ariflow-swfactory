@@ -16,7 +16,8 @@ import math
 from dataclasses import asdict, dataclass
 
 from swfactory import stages
-from swfactory.models import BuildSummary, Finding, Review, StageResult
+from swfactory.metrics import severity_counts
+from swfactory.models import Finding, Review, StageResult
 from swfactory.phase_control import ControlMode, Phase
 
 LANES: tuple[str, ...] = ("correctness", "verification", "risk")
@@ -253,9 +254,6 @@ def _initial_tests_green(ctx: stages.Ctx) -> bool:
 def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
     review_path = f"{ctx.art}/review.json"
     annealing_path = f"{ctx.art}/annealing.json"
-    if prior := stages._done(ctx, "review"):
-        return stages._skipped(prior)
-
     stages._assert_workspace_head(ctx, "review")
     base = ctx.state.read_control("base").strip()
     spec = stages._read_or(ctx, f"{ctx.art}/spec.md")
@@ -283,27 +281,9 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
     )
 
     for round_index in range(ctx.cfg.max_review_fixes + 1):
-        diff = stages._sh(ctx, f"git diff {base}..HEAD -- . {stages._exclude(ctx)}")
-        from swfactory.harness_efficiency import pack_review_diff
-
-        packed_diff = pack_review_diff(
-            ctx,
-            diff=diff,
-            base_sha=base,
-            head_sha=stages._assert_workspace_head(ctx, "review context"),
-            fanout=len(LANES),
+        review_diff, packed_diff = stages.review_context(
+            ctx, base, numbers, fanout=len(LANES), saved_key="review_context_replayed_bytes_avoided"
         )
-        review_diff = packed_diff.prompt_text if packed_diff is not None else diff
-        if packed_diff is not None:
-            numbers["review_context_source_bytes"] = numbers.get("review_context_source_bytes", 0.0) + float(
-                packed_diff.source_bytes
-            )
-            numbers["review_context_prompt_bytes"] = numbers.get("review_context_prompt_bytes", 0.0) + float(
-                packed_diff.prompt_bytes
-            )
-            numbers["review_context_replayed_bytes_avoided"] = numbers.get(
-                "review_context_replayed_bytes_avoided", 0.0
-            ) + float(packed_diff.estimated_replayed_bytes_avoided)
         findings, dropped, lane_records = _round(
             ctx,
             round_index=round_index,
@@ -323,7 +303,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
         dropped += extra_dropped
         findings = review.findings
 
-        counts = {severity: sum(item.severity == severity for item in findings) for severity in stages.SEVERITIES}
+        counts = severity_counts(findings)
         signature = _signature(findings)
         stagnated = bool(signature) and signature == previous_signature
         exhausted = round_index == ctx.cfg.max_review_fixes
@@ -375,16 +355,13 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
             failures="Liquid annealing defects requiring relaxation:\n" + stages._format_findings(actionable),
             protected=stages._protected(ctx, "fix"),
         )
-        iteration = ctx.cfg.max_build_iterations + fixes
-        fix_result = stages._agent(ctx, "fix", iteration, fix_prompt, BuildSummary)
-        stages.commit(ctx, stage="fix", msg=f"fix: {stages._summary_line(fix_result, 'relax annealing defects')}")
-        test_result, output = stages.run_tests(ctx)
-        numbers.update(stages._test_numbers(test_result))
-        tests_green = test_result.ok
-        tests_blocker = None if test_result.ok else stages._tests_blocker(ctx, test_result, output)
+        tests_blocker = stages.fix_and_retest(
+            ctx, fix_prompt, fixes=fixes, fallback="relax annealing defects", numbers=numbers
+        )
+        tests_green = tests_blocker is None
         previous_signature = signature
 
-    counts = {severity: sum(item.severity == severity for item in final_findings) for severity in stages.SEVERITIES}
+    counts = severity_counts(final_findings)
     review_record = {
         "verdict": "request_changes" if counts["blocker"] else "approve",
         "findings": [item.model_dump() for item in final_findings],
@@ -426,7 +403,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
     return StageResult(stage="review", status=status, artifacts=[review_path, annealing_path], numbers=numbers)
 
 
-@stages._timed
+@stages._resumable
 def review(ctx: stages.Ctx) -> StageResult:
     """Liquid-line review: independent specialist lanes -> deterministic fan-in -> bounded relaxation."""
 

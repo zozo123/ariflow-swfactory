@@ -171,7 +171,7 @@ def test_make_scm_local(tmp_path: Path) -> None:
 def calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     recorded: list[list[str]] = []
 
-    def fake_run(argv, cwd, input=None):
+    def fake_run(argv, cwd, input=None, **_kw):
         recorded.append(list(argv))
         if argv[:3] == ["gh", "pr", "create"]:
             return "https://github.com/o/r/pull/7\n"
@@ -364,7 +364,7 @@ def _observer(monkeypatch: pytest.MonkeyPatch, *, prs: list[dict], branch_head: 
     real_run = scm_mod._run
     recorded: list[list[str]] = []
 
-    def fake_run(argv, cwd, input=None):
+    def fake_run(argv, cwd, input=None, **_kw):
         recorded.append(list(argv))
         if argv[:3] == ["gh", "pr", "list"]:
             return json.dumps(prs)
@@ -633,7 +633,7 @@ def test_github_publish_reuses_open_pr(monkeypatch: pytest.MonkeyPatch) -> None:
     """Retried deliver: an open PR for the head branch is edited, not duplicated."""
     recorded: list[list[str]] = []
 
-    def fake_run(argv, cwd, input=None):
+    def fake_run(argv, cwd, input=None, **_kw):
         recorded.append(list(argv))
         if argv[:3] == ["gh", "pr", "list"]:
             return "https://github.com/o/r/pull/7\n"

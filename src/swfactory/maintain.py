@@ -8,7 +8,6 @@ nightly sweep of orphaned ``swf-*`` sandboxes and labelled Docker work container
 
 from __future__ import annotations
 
-import json
 import math
 import os
 import re
@@ -33,7 +32,7 @@ from swfactory.maintenance_incidents import DurableIncidentLedger, IncidentIdent
 from swfactory.metrics import CREATED_KEYS, first_timestamp, load_all
 from swfactory.models import Diagnosis
 from swfactory.runtime import run_id_for
-from swfactory.sandbox import DockerContainers, Sandbox
+from swfactory.sandbox import DockerContainers, Sandbox, owned_sandboxes
 from swfactory.sandbox_governance import (
     CleanupDebt,
     CleanupDecision,
@@ -168,8 +167,7 @@ def _incident_identity(cfg: Config, breach: Breach, runs: list[dict], bands: Map
     """What makes two breaches the same incident.
 
     Keyed on the newest run in the window rather than the wall clock, so three identical passes over
-    unchanged evidence resolve to one incident while genuinely new runs roll a new one -- which is
-    what ``should_roll_incident`` means by "the source evidence describes a new regression".
+    unchanged evidence resolve to one incident while genuinely new runs roll a new one.
     """
     newest = runs[0] if runs else {}
     return IncidentIdentity(
@@ -403,33 +401,6 @@ class CleanupControl(Protocol):
     ) -> Any: ...
 
 
-def owned_sandboxes(list_json: str, owner: str) -> list[dict]:
-    """Entries of an ``islo ls --output json`` listing whose ``created_by`` is ``owner``.
-
-    Pure. Tolerates a JSON array or an object wrapping one; drops deleted entries and anything
-    whose creator is missing or different. Never call ``islo ls --all`` to feed this.
-    """
-    owner = (owner or "").strip().lower()
-    if not owner:
-        return []
-    try:
-        data = json.loads(list_json)
-    except ValueError:
-        return []
-    if isinstance(data, dict):
-        data = next((v for v in data.values() if isinstance(v, list)), [])
-    if not isinstance(data, list):
-        return []
-    mine: list[dict] = []
-    for item in data:
-        if not isinstance(item, dict) or item.get("status") == "deleted":
-            continue
-        if str(item.get("created_by") or "").strip().lower() != owner:
-            continue
-        mine.append(item)
-    return mine
-
-
 def sweep_orphans(list_json: str, ttl_s: int, now: datetime, *, owner: str) -> list[str]:
     """Names of factory sandboxes (``swf-<slug>-<run8>``) created by ``owner`` older than ``ttl_s``.
 
@@ -651,15 +622,7 @@ def sweep_containers(
 def _receipt(
     ref: OperationRef, resource: str, status: CleanupStatus, *, provider: str, requested_at: float
 ) -> dict[str, Any]:
-    return CleanupReceipt.build(
-        cell_id=ref.cell_id,
-        epoch=ref.epoch,
-        operation_key=ref.key,
-        provider=provider,
-        resource_id=resource,
-        status=status,
-        requested_at=requested_at,
-    ).to_dict()
+    return CleanupReceipt.for_operation(ref, resource, status, provider=provider, requested_at=requested_at).to_dict()
 
 
 def _remove(

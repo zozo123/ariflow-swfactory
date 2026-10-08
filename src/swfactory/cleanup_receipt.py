@@ -9,13 +9,15 @@ epoch.
 from __future__ import annotations
 
 import json
-import sqlite3
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from swfactory.store_schema import ensure_named_schema, guard_before_ddl
+from swfactory.store_schema import connect_write, ensure_named_schema, guard_before_ddl
+
+if TYPE_CHECKING:
+    from swfactory.idempotency import OperationRef
 
 CleanupStatus = Literal["converged", "already_absent", "refused", "ambiguous", "failed"]
 
@@ -64,6 +66,29 @@ class CleanupReceipt:
             detail=detail[:2000],
         )
 
+    @classmethod
+    def for_operation(
+        cls,
+        ref: OperationRef,
+        resource_id: str,
+        status: CleanupStatus,
+        *,
+        provider: str,
+        requested_at: float,
+        detail: str = "",
+    ) -> CleanupReceipt:
+        """The receipt for the journaled cleanup operation ``ref`` on ``resource_id``."""
+        return cls.build(
+            cell_id=ref.cell_id,
+            epoch=ref.epoch,
+            operation_key=ref.key,
+            provider=provider,
+            resource_id=resource_id,
+            status=status,
+            requested_at=requested_at,
+            detail=detail,
+        )
+
     @property
     def converged(self) -> bool:
         return self.status in {"converged", "already_absent"}
@@ -88,11 +113,7 @@ class RepairLeaseStore:
     """
 
     def __init__(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(path, timeout=30, isolation_level="IMMEDIATE", check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=FULL")
+        self.db = connect_write(path)
         guard_before_ddl(self.db, "repairs")
         self.db.execute(
             """CREATE TABLE IF NOT EXISTS repair_leases(
@@ -140,18 +161,6 @@ class RepairLeaseStore:
                 (owner, epoch, expires, meta, key),
             )
             return RepairLease(key, owner, epoch, expires)
-
-    def renew(self, lease: RepairLease, *, ttl_s: float = 30.0) -> RepairLease | None:
-        now = time.time()
-        expires = now + ttl_s
-        with self.db:
-            cur = self.db.execute(
-                "UPDATE repair_leases SET expires_at=? WHERE lease_key=? AND owner=? AND lease_epoch=?",
-                (expires, lease.key, lease.owner, lease.epoch),
-            )
-        if cur.rowcount != 1:
-            return None
-        return RepairLease(lease.key, lease.owner, lease.epoch, expires)
 
     def release(self, lease: RepairLease) -> bool:
         with self.db:

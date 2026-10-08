@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from swfactory.assets import ASSET_ROOT
+from swfactory.models import SandboxKind
 from swfactory.paths import (
     normalize_absolute_posix_path,
     normalize_relative_path,
@@ -75,7 +76,7 @@ class Config(BaseSettings):
     blueprint: str = "factory"  # blueprints/<name>.toml that produced this config
 
     # -- execution: which implementation of each seam runs
-    sandbox: Literal["local", "islo", "srt", "docker", "toolset", "boat"] = "local"
+    sandbox: SandboxKind = "local"
     agent: Literal["claude", "scripted"] = "scripted"
     scm: Literal["local", "github"] = "local"
     approve: Literal["auto", "prompt"] = "prompt"

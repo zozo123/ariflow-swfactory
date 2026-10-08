@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from swfactory.linear_source import LinearPreview, _uuid, parse_preview
+from swfactory.linear_source import LinearPreview, _uuid, validate_fields
 from swfactory.models import Issue
 from swfactory.paths import validate_identifier
 
@@ -58,24 +58,9 @@ def source_issue(document: dict[str, Any], *, expected_ref: str) -> Issue:
         raise ValueError("unsupported accepted Linear source schema")
     try:
         row = document["snapshot"]
-        preview = parse_preview(
-            {
-                "data": {
-                    "organization": {"id": row["workspace_id"], "urlKey": urlsplit(row["url"]).path.split("/")[1]},
-                    "issue": {
-                        "id": row["issue_id"],
-                        "identifier": row["identifier"],
-                        "url": row["url"],
-                        "title": row["title"],
-                        "description": row["description"],
-                        "updatedAt": row["updated_at"],
-                        "archivedAt": row["archived_at"],
-                        "state": {"type": row["state_type"]},
-                        "team": {"id": row["team_id"]},
-                        "project": {"id": row["project_id"]},
-                    },
-                }
-            },
+        # The snapshot is a LinearPreview, which keeps no workspace URL key: the stored URL names it.
+        preview = validate_fields(
+            {**row, "workspace_slug": urlsplit(row["url"]).path.split("/")[1]},
             workspace_id=row["workspace_id"],
             project_id=row["project_id"],
             issue_id=row["issue_id"],
@@ -86,7 +71,7 @@ def source_issue(document: dict[str, Any], *, expected_ref: str) -> Issue:
         )
         if request.issue_ref(source) != expected_ref or preview.intent_digest != document["intent_digest"]:
             raise ValueError("accepted Linear source identity or digest differs from its receipt")
-        if preview.archived_at or preview.state_type in {"completed", "canceled", "duplicate"}:
+        if preview.terminal:
             raise ValueError("accepted Linear source was not eligible for work")
         return Issue(id=expected_ref, title=preview.title, body=preview.description, url=preview.url)
     except (KeyError, TypeError, IndexError):
