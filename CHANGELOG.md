@@ -6,6 +6,13 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Run the boat line on boat: a scripted run without a sandbox override no longer drops to `local`
+  when the blueprint's kind is `boat` (the only agent `boat` admits is the scripted one), so
+  `swfactory run --blueprint worldgen` and the Airflow DAG provision a boat.dev VM. The
+  workgraph execution report says `shared_workspace_serial` for every run, because nodes run in
+  one serial loop; a provider whose capabilities allow forking (boat) records it as
+  `parallel_hint`. List `boat` in the site, OPERATIONS, design and skill sandbox tables.
+
 - Allow `registry.npmjs.org` in the work-cell egress allowlists (the islo `swfactory` gateway
   profile, shared by every islo line, and the srt/toolset default) so a target that installs with
   Bun can run `bun install` inside a work cell; the registry serves metadata and tarballs itself,
