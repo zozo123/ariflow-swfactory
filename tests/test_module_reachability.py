@@ -16,10 +16,9 @@ one up without striking it off -- a ledger that only ever grows is a ledger nobo
 WHAT THIS DOES NOT MEASURE, stated because an empty ledger invites the opposite reading. Reachable
 here means an import path reaches the module from an entrypoint. It is not evidence that anything
 runs. A module imported inside a CLI command counts as wired even when the code it exposes is never
-entered -- `swfactory.research_loop` is reachable by this test while `run_annealing_loop` has no
-production caller, and `evolution.CandidateRunner` has no implementation outside test fakes. An
-empty map means nothing is unimportable. It does not mean every subsystem executes, and reading it
-that way is how a whole dead limb hides behind a green check.
+entered -- `swfactory.evolution` is reachable by this test while `plan_requests` has no production
+caller. An empty map means nothing is unimportable. It does not mean every subsystem executes, and
+reading it that way is how a whole dead limb hides behind a green check.
 """
 
 from __future__ import annotations

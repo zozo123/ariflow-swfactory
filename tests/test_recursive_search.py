@@ -15,14 +15,13 @@ from swfactory.population_manifest import BehaviorReceipt, PopulationTelemetry
 from swfactory.recursive_search import (
     ArtifactBlackboard,
     ArtifactKind,
+    ResearchArtifact,
     RoundSignal,
     StrategySignal,
-    artifact_from_payload,
     extract_search_laws,
     load_blackboard,
     plan_adaptive_round,
     plan_next_round,
-    write_blackboard,
 )
 
 
@@ -76,26 +75,28 @@ def _round(
 
 
 def test_blackboard_is_content_addressed_and_round_trips(tmp_path: Path) -> None:
-    first = artifact_from_payload(
+    first = ResearchArtifact(
+        artifact_id="hypothesis",
         kind=ArtifactKind.HYPOTHESIS,
         producer="agent-a",
-        payload={"claim": "cache identity is not approval identity"},
+        payload_digest="sha256:" + "1" * 64,
         tags=("hypothesis",),
     )
-    second = artifact_from_payload(
+    second = ResearchArtifact(
+        artifact_id="evidence",
         kind=ArtifactKind.EVIDENCE,
         producer="verifier-a",
-        payload={"result": "pass"},
+        payload_digest="sha256:" + "2" * 64,
         parents=(first.artifact_id,),
         tags=("evidence",),
     )
     board = ArtifactBlackboard((first, second))
     path = tmp_path / "blackboard.json"
+    path.write_text(json.dumps(board.to_dict()), encoding="utf-8")
 
-    written = write_blackboard(path, board)
     loaded = load_blackboard(path)
 
-    assert written == board.digest()
+    assert loaded.digest() == board.digest()
     assert loaded == board
     assert loaded.select(tags=("evidence",)) == (second,)
 
