@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -52,6 +52,23 @@ class CapabilityInventoryError(ValueError):
     """A capability claim is incomplete or internally inconsistent."""
 
 
+def check_state_support(label: str, state: str, support: str, follow_up: object, *, kind: str = "claim") -> str | None:
+    """``None`` when ``state`` and ``support`` agree; otherwise why not.
+
+    The one rule a capability claim and a Liquid row (``kind="row"``) share: support never outruns
+    validation, and an experiment names the work that would graduate it.
+    """
+    if state not in VALID_STATES:
+        return f"{label}: invalid state {state!r}"
+    if support not in VALID_SUPPORT:
+        return f"{label}: invalid support {support!r}"
+    if support == "supported" and state != "validated":
+        return f"{label}: supported {kind}s must be validated"
+    if state == "experimental" and (not isinstance(follow_up, str) or not follow_up.strip()):
+        return f"{label}: experimental {kind}s require an explicit follow_up"
+    return None
+
+
 def validate_claim(claim: dict[str, Any]) -> None:
     missing = REQUIRED_FIELDS - set(claim)
     if missing:
@@ -60,11 +77,8 @@ def validate_claim(claim: dict[str, Any]) -> None:
     if not ident or len(ident) > 160:
         raise CapabilityInventoryError("capability id must be nonempty and bounded")
     state = str(claim["state"])
-    support = str(claim["support"])
-    if state not in VALID_STATES:
-        raise CapabilityInventoryError(f"{ident}: invalid state {state!r}")
-    if support not in VALID_SUPPORT:
-        raise CapabilityInventoryError(f"{ident}: invalid support {support!r}")
+    if problem := check_state_support(ident, state, str(claim["support"]), claim.get("follow_up")):
+        raise CapabilityInventoryError(problem)
     for field in ("invariant", "owner", "runtime_entry", "environment", "test"):
         if not str(claim[field]).strip():
             raise CapabilityInventoryError(f"{ident}: {field} must be nonempty")
@@ -73,13 +87,6 @@ def validate_claim(claim: dict[str, Any]) -> None:
         raise CapabilityInventoryError(f"{ident}: evidence must be a list of nonempty references")
     if state == "validated" and not evidence:
         raise CapabilityInventoryError(f"{ident}: validated claims require evidence references")
-    if support == "supported" and state != "validated":
-        raise CapabilityInventoryError(f"{ident}: supported claims must be validated")
-    if state in {"experimental", "unsupported"} and support == "supported":
-        raise CapabilityInventoryError(f"{ident}: experimental/unsupported claim cannot be supported")
-    follow_up = claim.get("follow_up")
-    if state == "experimental" and (not isinstance(follow_up, str) or not follow_up.strip()):
-        raise CapabilityInventoryError(f"{ident}: experimental claims require an explicit follow_up")
 
 
 def validate_inventory(document: dict[str, Any]) -> dict[str, Any]:
@@ -108,7 +115,6 @@ def load_inventory(path: Path) -> dict[str, Any]:
 
 
 def support_matrix(document: dict[str, Any]) -> dict[str, str]:
-    validate_inventory(document)
     return {str(row["id"]): str(row["support"]) for row in document["claims"]}
 
 
@@ -124,6 +130,14 @@ _CI_REFERENCE = re.compile(r"(?<![\w-])ci:([A-Za-z0-9][\w.-]*)")
 def references(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Split one ``test``/``evidence`` string into its file paths and its ``ci:`` job names."""
     return tuple(_FILE_REFERENCE.findall(text)), tuple(_CI_REFERENCE.findall(text))
+
+
+def missing_references(text: str, *, root: Path, known_ci: Collection[str]) -> list[str]:
+    """The references in one ``test``/``evidence`` string that do not resolve, as the claim writes
+    them: a path that is not a file under ``root``, or ``ci:<job>`` for a job no workflow defines."""
+    files, jobs = references(text)
+    missing = [name for name in files if not (root / name).is_file()]
+    return missing + [f"ci:{job}" for job in jobs if job not in known_ci]
 
 
 def ci_identifiers(workflows: Path) -> set[str]:
@@ -151,7 +165,6 @@ def ci_identifiers(workflows: Path) -> set[str]:
 
 def unresolved_references(document: dict[str, Any], *, root: Path) -> list[str]:
     """Claims whose verification surface cannot be reached from the repository as it stands."""
-    validate_inventory(document)
     known = ci_identifiers(root / ".github" / "workflows")
     problems: list[str] = []
     for claim in document["claims"]:
@@ -159,10 +172,10 @@ def unresolved_references(document: dict[str, Any], *, root: Path) -> list[str]:
         fields = [("test", str(claim["test"]))]
         fields += [(f"evidence[{index}]", str(item)) for index, item in enumerate(claim["evidence"])]
         for field, value in fields:
-            files, jobs = references(value)
-            missing = [name for name in files if not (root / name).is_file()]
-            problems += [f"{ident}: {field} cites missing file {name!r}" for name in missing]
-            problems += [f"{ident}: {field} cites unknown CI job {name!r}" for name in jobs if name not in known]
+            problems += [
+                f"{ident}: {field} cites {name!r}, which does not exist"
+                for name in missing_references(value, root=root, known_ci=known)
+            ]
         if not any(references(str(claim["test"]))):
             problems.append(f"{ident}: test names no resolvable file or ci: job")
     return problems
@@ -260,7 +273,6 @@ def phrase_rank(text: str) -> tuple[int, str] | None:
 
 def render_claims_table(document: dict[str, Any]) -> str:
     """Render the public claim table README ships, straight from the inventory rows."""
-    validate_inventory(document)
     lines = [
         CLAIM_TABLE_START,
         f"<!-- Generated from {INVENTORY_PATH}; run `uv run python -m swfactory.capability_inventory --write`. -->",
@@ -341,7 +353,6 @@ def site_surface_rows(text: str, *, source: str) -> list[SurfaceRow]:
 
 def surface_findings(document: dict[str, Any], rows: list[SurfaceRow]) -> list[str]:
     """Public rows that promise availability the inventory does not carry."""
-    validate_inventory(document)
     matrix = support_matrix(document)
     findings: list[str] = []
     for row in rows:
@@ -366,7 +377,6 @@ def surface_findings(document: dict[str, Any], rows: list[SurfaceRow]) -> list[s
 
 def overstatements(document: dict[str, Any], sources: Mapping[str, str]) -> list[str]:
     """Public sentences that promise more than the claim they are describing."""
-    validate_inventory(document)
     claims = document["claims"]
     findings: list[str] = []
     for name, text in sources.items():

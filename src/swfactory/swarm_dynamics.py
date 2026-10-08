@@ -753,51 +753,6 @@ def allocate_population(
     return plan
 
 
-def observation_from_signatures(
-    signatures: Sequence[Iterable[str]],
-    *,
-    novelty: float,
-    verifier_disagreement: float,
-    evidence_completeness: float,
-    resource_pressure: float,
-    context_pressure: float,
-    branching_ratio: float,
-    progress_rate: float,
-    expected_information: float,
-) -> SwarmObservation:
-    return SwarmObservation(
-        effective_independent_search=effective_independent_search(signatures),
-        mean_correlation=mean_pairwise_correlation(signatures),
-        novelty=novelty,
-        verifier_disagreement=verifier_disagreement,
-        evidence_completeness=evidence_completeness,
-        resource_pressure=resource_pressure,
-        context_pressure=context_pressure,
-        branching_ratio=branching_ratio,
-        progress_rate=progress_rate,
-        expected_information=expected_information,
-    )
-
-
-def hotspot_from_disagreement(
-    hotspot_id: str,
-    payload: Mapping[str, Any],
-    *,
-    disagreement: float,
-    evidence_gap: float,
-    impact: float,
-    candidate_digests: Sequence[str] = (),
-) -> DisagreementHotspot:
-    return DisagreementHotspot(
-        hotspot_id=hotspot_id,
-        topic_digest=_digest(payload),
-        disagreement=disagreement,
-        evidence_gap=evidence_gap,
-        impact=impact,
-        candidate_digests=tuple(candidate_digests),
-    )
-
-
 def _apply_role_caps(
     lanes: tuple[PopulationLane, ...],
     role_caps: Mapping[AgentRole, int] | None,

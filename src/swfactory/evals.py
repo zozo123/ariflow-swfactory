@@ -16,7 +16,6 @@ verified statically (AST), never by importing agent-authored code on the orchest
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import sys
 import uuid
@@ -31,6 +30,7 @@ from swfactory import blueprint as blueprint_mod
 from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
 from swfactory.blueprint import Blueprint
 from swfactory.config import FACTORY_ROOT, Config, TargetContract
+from swfactory.liquid_spec import module_file, static_names
 from swfactory.models import RunReport, StageError
 from swfactory.runtime import ctx_for, run_id_for
 from swfactory.stages import cli_approver, run_pipeline, setup
@@ -259,30 +259,6 @@ def _source_root(workdir: Path) -> Path:
     return workdir / contract.source
 
 
-def _module_file(root: Path, parts: Sequence[str]) -> Path | None:
-    base = root.joinpath(*parts)
-    return next((c for c in (base / "__init__.py", base.with_suffix(".py")) if c.is_file()), None)
-
-
-def _top_level_names(tree: ast.Module) -> tuple[set[str], list[str] | None]:
-    """Names a module binds at top level, and its ``__all__`` if it declares a literal one."""
-    names: set[str] = set()
-    dunder_all: list[str] | None = None
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            names.add(node.name)
-        elif isinstance(node, ast.Import | ast.ImportFrom):
-            names.update(a.asname or a.name.split(".")[0] for a in node.names)
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            names.add(node.target.id)
-        elif isinstance(node, ast.Assign):
-            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
-            names.update(targets)
-            if "__all__" in targets and isinstance(node.value, ast.List | ast.Tuple):
-                dunder_all = [e.value for e in node.value.elts if isinstance(e, ast.Constant) and e.value]
-    return names, dunder_all
-
-
 def _check_export(workdir: Path, dotted: str) -> str | None:
     """``None`` when ``dotted`` (e.g. ``calc.average``) is importable from the target package.
 
@@ -293,14 +269,13 @@ def _check_export(workdir: Path, dotted: str) -> str | None:
     if "." not in dotted:
         return f"export {dotted!r}: must be dotted, e.g. calc.{dotted}"
     *module, symbol = dotted.split(".")
-    path = _module_file(_source_root(workdir), module)
+    path = module_file(_source_root(workdir), module)
     if path is None:
         return f"export {dotted}: no module {'.'.join(module)} under {_source_root(workdir).name}/"
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        names, dunder_all = static_names(path)
     except (OSError, SyntaxError) as e:
         return f"export {dotted}: cannot parse {path.name}: {e}"
-    names, dunder_all = _top_level_names(tree)
     where = f"{'.'.join(module)}/{path.name}" if path.name == "__init__.py" else path.name
     if symbol not in names:
         return f"export {dotted}: {symbol!r} is not defined or imported in {where}"

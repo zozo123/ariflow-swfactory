@@ -335,7 +335,6 @@ def test_annealing_control_plane_is_selfhost_protected() -> None:
         "src/swfactory/stage_registry.py",
         "src/swfactory/liquid_annealing.py",
         "src/swfactory/phase_control.py",
-        "config/phase-control.yaml",
     )
     for stage in ("build", "fix"):
         for path in protected:

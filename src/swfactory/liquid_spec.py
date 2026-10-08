@@ -1,10 +1,10 @@
 """The Liquid matrix as validated data, not as Python modules.
 
 The backlog generators produced a 90-domain x 10-concern matrix (900 cells) plus a legacy
-snapshot and three research waves.  That metadata used to be expressed as 41 near-identical
-modules (``liquid_bundle_*``, ``physics_bundle_*``, ``legacy_bundle_*``) that no runtime path
-imported.  C10 of the methodology forbids that: more issue slices must not imply more permanent
-abstractions.  So the matrix lives in ``config/liquid-spec.yaml`` and this module is the checker.
+snapshot.  That metadata used to be expressed as 41 near-identical modules (``liquid_bundle_*``,
+``physics_bundle_*``, ``legacy_bundle_*``) that no runtime path imported.  C10 of the methodology
+forbids that: more issue slices must not imply more permanent abstractions.  So the matrix lives
+in ``config/liquid-spec.yaml`` and this module is the checker; its history lives in git.
 
 The checker exists to make the matrix *falsifiable*.  A declarative file drifts into fiction the
 moment nothing tests it, so:
@@ -26,13 +26,14 @@ import argparse
 import ast
 import json
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from .capability_inventory import VALID_STATES, VALID_SUPPORT, load_inventory
+from .capability_inventory import VALID_STATES, check_state_support, load_inventory
 
 SCHEMA_VERSION = 1
 
@@ -46,9 +47,6 @@ CANONICAL_OWNERS = (
     "evidence",
     "operator",
 )
-
-#: Families may additionally be marked ``research`` -- kept as history, outside the product path.
-VALID_FAMILY_STATES = frozenset(VALID_STATES | {"research"})
 
 REQUIRED_CONCERN_FIELDS = frozenset({"id", "name", "action", "metric", "question"})
 REQUIRED_FAMILY_FIELDS = frozenset({"id", "kind", "state", "domains", "concerns_per_domain"})
@@ -115,23 +113,7 @@ class Family:
     state: str
     domains: int
     concerns_per_domain: int
-    issues: int | None = None
-    superseded_python: str | None = None
-    # The span this family claims, and how it was sliced before the collapse. These are the
-    # invariants `liquid_release` used to assert; without them the ranges are decoration.
-    span: tuple[int, int] | None = None
-    span_field: str | None = None
-    bundles: int | None = None
-    tranches: int | None = None
     areas: tuple[FamilyArea, ...] = ()
-
-    @property
-    def cells(self) -> int:
-        return self.domains * self.concerns_per_domain
-
-    @property
-    def span_width(self) -> int | None:
-        return None if self.span is None else self.span[1] - self.span[0] + 1
 
 
 @dataclass(frozen=True)
@@ -212,11 +194,6 @@ class LiquidSpec:
             "families": len(self.families),
             "matrix_cells": self.matrix_cells,
             "schema_version": self.schema_version,
-            "spans": {
-                family.id: {"range": list(family.span), "issues": family.issues}
-                for family in self.families
-                if family.span is not None
-            },
             "states": self.counts("state"),
             "support": self.counts("support"),
         }
@@ -227,31 +204,32 @@ class LiquidSpec:
 # --------------------------------------------------------------------------------------------
 
 
-def _module_path(dotted: str, root: Path) -> Path | None:
-    parts = dotted.split(".")
-    if any(not part.isidentifier() for part in parts):
-        return None
+def module_file(root: Path, parts: Sequence[str]) -> Path | None:
+    """The file ``import`` would load for ``parts`` under ``root``: a package before a module."""
     base = root.joinpath(*parts)
-    for candidate in (base.with_suffix(".py"), base / "__init__.py"):
-        if candidate.is_file():
-            return candidate
-    return None
+    return next((c for c in (base / "__init__.py", base.with_suffix(".py")) if c.is_file()), None)
 
 
-def _top_level_names(path: Path) -> frozenset[str]:
-    """Names bound at module top level, read from the AST so nothing is executed."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+def static_names(path: Path) -> tuple[frozenset[str], list[str] | None]:
+    """Names a module binds at top level, and its ``__all__`` if it declares a literal one.
+
+    Read from the AST, so nothing is executed.
+    """
     names: set[str] = set()
-    for node in tree.body:
+    dunder_all: list[str] | None = None
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
         if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
             names.add(node.name)
-        elif isinstance(node, ast.Assign):
-            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             names.add(node.target.id)
-        elif isinstance(node, ast.ImportFrom | ast.Import):
-            names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
-    return frozenset(names)
+        elif isinstance(node, ast.Assign):
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            names.update(targets)
+            if "__all__" in targets and isinstance(node.value, ast.List | ast.Tuple):
+                dunder_all = [e.value for e in node.value.elts if isinstance(e, ast.Constant) and e.value]
+    return frozenset(names), dunder_all
 
 
 def resolve_anchor(anchor: str, *, root: Path | None = None) -> Path:
@@ -269,13 +247,14 @@ def resolve_anchor(anchor: str, *, root: Path | None = None) -> Path:
     dotted, _, attribute = text.partition(":")
     if not dotted.startswith("swfactory.") and dotted != "swfactory":
         raise AnchorError(f"{anchor!r}: runtime anchors must be dotted paths under 'swfactory'")
-    path = _module_path(dotted, root)
+    parts = dotted.split(".")
+    path = module_file(root, parts) if all(part.isidentifier() for part in parts) else None
     if path is None:
         raise AnchorError(f"{anchor!r}: no module {dotted!r} under {root}")
     if attribute:
         if not attribute.isidentifier():
             raise AnchorError(f"{anchor!r}: {attribute!r} is not an identifier")
-        if attribute not in _top_level_names(path):
+        if attribute not in static_names(path)[0]:
             raise AnchorError(f"{anchor!r}: {dotted} defines no top-level {attribute!r}")
     return path
 
@@ -343,43 +322,11 @@ def _families(document: dict[str, Any], *, owners: tuple[str, ...], root: Path) 
             raise LiquidSpecError(f"duplicate family id {ident!r}")
         seen.add(ident)
         state = _text(row, "state", f"family {ident}")
-        if state not in VALID_FAMILY_STATES:
+        if state not in VALID_STATES:
             raise LiquidSpecError(f"family {ident}: invalid state {state!r}")
         for field in ("domains", "concerns_per_domain"):
             if not isinstance(row[field], int) or row[field] < 1:
                 raise LiquidSpecError(f"family {ident}: {field} must be a positive integer")
-        issues = row.get("issues")
-        if issues is not None and (not isinstance(issues, int) or issues < 1):
-            raise LiquidSpecError(f"family {ident}: issues must be a positive integer when present")
-
-        # The span. `liquid_release` asserted contiguity, disjointness and the totals; the ranges
-        # survived the collapse as YAML but nothing read them, so they were silently decorative.
-        span: tuple[int, int] | None = None
-        span_field: str | None = None
-        for field in ("issue_range", "rank_range"):
-            if field not in row:
-                continue
-            if span_field is not None:
-                raise LiquidSpecError(f"family {ident}: declare at most one of issue_range/rank_range")
-            bounds = row[field]
-            if (
-                not isinstance(bounds, list)
-                or len(bounds) != 2
-                or not all(isinstance(bound, int) for bound in bounds)
-                or bounds[0] < 1
-                or bounds[1] < bounds[0]
-            ):
-                raise LiquidSpecError(f"family {ident}: {field} must be [low, high] with 1 <= low <= high")
-            span, span_field = (int(bounds[0]), int(bounds[1])), field
-        if span is not None and issues is not None and span[1] - span[0] + 1 != issues:
-            raise LiquidSpecError(
-                f"family {ident}: {span_field} {list(span)} spans {span[1] - span[0] + 1} but issues says {issues}"
-            )
-
-        for field in ("bundles", "tranches"):
-            if field in row and (not isinstance(row[field], int) or row[field] < 1):
-                raise LiquidSpecError(f"family {ident}: {field} must be a positive integer")
-
         areas = _areas(row, ident=ident, owners=owners, root=root)
         if areas and len(areas) != int(row["domains"]):
             raise LiquidSpecError(f"family {ident}: declares {row['domains']} domains but carries {len(areas)} areas")
@@ -391,16 +338,9 @@ def _families(document: dict[str, Any], *, owners: tuple[str, ...], root: Path) 
                 state=state,
                 domains=int(row["domains"]),
                 concerns_per_domain=int(row["concerns_per_domain"]),
-                issues=issues,
-                superseded_python=(str(row["superseded_python"]) if row.get("superseded_python") else None),
-                span=span,
-                span_field=span_field,
-                bundles=(int(row["bundles"]) if "bundles" in row else None),
-                tranches=(int(row["tranches"]) if "tranches" in row else None),
                 areas=areas,
             )
         )
-    _assert_spans_tile(families)
     return tuple(families)
 
 
@@ -426,30 +366,6 @@ def _areas(row: dict[str, Any], *, ident: str, owners: tuple[str, ...], root: Pa
         resolve_anchor(anchor, root=root)
         areas.append(FamilyArea(slug=slug, owner=owner, runtime_anchor=anchor))
     return tuple(areas)
-
-
-def _assert_spans_tile(families: list[Family]) -> None:
-    """Spans of one kind must tile: sorted, contiguous, no gap and no overlap.
-
-    This is the invariant the old manifest carried and the collapse nearly dropped. Without it a
-    family can silently move its range, and the declared coverage stops meaning anything.
-    """
-    by_field: dict[tuple[str, str], list[Family]] = {}
-    for family in families:
-        if family.span is not None and family.span_field is not None:
-            by_field.setdefault((family.kind, family.span_field), []).append(family)
-    for (kind, field), group in sorted(by_field.items()):
-        ordered = sorted(group, key=lambda f: f.span or (0, 0))
-        for earlier, later in zip(ordered, ordered[1:], strict=False):
-            assert earlier.span is not None and later.span is not None  # narrowed by the filter
-            if later.span[0] <= earlier.span[1]:
-                raise LiquidSpecError(
-                    f"{kind} {field}: {earlier.id} {list(earlier.span)} overlaps {later.id} {list(later.span)}"
-                )
-            if later.span[0] != earlier.span[1] + 1:
-                raise LiquidSpecError(
-                    f"{kind} {field}: gap between {earlier.id} {list(earlier.span)} and {later.id} {list(later.span)}"
-                )
 
 
 def _domains(
@@ -485,21 +401,13 @@ def _domains(
             raise LiquidSpecError(f"domain {ident}: owner {owner!r} is not one of the canonical roles {list(owners)}")
         state = _text(row, "state", f"domain {ident}")
         support = _text(row, "support", f"domain {ident}")
-        if state not in VALID_STATES:
-            raise LiquidSpecError(f"domain {ident}: invalid state {state!r}")
-        if support not in VALID_SUPPORT:
-            raise LiquidSpecError(f"domain {ident}: invalid support {support!r}")
-        if support == "supported" and state != "validated":
-            raise LiquidSpecError(f"domain {ident}: supported rows must be validated")
-        if state in {"experimental", "unsupported"} and support == "supported":
-            raise LiquidSpecError(f"domain {ident}: experimental/unsupported row cannot be supported")
+        follow_up = str(row["follow_up"]).strip() if row.get("follow_up") else None
+        if problem := check_state_support(f"domain {ident}", state, support, follow_up, kind="row"):
+            raise LiquidSpecError(problem)
         invariant = _text(row, "invariant", f"domain {ident}")
         evidence = _text(row, "evidence_requirement", f"domain {ident}")
         anchor = _text(row, "runtime_anchor", f"domain {ident}")
         resolve_anchor(anchor, root=root)
-        follow_up = str(row["follow_up"]).strip() if row.get("follow_up") else None
-        if state == "experimental" and not follow_up:
-            raise LiquidSpecError(f"domain {ident}: experimental rows require an explicit follow_up")
         claim = str(row["capability_claim"]).strip() if row.get("capability_claim") else None
         if state == "validated" and not claim:
             raise LiquidSpecError(
@@ -573,14 +481,14 @@ def validate_spec(
     )
     for family in families:
         declared = sum(1 for row in domains if row.family == family.id)
-        # `if declared and ...` let a family with zero rows claim any number at all, which covered
-        # four of the six families. A liquid family must carry its rows; a family that reaches its
-        # domains by area is checked against len(areas) in _families instead.
+        # `if declared and ...` let a family with zero rows claim any number at all. A liquid family
+        # must carry its rows; a family that reaches its domains by area is checked against
+        # len(areas) in _families instead.
         if family.kind == "liquid" and not declared:
             raise LiquidSpecError(f"family {family.id}: kind 'liquid' must carry its domain rows")
         if declared and declared != family.domains:
             raise LiquidSpecError(f"family {family.id}: declares {family.domains} domains but {declared} rows exist")
-        if not declared and not family.areas and family.kind != "research":
+        if not declared and not family.areas:
             raise LiquidSpecError(
                 f"family {family.id}: carries neither domain rows nor areas, so its domain count is unfalsifiable"
             )

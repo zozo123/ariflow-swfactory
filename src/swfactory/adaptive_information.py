@@ -22,7 +22,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from swfactory.cognitive_harness import marginal_information_value
 from swfactory.phase_control import ControlMode
 from swfactory.population_execution import PopulationExecutionReport
 from swfactory.population_manifest import (
@@ -491,6 +490,15 @@ def information_budget_from_document(document: Mapping[str, Any]) -> Information
     )
     decision.validate()
     return decision
+
+
+def marginal_information_value(*, correlation: float, expected_information: float, cost: float) -> float:
+    for name, value in {"correlation": correlation, "expected_information": expected_information}.items():
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be finite and in [0, 1]")
+    if not math.isfinite(cost) or cost <= 0.0:
+        raise ValueError("cost must be finite and positive")
+    return ((1.0 - correlation) * expected_information) / cost
 
 
 def _lane_information(

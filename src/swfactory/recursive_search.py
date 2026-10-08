@@ -17,7 +17,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import time
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
@@ -30,18 +29,8 @@ from swfactory.adaptive_information import (
     InformationBudgetPolicy,
     evaluate_information_budget,
 )
-from swfactory.evolution import (
-    DEFAULT_STRATEGIES,
-    REQUIRED_DIMENSIONS,
-    CampaignError,
-    CampaignReport,
-    CandidateOutcome,
-    CandidateRunner,
-    Strategy,
-    plan_requests,
-    run_campaign,
-)
-from swfactory.generations import CampaignBudget, Dimension
+from swfactory.evolution import DEFAULT_STRATEGIES, REQUIRED_DIMENSIONS, CampaignError, Strategy
+from swfactory.generations import Dimension
 from swfactory.phase_control import Phase, PhaseObservation, assess
 from swfactory.population_execution import PopulationExecutionReport
 from swfactory.population_manifest import (
@@ -57,7 +46,6 @@ from swfactory.swarm_dynamics import (
     SwarmPlan,
     allocate_population,
 )
-from swfactory.work_executor import Cancellation
 
 RECURSIVE_SEARCH_SCHEMA_VERSION = 1
 RECURSIVE_SEARCH_AUTHORITY = "exploration-only"
@@ -153,18 +141,6 @@ class ArtifactBlackboard:
         self.validate()
         return _digest([artifact.digest() for artifact in self.artifacts])
 
-    def append(self, additions: Iterable[ResearchArtifact]) -> ArtifactBlackboard:
-        merged = {artifact.artifact_id: artifact for artifact in self.artifacts}
-        for artifact in additions:
-            artifact.validate()
-            incumbent = merged.get(artifact.artifact_id)
-            if incumbent is not None and incumbent != artifact:
-                raise CampaignError(f"artifact identity collision for {artifact.artifact_id}")
-            merged[artifact.artifact_id] = artifact
-        result = ArtifactBlackboard(tuple(merged[key] for key in sorted(merged)))
-        result.validate()
-        return result
-
     def select(self, *, tags: Iterable[str] = (), limit: int = 16) -> tuple[ResearchArtifact, ...]:
         required = set(tags)
         values = [artifact for artifact in self.artifacts if not required or required.intersection(artifact.tags)]
@@ -178,50 +154,6 @@ class ArtifactBlackboard:
             "digest": self.digest(),
             "artifacts": [_artifact_dict(artifact) for artifact in self.artifacts],
         }
-
-
-def artifact_from_payload(
-    *,
-    kind: ArtifactKind,
-    producer: str,
-    payload: object,
-    candidate_id: str | None = None,
-    parents: Iterable[str] = (),
-    tags: Iterable[str] = (),
-    weight: float = 1.0,
-) -> ResearchArtifact:
-    """Turn a JSON-like payload into an immutable blackboard artifact."""
-
-    payload_digest = _digest(payload)
-    identity = _digest(
-        {
-            "kind": kind.value,
-            "producer": producer,
-            "payload_digest": payload_digest,
-            "candidate_id": candidate_id,
-            "parents": sorted(set(parents)),
-            "tags": sorted(set(tags)),
-        }
-    )
-    return ResearchArtifact(
-        artifact_id=f"artifact_{identity.removeprefix('sha256:')[:24]}",
-        kind=kind,
-        producer=producer,
-        payload_digest=payload_digest,
-        candidate_id=candidate_id,
-        parents=tuple(sorted(set(parents))),
-        tags=tuple(sorted(set(tags))),
-        weight=weight,
-    )
-
-
-def write_blackboard(path: Path, blackboard: ArtifactBlackboard) -> str:
-    """Persist the artifact-mediated coordination surface without any authority material."""
-
-    document = blackboard.to_dict()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return str(document["digest"])
 
 
 def load_blackboard(path: Path) -> ArtifactBlackboard:
@@ -460,120 +392,6 @@ class RecursiveRoundPlan:
 
     def digest(self) -> str:
         return _digest(self.to_dict())
-
-
-@dataclass(frozen=True)
-class RecursiveSearchReport:
-    loop_id: str
-    cell_id: str
-    epoch: int
-    root_head: str
-    rounds: tuple[CampaignReport, ...]
-    plans: tuple[RecursiveRoundPlan, ...]
-    signals: tuple[RoundSignal, ...]
-    laws: tuple[SearchLaw, ...]
-    blackboard: ArtifactBlackboard
-    stop_reason: str
-    total_cost_usd: float
-    total_wall_s: int
-    authority: str = RECURSIVE_SEARCH_AUTHORITY
-
-    @property
-    def exploration_winner(self) -> CandidateOutcome | None:
-        if not self.rounds:
-            return None
-        winner_id = self.rounds[-1].exploration_selection.winner
-        if winner_id is None:
-            return None
-        return next(
-            (outcome for outcome in self.rounds[-1].outcomes if outcome.logical_id == winner_id),
-            None,
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": RECURSIVE_SEARCH_SCHEMA_VERSION,
-            "authority": self.authority,
-            "scheduler": "airflow",
-            "loop_id": self.loop_id,
-            "cell_id": self.cell_id,
-            "epoch": self.epoch,
-            "root_head": self.root_head,
-            "stop_reason": self.stop_reason,
-            "total_cost_usd": self.total_cost_usd,
-            "total_wall_s": self.total_wall_s,
-            "plans": [plan.to_dict() for plan in self.plans],
-            "signals": [_signal_dict(signal) for signal in self.signals],
-            "laws": [_law_dict(law) for law in self.laws],
-            "blackboard_digest": self.blackboard.digest(),
-            "artifacts": [_artifact_dict(artifact) for artifact in self.blackboard.artifacts],
-            "rounds": [report.to_dict() for report in self.rounds],
-        }
-
-
-def campaign_signal(
-    report: CampaignReport,
-    *,
-    required: Iterable[Dimension] = REQUIRED_DIMENSIONS,
-) -> RoundSignal:
-    """Reduce one full campaign into order parameters for the next search round."""
-
-    required_set = frozenset(required)
-    strategy_rows: dict[Strategy, list[CandidateOutcome]] = defaultdict(list)
-    answered: list[CandidateOutcome] = []
-    evidence_complete: list[CandidateOutcome] = []
-    required_passes: list[CandidateOutcome] = []
-
-    for outcome in report.outcomes:
-        strategy_rows[outcome.strategy].append(outcome)
-        if _answered(outcome):
-            answered.append(outcome)
-        if _answered(outcome) and outcome.evidence_digest:
-            evidence_complete.append(outcome)
-        if _answered(outcome) and required_set.issubset(outcome.passed):
-            required_passes.append(outcome)
-
-    unique_outputs = {outcome.output_head for outcome in answered if outcome.output_head}
-    disagreement = 0.0 if len(answered) < 2 else (len(unique_outputs) - 1) / max(1, len(answered) - 1)
-    novelty = _ratio(len(unique_outputs), len(answered))
-
-    winner_strategy: Strategy | None = None
-    winner_id = report.exploration_selection.winner
-    if winner_id is not None:
-        winner = next((outcome for outcome in report.outcomes if outcome.logical_id == winner_id), None)
-        winner_strategy = winner.strategy if winner is not None else None
-
-    strategy_signals: list[StrategySignal] = []
-    for strategy in sorted(strategy_rows, key=lambda item: item.value):
-        outcomes = strategy_rows[strategy]
-        answered_rows = [outcome for outcome in outcomes if _answered(outcome)]
-        strategy_signals.append(
-            StrategySignal(
-                strategy=strategy,
-                attempts=len(outcomes),
-                answered=len(answered_rows),
-                evidence_complete=sum(1 for outcome in answered_rows if outcome.evidence_digest),
-                required_passes=sum(1 for outcome in answered_rows if required_set.issubset(outcome.passed)),
-                unique_outputs=len({outcome.output_head for outcome in answered_rows if outcome.output_head}),
-                cost_usd=round(sum(outcome.cost_usd for outcome in outcomes), 6),
-            )
-        )
-
-    depth = report.experiment_round.depth if report.experiment_round is not None else 0
-    return RoundSignal(
-        campaign_id=report.campaign_id,
-        depth=depth,
-        attempts=len(report.outcomes),
-        answered=len(answered),
-        evidence_complete=len(evidence_complete),
-        required_passes=len(required_passes),
-        unique_outputs=len(unique_outputs),
-        disagreement=round(disagreement, 6),
-        novelty=round(novelty, 6),
-        cost_usd=round(sum(outcome.cost_usd for outcome in report.outcomes), 6),
-        winner_strategy=winner_strategy,
-        strategies=tuple(strategy_signals),
-    )
 
 
 def extract_search_laws(
@@ -1063,146 +881,6 @@ def _swarm_observation(
     )
 
 
-def run_recursive_search(
-    runner: CandidateRunner,
-    *,
-    loop_id: str,
-    cell_id: str,
-    epoch: int,
-    input_head: str,
-    budget: CampaignBudget | None = None,
-    strategies: Sequence[Strategy] = DEFAULT_STRATEGIES,
-    max_parallel: int = 3,
-    parallel: bool = True,
-    human_approved: bool = False,
-    required: Iterable[Dimension] = REQUIRED_DIMENSIONS,
-    cancellation: Cancellation | None = None,
-) -> RecursiveSearchReport:
-    """Run campaigns whose next search policy is learned from prior campaign evidence."""
-
-    budget = budget or CampaignBudget()
-    cancellation = cancellation or Cancellation()
-    if not loop_id.strip() or not cell_id.strip() or not input_head.strip():
-        raise CampaignError("recursive search loop, cell and input identities must be nonempty")
-    if epoch < 0:
-        raise CampaignError("recursive search epoch must be nonnegative")
-    if budget.max_depth < 0 or budget.max_candidates < 1:
-        raise CampaignError("recursive search budget has invalid depth or candidate count")
-    if budget.max_cost_usd < 0 or budget.max_wall_s < 0:
-        raise CampaignError("recursive search budget has negative cost or wall limit")
-
-    started = time.monotonic()
-    reports: list[CampaignReport] = []
-    plans: list[RecursiveRoundPlan] = []
-    signals: list[RoundSignal] = []
-    blackboard = ArtifactBlackboard()
-    current_head = input_head
-    parent_candidate: str | None = None
-    total_cost = 0.0
-    stop_reason = "max_depth"
-
-    for depth in range(budget.max_depth + 1):
-        if cancellation.cancelled:
-            stop_reason = "cancelled"
-            break
-
-        elapsed = int(time.monotonic() - started)
-        remaining_cost = round(budget.max_cost_usd - total_cost, 6)
-        remaining_wall = budget.max_wall_s - elapsed
-        if remaining_cost <= 0 or remaining_wall <= 0:
-            stop_reason = "budget_exhausted"
-            break
-
-        previous_phase = plans[-1].phase if plans else None
-        plan = plan_adaptive_round(
-            signals,
-            depth=depth,
-            input_head=current_head,
-            blackboard=blackboard,
-            allowed_strategies=strategies,
-            max_candidates=budget.max_candidates,
-            max_parallel=max_parallel,
-            previous_phase=previous_phase,
-        )
-        plans.append(plan)
-
-        round_budget = CampaignBudget(
-            max_depth=budget.max_depth,
-            max_candidates=budget.max_candidates,
-            max_cost_usd=remaining_cost,
-            max_wall_s=remaining_wall,
-        )
-        requests = plan_requests(
-            campaign_id=f"{loop_id}:recursive-{depth}",
-            cell_id=cell_id,
-            epoch=epoch,
-            input_head=current_head,
-            strategies=plan.strategies,
-            budget=round_budget,
-            parent_candidate=parent_candidate,
-            search_provenance_digest=plan.search_provenance_digest,
-            depth=depth,
-        )
-        report = run_campaign(
-            runner,
-            requests,
-            budget=round_budget,
-            max_parallel=plan.max_parallel,
-            parallel=parallel,
-            human_approved=human_approved,
-            required=required,
-            cancellation=cancellation,
-        )
-        reports.append(report)
-        signal = campaign_signal(report, required=required)
-        signals.append(signal)
-        blackboard = blackboard.append(_campaign_artifacts(report, signal))
-
-        total_cost = round(total_cost + signal.cost_usd, 6)
-        if report.cancelled or cancellation.cancelled:
-            stop_reason = "cancelled"
-            break
-
-        winner_id = report.exploration_selection.winner
-        if winner_id is None:
-            stop_reason = "no_exploration_candidate"
-            break
-        winner = next(outcome for outcome in report.outcomes if outcome.logical_id == winner_id)
-        if not winner.output_head:
-            raise CampaignError(f"recursive search winner {winner_id} has no output head")
-
-        current_head = winner.output_head
-        parent_candidate = winner.logical_id
-
-        elapsed = int(time.monotonic() - started)
-        if total_cost >= budget.max_cost_usd or elapsed >= budget.max_wall_s:
-            stop_reason = "budget_exhausted"
-            break
-        if depth == budget.max_depth:
-            stop_reason = "max_depth"
-            break
-
-    if not reports:
-        raise CampaignError(f"recursive search produced no campaign: {stop_reason}")
-
-    laws = extract_search_laws(signals)
-    blackboard = blackboard.append(_law_artifacts(laws))
-    return RecursiveSearchReport(
-        loop_id=loop_id,
-        cell_id=cell_id,
-        epoch=epoch,
-        root_head=input_head,
-        rounds=tuple(reports),
-        plans=tuple(plans),
-        signals=tuple(signals),
-        laws=laws,
-        blackboard=blackboard,
-        stop_reason=stop_reason,
-        total_cost_usd=total_cost,
-        total_wall_s=int(time.monotonic() - started),
-    )
-
-
 def signal_from_document(
     document: Mapping[str, Any],
     *,
@@ -1291,70 +969,6 @@ def signal_from_document(
         cost_usd=round(sum(float(row.get("cost_usd") or 0.0) for row in outcomes if isinstance(row, Mapping)), 6),
         winner_strategy=winner_strategy,
         strategies=tuple(per_strategy),
-    )
-
-
-def _campaign_artifacts(report: CampaignReport, signal: RoundSignal) -> tuple[ResearchArtifact, ...]:
-    artifacts: list[ResearchArtifact] = []
-    winner_id = report.exploration_selection.winner
-    for outcome in report.outcomes:
-        if outcome.evidence_digest:
-            artifacts.append(
-                ResearchArtifact(
-                    artifact_id=f"evidence:{outcome.logical_id}",
-                    kind=ArtifactKind.EVIDENCE,
-                    producer=outcome.logical_id,
-                    payload_digest=outcome.evidence_digest,
-                    candidate_id=outcome.logical_id,
-                    tags=("evidence", outcome.strategy.value),
-                    weight=2.0 if outcome.logical_id == winner_id else 1.0,
-                )
-            )
-        if outcome.state != "ok" or not _answered(outcome):
-            detail_digest = _digest(
-                {
-                    "candidate": outcome.logical_id,
-                    "state": outcome.state,
-                    "detail": outcome.detail,
-                    "strategy": outcome.strategy.value,
-                }
-            )
-            artifacts.append(
-                ResearchArtifact(
-                    artifact_id=f"failure:{outcome.logical_id}",
-                    kind=ArtifactKind.FAILURE,
-                    producer=outcome.logical_id,
-                    payload_digest=detail_digest,
-                    candidate_id=outcome.logical_id,
-                    tags=("failure", outcome.strategy.value),
-                    weight=1.0,
-                )
-            )
-    if signal.disagreement >= 0.66:
-        artifacts.append(
-            ResearchArtifact(
-                artifact_id=f"counterexample:{report.campaign_id}",
-                kind=ArtifactKind.COUNTEREXAMPLE,
-                producer=report.campaign_id,
-                payload_digest=_digest(_signal_dict(signal)),
-                tags=("counterexample", "disagreement"),
-                weight=1.5,
-            )
-        )
-    return tuple(artifacts)
-
-
-def _law_artifacts(laws: Sequence[SearchLaw]) -> tuple[ResearchArtifact, ...]:
-    return tuple(
-        ResearchArtifact(
-            artifact_id=f"law:{law.law_id}",
-            kind=ArtifactKind.LAW,
-            producer="recursive-search",
-            payload_digest=law.digest(),
-            tags=("law", law.kind.value, *(strategy.value for strategy in law.strategies)),
-            weight=1.0 + law.confidence,
-        )
-        for law in laws
     )
 
 
@@ -1453,10 +1067,6 @@ def _law(
     )
 
 
-def _answered(outcome: CandidateOutcome) -> bool:
-    return outcome.state == "ok" and bool(outcome.output_head) and outcome.output_head != outcome.input_head
-
-
 def _document_answered(outcome: Mapping[str, Any]) -> bool:
     return (
         str(outcome.get("state")) == "ok"
@@ -1487,20 +1097,6 @@ def _artifact_dict(artifact: ResearchArtifact) -> dict[str, Any]:
         "tags": list(artifact.tags),
         "weight": artifact.weight,
         "digest": artifact.digest(),
-    }
-
-
-def _law_dict(law: SearchLaw) -> dict[str, Any]:
-    return {
-        "law_id": law.law_id,
-        "kind": law.kind.value,
-        "statement": law.statement,
-        "confidence": law.confidence,
-        "support": law.support,
-        "strategies": [strategy.value for strategy in law.strategies],
-        "evidence_digests": list(law.evidence_digests),
-        "authority": law.authority,
-        "digest": law.digest(),
     }
 
 

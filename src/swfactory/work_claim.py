@@ -78,12 +78,12 @@ class Claim:
         """This claim's phase: ``condensed`` while a session holds it, ``sublimating`` once its
         lease has run out.
 
-        The repo's Phase240 family is research -- "advisory and observational only ... it must not
-        appear in the product's cognitive path" (config/liquid-spec.yaml) -- so this is naming,
-        not authority. It is worth the name anyway, because these really are phase transitions of
-        one backlog under many sessions: free work condenses onto the session that claims it, stays
-        condensed while that session keeps paying the lease, and sublimates back to free when the
-        session stops paying. `phase_of` below covers the free state, which has no claim object.
+        The Phase240 research wave was advisory and observational only, never in the product's
+        cognitive path, so this is naming, not authority. It is worth the name anyway, because these
+        really are phase transitions of one backlog under many sessions: free work condenses onto
+        the session that claims it, stays condensed while that session keeps paying the lease, and
+        sublimates back to free when the session stops paying. `phase_of` below covers the free
+        state, which has no claim object.
 
         Nothing branches on this. It is what an operator reads.
         """

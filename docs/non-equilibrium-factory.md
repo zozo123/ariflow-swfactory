@@ -118,8 +118,8 @@ history, not only the instantaneous scalar metric.
 A phase label must be derived from observable order parameters. The experimental product slice uses
 candidate entropy, coherence, mobility, queue pressure/acceleration, resource pressure, branching
 ratio, evidence completeness, context pressure, debt pressure and verifier disagreement. The formulas
-and hysteresis bands are versioned in config/phase-control.yaml and independently implemented in
-Python/Rust. New order parameters require evidence and cross-language tests.
+and hysteresis bands are implemented independently in Python/Rust and pinned by the shared
+phase-control contract fixture. New order parameters require evidence and cross-language tests.
 
 Relevant lineage: Landau-style order parameters and phase transitions; glassy dynamics and
 metastability for disordered low-mobility states.

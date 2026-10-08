@@ -16,10 +16,9 @@ one up without striking it off -- a ledger that only ever grows is a ledger nobo
 WHAT THIS DOES NOT MEASURE, stated because an empty ledger invites the opposite reading. Reachable
 here means an import path reaches the module from an entrypoint. It is not evidence that anything
 runs. A module imported inside a CLI command counts as wired even when the code it exposes is never
-entered -- `swfactory.research_loop` is reachable by this test while `run_annealing_loop` has no
-production caller, and `evolution.CandidateRunner` has no implementation outside test fakes. An
-empty map means nothing is unimportable. It does not mean every subsystem executes, and reading it
-that way is how a whole dead limb hides behind a green check.
+entered -- `swfactory.evolution` is reachable by this test while `plan_requests` has no production
+caller. An empty map means nothing is unimportable. It does not mean every subsystem executes, and
+reading it that way is how a whole dead limb hides behind a green check.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "swfactory" if (ROOT / "swfactory").is_dir() else ROOT / "src" / "swfactory"
+SRC = ROOT / "src" / "swfactory"
 
 # Declared in pyproject.toml: `[project.scripts]` and `[project.entry-points]`, plus every
 # `python -m swfactory.<module>` the repository tells an operator to run.
@@ -46,7 +45,6 @@ ENTRYPOINTS = frozenset(
     }
 )
 
-# Debt, with the reason it is not wired yet. Strike an entry off the moment something imports it.
 # Debt, with the reason it is not wired yet. It lives in ``config/not-yet-wired.json`` so this gate
 # and ``swfactory improve`` read one file: a ledger the loop cannot see is a ledger it cannot retire.
 LEDGER = ROOT / "config" / "not-yet-wired.json"
@@ -89,10 +87,13 @@ def import_graph() -> dict[str, set[str]]:
     return graph
 
 
-def reachable(graph: dict[str, set[str]]) -> set[str]:
-    roots = set(ENTRYPOINTS)
-    for driver in sorted((ROOT / "dags").glob("*.py")) + sorted((ROOT / "scripts").glob("*.py")):
-        roots |= imports_of(ast.parse(driver.read_text(encoding="utf-8")))
+def reachable(graph: dict[str, set[str]], roots: set[str] | None = None) -> set[str]:
+    """Modules an import path reaches from ``roots``; by default every declared entrypoint, DAG and
+    repository script."""
+    if roots is None:
+        roots = set(ENTRYPOINTS)
+        for driver in sorted((ROOT / "dags").glob("*.py")) + sorted((ROOT / "scripts").glob("*.py")):
+            roots |= imports_of(ast.parse(driver.read_text(encoding="utf-8")))
     seen: set[str] = set()
     stack = list(roots)
     while stack:
@@ -137,19 +138,7 @@ def test_a_package_init_resolves_its_own_relative_imports() -> None:
 def test_a_new_orphan_is_caught() -> None:
     graph = {"cli": {"used"}, "used": set(), "stranded": set()}
 
-    assert "stranded" in ({m for m in graph} - reachable_from(graph, {"cli"}))
-
-
-def reachable_from(graph: dict[str, set[str]], roots: set[str]) -> set[str]:
-    seen: set[str] = set()
-    stack = list(roots)
-    while stack:
-        module = stack.pop()
-        if module in seen:
-            continue
-        seen.add(module)
-        stack.extend(graph.get(module, ()))
-    return seen
+    assert "stranded" in set(graph) - reachable(graph, {"cli"})
 
 
 def test_the_ledger_states_what_it_does_not_measure() -> None:

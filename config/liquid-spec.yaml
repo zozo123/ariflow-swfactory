@@ -1,10 +1,10 @@
 # The Liquid matrix as data.
 #
 # The backlog generators produced a 90-domain x 10-concern matrix (900 cells) plus a legacy
-# snapshot and three research waves.  That matrix used to exist as 41 near-identical Python
-# modules (liquid_bundle_*, physics_bundle_*, legacy_bundle_*) whose only content was this
-# metadata.  C10 of the methodology says more issue slices must not imply more permanent
-# abstractions, so the matrix lives here, as data, and `python -m swfactory.liquid_spec`
+# snapshot.  That matrix used to exist as 41 near-identical Python modules (liquid_bundle_*,
+# physics_bundle_*, legacy_bundle_*) whose only content was this metadata.  C10 of the
+# methodology says more issue slices must not imply more permanent abstractions, so the
+# matrix lives here, as data, its history lives in git, and `python -m swfactory.liquid_spec`
 # proves it is not fiction: every runtime_anchor below must resolve to a real module or
 # attribute under src/swfactory/, and every capability_claim must exist in
 # config/capability-inventory.json.
@@ -87,31 +87,18 @@ families:
   - id: Liquid500
     kind: liquid
     state: declared
-    issue_range: [255, 754]
-    issues: 500
-    bundles: 10
     domains: 50
     concerns_per_domain: 10
-    superseded_python: "src/swfactory/liquid_bundle_01..10.py (superseded by this file)"
   - id: Liquid400
     kind: liquid
     state: declared
-    issue_range: [755, 1154]
-    issues: 400
-    bundles: 8
     domains: 40
     concerns_per_domain: 10
-    superseded_python: "src/swfactory/liquid_bundle_11..18.py (superseded by this file)"
   - id: LegacySnapshot
     kind: legacy
     state: declared
-    rank_range: [1, 181]
-    issues: 181
-    tranches: 4
     domains: 10
     concerns_per_domain: 10
-    snapshot_cutoff: "2026-09-06T22:22:21Z"
-    superseded_python: "src/swfactory/legacy_bundle_01..04.py + legacy_issue_runtime.py (superseded by this file)"
     # The ten legacy areas are the same domains named above, reached by their own slugs.
     areas:
       - { slug: cell-control-plane, owner: authority, runtime_anchor: swfactory.cells }
@@ -124,42 +111,6 @@ families:
       - { slug: github-intake-publication, owner: recovery, runtime_anchor: swfactory.backend_scm }
       - { slug: deployment-supply-chain, owner: operator, runtime_anchor: swfactory.runtime }
       - { slug: factory-generations, owner: authority, runtime_anchor: swfactory.generations }
-  - id: Ocean120
-    kind: research
-    state: research
-    issues: 120
-    domains: 12
-    concerns_per_domain: 10
-    superseded_python: "src/swfactory/physics_bundle_*.py + physics_wave_runtime.py (research only)"
-    research_notes: docs/non-equilibrium-factory.md
-    note: >-
-      Statistical-mechanics stress model.  Advisory and observational only: it never held
-      lifecycle authority.  Kept as coverage metadata so the history is not lost; it must
-      not appear in the product's cognitive path.
-  - id: Phase240
-    kind: research
-    state: research
-    issues: 240
-    domains: 24
-    concerns_per_domain: 10
-    superseded_python: "src/swfactory/physics_bundle_*.py + physics_wave_runtime.py (research only)"
-    research_notes: docs/non-equilibrium-factory.md
-    note: >-
-      Statistical-mechanics stress model.  Advisory and observational only: it never held
-      lifecycle authority.  Kept as coverage metadata so the history is not lost; it must
-      not appear in the product's cognitive path.
-  - id: StatMech360
-    kind: research
-    state: research
-    issues: 360
-    domains: 36
-    concerns_per_domain: 10
-    superseded_python: "src/swfactory/physics_bundle_*.py + physics_wave_runtime.py (research only)"
-    research_notes: docs/non-equilibrium-factory.md
-    note: >-
-      Statistical-mechanics stress model.  Advisory and observational only: it never held
-      lifecycle authority.  Kept as coverage metadata so the history is not lost; it must
-      not appear in the product's cognitive path.
 
 # The 90 domain rows.  `id` is `<family>.<slug>` because six slugs appear in both liquid
 # families with DIFFERENT owners; those rows carry a `note` and must be reconciled before

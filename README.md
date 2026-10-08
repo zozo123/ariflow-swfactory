@@ -156,11 +156,10 @@ queue posture, but it cannot approve, publish, merge, mint credentials or promot
 snapshot locally with `swfactory phase-assess phase.json --json` or `swf phase phase.json --json`. See
 [phase-aware control](docs/phase-control.md).
 
-### Cognitive harness and acceleration
+### Search posture and acceleration
 
-The experimental cognitive contracts separate **System 1** proposal generation from **System 2**
-measurement and convergence. Phase control recommends search posture; retained observations inform
-later search. None supplies approval or mutation authority. Model, prompt, and reasoning style may
+Phase control recommends search posture; retained observations inform later search. Neither
+supplies approval or mutation authority. Model, prompt, and reasoning style may
 vary; evidence must identify the exact candidate, inputs, policy, and procedure measured.
 
 The current managed authority and stage implementation lives in the **Python backend/application**;
@@ -201,8 +200,7 @@ These mechanisms are intentionally marked **experimental** in the capability inv
 change search posture, population and compute allocation, but they cannot schedule Airflow, weaken
 evidence, mint credentials, approve, publish, merge or promote.
 
-The full end-state and graduation path are in [Future Factory](docs/future-factory.md), with the
-machine-readable architecture contract in [`config/future-factory.yaml`](config/future-factory.yaml).
+The full end-state, laws and graduation path are in [Future Factory](docs/future-factory.md).
 
 ## Architecture and lifecycle
 
@@ -448,7 +446,6 @@ A merge callback already in flight is not interrupted or rolled back.
 | `selfhost.factory` | `experimental` | `swfactory run --blueprint selfhost (target dir is the repo root), executing swfactory.stages against the factory's own tree` | tests/test_selfhost.py (contract parses, every protected entry survives literal-prefix reduction, confinement modules are refused for build and fix, both gates are non-auto, one line serves both backends) |
 | `sandbox.smolvm` | `experimental` | `swfactory.smolvm_backend.SmolvmSandboxBackend via ToolsetSandbox` | tests/test_smolvm_backend.py (HTTP contract) and opt-in tests/test_smolvm_live.py |
 | `factory.phase-control` | `experimental` | `swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess and swf phase are read-only` | tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json |
-| `factory.cognitive-harness` | `experimental` | `swfactory.cognitive_harness and swf_domain::cognitive_harness` | tests/test_cognitive_harness.py |
 | `factory.recursive-search` | `experimental` | `swfactory.recursive_search; swfactory research-adapt` | tests/test_recursive_search.py |
 | `factory.swarm-dynamics` | `experimental` | `swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round; managed provider execution from factory.population-execution` | tests/test_swarm_dynamics.py |
 | `factory.population-manifest` | `experimental` | `swfactory.population_manifest via swfactory.recursive_search.plan_adaptive_round; swfactory population-summarize` | tests/test_population_manifest.py |
@@ -456,7 +453,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `factory.population-execution` | `experimental` | `swfactory.execution_binding.execute_managed_population -> swfactory.backend_population.BackendPopulationRunner -> /v1/population/execute -> swfactory.backend.population_service` | tests/test_population_execution.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
 | `factory.population-provider-adapter` | `experimental` | `swfactory.population_adapter.HttpPopulationAdapter via swfactory.backend.population_service` | tests/test_population_adapter.py; tests/test_backend_population.py; tests/test_managed_population_e2e.py |
 | `factory.adaptive-information-budget` | `experimental` | `swfactory.adaptive_information; swfactory population-budget; swfactory.recursive_search.plan_adaptive_round; managed population stage retention` | tests/test_adaptive_information.py and tests/test_recursive_search.py |
-| `factory.formal-claims` | `experimental` | `swfactory.formal_claims; swfactory.justification_graph; swfactory.crystallization; formal/authority/AuthorityKernel.tla` | tests/test_formal_claims.py; tests/test_justification_graph.py; tests/test_crystallization.py |
+| `factory.formal-claims` | `experimental` | `formal/authority/AuthorityKernel.tla` | formal/authority/AuthorityKernel.tla (TLC model; not run in CI) |
 | `autonomous.issue-to-merge` | `experimental` | `swfactory.backend.autonomous_service.operation -> Airflow autonomous DAG` | tests/test_autonomy.py and tests/test_dag_parity.py |
 
 <!-- capability-inventory:end -->

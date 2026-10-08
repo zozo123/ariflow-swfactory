@@ -157,17 +157,13 @@ def test_every_owner_is_one_of_the_seven_canonical_roles() -> None:
     assert all(spec.by_owner()[owner] for owner in CANONICAL_OWNERS)
 
 
-def test_physics_vocabulary_stays_in_research_and_out_of_the_domain_rows() -> None:
+def test_physics_vocabulary_stays_out_of_the_domain_rows() -> None:
     spec = load_spec(SPEC_PATH)
 
     for row in spec.domains:
         prose = f"{row.id} {row.invariant} {row.evidence_requirement}".lower()
         for banned in BANNED_VOCABULARY:
             assert banned not in prose, f"{row.id} still carries {banned!r}"
-
-    research = [family for family in spec.families if family.kind == "research"]
-    assert {family.id for family in research} == {"Ocean120", "Phase240", "StatMech360"}
-    assert all(family.state == "research" for family in research)
 
 
 def test_duplicate_slugs_are_reported_rather_than_silently_merged() -> None:
@@ -360,39 +356,14 @@ def test_a_family_area_anchor_must_resolve_like_any_other() -> None:
     _rejects(document, "no module 'swfactory.totally_fake_module'")
 
 
-def test_a_span_must_agree_with_its_issue_count() -> None:
-    document = _mutated(lambda d: _family(d, "Liquid500").update(issue_range=[1, 7], issues=3))
-    _rejects(document, "spans 7 but issues says 3")
-
-
 def test_a_family_cannot_claim_more_domains_than_it_carries() -> None:
     document = _mutated(lambda d: _family(d, "LegacySnapshot").update(domains=99999))
     _rejects(document, "declares 99999 domains but carries 10 areas")
 
 
-def test_spans_of_one_kind_may_not_overlap() -> None:
-    document = _mutated(lambda d: _family(d, "Liquid400").update(issue_range=[700, 1099], issues=400))
-    _rejects(document, "overlaps")
-
-
-def test_spans_of_one_kind_may_not_leave_a_gap() -> None:
-    document = _mutated(lambda d: _family(d, "Liquid400").update(issue_range=[800, 1199], issues=400))
-    _rejects(document, "gap between")
-
-
 def test_a_liquid_family_must_carry_its_domain_rows() -> None:
-    """Zero rows used to short-circuit the count check, which covered four of the six families."""
+    """Zero rows used to short-circuit the count check, so a liquid family could claim any count."""
     document = _mutated(
         lambda d: d.__setitem__("domains", [row for row in d["domains"] if row["family"] != "Liquid400"])
     )
     _rejects(document, "must carry its domain rows")
-
-
-def test_the_summary_reports_the_spans_the_old_manifest_pinned() -> None:
-    """900 = 500 + 400 and the 181 legacy ranks are now visible in CI output, not just asserted."""
-    spec = load_spec(SPEC_PATH)
-    spans = spec.summary()["spans"]
-    assert spans["Liquid500"] == {"range": [255, 754], "issues": 500}
-    assert spans["Liquid400"] == {"range": [755, 1154], "issues": 400}
-    assert spans["LegacySnapshot"] == {"range": [1, 181], "issues": 181}
-    assert sum(v["issues"] for k, v in spans.items() if k.startswith("Liquid")) == 900

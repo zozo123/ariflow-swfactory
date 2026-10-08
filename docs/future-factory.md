@@ -13,8 +13,25 @@ And the hard boundary is:
 
 > **The factory may recursively improve how it thinks, but never recursively expand what it is allowed to do.**
 
-The machine-readable version of this contract lives in
-[`config/future-factory.yaml`](../config/future-factory.yaml).
+Execution may be disposable, stochastic, heterogeneous and recursively self-improving. Durable
+reality may only change through exact identity, evidence, fencing and explicit authority.
+
+## Laws
+
+- The mind may be stochastic; reality may not.
+- Compute may multiply; authority may not.
+- Search and authority are separate universes.
+- Workers are disposable; Cell identity and accepted inputs are durable.
+- Every external effect is fenced, journaled, observed and reconciled.
+- Credentials are scoped leases, never ambient worker state.
+- Candidate selection for another experiment is not promotion.
+- A candidate must be frozen before independent verification.
+- Promotion depends on gauge-invariant evidence, not model confidence or explanation.
+- Correlated agents do not count as independent search.
+- Deep compute belongs at high-value disagreements, not uniformly across the population.
+- Glass means perturb; jammed means drain; crystal means verify exact bytes.
+- Self-improvement runs as shadow experiments and cannot authorize its own adoption.
+- Claims must never be stronger than retained evidence.
 
 ## End state
 
@@ -484,7 +501,7 @@ scheduler. It reads the retained `PopulationExecutionReport` and, when available
 `PopulationManifest`. Each measured lane is reduced to answer rate, candidate/evidence yield,
 effective independent search, pairwise correlation, disagreement pressure and compute-tier cost.
 
-The controller applies the same cognitive-harness proxy already declared elsewhere:
+The controller scores each lane with one marginal-information proxy:
 
 ```text
 marginal_information = (1 - correlation) * expected_information / compute_units
