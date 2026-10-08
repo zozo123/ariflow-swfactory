@@ -130,9 +130,9 @@ def test_publishing_never_creates_state_as_a_side_effect(tmp_path: Path) -> None
 
 
 def test_the_phases_one_backlog_moves_through() -> None:
-    """Naming, not authority: `Phase240` is research in config/liquid-spec.yaml -- "advisory and
-    observational only ... must not appear in the product's cognitive path". Nothing branches on a
-    phase. It is what an operator reads to see where the fuel is going."""
+    """Naming, not authority: the `Phase240` research wave was advisory and observational only,
+    never in the product's cognitive path. Nothing branches on a phase. It is what an operator reads
+    to see where the fuel is going."""
     from swfactory.work_claim import CONDENSED, FREE, SUBLIMATING, phase_of
 
     live = _claim("swf-a", lease_s=3600)

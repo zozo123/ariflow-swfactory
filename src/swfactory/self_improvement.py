@@ -158,7 +158,7 @@ def capability_signals(document: Mapping[str, Any], *, root: Path | None = None)
     """
     # Imported here rather than at module scope: this module is otherwise free of swfactory
     # dependencies, and resolving references is the only thing it needs from the inventory.
-    from swfactory.capability_inventory import ci_identifiers, references
+    from swfactory.capability_inventory import ci_identifiers, missing_references, references
 
     base = {"declared": 3.0, "integrated": 2.0, "experimental": 1.0, "unsupported": 0.0}
     # Words that mean "this cannot be closed by writing code today". Deliberately narrow: "hosted"
@@ -190,14 +190,12 @@ def capability_signals(document: Mapping[str, Any], *, root: Path | None = None)
         distance = base.get(state, 1.0)
         detail = [f"state={state}", f"support={claim.get('support')}"]
 
-        files, jobs = references(str(claim.get("test", "")))
         if root is not None:
-            missing = [name for name in files if not (root / name).is_file()]
-            missing += [f"ci:{job}" for job in jobs if job not in known_ci]
-            if not files and not jobs:
+            test = str(claim.get("test", ""))
+            if not any(references(test)):
                 distance += 1.0
                 detail.append("no resolvable test")
-            elif missing:
+            elif missing := missing_references(test, root=root, known_ci=known_ci):
                 distance += 1.0
                 detail.append("unresolved tests: " + ", ".join(missing))
 
