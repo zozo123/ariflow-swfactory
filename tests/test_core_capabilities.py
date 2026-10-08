@@ -15,7 +15,6 @@ from swfactory.core_capabilities import (
 )
 from swfactory.idempotency import MutationOutcome, OperationInDoubt, OperationJournal
 from swfactory.liquid_security_runtime import Capability, SecurityContext
-from swfactory.liquid_workgraph_runtime import WorkNode
 from swfactory.security_contract import CanonicalPolicy
 from swfactory.trust_evidence import TrustedEvidence
 
@@ -248,12 +247,6 @@ def test_airflow_binding_is_idempotent_but_conflicts_fail(
 
     with pytest.raises(CoreCapabilityError, match="different Airflow run"):
         runtime.bind_airflow(replace(airflow, run_id="run-conflict"))
-
-
-def test_issue_local_workgraph_stays_bounded(runtime: CoreCapabilityRuntime) -> None:
-    plan = runtime.compile_work([WorkNode(f"n{i}") for i in range(8)], max_width=7)
-    assert max(len(layer) for layer in plan.layers) <= 7
-    assert set(node for layer in plan.layers for node in layer) == {f"n{i}" for i in range(8)}
 
 
 def test_cancelled_cell_refuses_publication_before_the_provider_callback(

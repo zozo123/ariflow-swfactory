@@ -51,16 +51,6 @@ def waves(nodes: Iterable[WorkNode]) -> tuple[WorkWave, ...]:
     return tuple(result)
 
 
-def parallel_groups(nodes: Iterable[WorkNode]) -> tuple[tuple[str, ...], ...]:
-    groups = []
-    for wave in waves(nodes):
-        safe = [node for node in wave.nodes if node.parallel_safe]
-        if len(safe) < 2:
-            continue
-        groups.append(tuple(node.id for node in safe))
-    return tuple(groups)
-
-
 def conflict_set(nodes: Iterable[WorkNode]) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
     ordered = tuple(nodes)
     conflicts = []

@@ -21,7 +21,7 @@ from typing import Any
 
 from swfactory import stages
 from swfactory.models import BuildSummary, Plan, PlanTask, StageError, StageResult, TestResult
-from swfactory.workgraph import WorkNode, conflict_set
+from swfactory.workgraph import conflict_set, waves
 
 _PROGRESS = "workgraph-progress.json"
 
@@ -29,18 +29,6 @@ _PROGRESS = "workgraph-progress.json"
 def _digest_plan(plan: Plan) -> str:
     raw = json.dumps(plan.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
     return "sha256:" + hashlib.sha256(raw).hexdigest()
-
-
-def _nodes(plan: Plan) -> tuple[WorkNode, ...]:
-    return tuple(
-        WorkNode(
-            id=node.id,
-            depends_on=tuple(node.depends_on),
-            files=tuple(node.files),
-            parallel_safe=node.parallel_safe,
-        )
-        for node in plan.work
-    )
 
 
 def _load_progress(ctx: stages.Ctx, plan: Plan, current_head: str) -> dict[str, Any]:
@@ -303,8 +291,8 @@ def _execute_nodes(
         for row in progress["nodes"]
         if isinstance(row, dict) and row.get("state") == "ok" and row.get("node_id")
     }
-    for layer_index, layer in enumerate(plan.work_layers()):
-        for node in sorted(layer, key=lambda item: item.id):
+    for wave in waves(plan.work):
+        for node in sorted(wave.nodes, key=lambda item: item.id):
             if node.id in completed:
                 continue
             missing = sorted(dep for dep in node.depends_on if dep not in completed)
@@ -320,7 +308,7 @@ def _execute_nodes(
                 commit_stage=f"work:{node.id}",
                 label=f"work {node.id}",
                 title=node.title,
-                layer=layer_index,
+                layer=wave.index,
             )
             completed[node.id] = _settle(ctx, progress, plan, after)
 
@@ -356,7 +344,7 @@ def execution_decision(ctx: stages.Ctx, plan: Plan) -> dict[str, Any]:
         )
         if document is None:
             return {**serial, "provider": name, "reason": "provider publishes no capability document"}
-        provider, decision = choose_execution(_nodes(plan), (document,), preferred=(ctx.cfg.sandbox,))
+        provider, decision = choose_execution(plan.work, (document,), preferred=(ctx.cfg.sandbox,))
     except Exception as error:  # noqa: BLE001 - a capability answer is evidence, never a gate.
         return {**serial, "provider": name, "reason": str(error)[:400]}
     return {
@@ -398,14 +386,18 @@ def _verify(
     return tests, output
 
 
+def _failures(tests: TestResult, output: str) -> str:
+    return f"exit code {tests.exit_code}; failed={tests.failed} errors={tests.errors}\n\n{output}"
+
+
 def _legacy_build(
     ctx: stages.Ctx,
     spec_text: str,
     plan_text: str,
     *,
-    population_guidance: str = "",
-    population_artifacts: list[str] | None = None,
-    population_numbers: dict[str, float] | None = None,
+    population_guidance: str,
+    population_artifacts: list[str],
+    population_numbers: dict[str, float],
 ) -> StageResult:
     failures = ""
     for iteration in range(1, ctx.cfg.max_build_iterations + 1):
@@ -427,19 +419,31 @@ def _legacy_build(
         if tests.ok:
             return StageResult(
                 stage="build_and_test",
-                artifacts=list(population_artifacts or ()),
+                artifacts=population_artifacts,
                 numbers={
                     "iterations": float(iteration),
                     "first_pass_ci": float(iteration == 1),
-                    **(population_numbers or {}),
+                    **population_numbers,
                     **stages._test_numbers(tests),
                 },
             )
-        failures = f"exit code {tests.exit_code}; failed={tests.failed} errors={tests.errors}\n\n{output}"
+        failures = _failures(tests, output)
     raise StageError(
         "policy",
         f"tests still failing after {ctx.cfg.max_build_iterations} build iterations; last failure:\n{failures[-1500:]}",
     )
+
+
+def _load_plan(ctx: stages.Ctx) -> Plan | None:
+    """The typed plan, or None for a plan.md-only run; an invalid plan is refused before any search."""
+    try:
+        raw = ctx.read_artifact(f"{ctx.art}/plan.json")
+    except FileNotFoundError:
+        return None
+    try:
+        return Plan.model_validate_json(raw)
+    except (ValueError, OSError) as error:
+        raise StageError("policy", f"plan.json is invalid: {error}") from error
 
 
 @stages._resumable
@@ -447,26 +451,9 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
     """Airflow-managed build stage with real ``Plan.work`` semantics and legacy fallback."""
     spec_text = stages._read_or(ctx, f"{ctx.art}/spec.md")
     plan_text = ctx.read_artifact(f"{ctx.art}/plan.md")
-    try:
-        plan_text_json = ctx.read_artifact(f"{ctx.art}/plan.json")
-    except FileNotFoundError:
-        population_guidance, population_artifacts, population_numbers = _population_search(ctx)
-        return _legacy_build(
-            ctx,
-            spec_text,
-            plan_text,
-            population_guidance=population_guidance,
-            population_artifacts=population_artifacts,
-            population_numbers=population_numbers,
-        )
-    try:
-        plan = Plan.model_validate_json(plan_text_json)
-    except (ValueError, OSError) as error:
-        raise StageError("policy", f"plan.json is invalid: {error}") from error
-
+    plan = _load_plan(ctx)
     population_guidance, population_artifacts, population_numbers = _population_search(ctx)
-
-    if not plan.work:
+    if plan is None or not plan.work:
         return _legacy_build(
             ctx,
             spec_text,
@@ -476,9 +463,7 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
             population_numbers=population_numbers,
         )
 
-    conflicts = [
-        {"left": left, "right": right, "files": list(files)} for left, right, files in conflict_set(_nodes(plan))
-    ]
+    conflicts = [{"left": left, "right": right, "files": list(files)} for left, right, files in conflict_set(plan.work)]
     progress = _open_progress(ctx, plan)
     _execute_nodes(ctx, plan, spec_text, plan_text, progress, population_guidance)
 
@@ -500,7 +485,7 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
     tests, output = _verify(ctx, progress, plan, conflicts)
     if tests.ok:
         return outcome(tests)
-    failures = f"exit code {tests.exit_code}; failed={tests.failed} errors={tests.errors}\n\n{output}"
+    failures = _failures(tests, output)
     # The bound counts journalled repairs, so a retry continues the budget rather than reopening it.
     while len(progress["repairs"]) < ctx.cfg.max_build_iterations - 1:
         repair = len(progress["repairs"]) + 1
@@ -529,7 +514,7 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
         tests, output = _verify(ctx, progress, plan, conflicts)
         if tests.ok:
             return outcome(tests)
-        failures = f"exit code {tests.exit_code}; failed={tests.failed} errors={tests.errors}\n\n{output}"
+        failures = _failures(tests, output)
     raise StageError(
         "policy",
         f"Plan.work tests still failing after bounded repair; last failure:\n{failures[-1500:]}",

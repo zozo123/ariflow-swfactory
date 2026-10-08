@@ -8,6 +8,7 @@ from typing import Literal, NamedTuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from swfactory.paths import validate_identifier, validate_run_id
+from swfactory.workgraph import waves
 
 Severity = Literal["blocker", "major", "minor", "nit"]
 IssueState = Literal["open", "closed"]
@@ -155,70 +156,24 @@ class Plan(BoundaryModel):
 
     @model_validator(mode="after")
     def _validate_work_graph(self) -> Plan:
-        if not self.work:
-            return self
-
-        ids = [node.id for node in self.work]
-        if len(ids) != len(set(ids)):
-            raise ValueError("work graph node ids must be unique")
-        known = set(ids)
         declared_files = set(self.files)
-        by_id = {node.id: node for node in self.work}
-
         for node in self.work:
-            if node.id in node.depends_on:
-                raise ValueError(f"work graph node {node.id!r} cannot depend on itself")
-            unknown = sorted(set(node.depends_on) - known)
-            if unknown:
-                raise ValueError(f"work graph node {node.id!r} has unknown dependencies {unknown}")
             undeclared = sorted(set(node.files) - declared_files)
             if undeclared:
                 raise ValueError(
                     f"work graph node {node.id!r} references files not declared in plan.files: {undeclared}"
                 )
-
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def visit(node_id: str) -> None:
-            if node_id in visited:
-                return
-            if node_id in visiting:
-                raise ValueError(f"work graph contains a cycle at {node_id!r}")
-            visiting.add(node_id)
-            for parent in by_id[node_id].depends_on:
-                visit(parent)
-            visiting.remove(node_id)
-            visited.add(node_id)
-
-        for node_id in ids:
-            visit(node_id)
+        waves(self.work)
         return self
 
     def work_layers(self) -> list[list[PlanTask]]:
         """Stable topological waves; independent nodes in one wave may be fork candidates."""
-        if not self.work:
-            return []
-        remaining = {node.id: node for node in self.work}
-        done: set[str] = set()
-        layers: list[list[PlanTask]] = []
-        while remaining:
-            layer = [node for node in self.work if node.id in remaining and set(node.depends_on) <= done]
-            if not layer:
-                raise ValueError("work graph is cyclic")
-            layers.append(layer)
-            done.update(node.id for node in layer)
-            for node in layer:
-                remaining.pop(node.id, None)
-        return layers
+        return [list(wave.nodes) for wave in waves(self.work)]
 
     def fork_candidates(self) -> list[list[str]]:
         """Parallel-safe nodes sharing a topological wave; a hint, never a capability claim."""
-        return [
-            [node.id for node in layer if node.parallel_safe]
-            for layer in self.work_layers()
-            if sum(node.parallel_safe for node in layer) > 1
-        ]
+        groups = [[node.id for node in wave.nodes if node.parallel_safe] for wave in waves(self.work)]
+        return [group for group in groups if len(group) > 1]
 
     def to_markdown(self, issue_id: str) -> str:
         def section(title: str, items: list[str]) -> str:
