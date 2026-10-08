@@ -284,7 +284,7 @@ Important scenarios include:
 - publication remains outside stage workers.
 
 Executable conformance support lives in
-[`src/swfactory/harness_conformance.py`](../src/swfactory/harness_conformance.py), and the reusable
+[`tests/harness_conformance.py`](../tests/harness_conformance.py), and the reusable
 outer-harness operating contract lives in [`skills/swfactory/SKILL.md`](../skills/swfactory/SKILL.md).
 
 ## 13. Operational example

@@ -27,7 +27,6 @@ authority.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -75,9 +74,6 @@ class Claim:
         """
         return (now or datetime.now(UTC)) >= self.expires_at()
 
-    def held_by(self, instance: str) -> bool:
-        return self.instance == instance
-
     def phase(self, *, now: datetime | None = None) -> str:
         """This claim's phase: ``condensed`` while a session holds it, ``sublimating`` once its
         lease has run out.
@@ -94,44 +90,6 @@ class Claim:
         return SUBLIMATING if self.expired(now=now) else CONDENSED
 
 
-_FIELD = re.compile(r"^(?P<name>instance|at|lease_s)=(?P<value>.+)$", re.M)
-
-
-def parse_claim(key: str, message: str) -> Claim | None:
-    """Read a claim out of its commit message, or None when the message is not one.
-
-    Strict about the header line: a commit that merely mentions a key in prose is not a claim, and
-    treating it as one would let an unrelated ref in this namespace hold the backlog hostage.
-    """
-    if not message.startswith(f"swf-claim {key}"):
-        return None
-    fields = {m.group("name"): m.group("value").strip() for m in _FIELD.finditer(message)}
-    instance = fields.get("instance", "")
-    if not instance:
-        return None
-    try:
-        at = datetime.fromisoformat(fields["at"])
-        lease_s = float(fields.get("lease_s", DEFAULT_LEASE_S))
-    except (KeyError, ValueError):
-        return None
-    if at.tzinfo is None:
-        at = at.replace(tzinfo=UTC)
-    return Claim(key=key, instance=instance, at=at, lease_s=lease_s)
-
-
-def may_take(current: Claim | None, *, instance: str, now: datetime | None = None) -> bool:
-    """Whether ``instance`` may take this claim.
-
-    Three yeses and one no, and the no is the whole point: another session is alive and working
-    this issue, so this session's energy belongs somewhere else.
-    """
-    if current is None:
-        return True  # nobody holds it
-    if current.held_by(instance):
-        return True  # renewing our own
-    return current.expired(now=now)  # the holder is gone; the lease says so
-
-
 def refusal(current: Claim, *, now: datetime | None = None) -> str:
     """Why this session is not taking the claim, in words an operator can act on."""
     remaining = (current.expires_at() - (now or datetime.now(UTC))).total_seconds()
@@ -145,17 +103,3 @@ def refusal(current: Claim, *, now: datetime | None = None) -> str:
 def phase_of(current: Claim | None, *, now: datetime | None = None) -> str:
     """The phase of one unit of work, including the free state a missing claim represents."""
     return FREE if current is None else current.phase(now=now)
-
-
-def energy_report(claims: dict[str, Claim | None], *, now: datetime | None = None) -> dict[str, int]:
-    """How this backlog's work is distributed across phases, for `swf` to render.
-
-    The operator question a many-session factory raises is not "is anything running" but "is the
-    fuel going anywhere useful": a backlog that is entirely `condensed` has every session busy, one
-    that is entirely `free` has sessions idle or blind, and a rising `sublimating` count means
-    sessions are dying mid-loop and their work is being abandoned rather than finished.
-    """
-    counts = {FREE: 0, CONDENSED: 0, SUBLIMATING: 0}
-    for claim in claims.values():
-        counts[phase_of(claim, now=now)] += 1
-    return counts

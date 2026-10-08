@@ -2073,11 +2073,10 @@ def source_snapshot_cmd(
     json_out: Annotated[bool, typer.Option("--json", help="machine-readable receipt")] = False,
 ) -> None:
     """Create and verify the immutable source archive for one recorded Git revision."""
-    from swfactory.repo_runtime import snapshot_source
-    from swfactory.source_snapshot import SourceSnapshotError, verify_source_snapshot
+    from swfactory.source_snapshot import SourceSnapshotError, create_source_snapshot, verify_source_snapshot
 
     try:
-        snapshot = snapshot_source(repo, revision, cache_root)
+        snapshot = create_source_snapshot(repo, revision, cache_root)
         verify_source_snapshot(snapshot)
     except (OSError, SourceSnapshotError) as error:
         typer.echo(f"source snapshot: {error}", err=True)

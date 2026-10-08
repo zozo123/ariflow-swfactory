@@ -97,15 +97,11 @@ def test_homepage_accessibility_and_discovery_contract() -> None:
 def test_homepage_is_small_static_and_content_first() -> None:
     source, _ = parse_page("index.html")
     css = (SITE / "styles.css").read_text()
-    javascript = (SITE / "app.js").read_text()
 
     assert len(source.encode()) < 15_000
     assert len(css.encode()) < 12_000
-    assert len(javascript.encode()) < 300
-    assert 'src="app.js"' not in source
+    assert "<script" not in source
     assert "factory-line.webp" not in source
-    assert "IntersectionObserver" not in javascript
-    assert 'addEventListener("scroll"' not in javascript
     for decorative_surface in (
         "ambient",
         "hero-glow",
@@ -227,7 +223,6 @@ SERVED_WITHOUT_A_LINK = frozenset({"index.html", "404.html", ".nojekyll", "robot
 # `tests/test_site.py` happened to name them, which is an accident rather than a decision -- and the
 # same accident hid `osai-week-2026.html`, a real page reachable from nothing.
 KEPT_WITHOUT_A_LINK: dict[str, str] = {
-    "app.js": "a tombstone: the suite asserts it stays under 300 bytes and that no page loads it",
     "social-card.svg": "the source the published social-card.png is rendered from",
 }
 ADVERTISED_ANCHOR = re.compile(r"zozo123\.github\.io/ariflow-swfactory/#([\w-]+)")

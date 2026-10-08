@@ -69,8 +69,8 @@ Releasing is a tag push. `.github/workflows/release.yml` does the rest: lint, th
 the scripted demo, DAG parity and smoke, `uv build`, then a GitHub Release whose body is that
 version's `CHANGELOG.md` section, with the wheel and the sdist attached.
 
-1. Keep the versions in `pyproject.toml`, `Cargo.toml` (`workspace.package.version`), and
-   `.claude-plugin/plugin.json` aligned. Run `uv lock` and `cargo check --workspace` to refresh
+1. Keep the versions in `pyproject.toml` and `Cargo.toml` (`workspace.package.version`)
+   aligned. Run `uv lock` and `cargo check --workspace` to refresh
    the corresponding lockfiles. The scheme and
    what counts as a breaking change are in
    [docs/design.md](docs/design.md#versioning-and-release).

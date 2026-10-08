@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from swfactory.evidence_release import CandidateManifest, bind_execution_recipe
 from swfactory.execution_recipe import ExecutionRecipeError, load_execution_recipe
 
 
@@ -132,23 +131,6 @@ def test_recipe_rejects_unknown_fields_instead_of_silently_ignoring_policy(tmp_p
 
     with pytest.raises(ExecutionRecipeError, match="unknown execution recipe fields"):
         load_execution_recipe(repo, "HEAD")
-
-
-def test_candidate_manifest_digest_binds_recipe_and_exact_source_commit(tmp_path: Path) -> None:
-    repo, commit = _repo(tmp_path)
-    recipe = load_execution_recipe(repo, commit)
-    manifest = CandidateManifest(commit, "base", (), {})
-    bound = bind_execution_recipe(manifest, recipe)
-
-    assert bound.execution_recipe_sha256 == recipe.digest
-    assert bound.execution_recipe_commit_sha == commit
-    assert bound.execution_recipe_path == ".swfactory/candidate-run.json"
-    bound.validate(set())
-    assert bound.digest != manifest.digest
-
-    other = CandidateManifest("f" * 40, "base", (), {})
-    with pytest.raises(RuntimeError, match="recipe commit"):
-        bind_execution_recipe(other, recipe)
 
 
 def test_option_like_revision_and_escaping_recipe_path_are_refused(tmp_path: Path) -> None:

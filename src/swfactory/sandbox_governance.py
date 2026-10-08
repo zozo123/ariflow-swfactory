@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -100,103 +100,6 @@ def authorize_cleanup(
     if active:
         return CleanupDecision.KEEP
     return CleanupDecision.REMOVE
-
-
-@dataclass(frozen=True)
-class WorkNodeResult:
-    node_id: str
-    parallel_safe: bool
-    declared_paths: frozenset[str]
-    touched_paths: frozenset[str]
-    base_head: str
-    output_head: str
-    cell_id: str
-    epoch: int
-
-
-@dataclass(frozen=True)
-class Conflict:
-    kind: str
-    nodes: tuple[str, ...]
-    paths: tuple[str, ...]
-
-
-def classify_workgraph_conflicts(
-    results: Sequence[WorkNodeResult], *, protected_paths: Iterable[str] = ()
-) -> tuple[Conflict, ...]:
-    conflicts: list[Conflict] = []
-    protected = frozenset(protected_paths)
-    for result in results:
-        unexpected = result.touched_paths - result.declared_paths
-        if unexpected:
-            conflicts.append(Conflict("undeclared-path", (result.node_id,), tuple(sorted(unexpected))))
-        protected_touched = result.touched_paths & protected
-        if protected_touched:
-            conflicts.append(Conflict("protected-path", (result.node_id,), tuple(sorted(protected_touched))))
-        if not result.parallel_safe and len(results) > 1:
-            conflicts.append(Conflict("parallel-unsafe", (result.node_id,), ()))
-    for idx, left in enumerate(results):
-        for right in results[idx + 1 :]:
-            overlap = left.touched_paths & right.touched_paths
-            if overlap:
-                conflicts.append(Conflict("sibling-overlap", (left.node_id, right.node_id), tuple(sorted(overlap))))
-            if left.base_head != right.base_head:
-                conflicts.append(Conflict("base-divergence", (left.node_id, right.node_id), ()))
-            if left.cell_id != right.cell_id or left.epoch != right.epoch:
-                conflicts.append(Conflict("authority-divergence", (left.node_id, right.node_id), ()))
-    return tuple(conflicts)
-
-
-def authorize_fan_in(results: Sequence[WorkNodeResult], *, protected_paths: Iterable[str] = ()) -> None:
-    if not results:
-        raise ValueError("fan-in requires at least one result")
-    conflicts = classify_workgraph_conflicts(results, protected_paths=protected_paths)
-    if conflicts:
-        detail = "; ".join(f"{row.kind}:{','.join(row.nodes)}:{','.join(row.paths)}" for row in conflicts)
-        raise RuntimeError("workgraph fan-in refused: " + detail)
-
-
-class ReplayStrategy(StrEnum):
-    REPAIR = "repair"
-    REPLAN = "replan"
-    RESTART = "restart"
-
-
-@dataclass(frozen=True)
-class ReplayCandidate:
-    strategy: ReplayStrategy
-    input_digest: str
-    output_digest: str
-    correct: bool
-    elapsed_ms: int
-    cost_usd: float
-    evidence_digest: str
-
-    def score(self) -> tuple[int, float, int, str]:
-        # Correctness dominates. Among correct candidates, prefer lower cost then lower latency.
-        return (0 if self.correct else 1, self.cost_usd, self.elapsed_ms, self.strategy.value)
-
-
-@dataclass(frozen=True)
-class TimeMachineResult:
-    frozen_input_digest: str
-    candidates: tuple[ReplayCandidate, ...]
-    winner: ReplayCandidate
-
-
-def choose_replay_winner(candidates: Sequence[ReplayCandidate]) -> TimeMachineResult:
-    if {candidate.strategy for candidate in candidates} != set(ReplayStrategy):
-        raise ValueError("time-machine replay requires repair, replan and restart candidates")
-    inputs = {candidate.input_digest for candidate in candidates}
-    if len(inputs) != 1:
-        raise ValueError("competing futures must share one frozen input")
-    for candidate in candidates:
-        if candidate.elapsed_ms < 0 or candidate.cost_usd < 0:
-            raise ValueError("candidate metrics must be non-negative")
-        if len(candidate.evidence_digest) != 64:
-            raise ValueError("candidate evidence digest must be sha256")
-    winner = min(candidates, key=ReplayCandidate.score)
-    return TimeMachineResult(next(iter(inputs)), tuple(candidates), winner)
 
 
 @dataclass

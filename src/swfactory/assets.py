@@ -21,9 +21,3 @@ def _asset_root() -> Path:
 
 
 ASSET_ROOT = _asset_root()
-
-
-def asset_path(*parts: str) -> Path:
-    """Return a path below the selected source-or-wheel asset tree."""
-
-    return ASSET_ROOT.joinpath(*parts)
