@@ -34,6 +34,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from swfactory import blueprint as blueprint_mod
+from swfactory.backend_http import MIN_BACKEND_TOKEN_CHARS, valid_backend_token
 from swfactory.config import FACTORY_ROOT, Config, TargetContract
 from swfactory.sandbox import SRT_NPM_PACKAGE
 
@@ -66,9 +67,6 @@ _COMMAND_TIMEOUT_S = 120
 # What a backend-managed Airflow worker needs in its own environment to reach the backend
 # (``cell_callback.transition`` and ``backend_scm.BackendScm`` both read exactly these).
 MANAGED_WORKER_VARS = ("SWF_BACKEND_URL", "SWF_BACKEND_TOKEN")
-# The backend rejects anything shorter (``backend/service.py``), so a shorter value is not a
-# weak configuration: it is one that cannot authenticate at all.
-MIN_BACKEND_TOKEN_CHARS = 32
 
 
 class DoctorCommandError(RuntimeError):
@@ -472,7 +470,7 @@ def _check_managed_workers(env: Mapping[str, str]) -> Check:
         problems.append("SWF_BACKEND_URL must be an http(s) URL")
     if not token:
         problems.append("SWF_BACKEND_TOKEN is unset")
-    elif len(token) < MIN_BACKEND_TOKEN_CHARS or any(c.isspace() for c in token):
+    elif not valid_backend_token(token):
         problems.append(f"SWF_BACKEND_TOKEN must be {MIN_BACKEND_TOKEN_CHARS}+ non-whitespace characters")
     if problems:
         # Never the token itself: a doctor report is pasted into issues.

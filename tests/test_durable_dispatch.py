@@ -17,6 +17,7 @@ import sqlite3
 import threading
 import time
 import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -591,7 +592,7 @@ def test_the_callback_reports_the_resumed_dispatch_and_does_not_perform_it(monke
         "released_work": ["submit_b"],
         "resumed_dispatch": [{"work_id": "submit_b", "dispatched": True, "run_id": "swf__b"}],
     }
-    monkeypatch.setattr(cell_callback.urllib.request, "urlopen", lambda *a, **k: _Response(body))
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _Response(body))
     result = cell_callback.transition(_managed_job(), "success", operation_key="airflow:success")
     assert result == {
         "cell": body["cell"],
@@ -604,7 +605,7 @@ def test_the_callback_refuses_an_answer_about_a_different_cell_epoch(monkeypatch
     monkeypatch.setenv("SWF_BACKEND_URL", "https://backend.invalid")
     monkeypatch.setenv("SWF_BACKEND_TOKEN", "b" * 40)
     body = {"cell": {"cell_id": "cell_555aa0b670e50aef10c1f7fd", "epoch": 3, "state": "success"}, "released_work": []}
-    monkeypatch.setattr(cell_callback.urllib.request, "urlopen", lambda *a, **k: _Response(body))
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _Response(body))
     with pytest.raises(cell_callback.CellCallbackError):
         cell_callback.transition(_managed_job(), "success", operation_key="airflow:success")
 

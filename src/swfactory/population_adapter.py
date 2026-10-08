@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from swfactory.backend_http import no_redirect_open
 from swfactory.population_manifest import PopulationManifestError
 from swfactory.provider_binding import BoundPopulationTask
 
@@ -185,11 +186,6 @@ class HttpPopulationAdapterConfig:
         return _digest(self.canonical_dict())
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, _req, _fp, _code, _msg, _headers, _newurl):
-        return None
-
-
 class HttpPopulationAdapter:
     """Small JSON adapter for a trusted provider gateway."""
 
@@ -204,7 +200,7 @@ class HttpPopulationAdapter:
         self.provider = config.provider
         self.credential_capability = config.credential_capability
         self.credential_env = config.credential_env
-        self._open = opener or urllib.request.build_opener(_NoRedirect()).open
+        self._open = opener or no_redirect_open
 
     def execute(
         self,

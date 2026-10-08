@@ -20,15 +20,13 @@ that story visible and replayable rather than swallowed.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import urllib.error
-import urllib.request
 from collections.abc import Mapping
 from dataclasses import asdict
 from typing import Any
 
+from swfactory.backend_http import ResponseTooLarge, post_json, valid_backend_token
 from swfactory.recovery_accounting import CallbackDebt, RecoveryAction, reconcile_callback
 
 log = logging.getLogger(__name__)
@@ -53,39 +51,20 @@ def _binding(job: dict[str, Any]) -> tuple[str, int]:
 def _post(
     path: str, body: dict[str, Any], *, env: Mapping[str, str] | None = None, timeout: float = 10.0
 ) -> tuple[int, Any]:
-    """One bounded POST to the backend. Transport failure raises; an HTTP status is returned as-is."""
+    """One bounded POST to the backend. Transport failure raises; an HTTP status is returned with its detail."""
     env = os.environ if env is None else env
     base = (env.get("SWF_BACKEND_URL") or "").rstrip("/")
     token = env.get("SWF_BACKEND_TOKEN") or ""
-    if not base or len(token) < 32:
+    if not base or not valid_backend_token(token):
         raise CellCallbackError("managed Airflow workers require SWF_BACKEND_URL and SWF_BACKEND_TOKEN")
-    request = urllib.request.Request(
-        base + path,
-        data=json.dumps(body, sort_keys=True, separators=(",", ":")).encode(),
-        method="POST",
-        headers={
-            "Authorization": "Bearer " + token,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-    )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read(1024 * 1024 + 1)
-            status = response.status
-    except urllib.error.HTTPError as error:
-        raw = error.read(8192)
-        status = error.code
+        return post_json(base, token, path, body, timeout=timeout, limit=1024 * 1024)
+    except ResponseTooLarge:
+        raise CellCallbackError("Factory Cell callback response exceeds limit") from None
+    except ValueError as error:
+        raise CellCallbackError("Factory Cell callback returned invalid JSON") from error
     except OSError as error:
         raise CellCallbackError(f"Factory Cell callback unavailable: {error}") from error
-    if len(raw) > 1024 * 1024:
-        raise CellCallbackError("Factory Cell callback response exceeds limit")
-    try:
-        return status, json.loads(raw) if raw else {}
-    except ValueError as error:
-        if status >= 300:
-            return status, {}
-        raise CellCallbackError("Factory Cell callback returned invalid JSON") from error
 
 
 def post(path: str, body: dict[str, Any], *, env: Mapping[str, str] | None = None, timeout: float = 10.0) -> Any:
@@ -99,8 +78,7 @@ def post(path: str, body: dict[str, Any], *, env: Mapping[str, str] | None = Non
     """
     status, document = _post("/v1" + path, body, env=env, timeout=timeout)
     if status >= 300:
-        detail = document.get("detail", f"HTTP {status}") if isinstance(document, dict) else f"HTTP {status}"
-        raise CellCallbackError(f"Factory Cell callback refused: {detail}")
+        raise CellCallbackError(f"Factory Cell callback refused: {document}")
     return document
 
 
@@ -119,8 +97,7 @@ def transition(job: dict[str, Any], state: str, *, operation_key: str) -> dict[s
         {"cell_id": cell_id, "epoch": epoch, "state": state, "operation_key": operation_key},
     )
     if status >= 300:
-        detail = result.get("detail", f"HTTP {status}") if isinstance(result, dict) else f"HTTP {status}"
-        raise CellCallbackError(f"Factory Cell callback refused: {detail}")
+        raise CellCallbackError(f"Factory Cell callback refused: {result}")
     if not isinstance(result, dict):
         raise CellCallbackError("Factory Cell callback returned invalid document")
     cell = result.get("cell")

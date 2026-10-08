@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import urllib.request
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -553,8 +554,6 @@ def test_sweep_journals_a_lost_rm_and_reconciles_it_by_provider_identity(tmp_pat
 def test_request_sweep_goes_through_the_backend_and_refuses_without_one(monkeypatch: pytest.MonkeyPatch) -> None:
     """The worker never runs ``islo rm`` itself: the Cell store and journal that authorize and
     remember a removal live with the backend, so the DAG task asks it."""
-    from swfactory import cell_callback
-
     monkeypatch.delenv("SWF_BACKEND_URL", raising=False)
     report = maintain.request_sweep(3600)
     assert report["removed"] == [] and "SWF_BACKEND_URL" in report["refused"]
@@ -578,7 +577,7 @@ def test_request_sweep_goes_through_the_backend_and_refuses_without_one(monkeypa
 
     monkeypatch.setenv("SWF_BACKEND_URL", "http://backend:8082/")
     monkeypatch.setenv("SWF_BACKEND_TOKEN", "t" * 32)
-    monkeypatch.setattr(cell_callback.urllib.request, "urlopen", lambda request, **_k: _Response(request))
+    monkeypatch.setattr(urllib.request, "urlopen", lambda request, **_k: _Response(request))
     assert maintain.request_sweep(3600)["removed"] == ["swf-a-1-aaaaaaaa"]
     assert sent == [("http://backend:8082/v1/workers/sweep", {"ttl_s": 3600})]
 

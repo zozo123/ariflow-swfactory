@@ -29,6 +29,7 @@ from typing import Any
 
 from swfactory import blueprint, maintain
 from swfactory.admission import Priority
+from swfactory.backend_http import NoRedirect, valid_backend_token
 from swfactory.cell_runtime import SCHEDULE_ACTOR, identity_for_job
 from swfactory.cells import (
     SCHEMA_VERSION,
@@ -67,7 +68,7 @@ from swfactory.restore_contract import RestoreGate
 from swfactory.security_contract import CanonicalPolicy, MutationEnvelope, policy_digest_for_mapping
 from swfactory.store_schema import StoreSchemaError, assert_compatible
 from swfactory.trust_evidence import TrustedEvidence
-from swfactory.webhook import _NoRedirect, _safe_airflow_base
+from swfactory.webhook import _safe_airflow_base
 
 MAX_RESPONSE = 16 * 1024 * 1024
 # A Factory Cell that is live at its recorded epoch: the states an earlier dispatch attempt can
@@ -158,7 +159,7 @@ class Factory:
         state_root: Path = Path(".factory"),
         population_adapters: Mapping[str, PopulationAdapter] | None = None,
     ):
-        if len(token) < 32 or any(c.isspace() for c in token):
+        if not valid_backend_token(token):
             raise ValueError("SWF_BACKEND_TOKEN must contain at least 32 non-whitespace characters")
         self.token = token
         self.airflow_url = _safe_airflow_base(airflow_url)
@@ -227,7 +228,7 @@ class Factory:
         self.cell_store.on_authority_revoked = lambda cell_id, epoch, reason: self.leases.revoke_epoch(
             cell_id, epoch, reason=reason
         )
-        self.opener = urllib.request.build_opener(_NoRedirect)
+        self.opener = urllib.request.build_opener(NoRedirect)
         self.credentials = AirflowClient(
             self.airflow_url,
             token=os.getenv("AIRFLOW_TOKEN") or None,

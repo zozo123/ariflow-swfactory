@@ -53,6 +53,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from swfactory.backend_http import no_redirect_open
 from swfactory.models import RunResult, StageError
 from swfactory.paths import confined_posix_path, normalize_relative_path, validate_git_ref, validate_repo
 from swfactory.state import RunState
@@ -152,13 +153,6 @@ def boat_client_from_env(env: Mapping[str, str] | None = None) -> BoatClient:
     return HttpBoatClient(key, base_url or BOAT_DEFAULT_BASE_URL)
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Never follow a redirect: one would carry the Authorization header to another origin."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
 def _sandbox_path(sandbox_id: str) -> str:
     return f"/sandboxes/{urllib.parse.quote(sandbox_id, safe='')}"
 
@@ -217,7 +211,7 @@ class HttpBoatClient:
             method=method,
         )
         try:
-            with urllib.request.build_opener(_NoRedirect()).open(request, timeout=timeout_s) as response:
+            with no_redirect_open(request, timeout=timeout_s) as response:
                 raw = response.read(BOAT_MAX_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as error:
             error.close()

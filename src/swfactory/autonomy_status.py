@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import urllib.request
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from swfactory.autonomy import load_policy
+from swfactory.backend_http import ResponseTooLarge, no_redirect_open, post_json
 from swfactory.cells import is_cell_id
+from swfactory.webhook import _safe_backend_base
 
 NEXT_ACTION = {
     "required_labels_missing": "Apply the policy's required labels, then retriage the issue.",
@@ -70,30 +70,24 @@ def status(root: Path, *, limit: int = 50) -> dict:
     return result
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
 def remote_status(url: str, token: str, *, limit: int = 50) -> dict:
-    parsed = urlsplit(url)
-    if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError("backend URL must not contain credentials, query, or fragment")
-    if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}):
-        raise ValueError("backend URL must use HTTPS (HTTP is allowed only on loopback)")
+    base = _safe_backend_base(url)
     if not token:
         raise ValueError("SWF_BACKEND_TOKEN is missing")
-    request = urllib.request.Request(
-        url.rstrip("/") + "/v1/scm/autonomy-status",
-        data=json.dumps({"limit": limit}).encode(),
-        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.build_opener(_NoRedirect()).open(request, timeout=30) as response:
-        data = response.read(1024 * 1024 + 1)
-    if len(data) > 1024 * 1024:
-        raise ValueError("autonomy status exceeds response limit")
-    result = json.loads(data)
+    try:
+        code, result = post_json(
+            base,
+            token,
+            "/v1/scm/autonomy-status",
+            {"limit": limit},
+            timeout=30,
+            limit=1024 * 1024,
+            opener=no_redirect_open,
+        )
+    except ResponseTooLarge:
+        raise ValueError("autonomy status exceeds response limit") from None
+    if code >= 300:
+        raise ValueError(f"HTTP {code}")
     if not isinstance(result, dict) or not isinstance(result.get("decisions"), list):
         raise ValueError("backend returned an invalid autonomy status")
     return result

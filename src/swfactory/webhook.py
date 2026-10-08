@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from typing import Any
 
+from swfactory.backend_http import NoRedirect
 from swfactory.dispatch import DeliveryConflict, DeliveryInbox, Dispatcher, InboxFull
 from swfactory.paths import validate_repo
 
@@ -216,14 +217,8 @@ def verify_signature(secret: str, body: bytes, header: str | None) -> bool:
 # ---------------------------------------------------------------- Airflow REST calls
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Reject redirects so credentials cannot cross origins through urllib."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
-        return None
-
-
-_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect()).open
+_NoRedirect = NoRedirect
+_NO_REDIRECT_OPENER = urllib.request.build_opener(NoRedirect()).open
 
 
 def _safe_base(url: str, *, what: str, allow_var: str, env: Mapping[str, str] | None = None) -> str:

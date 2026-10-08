@@ -586,8 +586,7 @@ def state_autonomy(
             else status(root, limit=limit)
         )
     except (OSError, ValueError, sqlite3.Error) as error:
-        detail = f"HTTP {error.code}" if isinstance(error, urllib.error.HTTPError) else str(error)
-        typer.echo(f"autonomy status unavailable: {detail}", err=True)
+        typer.echo(f"autonomy status unavailable: {error}", err=True)
         raise typer.Exit(1) from error
     if as_json:
         typer.echo(json.dumps(result, indent=2))
