@@ -19,7 +19,6 @@ from swfactory.authority import ResourceKind
 from swfactory.core_capabilities import CoreMutationRequest
 from swfactory.credential_lease import LeaseBinding
 from swfactory.idempotency import MutationOutcome
-from swfactory.liquid_security_runtime import Capability, SecurityContext
 from swfactory.models import StageError
 from swfactory.recovery_accounting import (
     Observation,
@@ -30,6 +29,7 @@ from swfactory.recovery_accounting import (
     classify_observation,
 )
 from swfactory.scm import GitHubScm, patch_content_digest
+from swfactory.security_contract import Capability, SecurityContext
 
 from .core_service import airflow_binding, ensure_core, intent_digest
 from .service import Factory, Refused, text

@@ -11,7 +11,9 @@ from __future__ import annotations
 import os
 import posixpath
 import re
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
@@ -82,14 +84,11 @@ def validate_git_ref(value: str, *, field: str = "base_branch") -> str:
 def normalize_relative_path(value: str, *, field: str = "path", allow_empty: bool = False) -> str:
     """Normalize a portable POSIX relative path and reject traversal or platform ambiguity."""
 
-    if not isinstance(value, str) or _CONTROL_RE.search(value):
-        raise ValueError(f"{field} contains control characters")
+    _clean_posix(value, field=field, shape="POSIX relative path")
     if not value:
         if allow_empty:
             return ""
         raise ValueError(f"{field} must not be empty")
-    if value != value.strip() or "\\" in value or _WINDOWS_DRIVE_RE.match(value):
-        raise ValueError(f"{field} must be a clean POSIX relative path")
     path = PurePosixPath(value)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError(f"{field} must stay inside its root: {value!r}")
@@ -104,28 +103,29 @@ def normalize_relative_path(value: str, *, field: str = "path", allow_empty: boo
 def normalize_target_dir(value: str, *, field: str = "targets.dir") -> str:
     """Normalize a target directory while keeping the Cell target join injective."""
 
-    normalized = normalize_relative_path(value, field=field, allow_empty=True)
-    if "@" in normalized:
-        raise ValueError(f"{field} must not contain '@' because it separates Factory Cell target identity")
-    return normalized
+    return _no_target_separator(normalize_relative_path(value, field=field, allow_empty=True), field=field)
 
 
 def validate_target_base_branch(value: str, *, field: str = "targets.base_branch") -> str:
     """Validate a target branch while preserving the v1 target identity delimiter."""
 
-    normalized = validate_git_ref(value, field=field)
-    if "@" in normalized:
-        raise ValueError(f"{field} must not contain '@' because it separates Factory Cell target identity")
-    return normalized
+    return _no_target_separator(validate_git_ref(value, field=field), field=field)
+
+
+def cell_target(job: Mapping[str, Any]) -> str:
+    """Return the ``dir@base_branch`` target that Cell identity and Cell policy both bind."""
+
+    directory = normalize_target_dir(str(job.get("dir", "")).strip(), field="job.dir") or "."
+    base_branch = validate_target_base_branch(
+        str(job.get("base_branch", "main")).strip() or "main", field="job.base_branch"
+    )
+    return f"{directory}@{base_branch}"
 
 
 def normalize_absolute_posix_path(value: str, *, field: str = "path") -> str:
     """Normalize a non-root absolute path used inside a remote sandbox."""
 
-    if not isinstance(value, str) or _CONTROL_RE.search(value):
-        raise ValueError(f"{field} contains control characters")
-    if value != value.strip() or "\\" in value or _WINDOWS_DRIVE_RE.match(value):
-        raise ValueError(f"{field} must be a clean absolute POSIX path")
+    _clean_posix(value, field=field, shape="absolute POSIX path")
     path = PurePosixPath(value)
     if not path.is_absolute() or ".." in path.parts or path.as_posix() == "/":
         raise ValueError(f"{field} must be an absolute sandbox path below /")
@@ -156,3 +156,16 @@ def confined_posix_path(root: str, value: str) -> str:
     if not inside:
         raise ValueError(f"path escapes sandbox root {boundary}: {value}")
     return candidate
+
+
+def _clean_posix(value: str, *, field: str, shape: str) -> None:
+    if not isinstance(value, str) or _CONTROL_RE.search(value):
+        raise ValueError(f"{field} contains control characters")
+    if value != value.strip() or "\\" in value or _WINDOWS_DRIVE_RE.match(value):
+        raise ValueError(f"{field} must be a clean {shape}")
+
+
+def _no_target_separator(value: str, *, field: str) -> str:
+    if "@" in value:
+        raise ValueError(f"{field} must not contain '@' because it separates Factory Cell target identity")
+    return value

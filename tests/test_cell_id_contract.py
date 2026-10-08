@@ -4,7 +4,7 @@
 hex characters. That rule was being checked ten different ways:
 
     prefix only   airflow_binding.py, authority.py (x2), core_capabilities.py, idempotency.py,
-                  liquid_security_runtime.py, and in Rust manager_protocol.rs and worker.rs
+                  SecurityContext, and in Rust manager_protocol.rs and worker.rs
     prefix + len  runtime.py, security_contract.py
     full shape    swf-app/src/cells.rs (the operator surface, and only there)
 

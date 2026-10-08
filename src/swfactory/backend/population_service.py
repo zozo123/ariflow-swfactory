@@ -14,13 +14,13 @@ from typing import Any
 from swfactory.authority import ResourceKind
 from swfactory.core_capabilities import CoreMutationRequest
 from swfactory.credential_lease import LeaseBinding
-from swfactory.liquid_security_runtime import Capability, SecurityContext
 from swfactory.population_adapter import (
     PopulationInvocation,
     population_adapter_identity,
 )
 from swfactory.population_manifest import BehaviorReceipt, PopulationManifestError
 from swfactory.provider_binding import bound_population_task_from_document
+from swfactory.security_contract import Capability, SecurityContext
 
 from .core_service import airflow_binding, ensure_core, intent_digest
 from .service import Factory, Refused, text

@@ -12,7 +12,7 @@ from typing import Any
 
 from swfactory.cells import CellIdentity
 from swfactory.intake_governance import require_complete_bindings
-from swfactory.paths import normalize_target_dir, validate_target_base_branch
+from swfactory.paths import cell_target
 from swfactory.xcom_contract import validate_xcom_document
 
 # The actor a cron tick submits itself as. The backend accepts ``airflow_run_id`` from this actor
@@ -21,20 +21,10 @@ SCHEDULE_ACTOR = "airflow-schedule"
 _BINDING_KEYS = frozenset({"job_idx", "cell_id", "epoch", "repo", "snapshot_digest"})
 
 
-def target_identity(job: dict[str, Any]) -> str:
-    raw_directory = str(job.get("dir", "")).strip()
-    directory = normalize_target_dir(raw_directory, field="job.dir") or "."
-    base_branch = validate_target_base_branch(
-        str(job.get("base_branch", "main")).strip() or "main",
-        field="job.base_branch",
-    )
-    return f"{directory}@{base_branch}"
-
-
 def identity_for_job(job: dict[str, Any]) -> CellIdentity:
     return CellIdentity(
         repo=str(job["repo"]).strip(),
-        target=target_identity(job),
+        target=cell_target(job),
         issue=str(job["issue"]).strip(),
     )
 

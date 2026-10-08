@@ -14,8 +14,7 @@ from swfactory.core_capabilities import (
     CoreMutationRequest,
 )
 from swfactory.idempotency import MutationOutcome, OperationInDoubt, OperationJournal
-from swfactory.liquid_security_runtime import Capability, SecurityContext
-from swfactory.security_contract import CanonicalPolicy
+from swfactory.security_contract import CanonicalPolicy, Capability, SecurityContext
 from swfactory.trust_evidence import TrustedEvidence
 
 
