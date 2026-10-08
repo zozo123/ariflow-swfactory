@@ -489,9 +489,9 @@ These links are starting points for review, not blanket capability certification
 | Managed publication | [Backend SCM service](../src/swfactory/backend/scm_service.py), [journal](../src/swfactory/idempotency.py) | Converge mutation call sites and test ambiguous remote outcomes end to end |
 | Shared capability contract | [Core runtime](../src/swfactory/core_capabilities.py), [focused tests](../tests/test_core_capabilities.py) | The backend currently uses `ControlKernel`; adopt one canonical path without retaining parallel authority |
 | Inner work | [Plan model](../src/swfactory/models.py), [workgraph](../src/swfactory/workgraph.py), [lifecycle contract](lifecycle.md) | Wire bounded native fork/merge execution before advertising it |
-| Evidence and claims | [Trusted evidence](../src/swfactory/trust_evidence.py), [public capabilities](../src/swfactory/public_capabilities.py) | Link acceptance criteria and claims to retained runtime evidence |
+| Evidence and claims | [Trusted evidence](../src/swfactory/trust_evidence.py), [capability inventory](../src/swfactory/capability_inventory.py) | Link acceptance criteria and claims to retained runtime evidence |
 | Matrix and legacy scope | [Liquid spec](../config/liquid-spec.yaml), [checker](../src/swfactory/liquid_spec.py) | The spec resolves every `runtime_anchor` to real code, so declared coverage is falsifiable rather than asserted; `state`/`support` keep it separate from validated behavior |
-| Providers and generations | [Provider conformance](../src/swfactory/provider_conformance.py), [generations](../src/swfactory/generations.py) | Publish measured support boundaries and govern candidate promotion |
+| Providers and generations | [Provider contract](../src/swfactory/sandbox_contract.py), [generations](../src/swfactory/generations.py) | Publish measured support boundaries and govern candidate promotion |
 | Operators and recovery | [Rust console](../rust/README.md), [recovery guide](run-recovery.md), [backend](factory-backend.md) | Prove cross-surface agreement and repair from durable state after interruption |
 
 ## Implementation priorities
