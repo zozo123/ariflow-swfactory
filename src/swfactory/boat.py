@@ -11,7 +11,6 @@ that repo's vendored ``@boatdev/sdk`` rather than guessed::
     POST  /sandboxes/<id>/commands   exec (``cwd`` and ``timeoutSeconds`` travel per command)
     GET   /sandboxes/<id>/files      read one file (utf8)
     PUT   /sandboxes/<id>/files      write one file (base64)
-    POST  /sandboxes/<id>/host       map a port to a URL
     POST  /sandboxes/<id>/stop       archive the sandbox
 
 ``BOAT_API_KEY`` (and optional ``BOAT_BASE_URL``) come from the process environment only --
@@ -41,6 +40,7 @@ Honest limits, written down rather than discovered:
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import os
 import posixpath
@@ -50,12 +50,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from swfactory.backend_http import no_redirect_open
-from swfactory.models import RunResult, StageError
-from swfactory.paths import confined_posix_path, normalize_relative_path, validate_git_ref, validate_repo
+from swfactory.models import TIMEOUT_EXIT_CODE, ExecResult, RunResult, StageError
+from swfactory.paths import validate_git_ref, validate_repo
+from swfactory.sandbox import (
+    _CONTROL_TIMEOUT_S,
+    _checkout_dir,
+    _confine,
+    fold_exec,
+    load_handle,
+    provision_checkout,
+    save_handle,
+)
 from swfactory.state import RunState
 
 BOAT_API_KEY_ENV = "BOAT_API_KEY"
@@ -72,14 +80,9 @@ BOAT_READY_STATES = frozenset({"ready", "idle", "running"})
 BOAT_STOPPED_STATES = frozenset({"archived", "cancelled"})
 # States from which a sandbox can never become ready (archiving included: it is going down).
 BOAT_TERMINAL_STATES = frozenset({"error", "archiving", "archived", "cancelled"})
-BOAT_CONTROL_TIMEOUT_S = 300  # state polls, mkdir, file reads and writes
-BOAT_PROVISION_TIMEOUT_S = 1200  # git clone --depth 1 of the target
 BOAT_POLL_S = 2.0
 BOAT_READY_TIMEOUT_S = 300.0
 BOAT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
-# Exit code reported for a command boat killed at its timeout (mirrors coreutils `timeout`,
-# the same value sandbox.TIMEOUT_EXIT_CODE carries for the other kinds).
-TIMED_OUT_EXIT_CODE = 124
 
 
 class BoatError(StageError):
@@ -90,23 +93,14 @@ class BoatError(StageError):
         self.status = status
 
 
-@dataclass(frozen=True)
-class BoatExecResult:
-    """One exec outcome as boat reports it; ``exit_code`` is ``None`` when a signal killed it."""
-
-    exit_code: int | None
-    stdout: str = ""
-    stderr: str = ""
-    timed_out: bool = False
-    stdout_truncated: bool = False
-    stderr_truncated: bool = False
+BoatExecResult = ExecResult
 
 
 @runtime_checkable
 class BoatClient(Protocol):
     """The narrow boat.dev surface a work cell needs; tests fake exactly this and nothing else."""
 
-    def create(self, *, ttl_s: int, machine_type: str = BOAT_DEFAULT_TYPE, env: Mapping[str, str] | None = None) -> str:
+    def create(self, *, ttl_s: int, machine_type: str = BOAT_DEFAULT_TYPE) -> str:
         """Create a VM and return its sandbox id."""
         ...
 
@@ -126,10 +120,6 @@ class BoatClient(Protocol):
 
     def write_file(self, sandbox_id: str, path: str, content: bytes) -> None:
         """Write one file inside the VM (base64 over the transport)."""
-        ...
-
-    def expose(self, sandbox_id: str, port: int, *, public: bool = False) -> str:
-        """Map ``port`` to a URL and return it."""
         ...
 
     def stop(self, sandbox_id: str) -> None:
@@ -164,6 +154,11 @@ def _state_of(sandbox: Mapping[str, object]) -> str:
     return state.strip()
 
 
+def _expect(payload: dict, type_: str, op: str) -> None:
+    if payload.get("type") != type_:
+        raise BoatError(f"boat.dev {op} returned {payload.get('type')!r}, expected {type_!r}")
+
+
 class HttpBoatClient:
     """The boat.dev REST transport. Every failure is one ``BoatError`` line; the key never enters one."""
 
@@ -195,7 +190,7 @@ class HttpBoatClient:
         *,
         body: Mapping[str, object] | None = None,
         query: Mapping[str, str] | None = None,
-        timeout_s: float = BOAT_CONTROL_TIMEOUT_S,
+        timeout_s: float = _CONTROL_TIMEOUT_S,
     ) -> dict:
         url = self.base_url + path
         if query:
@@ -248,34 +243,38 @@ class HttpBoatClient:
             raise
         return _state_of(sandbox)
 
-    def create(self, *, ttl_s: int, machine_type: str = BOAT_DEFAULT_TYPE, env: Mapping[str, str] | None = None) -> str:
-        if machine_type not in BOAT_TYPES:
-            raise BoatError(f"boat has no machine type {machine_type!r}; have {list(BOAT_TYPES)}")
-        if type(ttl_s) is not int or ttl_s <= 0:
-            raise BoatError("boat ttl_s must be a positive integer")
-        body: dict[str, object] = {"noEnv": True, "type": machine_type, "ttlSeconds": ttl_s}
-        if env:
-            body["env"] = dict(env)
-        return self._sandbox(self._request("create", "POST", "/sandboxes", body=body), "create")["id"]
-
-    def wait_ready(self, sandbox_id: str) -> None:
+    def _poll(self, sandbox_id: str, observe: Callable[[], str], done: frozenset[str], what: str) -> None:
+        """Re-``observe`` the state every ``poll_s`` until it is in ``done``; ``observe`` raises on a
+        dead end, and a state still short of ``done`` after ``ready_timeout_s`` is retryable."""
         waited = 0.0
-        while True:
-            sandbox = self._sandbox(self._request("get", "GET", _sandbox_path(sandbox_id)), "get")
-            state = _state_of(sandbox)
-            if state in BOAT_READY_STATES:
-                return
-            if state in BOAT_TERMINAL_STATES:
-                why = sandbox.get("error")
-                detail = f": {why}" if isinstance(why, str) and why.strip() else ""
-                raise BoatError(f"boat sandbox {sandbox_id} entered state {state}{detail}")
+        while (state := observe()) not in done:
             if waited >= self.ready_timeout_s:
                 raise BoatError(
-                    f"boat sandbox {sandbox_id} not ready after {self.ready_timeout_s:g} s (state {state})",
+                    f"boat sandbox {sandbox_id} not {what} after {self.ready_timeout_s:g} s (state {state})",
                     retryable=True,
                 )
             self._sleep(self.poll_s)
             waited += self.poll_s
+
+    def create(self, *, ttl_s: int, machine_type: str = BOAT_DEFAULT_TYPE) -> str:
+        if machine_type not in BOAT_TYPES:
+            raise BoatError(f"boat has no machine type {machine_type!r}; have {list(BOAT_TYPES)}")
+        if type(ttl_s) is not int or ttl_s <= 0:
+            raise BoatError("boat ttl_s must be a positive integer")
+        body = {"noEnv": True, "type": machine_type, "ttlSeconds": ttl_s}
+        return self._sandbox(self._request("create", "POST", "/sandboxes", body=body), "create")["id"]
+
+    def wait_ready(self, sandbox_id: str) -> None:
+        def observe() -> str:
+            sandbox = self._sandbox(self._request("get", "GET", _sandbox_path(sandbox_id)), "get")
+            state = _state_of(sandbox)
+            if state in BOAT_TERMINAL_STATES:
+                why = sandbox.get("error")
+                detail = f": {why}" if isinstance(why, str) and why.strip() else ""
+                raise BoatError(f"boat sandbox {sandbox_id} entered state {state}{detail}")
+            return state
+
+        self._poll(sandbox_id, observe, BOAT_READY_STATES, "ready")
 
     def exec(
         self, sandbox_id: str, command: str, *, cwd: str | None = None, timeout_s: int | None = None
@@ -290,8 +289,7 @@ class HttpBoatClient:
             # is capped rather than refused, and a kill at the cap reports timed_out.
             body["timeoutSeconds"] = min(timeout_s, BOAT_MAX_COMMAND_S)
         payload = self._request("exec", "POST", f"{_sandbox_path(sandbox_id)}/commands", body=body)
-        if payload.get("type") != "command.finished":
-            raise BoatError(f"boat.dev exec returned {payload.get('type')!r}, expected 'command.finished'")
+        _expect(payload, "command.finished", "exec")
         return BoatExecResult(
             exit_code=payload.get("exitCode") if isinstance(payload.get("exitCode"), int) else None,
             stdout=payload.get("stdout") if isinstance(payload.get("stdout"), str) else "",
@@ -302,34 +300,18 @@ class HttpBoatClient:
         )
 
     def read_file(self, sandbox_id: str, path: str) -> str:
-        payload = self._request(
-            "read file", "GET", f"{_sandbox_path(sandbox_id)}/files", query={"path": path, "encoding": "utf8"}
-        )
-        if payload.get("type") != "file.read":
-            raise BoatError(f"boat.dev read returned {payload.get('type')!r}, expected 'file.read'")
+        query = {"path": path, "encoding": "utf8"}
+        payload = self._request("read file", "GET", f"{_sandbox_path(sandbox_id)}/files", query=query)
+        _expect(payload, "file.read", "read")
         content = payload.get("content")
         if not isinstance(content, str):
             raise BoatError("boat.dev read returned no content")
         return content
 
     def write_file(self, sandbox_id: str, path: str, content: bytes) -> None:
-        payload = self._request(
-            "write file",
-            "PUT",
-            f"{_sandbox_path(sandbox_id)}/files",
-            body={"path": path, "content": base64.b64encode(content).decode("ascii"), "encoding": "base64"},
-        )
-        if payload.get("type") != "file.written":
-            raise BoatError(f"boat.dev write returned {payload.get('type')!r}, expected 'file.written'")
-
-    def expose(self, sandbox_id: str, port: int, *, public: bool = False) -> str:
-        payload = self._request(
-            "expose", "POST", f"{_sandbox_path(sandbox_id)}/host", body={"port": port, "_public": public}
-        )
-        url = payload.get("url")
-        if not isinstance(url, str) or not url.strip():
-            raise BoatError(f"boat.dev expose returned no url for port {port}")
-        return url
+        body = {"path": path, "content": base64.b64encode(content).decode("ascii"), "encoding": "base64"}
+        payload = self._request("write file", "PUT", f"{_sandbox_path(sandbox_id)}/files", body=body)
+        _expect(payload, "file.written", "write")
 
     def stop(self, sandbox_id: str) -> None:
         try:
@@ -344,22 +326,15 @@ class HttpBoatClient:
             raise
 
     def wait_stopped(self, sandbox_id: str) -> None:
-        waited = 0.0
-        while True:
+        def observe() -> str:
             state = self._state(sandbox_id)
-            if state in BOAT_STOPPED_STATES:
-                return
             if state == "error":
                 raise BoatError(
                     f"boat sandbox {sandbox_id} entered state error while stopping, so it may still be billed"
                 )
-            if waited >= self.ready_timeout_s:
-                raise BoatError(
-                    f"boat sandbox {sandbox_id} not stopped after {self.ready_timeout_s:g} s (state {state})",
-                    retryable=True,
-                )
-            self._sleep(self.poll_s)
-            waited += self.poll_s
+            return state
+
+        self._poll(sandbox_id, observe, BOAT_STOPPED_STATES, "stopped")
 
 
 class BoatSandbox:
@@ -388,22 +363,21 @@ class BoatSandbox:
         self.client = client
         self.repo = validate_repo(repo)
         self.base_branch = validate_git_ref(base_branch, field="base_branch")
-        self.target_dir = normalize_relative_path(target_dir, field="target_dir", allow_empty=True)
+        self.repo_root = f"{BOAT_WORKDIR_ROOT}/{self.repo.rsplit('/', 1)[-1]}"
+        self.workdir = _checkout_dir(self.repo_root, target_dir)
         if type(ttl_s) is not int or ttl_s <= 0:
             raise BoatError("boat sandbox ttl_s must be a positive integer")
         self.ttl_s = ttl_s
         self.state = state
         # The public clone URL, exactly like make_scm's seed_url: read-only, and no token, ever.
         self.source = f"https://github.com/{self.repo}.git"
-        self.repo_root = f"{BOAT_WORKDIR_ROOT}/{self.repo.rsplit('/', 1)[-1]}"
-        self.workdir = posixpath.join(self.repo_root, self.target_dir) if self.target_dir else self.repo_root
         self.sandbox_id: str | None = None
 
     def ensure(self) -> None:
         """Create the VM and clone the target once; reconnect to a persisted id (idempotent)."""
         self._restore_id()
         if self.sandbox_id is not None:
-            probe = self._exec("true", cwd=self.workdir, timeout_s=BOAT_CONTROL_TIMEOUT_S)
+            probe = self._exec("true", cwd=self.workdir, timeout_s=_CONTROL_TIMEOUT_S)
             if not probe.ok:
                 raise BoatError(
                     f"existing boat sandbox is unavailable (rc={probe.exit_code}); "
@@ -431,46 +405,29 @@ class BoatSandbox:
     def _provision(self, sandbox_id: str) -> None:
         """``mkdir`` the workspace, clone the public target, prove the target dir exists.
 
-        The same sequence the toolset cell runs inside its backend (islo gets it by passing
-        ``--source`` and letting islo clone). Nothing here carries a credential: the clone URL
-        is the public one, and the VM was created with ``noEnv``.
+        ``sandbox.provision_checkout``, the same sequence the toolset cell runs inside its backend
+        (islo gets it by passing ``--source`` and letting islo clone). Nothing here carries a
+        credential: the clone URL is the public one, and the VM was created with ``noEnv``.
         """
-        made = self._exec(
-            f"mkdir -p {shlex.quote(self.repo_root)}", cwd="/", timeout_s=BOAT_CONTROL_TIMEOUT_S, sandbox_id=sandbox_id
+        failed = provision_checkout(
+            functools.partial(self._exec, sandbox_id=sandbox_id),
+            repo_root=self.repo_root,
+            workdir=self.workdir,
+            source=self.source,
+            branch=self.base_branch,
         )
-        if not made.ok:
-            raise BoatError(f"boat workspace mkdir failed (rc={made.exit_code}): {made.stderr[-800:]}")
-        repo_check = self._exec(
-            "git rev-parse --is-inside-work-tree",
-            cwd=self.repo_root,
-            timeout_s=BOAT_CONTROL_TIMEOUT_S,
-            sandbox_id=sandbox_id,
-        )
-        if not repo_check.ok:
-            parent = posixpath.dirname(self.repo_root) or "/"
-            clone = (
-                f"git clone --depth 1 --branch {shlex.quote(self.base_branch)} "
-                f"{shlex.quote(self.source)} {shlex.quote(posixpath.basename(self.repo_root))}"
-            )
-            cloned = self._exec(clone, cwd=parent, timeout_s=BOAT_PROVISION_TIMEOUT_S, sandbox_id=sandbox_id)
-            if not cloned.ok:
-                raise BoatError(
-                    f"boat checkout of {self.repo}@{self.base_branch} failed (rc={cloned.exit_code}): "
-                    f"{cloned.stderr[-800:]}",
-                    retryable=True,
-                )
-        present = self._exec(
-            f"test -d {shlex.quote(self.workdir)}",
-            cwd=self.repo_root,
-            timeout_s=BOAT_CONTROL_TIMEOUT_S,
-            sandbox_id=sandbox_id,
-        )
-        if not present.ok:
+        if failed is None:
+            return
+        step, res = failed
+        if step == "target":
             raise BoatError(f"boat target directory is unavailable: {self.workdir}")
+        what = "workspace mkdir" if step == "mkdir" else f"checkout of {self.repo}@{self.base_branch}"
+        raise BoatError(f"boat {what} failed (rc={res.exit_code}): {res.stderr[-800:]}", retryable=step == "clone")
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
         """Run ``cmd`` in the cell; the exit code propagates (a kill at boat's cap is 124)."""
-        return self._exec(cmd, cwd=self._cwd(cwd) if cwd else self.workdir, timeout_s=timeout_s)
+        run_cwd = _confine(self.workdir, self.workdir, cwd) if cwd else self.workdir
+        return self._exec(cmd, cwd=run_cwd, timeout_s=timeout_s)
 
     def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
         """Same path: the boat cell is credential-free by construction, so there is no separate
@@ -480,43 +437,29 @@ class BoatSandbox:
     def _exec(self, cmd: str, *, cwd: str, timeout_s: int, sandbox_id: str | None = None) -> RunResult:
         started = time.monotonic()
         res = self.client.exec(sandbox_id or self._id(), cmd, cwd=cwd, timeout_s=timeout_s)
-        # Truncation has no field of its own on this protocol, so it is folded into stderr
-        # (visible) and into a non-zero exit code, exactly like the toolset cell folds flags.
-        notes = [
-            note
-            for note, flag in (("stdout truncated", res.stdout_truncated), ("stderr truncated", res.stderr_truncated))
-            if flag
-        ]
-        stderr = "\n".join([res.stderr, *(f"[boat] {note}" for note in notes)]).strip()
-        exit_code = TIMED_OUT_EXIT_CODE if res.timed_out else (res.exit_code if res.exit_code is not None else 1)
-        return RunResult(
-            exit_code=exit_code or (1 if notes else 0),
-            stdout=res.stdout,
-            stderr=stderr,
-            duration_s=round(time.monotonic() - started, 3),
-            timed_out=res.timed_out,
-        )
+        return fold_exec(res, tag="boat", started=started, timeout_exit=TIMEOUT_EXIT_CODE)
 
     def read(self, path: str) -> str:
         """Read one UTF-8 file relative to ``workdir``; missing -> ``FileNotFoundError``."""
-        abs_path = self._abs(path)
+        abs_path = _confine(self.repo_root, self.workdir, path)
         if not self.exists(path):
             raise FileNotFoundError(abs_path)
         return self.client.read_file(self._id(), abs_path)
 
     def write(self, path: str, content: str) -> None:
         """Write one file (base64 over the transport), creating parent directories by exec."""
-        abs_path = self._abs(path)
+        abs_path = _confine(self.repo_root, self.workdir, path)
         parent = posixpath.dirname(abs_path)
         if parent:
-            made = self._exec(f"mkdir -p {shlex.quote(parent)}", cwd="/", timeout_s=BOAT_CONTROL_TIMEOUT_S)
+            made = self._exec(f"mkdir -p {shlex.quote(parent)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
             if not made.ok:
                 raise BoatError(f"boat mkdir for {abs_path} failed (rc={made.exit_code}): {made.stderr[-800:]}")
         self.client.write_file(self._id(), abs_path, content.encode("utf-8"))
 
     def exists(self, path: str) -> bool:
         """True if ``path`` (relative to ``workdir``) exists inside the VM."""
-        return self._exec(f"test -e {shlex.quote(self._abs(path))}", cwd="/", timeout_s=BOAT_CONTROL_TIMEOUT_S).ok
+        abs_path = _confine(self.repo_root, self.workdir, path)
+        return self._exec(f"test -e {shlex.quote(abs_path)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S).ok
 
     def close(self) -> None:
         """Stop the VM and wait for the archive; a failed stop retains the handle for a retry."""
@@ -543,34 +486,15 @@ class BoatSandbox:
         return self.sandbox_id
 
     def _restore_id(self) -> None:
-        if self.sandbox_id is not None or self.state is None or not self.state.has_control(BOAT_STATE_FILE):
+        if self.sandbox_id is not None:
             return
         try:
-            record = json.loads(self.state.read_control(BOAT_STATE_FILE))
-            sandbox_id = record["sandbox_id"] if isinstance(record, dict) else None
-            if not isinstance(sandbox_id, str) or not sandbox_id.strip():
-                raise ValueError("sandbox id is empty")
-        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            record = load_handle(self.state, BOAT_STATE_FILE)
+        except ValueError as e:
             raise BoatError(f"invalid boat sandbox state: {e}") from e
-        self.sandbox_id = sandbox_id
+        if record is not None:
+            self.sandbox_id = record["sandbox_id"]
 
     def _persist_id(self) -> None:
-        if self.state is None or self.sandbox_id is None:
-            return
-        self.state.write_control(
-            BOAT_STATE_FILE, json.dumps({"sandbox_id": self.sandbox_id}, separators=(",", ":")) + "\n"
-        )
-
-    def _abs(self, path: str) -> str:
-        try:
-            value = path if path.startswith("/") else posixpath.join(self.workdir, path)
-            return confined_posix_path(self.repo_root, value)
-        except ValueError as e:
-            raise StageError("policy", str(e)) from e
-
-    def _cwd(self, path: str) -> str:
-        try:
-            value = path if path.startswith("/") else posixpath.join(self.workdir, path)
-            return confined_posix_path(self.workdir, value)
-        except ValueError as e:
-            raise StageError("policy", str(e)) from e
+        if self.sandbox_id is not None:
+            save_handle(self.state, BOAT_STATE_FILE, {"sandbox_id": self.sandbox_id})

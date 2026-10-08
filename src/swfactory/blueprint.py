@@ -22,6 +22,7 @@ from swfactory.approval_policy import GateMode, declared_mode
 from swfactory.config import FACTORY_ROOT, Config
 from swfactory.intake_governance import ScheduleLimits
 from swfactory.linear_intake import LinearWorkSource
+from swfactory.models import SandboxKind
 from swfactory.paths import (
     normalize_absolute_posix_path,
     normalize_relative_path,
@@ -161,7 +162,7 @@ class ReviewSpec(BaseModel):
 class SandboxSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["local", "srt", "islo", "docker", "toolset", "boat"] = "islo"
+    kind: SandboxKind = "islo"
     gateway_profile: str = "swfactory"
     environment: str = "swfactory"
     ttl_s: int = Field(default=172_800, ge=1)  # --delete-after

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, NamedTuple
 
@@ -13,6 +14,8 @@ from swfactory.workgraph import waves
 Severity = Literal["blocker", "major", "minor", "nit"]
 IssueState = Literal["open", "closed"]
 AgentKind = Literal["claude", "scripted"]
+# Mirrored by the Rust ``SandboxKind`` enum (swf-domain blueprint.rs).
+SandboxKind = Literal["local", "islo", "srt", "docker", "toolset", "boat"]
 AgentRole = Literal[
     "issue_maker",
     "groomer",
@@ -61,6 +64,24 @@ class RunResult(NamedTuple):
     @property
     def ok(self) -> bool:
         return self.exit_code == 0 and not self.timed_out
+
+
+# Exit code reported when a command is killed by the timeout (mirrors coreutils `timeout`).
+TIMEOUT_EXIT_CODE = 124
+
+
+@dataclass(frozen=True)
+class ExecResult:
+    """One remote exec outcome as a provider reports it; ``exit_code`` is ``None`` when a signal
+    killed it. ``sandbox.fold_exec`` turns it into a ``RunResult``."""
+
+    exit_code: int | None
+    stdout: str = ""
+    stderr: str = ""
+    timed_out: bool = False
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    sandbox_terminated: bool = False
 
 
 class TestResult(BoundaryModel):

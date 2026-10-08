@@ -37,7 +37,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -47,7 +47,7 @@ from swfactory.cells import CellIdentity
 from swfactory.cleanup_receipt import CleanupReceipt, CleanupStatus
 from swfactory.config import Config
 from swfactory.idempotency import OperationRef
-from swfactory.models import RunResult, StageError
+from swfactory.models import TIMEOUT_EXIT_CODE, RunResult, StageError
 from swfactory.paths import confined_path, confined_posix_path, normalize_relative_path
 from swfactory.sandbox_governance import (
     CleanupDebt,
@@ -58,10 +58,10 @@ from swfactory.sandbox_governance import (
 )
 from swfactory.state import RunState
 
-# Exit code reported when a command is killed by the timeout (mirrors coreutils `timeout`).
-TIMEOUT_EXIT_CODE = 124
 # Bound for the short control-plane calls (`islo cp`, `islo rm`, `islo resume`, `test -e`).
 _CONTROL_TIMEOUT_S = 300
+# Bound for creating a remote cell and cloning the target into it (`islo use`, `git clone`).
+_PROVISION_TIMEOUT_S = 1200
 
 # srt: npm package used when no `srt` binary is on PATH, and the settings file location.
 SRT_NPM_PACKAGE = "@anthropic-ai/sandbox-runtime"
@@ -829,6 +829,98 @@ def _dedupe(items: Sequence[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
 
+# ---------------------------------------------------------------- remote cells (islo, toolset, boat)
+
+
+def _confine(root: str, workdir: str, path: str) -> str:
+    """``path`` (relative to ``workdir`` unless absolute), refused unless it stays under ``root``."""
+    try:
+        return confined_posix_path(root, path if path.startswith("/") else posixpath.join(workdir, path))
+    except ValueError as e:
+        raise StageError("policy", str(e)) from e
+
+
+def _checkout_dir(repo_root: str, target: str) -> str:
+    """The target directory inside the checkout at ``repo_root`` (``""`` = the root itself)."""
+    target = normalize_relative_path(target, field="target_dir", allow_empty=True)
+    return posixpath.join(repo_root, target) if target else repo_root
+
+
+def load_handle(state: RunState | None, file: str) -> dict | None:
+    """The remote cell's handle persisted in host-owned run state, or ``None`` without one.
+    Raises ``ValueError`` for a record that is not an object with a non-empty ``sandbox_id``."""
+    if state is None or not state.has_control(file):
+        return None
+    record = json.loads(state.read_control(file))
+    sandbox_id = record.get("sandbox_id") if isinstance(record, dict) else None
+    if not isinstance(sandbox_id, str) or not sandbox_id.strip():
+        raise ValueError("sandbox id is empty")
+    return record
+
+
+def save_handle(state: RunState | None, file: str, record: Mapping[str, object]) -> None:
+    """Persist the handle the moment it exists, so a retried or restarted task reconnects to it."""
+    if state is not None:
+        state.write_control(file, json.dumps(record, separators=(",", ":")) + "\n")
+
+
+def provision_checkout(
+    exec_: Callable[..., RunResult], *, repo_root: str, workdir: str, source: str | None, branch: str
+) -> tuple[str, RunResult] | None:
+    """``mkdir`` the repo root, ``git clone --depth 1`` the public ``source`` into it unless it is
+    already a work tree, and prove the target dir exists (create it when there is no source).
+
+    ``exec_(cmd, *, cwd, timeout_s)`` runs one command in the cell. Returns the first failing
+    ``(step, result)`` -- step ``mkdir``, ``clone`` or ``target`` -- or ``None`` once it is ready.
+    """
+    made = exec_(f"mkdir -p {shlex.quote(repo_root)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
+    if not made.ok:
+        return "mkdir", made
+    in_tree = exec_("git rev-parse --is-inside-work-tree", cwd=repo_root, timeout_s=_CONTROL_TIMEOUT_S).ok
+    if source and not in_tree:
+        clone = (
+            f"git clone --depth 1 --branch {shlex.quote(branch)} "
+            f"{shlex.quote(source)} {shlex.quote(posixpath.basename(repo_root))}"
+        )
+        cloned = exec_(clone, cwd=posixpath.dirname(repo_root) or "/", timeout_s=_PROVISION_TIMEOUT_S)
+        if not cloned.ok:
+            return "clone", cloned
+    command = f"test -d {shlex.quote(workdir)}" if source else f"mkdir -p {shlex.quote(workdir)}"
+    present = exec_(command, cwd=repo_root, timeout_s=_CONTROL_TIMEOUT_S)
+    return None if present.ok else ("target", present)
+
+
+def fold_exec(res: Any, *, tag: str, started: float, timeout_exit: int | None = None) -> RunResult:
+    """A provider's exec outcome (``models.ExecResult`` or a duck-typed one) as a ``RunResult``.
+
+    Truncation and termination have no ``RunResult`` field. Dropping them would let truncated
+    output or a dead sandbox read as a clean result, so they are folded into stderr (visible,
+    tagged ``[tag]``) and into a non-zero exit code. ``timeout_exit`` replaces the exit code of a
+    command killed at its timeout; without it the provider's own code stands.
+    """
+    terminated = bool(getattr(res, "sandbox_terminated", False))
+    notes = [
+        note
+        for note, flag in (
+            ("stdout truncated", getattr(res, "stdout_truncated", False)),
+            ("stderr truncated", getattr(res, "stderr_truncated", False)),
+            ("sandbox terminated", terminated),
+        )
+        if flag
+    ]
+    timed_out = bool(res.timed_out)
+    exit_code = res.exit_code if isinstance(res.exit_code, int) else 1
+    if timed_out and timeout_exit is not None:
+        exit_code = timeout_exit
+    return RunResult(
+        exit_code=exit_code or (1 if notes or timed_out else 0),
+        stdout=str(res.stdout or ""),
+        stderr="\n".join([str(res.stderr or ""), *(f"[{tag}] {note}" for note in notes)]).strip(),
+        duration_s=round(time.monotonic() - started, 3),
+        timed_out=timed_out or terminated,
+    )
+
+
 class IsloSandbox:
     """An islo MicroVM created from ``--source`` (read-only clone) and addressed by a stable name.
 
@@ -860,10 +952,8 @@ class IsloSandbox:
         self.idle_s = idle_s
         self.snapshot = snapshot
         self.factory_root = Path(factory_root)
-        repo_name = _repo_name(source)
-        self.repo_root = f"/workspace/{repo_name}"
-        target = normalize_relative_path(target_dir, field="target_dir", allow_empty=True)
-        self.workdir = posixpath.join(self.repo_root, target) if target else self.repo_root
+        self.repo_root = f"/workspace/{_repo_name(source)}"
+        self.workdir = _checkout_dir(self.repo_root, target_dir)
 
     def argv(self, cmd: str, *, cwd: str | None = None, create: bool = False) -> list[str]:
         """Build the ``islo use`` argv for ``cmd``.
@@ -894,7 +984,7 @@ class IsloSandbox:
             if self.snapshot:
                 argv += ["--snapshot", self.snapshot]
             return [*argv, "--output", "plain", "--", "true"]
-        run_cwd = self._cwd(cwd) if cwd else self.workdir
+        run_cwd = _confine(self.workdir, self.workdir, cwd) if cwd else self.workdir
         script = f"cd {shlex.quote(run_cwd)} && {cmd}"
         # `--output json`, not `plain`: islo prints its own status lines ("→ Reconnecting to existing
         # sandbox ...") with println!, i.e. onto the COMMAND's stdout, in every mode but json (islo
@@ -908,7 +998,7 @@ class IsloSandbox:
             self.argv("true", create=True),
             cwd=self.factory_root,
             env=None,
-            timeout_s=_CONTROL_TIMEOUT_S * 4,
+            timeout_s=_PROVISION_TIMEOUT_S,
         )
         if not res.ok:
             raise StageError(
@@ -928,17 +1018,17 @@ class IsloSandbox:
 
     def read(self, path: str) -> str:
         """Copy the file out with ``islo cp`` and return its text; missing -> FileNotFoundError."""
-        remote = f"{self.name}:{self._abs(path)}"
+        remote = f"{self.name}:{_confine(self.repo_root, self.workdir, path)}"
         with tempfile.TemporaryDirectory(prefix="swf-cp-") as tmp:
             local = Path(tmp) / "file"
             res = self._cp(remote, str(local))
             if not res.ok or not local.exists():
-                raise FileNotFoundError(f"{self.name}:{self._abs(path)} ({res.stderr.strip()})")
+                raise FileNotFoundError(f"{remote} ({res.stderr.strip()})")
             return local.read_text(encoding="utf-8")
 
     def write(self, path: str, content: str) -> None:
         """Copy ``content`` into the sandbox with ``islo cp``, creating parent directories."""
-        abs_path = self._abs(path)
+        abs_path = _confine(self.repo_root, self.workdir, path)
         parent = posixpath.dirname(abs_path)
         if parent and parent != self.workdir:
             mk = self.run(f"mkdir -p {shlex.quote(parent)}", timeout_s=_CONTROL_TIMEOUT_S)
@@ -953,7 +1043,8 @@ class IsloSandbox:
 
     def exists(self, path: str) -> bool:
         """True if ``test -e`` succeeds inside the sandbox."""
-        res = self.run(f"test -e {shlex.quote(self._abs(path))}", timeout_s=_CONTROL_TIMEOUT_S)
+        abs_path = _confine(self.repo_root, self.workdir, path)
+        res = self.run(f"test -e {shlex.quote(abs_path)}", timeout_s=_CONTROL_TIMEOUT_S)
         return res.exit_code == 0
 
     def close(self) -> None:
@@ -977,20 +1068,6 @@ class IsloSandbox:
     @staticmethod
     def _control(argv: list[str]) -> RunResult:
         return _run_subprocess(argv, cwd=None, env=None, timeout_s=_CONTROL_TIMEOUT_S)
-
-    def _abs(self, path: str) -> str:
-        try:
-            value = path if path.startswith("/") else posixpath.join(self.workdir, path)
-            return confined_posix_path(self.repo_root, value)
-        except ValueError as e:
-            raise StageError("policy", str(e)) from e
-
-    def _cwd(self, path: str) -> str:
-        try:
-            value = path if path.startswith("/") else posixpath.join(self.workdir, path)
-            return confined_posix_path(self.workdir, value)
-        except ValueError as e:
-            raise StageError("policy", str(e)) from e
 
 
 def _repo_name(source: str) -> str:
@@ -1118,37 +1195,23 @@ class ToolsetSandbox:
         self._terminated = False
 
     def _restore_id(self) -> None:
-        if self.sandbox_id is not None or self.state is None:
-            return
-        if not self.state.has_control(TOOLSET_STATE_FILE):
+        if self.sandbox_id is not None:
             return
         try:
-            record = json.loads(self.state.read_control(TOOLSET_STATE_FILE))
+            record = load_handle(self.state, TOOLSET_STATE_FILE)
+            if record is None:
+                return
             if record.get("backend") != self.backend_identity:
                 raise ValueError("backend identity changed")
-            sandbox_id = record["sandbox_id"]
-            if not isinstance(sandbox_id, str) or not sandbox_id.strip():
-                raise ValueError("sandbox id is empty")
-        except (AttributeError, KeyError, TypeError, ValueError) as e:
+        except ValueError as e:
             raise StageError("policy", f"invalid toolset sandbox state: {e}") from e
-        self.sandbox_id = sandbox_id
+        self.sandbox_id = record["sandbox_id"]
         self._terminated = bool(record.get("terminated", False))
 
     def _persist_id(self) -> None:
-        if self.state is None or self.sandbox_id is None:
-            return
-        self.state.write_control(
-            TOOLSET_STATE_FILE,
-            json.dumps(
-                {
-                    "backend": self.backend_identity,
-                    "sandbox_id": self.sandbox_id,
-                    "terminated": self._terminated,
-                },
-                separators=(",", ":"),
-            )
-            + "\n",
-        )
+        if self.sandbox_id is not None:
+            handle = {"backend": self.backend_identity, "sandbox_id": self.sandbox_id, "terminated": self._terminated}
+            save_handle(self.state, TOOLSET_STATE_FILE, handle)
 
     def _spec(self):
         """Concrete isolation requirements; a backend must enforce them or refuse creation."""
@@ -1194,27 +1257,21 @@ class ToolsetSandbox:
                 raise StageError("sandbox", "toolset backend returned an empty sandbox id")
             self.sandbox_id = sandbox_id
             self._persist_id()
-        made = self._run_backend(f"mkdir -p {shlex.quote(self.repo_root)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
-        if not made.ok:
-            raise StageError("sandbox", f"toolset repository root failed: {made.stderr[-800:]}")
-        repo_check = self._run_backend(
-            "git rev-parse --is-inside-work-tree",
-            cwd=self.repo_root,
-            timeout_s=_CONTROL_TIMEOUT_S,
+        failed = provision_checkout(
+            self._run_backend,
+            repo_root=self.repo_root,
+            workdir=self.workdir,
+            source=self.source,
+            branch=self.base_branch,
         )
-        if self.source and not repo_check.ok:
-            parent = posixpath.dirname(self.repo_root) or "/"
-            clone = (
-                f"git clone --depth 1 --branch {shlex.quote(self.base_branch)} "
-                f"{shlex.quote(self.source)} {shlex.quote(posixpath.basename(self.repo_root))}"
-            )
-            result = self._run_backend(clone, cwd=parent, timeout_s=_CONTROL_TIMEOUT_S * 4)
-            if not result.ok:
-                raise StageError("sandbox", f"toolset checkout failed: {result.stderr[-800:]}")
-        command = f"test -d {shlex.quote(self.workdir)}" if self.source else f"mkdir -p {shlex.quote(self.workdir)}"
-        result = self._run_backend(command, cwd=self.repo_root, timeout_s=_CONTROL_TIMEOUT_S)
-        if not result.ok:
-            raise StageError("sandbox", f"toolset target directory is unavailable: {result.stderr[-800:]}")
+        if failed is not None:
+            step, result = failed
+            what = {
+                "mkdir": "repository root failed",
+                "clone": "checkout failed",
+                "target": "target directory is unavailable",
+            }[step]
+            raise StageError("sandbox", f"toolset {what}: {result.stderr[-800:]}")
 
     def _check_alive(self) -> None:
         if self._terminated:
@@ -1229,7 +1286,8 @@ class ToolsetSandbox:
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
         """Run ``cmd`` in the sandbox; the backend has no cwd, so it travels in the command."""
-        return self._run_backend(cmd, cwd=self._cwd(cwd) if cwd else self.workdir, timeout_s=timeout_s)
+        run_cwd = _confine(self.workdir, self.workdir, cwd) if cwd else self.workdir
+        return self._run_backend(cmd, cwd=run_cwd, timeout_s=timeout_s)
 
     def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
         """Run the model process using authentication declared in the backend's sandbox spec."""
@@ -1242,50 +1300,14 @@ class ToolsetSandbox:
         res = self.backend.run_command(
             self._id(), script, timeout=float(timeout_s), max_output_bytes=TOOLSET_MAX_OUTPUT_BYTES
         )
-        # The backend reports three conditions our RunResult has no field for. Dropping them
-        # would let truncated output or a dead sandbox read as a clean result, so they are folded
-        # into stderr (visible) and, for termination, into a non-zero exit code.
-        notes = [
-            n
-            for n, flag in (
-                ("stdout truncated", getattr(res, "stdout_truncated", False)),
-                ("stderr truncated", getattr(res, "stderr_truncated", False)),
-                ("sandbox terminated", getattr(res, "sandbox_terminated", False)),
-            )
-            if flag
-        ]
-        stderr = "\n".join([str(res.stderr or ""), *(f"[toolset] {n}" for n in notes)]).strip()
-        terminated = bool(getattr(res, "sandbox_terminated", False))
-        if terminated:
+        if getattr(res, "sandbox_terminated", False):
             # Keep the handle for cleanup, but never continue old stage records in a fresh VM.
             self._terminated = True
             self._persist_id()
-        exit_code = res.exit_code if isinstance(res.exit_code, int) else 1
-        degraded = bool(notes) or bool(res.timed_out)
-        return RunResult(
-            exit_code=exit_code or (1 if degraded else 0),
-            stdout=str(res.stdout or ""),
-            stderr=stderr,
-            duration_s=round(time.monotonic() - started, 3),
-            timed_out=bool(res.timed_out) or terminated,
-        )
-
-    def _abs(self, path: str) -> str:
-        try:
-            value = path if path.startswith("/") else posixpath.join(self.workdir, path)
-            return confined_posix_path(self.repo_root, value)
-        except ValueError as e:
-            raise StageError("policy", str(e)) from e
-
-    def _cwd(self, path: str) -> str:
-        try:
-            value = path if path.startswith("/") else posixpath.join(self.workdir, path)
-            return confined_posix_path(self.workdir, value)
-        except ValueError as e:
-            raise StageError("policy", str(e)) from e
+        return fold_exec(res, tag="toolset", started=started)
 
     def read(self, path: str) -> str:
-        abs_path = self._abs(path)
+        abs_path = _confine(self.repo_root, self.workdir, path)
         if not self.run(f"test -f {shlex.quote(abs_path)}", timeout_s=_CONTROL_TIMEOUT_S).ok:
             raise FileNotFoundError(abs_path)
         try:
@@ -1296,7 +1318,7 @@ class ToolsetSandbox:
             raise StageError("sandbox", f"toolset could not read {abs_path}: {e}") from e
 
     def write(self, path: str, content: str) -> None:
-        abs_path = self._abs(path)
+        abs_path = _confine(self.repo_root, self.workdir, path)
         parent = abs_path.rsplit("/", 1)[0]
         if parent:
             result = self._run_backend(f"mkdir -p {shlex.quote(parent)}", cwd="/", timeout_s=_CONTROL_TIMEOUT_S)
@@ -1305,7 +1327,8 @@ class ToolsetSandbox:
         self.backend.write_file(self._id(), abs_path, content.encode("utf-8"))
 
     def exists(self, path: str) -> bool:
-        return self.run(f"test -e {shlex.quote(self._abs(path))}", timeout_s=_CONTROL_TIMEOUT_S).ok
+        abs_path = _confine(self.repo_root, self.workdir, path)
+        return self.run(f"test -e {shlex.quote(abs_path)}", timeout_s=_CONTROL_TIMEOUT_S).ok
 
     def close(self) -> None:
         """Destroy the sandbox; retain the handle on failure for explicit cleanup reconciliation."""
@@ -1362,8 +1385,7 @@ def make_sandbox(
         )
     if cfg.sandbox == "toolset":
         repo_root = cfg.toolset_workdir.rstrip("/") or "/workspace/repo"
-        target = normalize_relative_path(cfg.target_dir, field="target_dir", allow_empty=True)
-        workdir = posixpath.join(repo_root, target) if target else repo_root
+        workdir = _checkout_dir(repo_root, cfg.target_dir)
         backend_kwargs = {}
         if cfg.toolset_backend == "sbx":
             backend_kwargs = {

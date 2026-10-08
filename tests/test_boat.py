@@ -64,7 +64,6 @@ class FakeBoatClient:
         self.waited_ready: list[str] = []
         self.commands: list[tuple[str, str, str | None, int | None]] = []
         self.files: dict[str, bytes] = {}
-        self.exposed: list[tuple[str, int, bool]] = []
         self.stopped: list[str] = []
         self.waited_stopped: list[str] = []
         self.stop_errors: list[str] = []  # sandbox ids whose stop raises once
@@ -74,8 +73,8 @@ class FakeBoatClient:
         self.timed_out = timed_out
         self.cloned = False  # an empty VM: nothing is a work tree until the clone ran
 
-    def create(self, *, ttl_s: int, machine_type: str = BOAT_DEFAULT_TYPE, env=None) -> str:
-        self.created.append({"machine_type": machine_type, "ttl_s": ttl_s, "env": dict(env or {})})
+    def create(self, *, ttl_s: int, machine_type: str = BOAT_DEFAULT_TYPE) -> str:
+        self.created.append({"machine_type": machine_type, "ttl_s": ttl_s})
         self.next_id += 1
         return f"boat-{self.next_id}"
 
@@ -105,10 +104,6 @@ class FakeBoatClient:
 
     def write_file(self, sandbox_id: str, path: str, content: bytes) -> None:
         self.files[path] = content
-
-    def expose(self, sandbox_id: str, port: int, *, public: bool = False) -> str:
-        self.exposed.append((sandbox_id, port, public))
-        return f"https://boat.dev/sb/{sandbox_id}/{port}"
 
     def stop(self, sandbox_id: str) -> None:
         if sandbox_id in self.stop_errors:
@@ -144,7 +139,7 @@ def _commands(client: FakeBoatClient) -> list[str]:
 def test_ensure_creates_a_small_vm_clones_the_target_and_persists_the_id(tmp_path: Path) -> None:
     client, sandbox = _cell(tmp_path)
     sandbox.ensure()
-    assert client.created == [{"machine_type": "small", "ttl_s": 10_800, "env": {}}]
+    assert client.created == [{"machine_type": "small", "ttl_s": 10_800}]
     assert client.waited_ready == ["boat-1"]
     commands = _commands(client)
     assert "mkdir -p /workspace/zozo123-genworld" in commands
@@ -159,7 +154,7 @@ def test_a_retried_task_reconnects_to_the_same_vm_instead_of_leaking_a_second(tm
     sandbox.ensure()
     _, restored = _cell(tmp_path, client=client)  # the next task rebuilds the cell from run state
     restored.ensure()
-    assert client.created == [{"machine_type": "small", "ttl_s": 10_800, "env": {}}]  # one create
+    assert client.created == [{"machine_type": "small", "ttl_s": 10_800}]  # one create
     assert "true" in _commands(client)  # the reconnect probe
 
 
@@ -454,14 +449,12 @@ def test_write_file_travels_base64_and_read_file_comes_back_utf8(monkeypatch) ->
     assert urllib.parse.parse_qs(query) == {"path": ["/w/a.txt"], "encoding": ["utf8"]}
 
 
-def test_expose_maps_the_port_and_stop_treats_gone_and_archived_as_done(monkeypatch) -> None:
+def test_stop_treats_gone_and_archived_as_done(monkeypatch) -> None:
     payloads = {
-        ("POST", "/sandboxes/sb-1/host"): {"ok": True, "url": "https://sb-1.boat.dev:4000"},
         ("POST", "/sandboxes/sb-1/stop"): {"ok": True},
         ("GET", "/sandboxes/sb-1"): {"sandbox": {"id": "sb-1", "state": "archived"}},
     }
     client, _ = _client(monkeypatch, payloads)
-    assert client.expose("sb-1", 4000, public=True) == "https://sb-1.boat.dev:4000"
     client.stop("sb-1")  # a plain stop is fine
     gone, _ = _client(monkeypatch, payloads={("GET", "/sandboxes/sb-1"): {"sandbox": {"id": "sb-1", "state": "ready"}}})
     gone.stop("sb-1")  # 404: boat.dev already removed it -- a no-op, not an error
