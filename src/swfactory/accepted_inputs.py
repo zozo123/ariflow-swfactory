@@ -335,6 +335,11 @@ def policy_document(cfg: Config, blueprint: Blueprint | None) -> dict[str, Any]:
     }
 
 
+def policy_sha256(cfg: Config, blueprint: Blueprint | None) -> str:
+    """``sha256`` of :func:`policy_document`: what a snapshot pins and a run identity records."""
+    return _sha256(policy_document(cfg, blueprint))
+
+
 def snapshot(
     cfg: Config,
     blueprint: Blueprint | None,
@@ -355,7 +360,7 @@ def snapshot(
         blueprint_sha256=_sha256(blueprint.model_dump(mode="json") if blueprint is not None else None),
         prompt_templates=prompt_document(blueprint),
         review_policy_sha256=packaged_review_policy_digest(blueprint),
-        policy_sha256=_sha256(policy_document(cfg, blueprint)),
+        policy_sha256=policy_sha256(cfg, blueprint),
         repo=cfg.repo,
         target_dir=cfg.target_dir,
         base_branch=cfg.base_branch,

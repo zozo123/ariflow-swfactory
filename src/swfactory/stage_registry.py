@@ -47,9 +47,3 @@ def resolve(stage: str) -> StageCallable:
         return STAGES[stage]
     except KeyError as exc:
         raise KeyError(f"unknown factory stage {stage!r}") from exc
-
-
-def names() -> tuple[str, ...]:
-    from swfactory.stages import STAGES
-
-    return tuple(STAGES)

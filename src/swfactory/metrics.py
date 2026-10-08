@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from swfactory.models import Approval, Review, StageResult
+from swfactory.models import Approval, Finding, Review, StageResult
 
 if TYPE_CHECKING:
     from swfactory.stages import Ctx
@@ -28,6 +28,17 @@ CREATED_KEYS = ("created_at", "createdAt", "created-at", "created")
 
 def _iso(dt: datetime) -> str:
     return dt.astimezone(UTC).isoformat(timespec="seconds")
+
+
+def tests_passed(stages: Sequence[StageResult]) -> bool:
+    """Whether the last stage that ran the suite left it green."""
+    tests = [s.numbers["tests_passed"] for s in stages if "tests_passed" in s.numbers]
+    return bool(tests) and tests[-1] == 1.0
+
+
+def severity_counts(findings: Sequence[Finding]) -> dict[str, int]:
+    """Findings per severity, in ``SEVERITIES`` order, zero included."""
+    return {s: sum(1 for f in findings if f.severity == s) for s in SEVERITIES}
 
 
 def write_run_metrics(
@@ -51,7 +62,6 @@ def write_run_metrics(
         started = ctx.state.read_control("started").strip() or _iso(ctx.started_at)
     except FileNotFoundError:
         started = _iso(ctx.started_at)
-    tests = [s.numbers["tests_passed"] for s in stages if "tests_passed" in s.numbers]
     data = {
         "run_id": ctx.cfg.run_id,
         "issue_id": ctx.issue.id,
@@ -67,7 +77,7 @@ def write_run_metrics(
         "cycle_s": round(sum(s.duration_s for s in stages), 3),
         "iterations": int(build.get("iterations", 0)),
         "first_pass_ci": bool(build.get("first_pass_ci", 0.0)),
-        "tests_passed": bool(tests) and tests[-1] == 1.0,
+        "tests_passed": tests_passed(stages),
         "findings_by_severity": findings,
         "blockers": findings["blocker"],
         "review_fixes": int(review.get("fixes", 0)),
@@ -92,7 +102,7 @@ def _findings_by_severity(ctx: Ctx, review_numbers: dict[str, float]) -> dict[st
         rv = Review.model_validate(json.loads(ctx.read_artifact(f"{ctx.art}/review.json")))
     except (FileNotFoundError, ValueError):
         return {s: int(review_numbers.get(s, 0)) for s in SEVERITIES}
-    return {s: sum(1 for f in rv.findings if f.severity == s) for s in SEVERITIES}
+    return severity_counts(rv.findings)
 
 
 def parse_ts(value: Any) -> datetime | None:

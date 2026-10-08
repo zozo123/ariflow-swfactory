@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from swfactory.stage_registry import names, resolve
+from swfactory.stage_registry import resolve
 
 
 def test_managed_build_stage_is_the_canonical_build_and_test_implementation() -> None:
@@ -14,7 +14,7 @@ def test_managed_build_stage_is_the_canonical_build_and_test_implementation() ->
 def test_registry_preserves_unoverridden_canonical_stages() -> None:
     from swfactory.stages import STAGES
 
-    assert names() == tuple(STAGES)
+    assert tuple(resolve(stage).__name__ for stage in STAGES) == tuple(STAGES)
     for stage, implementation in STAGES.items():
         if stage not in {"build_and_test", "review"}:
             assert resolve(stage) is implementation

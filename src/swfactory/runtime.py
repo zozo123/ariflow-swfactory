@@ -32,8 +32,8 @@ from swfactory.paths import (
 )
 from swfactory.sandbox import HOST_SANDBOXES, make_sandbox
 from swfactory.scm import make_scm
-from swfactory.stages import Ctx, seed_local_workdir
-from swfactory.state import JournalCorruption, RunBusyError, RunState
+from swfactory.stages import Ctx, owned, seed_local_workdir
+from swfactory.state import RunState
 
 if TYPE_CHECKING:
     from swfactory.agent import Agent
@@ -210,21 +210,16 @@ def ctx_for(
         enforce_runtime_policy(cfg, blueprint, cell_binding)
     run_dir = Path(run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        with RunState(run_dir).exclusive("prepare"):
-            return _prepare_ctx(
-                cfg,
-                blueprint=blueprint,
-                run_dir=run_dir,
-                agent=agent,
-                scm_override=scm_override,
-                cell_binding=cell_binding,
-                enforce_inputs=enforce_inputs,
-            )
-    except RunBusyError as error:
-        raise StageError("sandbox", str(error), retryable=True) from error
-    except JournalCorruption as error:
-        raise StageError("policy", str(error)) from error
+    with owned(RunState(run_dir), "prepare"):
+        return _prepare_ctx(
+            cfg,
+            blueprint=blueprint,
+            run_dir=run_dir,
+            agent=agent,
+            scm_override=scm_override,
+            cell_binding=cell_binding,
+            enforce_inputs=enforce_inputs,
+        )
 
 
 def _preflight(cfg: Config) -> None:
@@ -288,13 +283,14 @@ def _prepare_ctx(
     # Admission BEFORE make_sandbox/make_agent: a refused task must not have started a MicroVM or
     # constructed an agent, let alone reached a stage body. Reading the issue above is the only I/O
     # that has to precede this, because the issue is one of the things being compared.
+    binding = cell_binding or {}
     current = accepted_inputs.snapshot(
         cfg,
         blueprint,
         issue,
-        cell_id=(cell_binding or {}).get("cell_id"),
-        cell_epoch=(cell_binding or {}).get("epoch"),
-        managed=bool((cell_binding or {}).get("managed")),
+        cell_id=binding.get("cell_id"),
+        cell_epoch=binding.get("epoch"),
+        managed=bool(binding.get("managed")),
     )
     if enforce_inputs:
         accepted_inputs.admit(state, current)

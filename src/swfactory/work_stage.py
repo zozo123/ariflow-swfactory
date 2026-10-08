@@ -442,11 +442,9 @@ def _legacy_build(
     )
 
 
-@stages._timed
+@stages._resumable
 def build_and_test(ctx: stages.Ctx) -> StageResult:
     """Airflow-managed build stage with real ``Plan.work`` semantics and legacy fallback."""
-    if prior := stages._done(ctx, "build_and_test"):
-        return stages._skipped(prior)
     spec_text = stages._read_or(ctx, f"{ctx.art}/spec.md")
     plan_text = ctx.read_artifact(f"{ctx.art}/plan.md")
     try:

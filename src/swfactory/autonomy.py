@@ -161,21 +161,21 @@ def policy_approval(ctx, gate: str) -> Approval:
     from swfactory import accepted_inputs
     from swfactory.backend_scm import BackendScm
     from swfactory.models import Plan
-    from swfactory.stages import _gate_artifact, _persisted, cell_evidence
+    from swfactory.stages import _artifact_sha256, _gate_artifact, cell_evidence, persisted_cost
 
     if not isinstance(ctx.scm, BackendScm) or not cell_evidence(ctx)[2]:
         raise StageError("policy", "policy gates require a backend-managed Cell")
     policy = load_policy()
-    artifact = ctx.read_artifact(_gate_artifact(ctx, gate))
+    artifact_sha256 = _artifact_sha256(ctx, _gate_artifact(ctx, gate))
     plan = Plan.model_validate_json(ctx.read_artifact(f"{ctx.art}/plan.json")) if gate == "plan" else None
     result = ctx.scm.autonomous_gate(
         gate=gate,
         revision=policy.revision,
-        artifact_sha256=hashlib.sha256(artifact.encode()).hexdigest(),
+        artifact_sha256=artifact_sha256,
         inputs_digest=accepted_inputs.require(ctx.state).digest,
         paths=plan.files if plan else [],
-        plan_sha256=(hashlib.sha256(ctx.read_artifact(f"{ctx.art}/plan.json").encode()).hexdigest() if plan else None),
-        cost_usd=sum(stage.cost_usd for stage in _persisted(ctx)),
+        plan_sha256=_artifact_sha256(ctx, f"{ctx.art}/plan.json") if plan else None,
+        cost_usd=persisted_cost(ctx),
         budget_usd=ctx.cfg.max_budget_usd,
     )
     return Approval.model_validate(result)
