@@ -17,6 +17,8 @@ if [ -z "${SWF_REPO_DIR:-}" ]; then
 fi
 : "${SWF_REPO_DIR:?no factory checkout with dags/blueprints.py under /workspace}"
 cd "$SWF_REPO_DIR"
+# shellcheck source=SCRIPTDIR/../../../scripts/lib/live_airflow.sh
+. scripts/lib/live_airflow.sh
 
 # --- Airflow ---------------------------------------------------------------------------------
 export AIRFLOW_HOME="${AIRFLOW_HOME:-/workspace/airflow_home}"
@@ -52,22 +54,7 @@ trap 'kill "$AIRFLOW_PID" 2>/dev/null || true' EXIT INT TERM
 # Credentials for the receiver's /auth/token login: AIRFLOW_TOKEN wins; else AIRFLOW_USER +
 # AIRFLOW_PASSWORD; else the generated admin password (read here, exported, never printed).
 if [ -z "${AIRFLOW_TOKEN:-}" ] && [ -z "${AIRFLOW_PASSWORD:-}" ]; then
-  PW_FILE="${AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE:-$AIRFLOW_HOME/simple_auth_manager_passwords.json.generated}"
-  for _ in $(seq 1 180); do
-    if [ -s "$PW_FILE" ]; then break; fi
-    if ! kill -0 "$AIRFLOW_PID" 2>/dev/null; then
-      echo "start.sh: Airflow exited before generating its credential file" >&2
-      exit 1
-    fi
-    sleep 2
-  done
-  if [ ! -s "$PW_FILE" ]; then
-    echo "start.sh: Airflow has not generated its credential file" >&2
-    exit 1
-  fi
-  export AIRFLOW_USER="${AIRFLOW_USER:-admin}"
-  AIRFLOW_PASSWORD="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$PW_FILE" "$AIRFLOW_USER")"
-  export AIRFLOW_PASSWORD
+  wait_for_airflow_password "$AIRFLOW_PID"
 fi
 export AIRFLOW_URL
 exec uv run --group airflow swfactory webhook serve --port "${SWF_WEBHOOK_PORT:-8081}" --airflow-url "$AIRFLOW_URL"

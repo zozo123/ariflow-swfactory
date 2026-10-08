@@ -45,8 +45,9 @@
 set -Eeuo pipefail
 
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=SCRIPTDIR/lib/live_airflow.sh
+. "$REPO/scripts/lib/live_airflow.sh"
 DAG_ID="stress"
-TARGET_B="demo/target-b"   # blueprints/stress.toml's second [[targets]].dir, materialised below
 E2E_REPO="zozo123/ariflow-swfactory"
 HEALTH_TIMEOUT_S=240; PARSE_TIMEOUT_S=240; BACKEND_TIMEOUT_S=60; RUN_TIMEOUT_S=1800
 LEGS="${SWF_E2E_LEGS:-direct backend two-sessions}"
@@ -77,25 +78,6 @@ export AIRFLOW_HOME="$WORK/airflow_home"
 export SWF_CONFIG="$WORK/config/swf/config.toml"
 STANDALONE_LOG="$WORK/standalone.log"; STANDALONE_PID=""
 BACKEND_LOG="$WORK/backend.log";       BACKEND_PID=""
-
-say() { printf '\n=== %s\n' "$*"; }
-fail() { echo "FAILED: $*" >&2; exit 1; }
-
-# SIGINT to the whole GROUP, then a bounded wait, then SIGKILL. The group, because `airflow
-# standalone` stops its scheduler / api-server / dag-processor / triggerer children on
-# KeyboardInterrupt and they are its subprocesses. The bound, because a background job started with
-# job control OFF inherits SIGINT ignored: `swfactory backend` outlived every INT this trap sent and
-# the bare `wait` after it blocked forever — a hung harness behind a green factory, which reads
-# exactly like a hung factory. Hence `set -m` on both starts, and no unbounded wait.
-stop_group() { # stop_group <pid> <what>
-  local pid=${1:-} what=$2 i=0
-  [ -n "$pid" ] || return 0
-  say "shutting down $what (process group $pid)"
-  kill -INT -- "-$pid" 2>/dev/null || true
-  while kill -0 "$pid" 2>/dev/null && [ $i -lt 60 ]; do sleep 0.5; i=$((i + 1)); done
-  kill -KILL -- "-$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
-}
 
 cleanup() {
   rc=$?
@@ -131,19 +113,9 @@ say "swf under test: $("$SWF" --version)"
 #
 # Python has four jobs here: booting Airflow, serving the backend leg, reading small JSON fields,
 # and rendering the reference snapshot. It never drives the factory.
-if [ "${SWF_AIRFLOW_NO_SYNC:-}" = "1" ]; then
-  PY="$(uv run --no-sync --project "$REPO" python -c 'import sys; print(sys.executable)')"
-else
-  PY="$(uv run --project "$REPO" --group airflow python -c 'import sys; print(sys.executable)')"
-fi
-"$PY" -c 'import airflow; print("Live E2E Airflow:", airflow.__version__)'
-BIN="$(dirname "$PY")"
-[ -x "$BIN/airflow" ] || fail "no airflow in $BIN — run: uv sync --group airflow"
-export PATH="$BIN:$PATH"
+resolve_py
 
 py() { "$PY" - "$@"; }   # a heredoc script with arguments; stdin carries the script, never data
-field() { "$PY" -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }
-port() { "$PY" -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
 # Where the workers put job <idx> of dag run <id>. Asked of the runtime rather than restated here:
 # `run_id_for` is the only definition of that mapping, and a second copy of it in this script would
 # be a harness that agrees with the factory only until someone changes one of them.
@@ -157,69 +129,19 @@ print(run_id_for(sys.argv[1], int(sys.argv[2])))' "$1" "$2" |
 # ---------------------------------------------------------------- work dir and environment
 
 say "work dir $WORK"
-mkdir -p "$AIRFLOW_HOME" "$(dirname "$SWF_CONFIG")" "$WORK/$(dirname "$TARGET_B")"
-cp -R "$REPO/demo/target" "$WORK/$TARGET_B"
-find "$WORK/$TARGET_B" \( -name __pycache__ -o -name .pytest_cache -o -name .venv \) -prune \
-  -exec rm -rf {} + 2>/dev/null || true
+mkdir -p "$AIRFLOW_HOME" "$(dirname "$SWF_CONFIG")"
+materialize_target_b
 cd "$WORK"
 
-BASE="http://localhost:$(port)"
-BACKEND_URL="http://127.0.0.1:$(port)"
+BASE="http://localhost:$(free_port)"
+BACKEND_URL="http://127.0.0.1:$(free_port)"
 # Minted before anything boots, because the Airflow workers need it from the moment they start —
 # see boot_airflow. `swfactory backend` refuses a token under 32 characters.
 SWF_BACKEND_TOKEN="$("$PY" -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export SWF_BACKEND_TOKEN
-
-export AIRFLOW__CORE__DAGS_FOLDER="$REPO/dags"
-export AIRFLOW__CORE__LOAD_EXAMPLES=False
-export AIRFLOW__API__PORT="${BASE##*:}"
-# The execution API url defaults to `{api.base_url}/execution/`, so a non-default port needs both
-# or the task workers dial 8080 and every task hangs.
-export AIRFLOW__API__BASE_URL="$BASE"
-export AIRFLOW__CORE__EXECUTION_API_SERVER_URL="$BASE/execution/"
-export SWF_AGENT=scripted SWF_SANDBOX=local SWF_SCM=local
+export_airflow_env
 
 # ---------------------------------------------------------------- boot
-
-boot_airflow() {
-  say "airflow standalone on $BASE (log: $STANDALONE_LOG)"
-  set -m   # own process group, so cleanup can signal airflow's children too
-  # SWF_BACKEND_URL is exported HERE and nowhere else, and both halves matter. The workers need it:
-  # a backend-submitted run's jobs are managed Factory Cells, and `cell_callback.transition` fails
-  # closed without it ("managed Airflow workers require SWF_BACKEND_URL and SWF_BACKEND_TOKEN"),
-  # which killed every such job in `setup`. This shell must NOT have it: `swf` reads it as an
-  # override of the context's own backend_url, so exporting it would route the DIRECT leg through
-  # the backend and collapse the two legs into one.
-  SWF_BACKEND_URL="$BACKEND_URL" "$BIN/airflow" standalone >"$STANDALONE_LOG" 2>&1 &
-  STANDALONE_PID=$!
-  set +m
-  say "waiting for $BASE/api/v2/monitor/health"
-  local i=0 health
-  while :; do
-    kill -0 "$STANDALONE_PID" 2>/dev/null || fail "standalone died during startup"
-    health="$(curl -fsS "$BASE/api/v2/monitor/health" 2>/dev/null || true)"
-    if [ -n "$health" ] && printf '%s' "$health" | "$PY" -c '
-import json, sys
-
-data = json.load(sys.stdin)
-parts = ("metadatabase", "scheduler", "dag_processor", "triggerer")
-sys.exit(0 if all(data.get(p, {}).get("status") == "healthy" for p in parts) else 1)
-'; then echo "healthy after ${i}s"; break; fi
-    [ $i -lt "$HEALTH_TIMEOUT_S" ] || fail "health never went green in ${HEALTH_TIMEOUT_S}s"
-    sleep 1; i=$((i + 1))
-  done
-}
-
-# `airflow standalone` writes the admin password on first boot. Gates are answered as that user, so
-# the factory records a real HITL respondent instead of "auto". The password reaches `swf` only as
-# the NAME of the variable holding it — the discipline a shared machine needs.
-mint_admin() {
-  local file="$AIRFLOW_HOME/simple_auth_manager_passwords.json.generated"
-  [ -f "$file" ] || fail "no $file — is [core] simple_auth_manager_all_admins on?"
-  PASSWORD="$("$PY" -c 'import json,sys
-u = json.load(open(sys.argv[1])); print(u.get("admin") or next(iter(u.values())))' "$file")"
-  export SWF_E2E_PASSWORD="$PASSWORD"
-}
 
 # The credential-holding process the backend leg talks to: it gets Airflow's password, the console
 # never does. Its state root is deliberately not `.factory`, where the factory's own run dirs live —
@@ -247,12 +169,7 @@ start_backend() {
 
 wait_parsed() {
   say "[$MODE] waiting for the dag-processor to parse $DAG_ID"
-  local i=0
-  until "$SWF" runs list --dag "$DAG_ID" --json >/dev/null 2>&1; do
-    [ $i -lt "$PARSE_TIMEOUT_S" ] || fail "$DAG_ID never appeared in ${PARSE_TIMEOUT_S}s"
-    sleep 1; i=$((i + 1))
-  done
-  echo "parsed after ${i}s"
+  wait_dag_parsed "$SWF" runs list --dag "$DAG_ID" --json
   "$SWF" runs unpause "$DAG_ID"   # new DAGs start paused; without this the run sits queued forever
 }
 
@@ -814,8 +731,17 @@ PY
   done <"$ARENA/b-job-ids.txt"
 }
 
-boot_airflow
-mint_admin
+# SWF_BACKEND_URL reaches the standalone and nowhere else, and both halves matter. The workers need
+# it: a backend-submitted run's jobs are managed Factory Cells, and `cell_callback.transition` fails
+# closed without it ("managed Airflow workers require SWF_BACKEND_URL and SWF_BACKEND_TOKEN"), which
+# killed every such job in `setup`. This shell must NOT have it: `swf` reads it as an override of
+# the context's own backend_url, so exporting it would route the DIRECT leg through the backend and
+# collapse the two legs into one.
+boot_airflow SWF_BACKEND_URL="$BACKEND_URL"
+admin_password
+# The password reaches `swf` only as the NAME of the variable holding it — the discipline a shared
+# machine needs.
+export SWF_E2E_PASSWORD="$PASSWORD"
 start_backend
 # `two-sessions` is a leg like any other, so it can be run alone: SWF_E2E_LEGS=two-sessions is the
 # whole cross-session proof for the price of one boot. It ran unconditionally after the others when

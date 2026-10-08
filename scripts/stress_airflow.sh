@@ -22,8 +22,9 @@
 set -Eeuo pipefail
 
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=SCRIPTDIR/lib/live_airflow.sh
+. "$REPO/scripts/lib/live_airflow.sh"
 DAG_ID="${SWF_STRESS_DAG_ID:-stress}" # any installed line; `selfhost` targets the repo root
-TARGET_B="demo/target-b" # blueprints/stress.toml's second [[targets]].dir (materialised below)
 HEALTH_TIMEOUT_S="${SWF_STRESS_HEALTH_TIMEOUT_S:-240}"
 PARSE_TIMEOUT_S="${SWF_STRESS_PARSE_TIMEOUT_S:-240}"
 # 1800 s fits two demo-calculator jobs. A root-target line runs the factory's own suite once per
@@ -42,23 +43,9 @@ export AIRFLOW_HOME="$WORK/airflow_home"
 STANDALONE_LOG="$WORK/standalone.log"
 STANDALONE_PID=""
 
-say() { printf '\n=== %s\n' "$*"; }
-
 cleanup() {
   rc=$?
-  if [ -n "$STANDALONE_PID" ]; then
-    say "shutting down standalone (process group $STANDALONE_PID)"
-    # SIGINT: `airflow standalone` stops its scheduler / api-server / dag-processor / triggerer
-    # children on KeyboardInterrupt. To the whole group, since they are its subprocesses.
-    kill -INT -- "-$STANDALONE_PID" 2>/dev/null || true
-    i=0
-    while kill -0 "$STANDALONE_PID" 2>/dev/null && [ $i -lt 60 ]; do
-      sleep 0.5
-      i=$((i + 1))
-    done
-    kill -KILL -- "-$STANDALONE_PID" 2>/dev/null || true
-    wait "$STANDALONE_PID" 2>/dev/null || true
-  fi
+  stop_group "$STANDALONE_PID" standalone
   if [ "$rc" -ne 0 ] && [ -f "$STANDALONE_LOG" ]; then
     say "standalone log (tail)"
     tail -40 "$STANDALONE_LOG" || true
@@ -73,24 +60,8 @@ cleanup() {
 trap cleanup EXIT
 
 # ---------------------------------------------------------------- the project's interpreter
-#
-# One `uv run` to materialise/locate the venv, then the venv's own binaries: nothing else in this
-# script holds uv's lock, so a long `airflow standalone` cannot block another `uv run` (or be
-# blocked by one).
-if [ "${SWF_AIRFLOW_NO_SYNC:-}" = "1" ]; then
-  PY="$(uv run --no-sync --project "$REPO" python -c 'import sys; print(sys.executable)')"
-else
-  PY="$(uv run --project "$REPO" --group airflow python -c 'import sys; print(sys.executable)')"
-fi
-"$PY" -c 'import airflow; print("Live E2E Airflow:", airflow.__version__)'
-BIN="$(dirname "$PY")"
-[ -x "$BIN/airflow" ] || {
-  echo "no airflow in $BIN — run: uv sync --group airflow" >&2
-  exit 1
-}
-# `airflow standalone` starts its scheduler / api-server / dag-processor / triggerer by running
-# `airflow <subcommand>` off PATH, so the venv has to be on it and not just addressed by path.
-export PATH="$BIN:$PATH"
+
+resolve_py
 
 # ---------------------------------------------------------------- REST helpers
 
@@ -104,9 +75,6 @@ api() { # api METHOD PATH [BODY]
   curl "$@" "$BASE/api/v2$_path"
 }
 
-# One field of the JSON object on stdin (stdlib only: jq is not assumed to be installed).
-field() { "$PY" -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }
-
 # ---------------------------------------------------------------- work dir
 
 say "work dir $WORK"
@@ -115,9 +83,7 @@ mkdir -p "$AIRFLOW_HOME"
 # hence every task — inherits the cwd set here. So the cwd has to satisfy the line's targets, and
 # the two shapes need different ground:
 #
-#   dir != ""  the target lives inside the cwd. Materialise the blueprint's second target here
-#              rather than committing it (the recorded patches carry blob hashes, so a "second"
-#              target has to BE that copy).
+#   dir != ""  the target lives inside the cwd. Materialise the blueprint's second target here.
 #   dir == ""  the target IS a factory checkout — this is the self-host line. A throwaway cwd has
 #              no factory.toml, so `seed_local_workdir` refuses before a task starts. Run from a
 #              clone instead, which satisfies the contract and still keeps the run off the
@@ -133,111 +99,36 @@ if [ "$ROOT_TARGET" = "1" ]; then
   git -C "$WORK/factory" checkout -q "$(git -C "$REPO" rev-parse HEAD)"
   cd "$WORK/factory"
 else
-  mkdir -p "$WORK/$(dirname "$TARGET_B")"
-  cp -R "$REPO/demo/target" "$WORK/$TARGET_B"
-  find "$WORK/$TARGET_B" \( -name __pycache__ -o -name .pytest_cache -o -name .venv \) -prune \
-    -exec rm -rf {} + 2>/dev/null || true
+  materialize_target_b
   cd "$WORK"
 fi
 
-PORT="$("$PY" -c '
-import socket
-
-sock = socket.socket()
-sock.bind(("127.0.0.1", 0))
-print(sock.getsockname()[1])
-sock.close()
-')"
-BASE="http://localhost:$PORT"
+BASE="http://localhost:$(free_port)"
 TARGETS="$("$PY" -c "from swfactory.blueprint import load; print(len(load('$DAG_ID').targets))")"
-
-export AIRFLOW__CORE__DAGS_FOLDER="$REPO/dags"
-export AIRFLOW__CORE__LOAD_EXAMPLES=False
-export AIRFLOW__API__PORT="$PORT"
-# The execution API url defaults to `{api.base_url}/execution/`, so a non-default port needs both
-# or the task workers dial 8080 and every task hangs.
-export AIRFLOW__API__BASE_URL="$BASE"
-export AIRFLOW__CORE__EXECUTION_API_SERVER_URL="$BASE/execution/"
-export SWF_AGENT=scripted SWF_SANDBOX=local SWF_SCM=local
+export_airflow_env
 
 # ---------------------------------------------------------------- boot
 
-say "airflow standalone on $BASE (log: $STANDALONE_LOG)"
-set -m # own process group, so cleanup can signal airflow's children too
-"$BIN/airflow" standalone >"$STANDALONE_LOG" 2>&1 &
-STANDALONE_PID=$!
-set +m
-
-say "waiting for $BASE/api/v2/monitor/health"
-i=0
-while :; do
-  if ! kill -0 "$STANDALONE_PID" 2>/dev/null; then
-    echo "standalone died during startup" >&2
-    exit 1
-  fi
-  health="$(curl -fsS "$BASE/api/v2/monitor/health" 2>/dev/null || true)"
-  if [ -n "$health" ] && printf '%s' "$health" | "$PY" -c '
-import json
-import sys
-
-data = json.load(sys.stdin)
-parts = ("metadatabase", "scheduler", "dag_processor", "triggerer")
-sys.exit(0 if all(data.get(p, {}).get("status") == "healthy" for p in parts) else 1)
-'; then
-    echo "healthy after ${i}s: $health"
-    break
-  fi
-  if [ $i -ge "$HEALTH_TIMEOUT_S" ]; then
-    echo "health never went green in ${HEALTH_TIMEOUT_S}s: ${health:-<no response>}" >&2
-    exit 1
-  fi
-  sleep 1
-  i=$((i + 1))
-done
+boot_airflow
 
 # Source installs must serve real dashboard/login HTML, not merely start the REST API.
 curl -fsS "$BASE/" >"$WORK/dashboard.html"
 curl -fsS "$BASE/auth/login" >"$WORK/login.html"
 for page in dashboard login; do
-  grep -Eqi '<!doctype html|<html[[:space:]>]' "$WORK/$page.html" || {
-    echo "$page did not return HTML" >&2; exit 1;
-  }
+  grep -Eqi '<!doctype html|<html[[:space:]>]' "$WORK/$page.html" || fail "$page did not return HTML"
 done
 
-# `airflow standalone` writes the admin password on first boot. The gates are answered as that
-# user, so approvals.json records a real HITL `responded_by_user` instead of "auto".
-PASSWORDS="$AIRFLOW_HOME/simple_auth_manager_passwords.json.generated"
-[ -f "$PASSWORDS" ] || {
-  echo "no $PASSWORDS — is [core] simple_auth_manager_all_admins on?" >&2
-  exit 1
-}
-PASSWORD="$("$PY" -c "
-import json
-
-users = json.load(open('$PASSWORDS'))
-print(users.get('admin') or next(iter(users.values())))
-")"
+# The gates are answered as admin, so approvals.json records a real HITL `responded_by_user`.
+admin_password
 # /auth/token is the auth manager's own endpoint: no /api/v2 prefix, hence not through api().
 TOKEN="$(curl -fsS -X POST "$BASE/auth/token" -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$PASSWORD\"}" | field access_token || true)"
-[ -n "$TOKEN" ] || {
-  echo "POST /auth/token returned no access_token" >&2
-  exit 1
-}
+[ -n "$TOKEN" ] || fail "POST /auth/token returned no access_token"
 export AIRFLOW_URL="$BASE" AIRFLOW_TOKEN="$TOKEN" # read by `swfactory approve`
 echo "authenticated as admin"
 
 say "waiting for the dag-processor to parse $DAG_ID"
-i=0
-while [ $i -lt "$PARSE_TIMEOUT_S" ] && ! api GET "/dags/$DAG_ID" >/dev/null 2>&1; do
-  sleep 1
-  i=$((i + 1))
-done
-api GET "/dags/$DAG_ID" >/dev/null || {
-  echo "$DAG_ID never appeared in ${PARSE_TIMEOUT_S}s" >&2
-  exit 1
-}
-echo "parsed after ${i}s"
+wait_dag_parsed api GET "/dags/$DAG_ID"
 
 # New DAGs start paused in standalone: without this the run sits queued forever.
 say "unpausing $DAG_ID"
@@ -253,10 +144,7 @@ import sys
 print(json.dumps({"logical_date": None, "conf": {"issues": sys.argv[1:]}}))
 ' "${ISSUES[@]}")"
 RUN_ID="$(api POST "/dags/$DAG_ID/dagRuns" "$CONF" | field dag_run_id || true)"
-[ -n "$RUN_ID" ] || {
-  echo "trigger returned no dag_run_id" >&2
-  exit 1
-}
+[ -n "$RUN_ID" ] || fail "trigger returned no dag_run_id"
 echo "dag_run_id $RUN_ID"
 
 # ---------------------------------------------------------------- answer the gates, poll the run
@@ -476,8 +364,7 @@ REPORT_RC=0
 "$PY" "$WORK/report.py" "$DAG_ID" "$RUN_ID" "$WORK" "${ISSUES[@]}" || REPORT_RC=$?
 
 if [ "$TI_RC" -ne 0 ] || [ "$REPORT_RC" -ne 0 ] || [ "$STATE" != "success" ]; then
-  echo "FAILED: state=$STATE task_instances_rc=$TI_RC report_rc=$REPORT_RC" >&2
-  exit 1
+  fail "state=$STATE task_instances_rc=$TI_RC report_rc=$REPORT_RC"
 fi
 say "OK: $DAG_ID green — ${#ISSUES[@]} issues x $TARGETS targets, $answered gates answered"
 echo "$RUN_ID"
