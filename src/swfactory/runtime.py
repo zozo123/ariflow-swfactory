@@ -66,7 +66,9 @@ def job_config(
 ) -> Config:
     over = overrides or {}
     cfg = bp.config(job, run_id=run_id, **over)
-    if cfg.agent == "scripted" and over.get("sandbox") is None and cfg.sandbox != "local":
+    # A scripted replay makes no model calls, so it never needs the blueprint's MicroVM. Boat is the
+    # exception: Config admits only the scripted agent there, so a scripted run IS the line's run.
+    if cfg.agent == "scripted" and over.get("sandbox") is None and cfg.sandbox not in ("local", "boat"):
         cfg = bp.config(job, run_id=run_id, **{**over, "sandbox": "local"})
     identity: dict[str, Any] = {
         "issue": str(job["issue"]),

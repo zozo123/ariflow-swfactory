@@ -523,17 +523,20 @@ def test_a_provider_that_claims_no_filesystem_isolation_says_so() -> None:
     assert "filesystem_isolation" in decision["reason"]
 
 
-def test_a_fork_capable_provider_flips_the_decision(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_fork_capable_provider_flips_the_hint_not_what_ran(monkeypatch: pytest.MonkeyPatch) -> None:
     """The point of reading capabilities instead of hardcoding the answer: nothing in this module
-    changes when a provider learns to fork."""
+    changes when a provider learns to fork. But ``_execute_nodes`` is serial, so the capability is a
+    hint until the stage itself fans out -- the report never claims a parallel run that did not
+    happen."""
     original = _contract.provider_documents
     monkeypatch.setattr(_contract, "provider_documents", lambda **_: original(islo_fork=True))
 
     decision = execution_decision(_decision_ctx("islo"), _plan_with_two_independent_nodes())
 
-    assert decision["parallel"] is True
-    assert decision["mode"] == "provider_fork_parallel"
-    assert decision["reason"] == "capabilities_allow_parallel"
+    assert decision["parallel_hint"] is True
+    assert decision["parallel"] is False
+    assert decision["mode"] == "shared_workspace_serial"
+    assert decision["reason"] == "serial_executor_no_fan_out"
 
 
 def test_a_toolset_answer_belongs_to_the_backend_it_wraps() -> None:
@@ -584,15 +587,28 @@ def test_boat_does_not_claim_the_one_thing_that_was_not_exercised() -> None:
     assert boat_document().capabilities.network_policy is False
 
 
-def test_a_fork_capable_provider_turns_the_run_parallel_with_no_code_change_here() -> None:
-    """The point of deriving the decision from capabilities instead of asserting it: `work_stage`
-    is untouched, and a provider that learns to fork flips the run by itself."""
+def test_boat_fork_is_reported_as_a_hint_while_its_nodes_run_serially(tmp_path: Path) -> None:
+    """`sandbox = "boat"` is reachable since the WorldGen line, and `BoatSandbox` has no fork: a boat
+    run's report must say serial, and carry the provider's fork capability only as a hint."""
     plan = _plan_with_two_independent_nodes()
 
     serial = execution_decision(_decision_ctx("docker"), plan)
-    parallel = execution_decision(_decision_ctx("boat"), plan)
+    hinted = execution_decision(_decision_ctx("boat"), plan)
 
     assert serial["parallel"] is False and serial["reason"] == "serial_fallback_missing_fork"
-    assert parallel["parallel"] is True
-    assert parallel["mode"] == "provider_fork_parallel"
-    assert parallel["reason"] == "capabilities_allow_parallel"
+    assert serial["parallel_hint"] is False
+    assert hinted["parallel"] is False and hinted["mode"] == "shared_workspace_serial"
+    assert hinted["parallel_hint"] is True and hinted["reason"] == "serial_executor_no_fan_out"
+
+    sandbox = GitSandbox()
+    agent = NodeAgent(sandbox, {"a": ["a.py"], "b": ["b.py"]})
+    ctx = _ctx(tmp_path, sandbox, agent, plan)
+    ctx.cfg = ctx.cfg.model_copy(update={"sandbox": "boat"})
+
+    result = work_stage.build_and_test(ctx)
+    report = _report(ctx)
+
+    assert [node for _, _, node in agent.calls] == ["a", "b"]
+    assert result.numbers["parallel_nodes"] == 0
+    assert report["provider"] == "boat" and report["parallel"] is False
+    assert report["mode"] == "shared_workspace_serial" and report["parallel_hint"] is True
