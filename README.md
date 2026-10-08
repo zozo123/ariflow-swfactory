@@ -201,8 +201,7 @@ These mechanisms are intentionally marked **experimental** in the capability inv
 change search posture, population and compute allocation, but they cannot schedule Airflow, weaken
 evidence, mint credentials, approve, publish, merge or promote.
 
-The full end-state and graduation path are in [Future Factory](docs/future-factory.md), with the
-machine-readable architecture contract in [`config/future-factory.yaml`](config/future-factory.yaml).
+The full end-state, laws and graduation path are in [Future Factory](docs/future-factory.md).
 
 ## Architecture and lifecycle
 
@@ -448,7 +447,6 @@ A merge callback already in flight is not interrupted or rolled back.
 | `selfhost.factory` | `experimental` | `swfactory run --blueprint selfhost (target dir is the repo root), executing swfactory.stages against the factory's own tree` | tests/test_selfhost.py (contract parses, every protected entry survives literal-prefix reduction, confinement modules are refused for build and fix, both gates are non-auto, one line serves both backends) |
 | `sandbox.smolvm` | `experimental` | `swfactory.smolvm_backend.SmolvmSandboxBackend via ToolsetSandbox` | tests/test_smolvm_backend.py (HTTP contract) and opt-in tests/test_smolvm_live.py |
 | `factory.phase-control` | `experimental` | `swfactory.phase_control and swf_domain::phase_control; swfactory phase-assess and swf phase are read-only` | tests/test_phase_control.py plus rust/crates/swf-domain/tests/phase_control_contract.rs using tests/fixtures/contract/phase_control.json |
-| `factory.cognitive-harness` | `experimental` | `swfactory.cognitive_harness and swf_domain::cognitive_harness` | tests/test_cognitive_harness.py |
 | `factory.recursive-search` | `experimental` | `swfactory.recursive_search; swfactory research-adapt` | tests/test_recursive_search.py |
 | `factory.swarm-dynamics` | `experimental` | `swfactory.swarm_dynamics via swfactory.recursive_search.plan_adaptive_round; managed provider execution from factory.population-execution` | tests/test_swarm_dynamics.py |
 | `factory.population-manifest` | `experimental` | `swfactory.population_manifest via swfactory.recursive_search.plan_adaptive_round; swfactory population-summarize` | tests/test_population_manifest.py |

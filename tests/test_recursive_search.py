@@ -221,14 +221,6 @@ def test_adaptive_round_clamps_parallelism_to_its_default_population_budget() ->
     assert plan.max_parallel == 1
 
 
-def test_future_factory_contract_keeps_one_root_search_authority() -> None:
-    root = Path(__file__).resolve().parents[1]
-    lines = (root / "config" / "future-factory.yaml").read_text(encoding="utf-8").splitlines()
-
-    assert [line for line in lines if line.startswith("authority:")] == ["authority: search-only"]
-    assert "authority_envelope:" in lines
-
-
 def _population_telemetry() -> PopulationTelemetry:
     return PopulationTelemetry(
         manifest_digest="sha256:" + "a" * 64,

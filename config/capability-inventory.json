@@ -246,31 +246,6 @@
       ]
     },
     {
-      "id": "factory.cognitive-harness",
-      "state": "experimental",
-      "support": "experimental",
-      "invariant": "The cognitive harness may create stochastic worlds, measure, anneal, gauge-fix, consolidate memory and request authority; it cannot grant authority or mutate durable reality.",
-      "owner": "workgraph+evidence+authority",
-      "runtime_entry": "swfactory.cognitive_harness and swf_domain::cognitive_harness",
-      "environment": "pure domain/search logic inside the AI harness; Airflow remains lifecycle substrate and the Rust authority kernel remains the reality boundary",
-      "test": "tests/test_cognitive_harness.py",
-      "evidence": [
-        "tests/test_cognitive_harness.py",
-        "typed Python/Rust cognitive contract",
-        "config/cognitive-harness.yaml",
-        "docs/cognitive-harness.md"
-      ],
-      "follow_up": "Wire the pure cognitive domain into managed-run telemetry before enabling any automatic search-only control; do not widen authority while doing so.",
-      "public_surface": [
-        "cognitive harness",
-        "System 1",
-        "System 2",
-        "gauge invariants",
-        "many-world cognition",
-        "executable epistemology"
-      ]
-    },
-    {
       "id": "factory.recursive-search",
       "state": "experimental",
       "support": "experimental",
@@ -283,7 +258,6 @@
         "tests/test_recursive_search.py",
         "tests/test_candidate_evidence.py",
         "tests/test_population_manifest.py",
-        "config/future-factory.yaml",
         "docs/future-factory.md"
       ],
       "follow_up": "Calibrate adaptive information-budget thresholds from retained managed runs, expose the resulting decisions in Rust operator surfaces, and keep promotion authority separate.",
@@ -305,7 +279,6 @@
       "evidence": [
         "tests/test_swarm_dynamics.py",
         "tests/test_population_manifest.py",
-        "config/future-factory.yaml",
         "docs/future-factory.md"
       ],
       "follow_up": "Use retained managed population execution to tune lane-level information budgets, qualify the adaptive thresholds on real workloads, and graduate stable contracts into Rust.",
@@ -425,7 +398,7 @@
         "src/swfactory/adaptive_information.py",
         "src/swfactory/population_stage.py",
         "docs/dark-factory.md",
-        "config/future-factory.yaml"
+        "docs/future-factory.md"
       ],
       "follow_up": "Calibrate thresholds from real retained workloads, compare predicted marginal value with realized evidence gain, and graduate a stable cross-language contract into Rust before treating it as supported.",
       "public_surface": [
