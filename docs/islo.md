@@ -7,7 +7,7 @@ token.
 | Tier | Runs | Credentials | Egress |
 | --- | --- | --- | --- |
 | **Orchestrator** — one sandbox, `swf-orchestrator` (trusted) | Airflow 3 (`airflow standalone`, UI `:8080`), `swfactory webhook serve --port 8081 --airflow-url http://localhost:8080`, and `deliver`: `git am` of the agent's format-patch stream, push `factory/*`, `gh pr create` | gateway-injected `GH_TOKEN`; environment-injected `ISLO_API_KEY` to spawn agent VMs; **no** Anthropic key | `swfactory-orchestrator` gateway: github.com, api.github.com, releases.islo.dev, the islo API |
-| **Agents** — one MicroVM per (issue, target), `swf-<issue>-<run>` (untrusted) | clone of the target (`--source`), `claude -p` per stage, the target's tests, bot-authored commits | gateway-injected `ANTHROPIC_API_KEY`; never a GitHub token, never `--env` | `swfactory` gateway, deny-by-default: api.anthropic.com, github.com, api.github.com, pypi.org, files.pythonhosted.org, astral.sh, releases.astral.sh, release-assets.githubusercontent.com (the last two are the `uv` installer's redirect targets) |
+| **Agents** — one MicroVM per (issue, target), `swf-<issue>-<run>` (untrusted) | clone of the target (`--source`), `claude -p` per stage, the target's tests, bot-authored commits | gateway-injected `ANTHROPIC_API_KEY`; never a GitHub token, never `--env` | `swfactory` gateway, deny-by-default: api.anthropic.com, github.com, api.github.com, pypi.org, files.pythonhosted.org, registry.npmjs.org (the npm registry `bun install` needs), astral.sh, releases.astral.sh, release-assets.githubusercontent.com (the last two are the `uv` installer's redirect targets) |
 
 The orchestrator spawns agent VMs with the same `IsloSandbox.argv` the CLI uses (`--gateway-profile
 swfactory --environment swfactory --init minimal --delete-after --pause-after-idle --auto-resume
@@ -49,7 +49,7 @@ human the required reviewer.
 | Step | Command | Skipped when |
 | --- | --- | --- |
 | login | `islo login`; `islo login --tool github`; `islo login --tool claude` | `islo status` says authenticated / the integration is listed |
-| gateway | `islo gateway create --name swfactory --default-action deny --internet-access true`, then `islo gateway swfactory add-rule --host <h> --action allow` for api.anthropic.com github.com api.github.com pypi.org files.pythonhosted.org astral.sh releases.astral.sh release-assets.githubusercontent.com | the profile / rule host exists |
+| gateway | `islo gateway create --name swfactory --default-action deny --internet-access true`, then `islo gateway swfactory add-rule --host <h> --action allow` for api.anthropic.com github.com api.github.com pypi.org files.pythonhosted.org registry.npmjs.org astral.sh releases.astral.sh release-assets.githubusercontent.com | the profile / rule host exists |
 | environment | `islo environment create --name swfactory --gateway-secret 'ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY;host=api.anthropic.com;auth=bearer'` | the environment exists |
 | snapshot (`SNAPSHOT=1`) | `islo use swf-golden --source github://<repo>:main ... -- bash -lc 'cd <target> && uv sync --group dev && claude --version'`; `islo snapshot save swf-golden --name swf-golden-<date>`; `islo rm swf-golden --force` | the snapshot exists |
 | verify | `uv run swfactory doctor`, then `deploy/islo/knowledge.sh <repo>` | never |

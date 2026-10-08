@@ -21,8 +21,9 @@ ENV="${ENV:-swfactory}"                          # islo environment ([sandbox] e
 SNAPSHOT="${SNAPSHOT:-0}"                        # 1 = bake swf-golden-<date> (docs/islo.md)
 BRANCH="${BRANCH:-main}"
 # Same set as the allow-list in swfactory.doctor (parity is pinned by tests/test_doctor.py); the last
-# two are the astral.sh uv installer's redirect targets. Keep this array on one line, unquoted.
-ALLOW_HOSTS=(api.anthropic.com github.com api.github.com pypi.org files.pythonhosted.org astral.sh releases.astral.sh release-assets.githubusercontent.com)
+# two are the astral.sh uv installer's redirect targets, and registry.npmjs.org is the npm registry a
+# work cell whose target installs with Bun needs for `bun install`. Keep this array on one line, unquoted.
+ALLOW_HOSTS=(api.anthropic.com github.com api.github.com pypi.org files.pythonhosted.org registry.npmjs.org astral.sh releases.astral.sh release-assets.githubusercontent.com)
 
 FACTORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$FACTORY_ROOT"   # `islo use` picks up ./islo.yaml from here

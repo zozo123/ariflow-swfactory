@@ -31,6 +31,9 @@ Honest limits, written down rather than discovered:
   credential has no path into a boat VM without becoming ambient for target verification too.
   ``Config`` therefore refuses ``agent=claude`` with ``sandbox=boat``; the scripted agent needs
   nothing.
+* create sends no egress policy, so a boat cell has no swfactory-enforced allowlist: neither the
+  srt/toolset default (``SRT_DEFAULT_DOMAINS``) nor the islo ``swfactory`` gateway profile applies,
+  and the VM reaches whatever boat.dev lets it reach (its own ``git clone`` of the target included).
 * the sandbox id is persisted in host-owned run state the moment provisioning succeeds, so a
   retried or restarted task reconnects to the same VM instead of leaking a second one.
 """

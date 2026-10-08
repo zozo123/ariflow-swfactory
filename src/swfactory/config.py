@@ -25,7 +25,10 @@ if TYPE_CHECKING:
     from swfactory.sandbox import Sandbox
 
 
-SRT_DEFAULT_DOMAINS = ("api.anthropic.com", "pypi.org", "files.pythonhosted.org", "astral.sh")
+# Default egress allowlist for srt and toolset work cells (docker has no domain allowlist; boat
+# sends no egress policy); registry.npmjs.org is the npm registry a Bun-installing target needs
+# (it serves metadata and tarballs itself, so no CDN host is needed).
+SRT_DEFAULT_DOMAINS = ("api.anthropic.com", "pypi.org", "files.pythonhosted.org", "registry.npmjs.org", "astral.sh")
 DOCKER_DEFAULT_IMAGE = "ghcr.io/zozo123/swfactory-sandbox:latest"
 IDENTITY_SETTINGS = frozenset({"issue", "repo", "target_dir", "base_branch", "run_id", "blueprint"})
 # Compatibility name used throughout the runtime. This is the checkout root in development and

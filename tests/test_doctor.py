@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 from swfactory import doctor
 from swfactory.cli import app
-from swfactory.config import Config
+from swfactory.config import SRT_DEFAULT_DOMAINS, Config
 from swfactory.doctor import Check, exit_code, run_doctor, table
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -195,18 +195,22 @@ def test_gateway_with_internet_disabled_fails() -> None:
 # ------------------------------------------------- the allow-list, stated in five places at once
 
 # The six hosts a run has always needed, plus the two redirect targets of the ``astral.sh`` uv
-# installer (301 to releases.astral.sh, asset download falling back to GitHub's release host).
+# installer (301 to releases.astral.sh, asset download falling back to GitHub's release host),
+# plus the npm registry a work cell whose target installs with Bun needs (``bun install``; the
+# registry serves metadata and tarballs itself, so no CDN host).
 EXPECTED_GATEWAY_ALLOW_HOSTS = (
     "api.anthropic.com",
     "github.com",
     "api.github.com",
     "pypi.org",
     "files.pythonhosted.org",
+    "registry.npmjs.org",
     "astral.sh",
     "releases.astral.sh",
     "release-assets.githubusercontent.com",
 )
 UV_REDIRECT_HOSTS = ("releases.astral.sh", "release-assets.githubusercontent.com")
+NPM_REGISTRY_HOSTS = ("registry.npmjs.org",)
 ALLOW_HOSTS_MARKER = "ALLOW_HOSTS=("
 BOOTSTRAP = ROOT / "deploy" / "islo" / "bootstrap.sh"
 
@@ -233,9 +237,9 @@ def allow_hosts_from_shell(text: str, source: str) -> set[str]:
 
 
 def test_gateway_allow_hosts_pin() -> None:
-    """Nothing removed or renamed (an already-bootstrapped profile stays valid); two hosts added."""
+    """Nothing removed or renamed (an already-bootstrapped profile stays valid); hosts only added."""
     assert doctor.GATEWAY_ALLOW_HOSTS == EXPECTED_GATEWAY_ALLOW_HOSTS
-    for host in UV_REDIRECT_HOSTS:
+    for host in (*UV_REDIRECT_HOSTS, *NPM_REGISTRY_HOSTS):
         assert host in doctor.GATEWAY_ALLOW_HOSTS
     for host in doctor.GATEWAY_ALLOW_HOSTS:
         assert host == host.lower() and "/" not in host, f"{host!r} must be a bare lowercase hostname"
@@ -274,7 +278,12 @@ def test_allow_hosts_parse_fails_loudly() -> None:
 
 
 def test_prose_allowlists_name_new_hosts() -> None:
-    """The three human-maintained statements of the same list: deploy.sh's comment, docs/islo.md x2."""
+    """The human-maintained statements of the list: deploy.sh's comment, docs/islo.md x2.
+
+    deploy.sh's comment carries only the uv redirect hosts (its own setup script runs that
+    installer); the two docs/islo.md rows state the agent-side list, so they also name the npm
+    registry a Bun-installing work cell needs.
+    """
     deploy = (ROOT / "deploy" / "islo" / "deploy.sh").read_text(encoding="utf-8")
     allow_comment = deploy.split("allow:", 1)[1].split("islo environment create", 1)[0]
     for host in UV_REDIRECT_HOSTS:
@@ -284,8 +293,24 @@ def test_prose_allowlists_name_new_hosts() -> None:
     agents_row = next(line for line in islo_doc if "**Agents**" in line)
     gateway_row = next(line for line in islo_doc if line.startswith("| gateway |"))
     for label, row in (("the Agents trust row", agents_row), ("the gateway bootstrap row", gateway_row)):
-        for host in UV_REDIRECT_HOSTS:
+        for host in (*UV_REDIRECT_HOSTS, *NPM_REGISTRY_HOSTS):
             assert host in row, f"docs/islo.md: {label} omits {host}"
+
+
+def test_srt_default_domains_pin() -> None:
+    """The srt/toolset work-cell egress default must also allow the npm registry.
+
+    A work cell whose target installs with Bun runs `bun install` on srt and toolset as well as
+    islo (docker has no domain allowlist, boat no swfactory egress policy); the registry serves
+    metadata and tarballs itself, so this one host is the whole need.
+    """
+    assert SRT_DEFAULT_DOMAINS == (
+        "api.anthropic.com",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "registry.npmjs.org",
+        "astral.sh",
+    )
 
 
 def test_selfhost_doc_settles_init_minimal() -> None:

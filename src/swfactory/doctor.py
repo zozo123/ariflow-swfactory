@@ -44,6 +44,8 @@ ToolsetLoader = Callable[[str], object]
 # Hosts the deny-by-default gateway profile must allow for a factory run to work. The last two are
 # the ``astral.sh`` uv installer's redirect targets (301 to releases.astral.sh, whose asset download
 # falls back to release-assets.githubusercontent.com); without them the installer gets a 403.
+# ``registry.npmjs.org`` is the npm registry: a work cell whose target installs with Bun runs
+# ``bun install`` against it, and it serves metadata and tarballs itself, so no CDN host is needed.
 # Kept in sync with ``ALLOW_HOSTS`` in deploy/islo/bootstrap.sh (pinned by tests/test_doctor.py).
 GATEWAY_ALLOW_HOSTS = (
     "api.anthropic.com",
@@ -51,6 +53,7 @@ GATEWAY_ALLOW_HOSTS = (
     "api.github.com",
     "pypi.org",
     "files.pythonhosted.org",
+    "registry.npmjs.org",
     "astral.sh",
     "releases.astral.sh",
     "release-assets.githubusercontent.com",
