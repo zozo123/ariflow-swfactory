@@ -125,6 +125,20 @@ def connect_read(path: Path) -> sqlite3.Connection:
         return sqlite3.connect(path)
 
 
+def connect_write(
+    path: Path, *, isolation_level: str | None = "IMMEDIATE", foreign_keys: bool = False
+) -> sqlite3.Connection:
+    """Open a store for writing: WAL, full fsync, one connection shared by the store's threads."""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(path, timeout=30, isolation_level=isolation_level, check_same_thread=False)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA synchronous=FULL")
+    if foreign_keys:
+        db.execute("PRAGMA foreign_keys=ON")
+    return db
+
+
 def read_user_version(db: sqlite3.Connection) -> int:
     return int(db.execute("PRAGMA user_version").fetchone()[0])
 

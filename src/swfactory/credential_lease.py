@@ -17,11 +17,12 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
 from swfactory.cells import is_cell_id
+from swfactory.store_schema import connect_write
 
 LEASE_SCHEMA_VERSION = 1
 _MIN_NONCE_LEN = 16
@@ -79,33 +80,16 @@ class LeaseBinding:
     @classmethod
     def from_untrusted(cls, raw: Mapping[str, Any]) -> LeaseBinding:
         """Parse scheduler/artifact metadata without accepting extra authority-bearing fields."""
-        allowed = {
-            "factory_run_id",
-            "dag_run_id",
-            "task_instance_id",
-            "stage_id",
-            "sandbox_id",
-            "attempt_number",
-            "cell_id",
-            "epoch",
-            "operation_key",
-            "policy_digest",
-        }
-        unknown = sorted(set(raw) - allowed)
+        unknown = sorted(set(raw) - {field.name for field in fields(cls)})
         if unknown:
             raise CredentialLeaseError("untrusted lease binding carries unsupported fields: " + ", ".join(unknown))
         try:
+            # Integer fields keep their raw type so validate() rejects a non-int instead of coercing it.
             binding = cls(
-                factory_run_id=str(raw["factory_run_id"]),
-                dag_run_id=str(raw["dag_run_id"]),
-                task_instance_id=str(raw["task_instance_id"]),
-                stage_id=str(raw["stage_id"]),
-                sandbox_id=str(raw["sandbox_id"]),
-                attempt_number=raw["attempt_number"],
-                cell_id=str(raw["cell_id"]),
-                epoch=raw["epoch"],
-                operation_key=str(raw["operation_key"]),
-                policy_digest=str(raw["policy_digest"]),
+                **{
+                    field.name: raw[field.name] if field.type == "int" else str(raw[field.name])
+                    for field in fields(cls)
+                }
             )
         except (KeyError, TypeError, ValueError) as error:
             raise CredentialLeaseError(f"invalid untrusted lease binding: {error}") from error
@@ -157,20 +141,11 @@ class CredentialLeaseBroker:
         on_denial: Callable[[LeaseDenial], None] | None = None,
     ) -> None:
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.providers = dict(providers or {})
         self.epoch_reader = epoch_reader
         self.on_denial = on_denial
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(
-            self.path,
-            timeout=30,
-            isolation_level="IMMEDIATE",
-            check_same_thread=False,
-        )
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=FULL")
+        self.db = connect_write(self.path)
         self._migrate()
 
     def close(self) -> None:
@@ -334,15 +309,7 @@ class CredentialLeaseBroker:
         reason: str = "use_complete",
         now: float | None = None,
     ) -> bool:
-        clock = time.time() if now is None else now
-        with self.lock, self.db:
-            cur = self.db.execute(
-                """UPDATE credential_leases
-                   SET revoked_at=?, revoke_reason=?
-                   WHERE lease_id=? AND revoked_at IS NULL""",
-                (clock, reason, lease_id),
-            )
-            return bool(cur.rowcount)
+        return bool(self._revoke("lease_id=?", (lease_id,), reason=reason, now=now))
 
     def revoke_epoch(
         self,
@@ -353,15 +320,7 @@ class CredentialLeaseBroker:
         now: float | None = None,
     ) -> int:
         """Synchronously revoke every still-live lease issued under a superseded fence."""
-        clock = time.time() if now is None else now
-        with self.lock, self.db:
-            cur = self.db.execute(
-                """UPDATE credential_leases
-                   SET revoked_at=?, revoke_reason=?
-                   WHERE cell_id=? AND epoch=? AND revoked_at IS NULL""",
-                (clock, reason, cell_id, epoch),
-            )
-            return int(cur.rowcount)
+        return self._revoke("cell_id=? AND epoch=?", (cell_id, epoch), reason=reason, now=now)
 
     def revoke_prior_attempts(
         self,
@@ -375,39 +334,24 @@ class CredentialLeaseBroker:
         """Revoke every lease from an earlier Airflow/provider attempt before attempt N proceeds."""
         if attempt_number < 1:
             raise ValueError("attempt_number must be positive")
-        clock = time.time() if now is None else now
-        with self.lock, self.db:
-            cur = self.db.execute(
-                """UPDATE credential_leases
-                   SET revoked_at=?, revoke_reason=?
-                   WHERE cell_id=? AND epoch=? AND attempt_number<? AND revoked_at IS NULL""",
-                (clock, reason, cell_id, epoch, attempt_number),
-            )
-            return int(cur.rowcount)
+        return self._revoke(
+            "cell_id=? AND epoch=? AND attempt_number<?", (cell_id, epoch, attempt_number), reason=reason, now=now
+        )
 
-    def revoke_attempt(
-        self,
-        binding: LeaseBinding,
-        *,
-        reason: str = "attempt_superseded",
-        now: float | None = None,
-    ) -> int:
-        """Invalidate attempt N before attempt N+1 receives a fresh handle."""
+    def _revoke(self, where: str, params: tuple[Any, ...], *, reason: str, now: float | None) -> int:
+        """Revoke every still-live lease matching ``where``; returns how many were revoked."""
         clock = time.time() if now is None else now
         with self.lock, self.db:
             cur = self.db.execute(
-                """UPDATE credential_leases
-                   SET revoked_at=?, revoke_reason=?
-                   WHERE cell_id=? AND epoch=? AND attempt_number=? AND revoked_at IS NULL""",
-                (clock, reason, binding.cell_id, binding.epoch, binding.attempt_number),
+                f"UPDATE credential_leases SET revoked_at=?, revoke_reason=? WHERE {where} AND revoked_at IS NULL",
+                (clock, reason, *params),
             )
             return int(cur.rowcount)
 
     def denials(self, *, limit: int = 100) -> list[dict[str, Any]]:
         with self.lock:
             rows = self.db.execute(
-                "SELECT lease_id,reason,binding_digest,capability,purpose,factory_run_id,"
-                "cell_id,epoch,attempt_number,created_at "
+                f"SELECT {','.join(field.name for field in fields(LeaseDenial))} "
                 "FROM credential_denials ORDER BY seq DESC LIMIT ?",
                 (max(1, min(int(limit), 1000)),),
             ).fetchall()
@@ -447,23 +391,10 @@ class CredentialLeaseBroker:
             attempt_number=binding.attempt_number if binding is not None else None,
             created_at=now,
         )
+        record = asdict(event)
         self.db.execute(
-            """INSERT INTO credential_denials(
-                lease_id,reason,binding_digest,capability,purpose,factory_run_id,
-                cell_id,epoch,attempt_number,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-            (
-                event.lease_id,
-                event.reason,
-                event.binding_digest,
-                event.capability,
-                event.purpose,
-                event.factory_run_id,
-                event.cell_id,
-                event.epoch,
-                event.attempt_number,
-                event.created_at,
-            ),
+            f"INSERT INTO credential_denials({','.join(record)}) VALUES({','.join('?' * len(record))})",
+            tuple(record.values()),
         )
         # A denial is itself durable security evidence. Commit it before raising: redeem() runs
         # inside a sqlite context manager whose exception path would otherwise roll this INSERT back.

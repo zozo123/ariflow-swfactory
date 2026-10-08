@@ -16,12 +16,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from swfactory.store_schema import CELL_ROW_SCHEMA_VERSION, ensure_named_schema, guard_before_ddl
+from swfactory.store_schema import CELL_ROW_SCHEMA_VERSION, connect_write, ensure_named_schema, guard_before_ddl
 
 # The row field and the file stamp are one number: two of them is how a store starts lying
 # about which binary may write to it.
 SCHEMA_VERSION = CELL_ROW_SCHEMA_VERSION
 TERMINAL_STATES = frozenset({"success", "failed", "cancelled", "rejected", "cleaned"})
+# Cell fields stored as canonical JSON text in a ``<field>_json`` column.
+_JSON_FIELDS = frozenset({"compute", "cleanup"})
 
 
 class CellError(RuntimeError):
@@ -99,18 +101,8 @@ class CellStore:
     ):
         self.path = path
         self.on_authority_revoked = on_authority_revoked
-        path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(
-            path,
-            timeout=30,
-            isolation_level="IMMEDIATE",
-            check_same_thread=False,
-        )
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=FULL")
-        self.db.execute("PRAGMA foreign_keys=ON")
+        self.db = connect_write(path, foreign_keys=True)
         self._migrate()
 
     def close(self) -> None:
@@ -183,10 +175,7 @@ class CellStore:
         now = time.time()
         with self.lock, self.db:
             self._insert_identity(identity, now)
-            row = self.db.execute("SELECT * FROM cells WHERE cell_id=?", (cell_id,)).fetchone()
-            if row is None:  # defensive: INSERT OR IGNORE above must make this impossible
-                raise KeyError(cell_id)
-            current = self._decode(row)
+            current = self.get(cell_id)
             fresh = current["state"] == "created" and current["airflow_run_id"] is None
             if not fresh and current["state"] not in TERMINAL_STATES:
                 raise CellBusy(f"{cell_id} is already active at epoch {current['epoch']} in state {current['state']}")
@@ -319,9 +308,10 @@ class CellStore:
                 raise StaleEpoch(f"{cell_id}: expected {expected_epoch}, current {row['epoch']}")
             encoded: dict[str, Any] = {}
             for key, value in fields.items():
-                encoded[key + "_json" if key in {"compute", "cleanup"} else key] = (
-                    json.dumps(value, sort_keys=True, separators=(",", ":")) if key in {"compute", "cleanup"} else value
-                )
+                if key in _JSON_FIELDS:
+                    encoded[key + "_json"] = json.dumps(value, sort_keys=True, separators=(",", ":"))
+                else:
+                    encoded[key] = value
             now = time.time()
             with self.db:
                 # Terminal lifecycle state revokes the epoch's credential authority before the

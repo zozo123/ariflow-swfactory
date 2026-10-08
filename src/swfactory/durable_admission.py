@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from swfactory.admission import Limits, Priority
-from swfactory.store_schema import ensure_named_schema, guard_before_ddl
+from swfactory.store_schema import connect_write, ensure_named_schema, guard_before_ddl
 
 WORK_ORDER_SCHEMA = 1
 HOLDING_STATES = ("admitted", "dispatching", "bound")
@@ -162,7 +162,6 @@ class DurableAdmission:
     """
 
     def __init__(self, path: Path, limits: Limits | None = None):
-        path.parent.mkdir(parents=True, exist_ok=True)
         self.limits = limits or Limits()
         # How long one delivery attempt owns its intent. A process that dies mid-dispatch cannot
         # release the lease itself, so redelivery waits for it to expire rather than racing it.
@@ -175,10 +174,7 @@ class DurableAdmission:
         self._inflight: dict[str, str] = {}
         # Autocommit plus explicit BEGIN IMMEDIATE: capacity is inspected and reserved inside one
         # write transaction, so two concurrent submissions cannot both read the same free slot.
-        self.db = sqlite3.connect(path, timeout=30, isolation_level=None, check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=FULL")
+        self.db = connect_write(path, isolation_level=None)
         self._migrate()
 
     @contextmanager
@@ -783,10 +779,6 @@ class DurableAdmission:
 
     # ------------------------------------------------------------------ capacity
 
-    def capacity_block(self, *, repos: Sequence[str], actor: str, blueprint: str) -> CapacityBlock | None:
-        with self.lock:
-            return self._capacity_block(repos=repos, actor=actor, blueprint=blueprint)
-
     def _capacity_block(self, *, repos: Sequence[str], actor: str, blueprint: str) -> CapacityBlock | None:
         """Count every unit the request needs, per dimension, against what is already held."""
         return _first_block(self._checks(repos, actor, blueprint, self._held_members()))
@@ -838,27 +830,6 @@ class DurableAdmission:
                 WHERE m.state='held' AND w.state IN ({_placeholders(HOLDING_STATES)})""",  # noqa: S608
             HOLDING_STATES,
         ).fetchall()
-
-    # ------------------------------------------------------------------ throttles
-
-    def set_throttle(self, scope: str, scope_key: str, *, until_at: float, reason: str) -> None:
-        if until_at <= time.time():
-            self.clear_throttle(scope, scope_key)
-            return
-        with self._txn():
-            self.db.execute(
-                """INSERT INTO admission_throttles(scope,scope_key,reason,until_at,updated_at)
-                   VALUES(?,?,?,?,?) ON CONFLICT(scope,scope_key) DO UPDATE SET
-                   reason=excluded.reason,until_at=excluded.until_at,updated_at=excluded.updated_at""",
-                (scope, scope_key, reason[:512], until_at, time.time()),
-            )
-
-    def clear_throttle(self, scope: str, scope_key: str) -> None:
-        with self._txn():
-            self.db.execute(
-                "DELETE FROM admission_throttles WHERE scope=? AND scope_key=?",
-                (scope, scope_key),
-            )
 
     # ------------------------------------------------------------------ views
 
