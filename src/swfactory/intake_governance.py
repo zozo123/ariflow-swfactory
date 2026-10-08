@@ -7,7 +7,6 @@ import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -20,58 +19,12 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class WorkOrderState(StrEnum):
-    QUEUED = "queued"
-    ADMITTED = "admitted"
-    DISPATCHING = "dispatching"
-    BOUND = "bound"
-    TERMINAL = "terminal"
-    CANCELLED = "cancelled"
-
-
-_ALLOWED: dict[WorkOrderState, frozenset[WorkOrderState]] = {
-    WorkOrderState.QUEUED: frozenset({WorkOrderState.ADMITTED, WorkOrderState.CANCELLED}),
-    WorkOrderState.ADMITTED: frozenset({WorkOrderState.DISPATCHING, WorkOrderState.CANCELLED}),
-    WorkOrderState.DISPATCHING: frozenset({WorkOrderState.BOUND, WorkOrderState.CANCELLED}),
-    WorkOrderState.BOUND: frozenset({WorkOrderState.TERMINAL, WorkOrderState.CANCELLED}),
-    WorkOrderState.TERMINAL: frozenset(),
-    WorkOrderState.CANCELLED: frozenset(),
-}
-
-
 def _canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
 
 def digest(value: object) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
-
-
-@dataclass(frozen=True)
-class AcceptedSnapshot:
-    issue_ref: str
-    issue_revision: str
-    issue_body: str
-    blueprint: str
-    blueprint_revision: str
-    policy: Mapping[str, object]
-    target: str
-    base_revision: str
-
-    @property
-    def digest(self) -> str:
-        return digest(
-            {
-                "issue_ref": self.issue_ref,
-                "issue_revision": self.issue_revision,
-                "issue_body": self.issue_body,
-                "blueprint": self.blueprint,
-                "blueprint_revision": self.blueprint_revision,
-                "policy": dict(self.policy),
-                "target": self.target,
-                "base_revision": self.base_revision,
-            }
-        )
 
 
 @dataclass(frozen=True)
@@ -91,99 +44,6 @@ class CellBinding:
             raise ValueError("repository is required")
         if len(self.snapshot_digest) != 64:
             raise ValueError("snapshot digest must be sha256")
-
-
-@dataclass(frozen=True)
-class ManagedWorkOrder:
-    request_id: str
-    actor: str
-    source: str
-    snapshot: AcceptedSnapshot
-    bindings: tuple[CellBinding, ...]
-    state: WorkOrderState = WorkOrderState.QUEUED
-
-    @property
-    def request_digest(self) -> str:
-        return digest(
-            {
-                "request_id": self.request_id,
-                "actor": self.actor,
-                "source": self.source,
-                "snapshot": self.snapshot.digest,
-                "bindings": [
-                    {
-                        "job_idx": row.job_idx,
-                        "cell_id": row.cell_id,
-                        "epoch": row.epoch,
-                        "repo": row.repo,
-                        "snapshot_digest": row.snapshot_digest,
-                    }
-                    for row in self.bindings
-                ],
-            }
-        )
-
-    def transition(self, target: WorkOrderState) -> ManagedWorkOrder:
-        if target not in _ALLOWED[self.state]:
-            raise ValueError(f"invalid work-order transition {self.state} -> {target}")
-        return ManagedWorkOrder(
-            request_id=self.request_id,
-            actor=self.actor,
-            source=self.source,
-            snapshot=self.snapshot,
-            bindings=self.bindings,
-            state=target,
-        )
-
-    def validate_bindings(self) -> None:
-        if not self.bindings:
-            raise ValueError("managed work requires at least one Cell binding")
-        seen: set[tuple[str, int]] = set()
-        for binding in self.bindings:
-            binding.validate()
-            if binding.snapshot_digest != self.snapshot.digest:
-                raise ValueError("Cell binding snapshot differs from accepted snapshot")
-            key = (binding.cell_id, binding.epoch)
-            if key in seen:
-                raise ValueError("duplicate Cell binding")
-            seen.add(key)
-
-
-@dataclass(frozen=True)
-class HumanGate:
-    gate: str
-    required: bool
-    cell_id: str
-    epoch: int
-    artifact_digest: str
-
-
-@dataclass(frozen=True)
-class GateResponse:
-    gate: str
-    actor: str
-    decision: str
-    cell_id: str
-    epoch: int
-    artifact_digest: str
-    recorded_at: datetime
-
-
-def authorize_gate(policy: HumanGate, response: GateResponse | None, *, allow_automatic: bool = False) -> GateResponse:
-    if response is None:
-        raise PermissionError("required gate has no response")
-    if response.gate != policy.gate:
-        raise PermissionError("gate response targets a different gate")
-    if response.cell_id != policy.cell_id or response.epoch != policy.epoch:
-        raise PermissionError("gate response targets stale Cell authority")
-    if response.artifact_digest != policy.artifact_digest:
-        raise PermissionError("gate response targets stale artifacts")
-    if response.decision != "approve":
-        raise PermissionError("gate was not approved")
-    actor = response.actor.strip().lower()
-    if policy.required and actor in {"", "auto", "system", "bot"} and not allow_automatic:
-        raise PermissionError("required human gate cannot be satisfied automatically")
-    return response
 
 
 @dataclass(frozen=True)
@@ -368,10 +228,6 @@ class ScheduleLimits:
             raise ValueError("schedule limits must be positive")
         if self.run_timeout <= timedelta(0):
             raise ValueError("run timeout must be positive")
-
-
-def cross_channel_key(line: str, snapshot_digest: str, actor_scope: str = "factory") -> str:
-    return "work_" + digest({"line": line, "snapshot": snapshot_digest, "scope": actor_scope})[:32]
 
 
 def require_complete_bindings(bindings: Sequence[Mapping[str, object]], expected_jobs: int) -> tuple[CellBinding, ...]:

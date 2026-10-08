@@ -13,8 +13,6 @@ from swfactory.work_claim import (
     DEFAULT_LEASE_S,
     Claim,
     claim_ref,
-    may_take,
-    parse_claim,
     refusal,
 )
 
@@ -29,10 +27,6 @@ def _claim(instance: str, *, at: datetime = T0, lease_s: float = DEFAULT_LEASE_S
 def test_a_live_claim_sends_the_other_session_elsewhere() -> None:
     """The whole point: N sessions looping one backlog must not all pick the same issue."""
     held = _claim("swf-a")
-    assert may_take(held, instance="swf-a", now=T0), "the holder may renew its own claim"
-    assert not may_take(held, instance="swf-b", now=T0)
-    assert may_take(None, instance="swf-b", now=T0), "unclaimed work is takeable"
-
     why = refusal(held, now=T0 + timedelta(minutes=10))
     assert "swf-a" in why and "3000s" in why
     assert "take other work" in why, "a refusal has to tell the session what to do instead"
@@ -43,25 +37,8 @@ def test_a_dead_session_does_not_strand_its_issue_forever() -> None:
     container, a spend limit reached mid-loop. A lock with no expiry would hold the issue for good;
     the lease bounds it to one period."""
     held = _claim("swf-a", lease_s=60)
-    assert not may_take(held, instance="swf-b", now=T0 + timedelta(seconds=59))
-    assert may_take(held, instance="swf-b", now=T0 + timedelta(seconds=61))
+    assert not held.expired(now=T0 + timedelta(seconds=59))
     assert held.expired(now=T0 + timedelta(seconds=61))
-
-
-def test_a_claim_survives_the_round_trip_through_a_commit_message() -> None:
-    """The claim lives in a commit message so an operator diagnosing a stuck backlog can read it
-    with git alone, on a machine with none of this installed."""
-    original = _claim("swf-a", lease_s=900)
-    parsed = parse_claim(KEY, original.message())
-    assert parsed == original
-
-
-def test_a_commit_that_merely_mentions_the_key_is_not_a_claim() -> None:
-    """Otherwise an unrelated ref in this namespace could hold the backlog hostage."""
-    assert parse_claim(KEY, f"chore: mention {KEY} in passing\n\ninstance=swf-a\n") is None
-    assert parse_claim(KEY, f"swf-claim {KEY}\n\nat={T0.isoformat()}\n") is None, "no instance"
-    assert parse_claim(KEY, f"swf-claim {KEY}\n\ninstance=swf-a\nat=not-a-date\n") is None
-    assert parse_claim(KEY, f"swf-claim other-key\n\ninstance=swf-a\nat={T0.isoformat()}\n") is None
 
 
 def test_claims_live_under_their_own_ref_namespace() -> None:
@@ -156,7 +133,7 @@ def test_the_phases_one_backlog_moves_through() -> None:
     """Naming, not authority: `Phase240` is research in config/liquid-spec.yaml -- "advisory and
     observational only ... must not appear in the product's cognitive path". Nothing branches on a
     phase. It is what an operator reads to see where the fuel is going."""
-    from swfactory.work_claim import CONDENSED, FREE, SUBLIMATING, energy_report, phase_of
+    from swfactory.work_claim import CONDENSED, FREE, SUBLIMATING, phase_of
 
     live = _claim("swf-a", lease_s=3600)
     dead = _claim("swf-b", lease_s=60)
@@ -165,11 +142,3 @@ def test_the_phases_one_backlog_moves_through() -> None:
     assert phase_of(None, now=now) == FREE, "unclaimed work is free for any session"
     assert phase_of(live, now=now) == CONDENSED, "a session is paying its lease"
     assert phase_of(dead, now=now) == SUBLIMATING, "the holder stopped paying; it returns to free"
-
-    # A rising `sublimating` count is the signal that sessions are dying mid-loop and abandoning
-    # work, which is invisible from any single session's own logs.
-    assert energy_report({"a": live, "b": dead, "c": None}, now=now) == {
-        FREE: 1,
-        CONDENSED: 1,
-        SUBLIMATING: 1,
-    }

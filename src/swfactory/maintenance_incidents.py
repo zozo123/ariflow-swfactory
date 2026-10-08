@@ -92,11 +92,6 @@ class IncidentLedger:
         return receipt
 
 
-def should_roll_incident(previous: IncidentIdentity, current: IncidentIdentity) -> bool:
-    """Return true only when the source evidence or policy scope describes a new regression."""
-    return previous.key != current.key
-
-
 @dataclass
 class DurableIncidentLedger(IncidentLedger):
     """JSON-backed incident ledger used across maintenance restarts.

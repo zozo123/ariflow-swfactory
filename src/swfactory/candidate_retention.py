@@ -171,26 +171,6 @@ def sweep_candidate_evidence(
     return SweepReport(tuple(removed), tuple(retained), tuple(malformed))
 
 
-def verify_retained_candidate_evidence(
-    store: Path,
-    digest: str,
-    *,
-    repo: Path,
-) -> CandidateEvidenceBundle:
-    """Verify the retained bytes and their frozen Git candidate ref."""
-    _, objects, leases = _layout(store)
-    token = _validate_digest_token(digest)
-    lease = _require_lease(leases / f"{token}.json")
-    if lease.digest != token:
-        raise CandidateRetentionError("lease filename and digest disagree")
-    bundle = verify_candidate_evidence_bundle(objects / token, repo=repo)
-    if _digest_token(bundle) != token:
-        raise CandidateRetentionError("retained bundle manifest digest differs from object identity")
-    if bundle.candidate_id != lease.candidate_id or bundle.output_head != lease.output_head:
-        raise CandidateRetentionError("retention lease differs from retained candidate evidence")
-    return bundle
-
-
 def _layout(store: Path) -> tuple[Path, Path, Path]:
     root = store.resolve()
     objects = root / "objects"

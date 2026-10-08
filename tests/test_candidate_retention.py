@@ -17,7 +17,6 @@ from swfactory.candidate_retention import (
     retain_candidate_evidence,
     sweep_candidate_evidence,
     unpin_candidate_evidence,
-    verify_retained_candidate_evidence,
 )
 from swfactory.candidate_worktree import (
     create_candidate_worktree,
@@ -95,7 +94,6 @@ def test_retention_import_is_content_addressed_and_verifiable(repo: Path, tmp_pa
     assert retained.is_dir()
     assert lease.output_head == revision.output_head
     assert lease.expires_at == "2026-09-25T01:00:00Z"
-    assert verify_retained_candidate_evidence(store, lease.digest, repo=repo).output_head == revision.output_head
 
 
 def test_sweep_removes_only_after_expiry(repo: Path, tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-"""The supported deployment boundary, and the drain/rollback semantics that live inside it.
+"""The supported deployment boundary.
 
 One boundary is supported and qualified: **a single host, one shared local state root**. The
 factory's five authoritative stores are SQLite files and an evidence tree on that host's local
@@ -161,23 +161,3 @@ def assert_supported_state_root(state_root: Path, *, mounts: Callable[[], str] =
         os.close(handle)
         probe.unlink(missing_ok=True)
     return fs_type
-
-
-@dataclass(frozen=True)
-class DrainPlan:
-    from_generation: str
-    to_generation: str
-    max_inflight_old: int
-    rollback_generation: str
-
-    def allowed_to_cutover(self, inflight_old: int) -> bool:
-        return inflight_old <= self.max_inflight_old
-
-
-def rollback_target(history: list[str], current: str) -> str:
-    if current not in history:
-        raise ValueError("current generation is not in deployment history")
-    index = history.index(current)
-    if index == 0:
-        raise ValueError("no prior generation available")
-    return history[index - 1]
