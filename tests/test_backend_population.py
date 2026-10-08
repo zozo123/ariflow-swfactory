@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from swfactory.backend.population_service import operation
 from swfactory.backend.service import Factory, Refused
 from swfactory.cell_runtime import identity_for_job
 from swfactory.idempotency import OperationInDoubt
@@ -144,8 +143,8 @@ def test_backend_population_call_replays_without_duplicate_provider_spend(
     factory, cell = _factory(tmp_path, monkeypatch, adapter)
     body = _body(cell)
     try:
-        first = operation(factory, "/population/execute", body)
-        second = operation(factory, "/population/execute", body)
+        first = factory.operation("/population/execute", body)
+        second = factory.operation("/population/execute", body)
 
         assert adapter.calls == 1
         assert adapter.credentials == [SECRET]
@@ -177,10 +176,10 @@ def test_backend_population_timeout_becomes_in_doubt_and_does_not_replay_blindly
     body = _body(cell, operation_key="population:ambiguous")
     try:
         with pytest.raises(TimeoutError, match="outcome unknown"):
-            operation(factory, "/population/execute", body)
+            factory.operation("/population/execute", body)
 
         with pytest.raises(OperationInDoubt):
-            operation(factory, "/population/execute", body)
+            factory.operation("/population/execute", body)
 
         assert adapter.calls == 1
         row = factory.control.operations.get(body["operation_key"])
@@ -200,7 +199,7 @@ def test_backend_population_refuses_stale_policy_before_adapter_or_lease(
     body["policy_digest"] = "policy:v1:" + "f" * 64
     try:
         with pytest.raises(Refused, match="policy digest changed") as error:
-            operation(factory, "/population/execute", body)
+            factory.operation("/population/execute", body)
         assert error.value.status == 409
         assert adapter.calls == 0
         assert factory.leases.denials() == []
@@ -222,7 +221,7 @@ def test_backend_population_refuses_unconfigured_bound_provider(
     body["task"] = raw
     try:
         with pytest.raises(Exception, match="binding digest mismatch"):
-            operation(factory, "/population/execute", body)
+            factory.operation("/population/execute", body)
         assert adapter.calls == 0
     finally:
         factory.close()

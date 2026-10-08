@@ -7,6 +7,7 @@ import re
 from datetime import UTC, datetime
 
 from swfactory.autonomy import LINE, AutonomyStore, gate_key, load_policy
+from swfactory.durable_admission import request_digest
 from swfactory.idempotency import MutationOutcome
 from swfactory.models import Approval, StageError
 from swfactory.scm import patch_content_digest, patch_paths
@@ -20,9 +21,8 @@ def store(factory: Factory) -> AutonomyStore:
 
 
 def authority(factory: Factory, body: dict):
-    from .scm_service import _managed_identity
-
-    cell, security, operation_key, actor = _managed_identity(factory, body)
+    actor = text(body, "actor", default="airflow-worker", max_len=128)
+    cell, _, _, operation_key = factory.fenced(body, what="publication")
     policy = load_policy()
     if not policy.enabled or factory.repo != policy.repository or cell.get("airflow_dag_id") != LINE:
         raise Refused(403, "Cell is outside autonomous policy")
@@ -40,22 +40,17 @@ def authority(factory: Factory, body: dict):
         raise Refused(409, "autonomous policy revision moved; a new Cell epoch is required")
     if body.get("base_branch", policy.base_branch) != policy.base_branch:
         raise Refused(403, "autonomous base branch is outside policy")
-    return policy, cell, security, operation_key, actor
+    return policy, cell, operation_key, actor
 
 
-def operation(factory: Factory, path: str, body: dict) -> dict:
-    if path == "/scm/triage":
-        return triage(factory, body)
-    if path == "/scm/policy-gate":
-        try:
-            return approve(factory, body)
-        except (Refused, StageError) as error:
-            digest = hashlib.sha256(repr(sorted(body.items())).encode()).hexdigest()
-            store(factory).bind(f"blocked-gate:{digest}", {"state": "blocked", "reason": str(error)})
-            raise
-    if path == "/scm/merge":
-        return merge(factory, body)
-    raise Refused(404, "unknown autonomous operation")
+def policy_gate(factory: Factory, body: dict) -> dict:
+    """``approve``, leaving a blocked-gate record behind every refusal."""
+    try:
+        return approve(factory, body)
+    except (Refused, StageError) as error:
+        digest = hashlib.sha256(repr(sorted(body.items())).encode()).hexdigest()
+        store(factory).bind(f"blocked-gate:{digest}", {"state": "blocked", "reason": str(error)})
+        raise
 
 
 def triage(factory: Factory, body: dict) -> dict:
@@ -82,7 +77,7 @@ def triage(factory: Factory, body: dict) -> dict:
 def approve(factory: Factory, body: dict) -> dict:
     from swfactory.scm import GitHubScm
 
-    policy, cell, _, _, _ = authority(factory, body)
+    policy, cell, _, _ = authority(factory, body)
     gate = body.get("gate")
     if gate not in {"intent", "plan"}:
         raise ValueError("policy gate must be intent or plan")
@@ -139,7 +134,7 @@ def validate_publication(factory: Factory, body: dict, patch: bytes) -> dict | N
     cell = factory._cell(text(body, "cell_id"))
     if cell.get("airflow_dag_id") != LINE:
         return None
-    policy, cell, _, _, _ = authority(factory, body)
+    policy, cell, _, _ = authority(factory, body)
     issue = GitHubScm(factory.repo, policy.base_branch).fetch_issue(str(cell["issue"]))
     if reason := policy.issue_reason(issue, factory.repo):
         raise Refused(403, f"autonomous publication blocked: {reason}")
@@ -197,10 +192,9 @@ def remember_publication(factory: Factory, cell: dict, decision: dict, receipt: 
 
 
 def merge(factory: Factory, body: dict) -> dict:
-    from .core_service import intent_digest
     from .scm_service import _request, _with_github_lease
 
-    policy, cell, security, key, actor = authority(factory, body)
+    policy, cell, key, actor = authority(factory, body)
     recorded = store(factory).get(f"{cell['cell_id']}:{cell['epoch']}:publication")
     if not recorded or recorded["revision"] != policy.revision:
         raise Refused(403, "no policy-authorized publication exists for this Cell epoch")
@@ -270,10 +264,9 @@ def merge(factory: Factory, body: dict) -> dict:
     request = _request(
         factory,
         cell=cell,
-        security=security,
         operation_key=key,
         kind="github_merge",
-        digest=intent_digest({"sha": sha, "pr": number, "revision": policy.revision, "actor": actor}),
+        digest=request_digest({"sha": sha, "pr": number, "revision": policy.revision, "actor": actor}),
         replay_safe=True,
         parts=(str(number), sha),
     )

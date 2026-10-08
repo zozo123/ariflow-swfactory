@@ -665,6 +665,40 @@ class GitHubClient:
             for i in _json(out, "gh issue list") or []
         ]
 
+    def pr_for_head(self, branch: str) -> dict[str, Any] | None:
+        """The newest PR, in any state, whose head is ``branch``; ``None`` when there is none."""
+        out = _exec(
+            self._runner,
+            [
+                "gh", "pr", "list", "--repo", self.repo, "--head", branch, "--state", "all", "--limit", "1",
+                "--json", "url,state,title,labels,headRefOid,baseRefName",
+            ],
+        )  # fmt: skip
+        rows = _json(out, "gh pr list")
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "url": row["url"],
+            "state": row["state"],
+            "title": row["title"],
+            "labels": _label_names(row.get("labels")),
+            "head_sha": row["headRefOid"],
+            "base_ref": row["baseRefName"],
+        }
+
+    def pr_checks(self, number: int) -> str:
+        """PR ``number``'s check rollup, summarized by :func:`summarize_checks`."""
+        out = _exec(
+            self._runner,
+            ["gh", "pr", "view", str(number), "--repo", self.repo, "--json", "statusCheckRollup"],
+        )
+        return summarize_checks(_json(out, "gh pr view").get("statusCheckRollup"))
+
+    def pr_url(self, number: int) -> str:
+        out = _exec(self._runner, ["gh", "pr", "view", str(number), "--repo", self.repo, "--json", "url"])
+        return _json(out, "gh pr view")["url"]
+
     def open_pr_in_browser(self, number: int) -> list[str]:
         """``gh pr view N --repo R --web``; returns the argv it ran."""
         argv = ["gh", "pr", "view", str(int(number)), "--repo", self.repo, "--web"]

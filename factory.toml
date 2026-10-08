@@ -63,6 +63,7 @@ protected = [
   "src/swfactory/backend/__init__.py",
   "src/swfactory/backend/service.py",
   "src/swfactory/backend/server.py",
+  "src/swfactory/backend/routes.py",
   "src/swfactory/backend/core_service.py",
   "src/swfactory/config.py",
   "src/swfactory/blueprint.py",

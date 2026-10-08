@@ -66,7 +66,7 @@ def _bound_cell(factory: Factory) -> dict:
     # #2058 replaced the single `repo=` argument with a declared member per Factory Cell, so a
     # multi-job order can no longer hide behind one synthetic key and release its siblings early.
     # This test's subject is cancellation, not admission, so it declares the one member it binds.
-    decision = factory.control.submit(
+    decision = factory.control.admission.submit(
         work_id="work-1",
         actor="operator",
         blueprint="factory",

@@ -16,34 +16,26 @@ import json
 import os
 import re
 import secrets
-import shutil
-import subprocess
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from swfactory import blueprint, maintain
+from swfactory import blueprint
 from swfactory.admission import Priority
 from swfactory.backend_http import NoRedirect, valid_backend_token
 from swfactory.cell_runtime import SCHEDULE_ACTOR, identity_for_job
-from swfactory.cells import (
-    SCHEMA_VERSION,
-    TERMINAL_STATES,
-    CellBusy,
-    CellStore,
-    DuplicateOperation,
-    StaleEpoch,
-)
-from swfactory.control import AirflowClient, ControlError, GitHubClient, IsloClient, MetricsSource
+from swfactory.cells import TERMINAL_STATES, CellBusy, CellStore, DuplicateOperation, StaleEpoch
+from swfactory.control import AirflowClient, ControlError
 from swfactory.control_kernel import ControlKernel
+from swfactory.core_capabilities import AirflowBinding
 from swfactory.credential_lease import CredentialLeaseBroker, CredentialLeaseError, LeaseBinding, LeaseDenial
 from swfactory.deployment_profile import assert_supported_state_root
-from swfactory.doctor import _check_managed_workers
 from swfactory.durable_admission import (
     MAX_DISPATCH_ATTEMPTS,
     WORK_ORDER_SCHEMA,
@@ -55,14 +47,13 @@ from swfactory.durable_admission import (
     request_digest,
 )
 from swfactory.idempotency import MutationOutcome, OperationRef, RetryBudget
-from swfactory.inspection import inspect_run, list_runs
 from swfactory.lifecycle_evidence import TraceContext
 from swfactory.population_adapter import (
     PopulationAdapter,
     PopulationArtifactStore,
     http_population_adapters_from_document,
 )
-from swfactory.product_surface import build_preview, capability_document
+from swfactory.product_surface import capability_document
 from swfactory.restore_contract import GATE_PENDING as RESTORE_PENDING
 from swfactory.restore_contract import RestoreGate
 from swfactory.security_contract import CanonicalPolicy, MutationEnvelope, policy_digest_for_mapping
@@ -103,11 +94,32 @@ class Refused(ValueError):
         self.status = status
 
 
-def text(body: dict[str, Any], key: str, *, max_len: int = 512) -> str:
-    value = body.get(key)
+def text(body: dict[str, Any], key: str, *, max_len: int = 512, default: str | None = None) -> str:
+    value = body.get(key, default)
     if not isinstance(value, str) or not value.strip() or len(value) > max_len:
         raise ValueError(f"{key} must be a nonempty string of at most {max_len} characters")
     return value.strip()
+
+
+def airflow_binding(cell: dict[str, Any]) -> AirflowBinding:
+    """The authoritative Airflow run of a Cell already fenced at its current epoch."""
+    dag_id = str(cell.get("airflow_dag_id") or "")
+    run_id = str(cell.get("airflow_run_id") or "")
+    if not dag_id or not run_id:
+        raise Refused(409, "Factory Cell is not bound to an authoritative Airflow run")
+    map_index = cell.get("map_index")
+    return AirflowBinding(
+        cell_id=str(cell["cell_id"]),
+        epoch=int(cell["epoch"]),
+        dag_id=dag_id,
+        run_id=run_id,
+        map_index=int(map_index) if map_index is not None else None,
+    )
+
+
+def has_cleanup_debt(cell: dict[str, Any]) -> bool:
+    """A finished Cell that held compute and has no cleanup receipt yet."""
+    return bool(cell.get("compute") and not cell.get("cleanup") and cell.get("state") in TERMINAL_STATES)
 
 
 def _cell_actor(actor: str, work_id: str) -> str:
@@ -175,8 +187,13 @@ class Factory:
         assert_compatible(self.state_root)
         self.restore_gate = RestoreGate(self.state_root)
         self.cell_store = CellStore(self.state_root / "cells.sqlite3")
-        self.control = ControlKernel(self.state_root / "control", restore_gate=self.restore_gate)
         self.evidence = TrustedEvidence(self.state_root / "evidence")
+        self.control = ControlKernel(
+            self.state_root / "control",
+            cells=self.cell_store,
+            evidence=self.evidence,
+            restore_gate=self.restore_gate,
+        )
         self.population_artifacts = PopulationArtifactStore(self.state_root / "population-artifacts")
         if population_adapters is None:
             raw_population_adapters = os.getenv("SWF_POPULATION_ADAPTERS_JSON", "").strip()
@@ -520,7 +537,7 @@ class Factory:
         # activated, so every affected repository is counted and no sibling can be released early.
         members = [MemberSpec(int(job["job_idx"]), str(job["repo"]), identity_for_job(job).stable_id()) for job in jobs]
         try:
-            decision = self.control.submit(
+            decision = self.control.admission.submit(
                 work_id=submission_id,
                 actor=actor,
                 blueprint=line.name,
@@ -583,12 +600,12 @@ class Factory:
         resumed: list[dict[str, Any]] = []
         seen: set[str] = set()
         for _ in range(max(1, rounds)):
-            batch = [work_id for work_id in self.control.pending_dispatch(limit=limit) if work_id not in seen]
+            batch = [work_id for work_id in self.control.admission.pending_dispatch(limit=limit) if work_id not in seen]
             if not batch:
                 break
             for work_id in batch:
                 seen.add(work_id)
-                intent = self.control.claim_dispatch(work_id)
+                intent = self.control.admission.claim_dispatch(work_id)
                 if intent is None:
                     continue
                 try:
@@ -647,7 +664,7 @@ class Factory:
                         self.callback_debt[cell_id] = {"work_id": work_id, "detail": "Airflow did not answer"}
                     continue
             try:
-                self.control.release_for_terminal_cell(work_id, cell_id=cell_id, epoch=epoch, state=outcome)
+                self.control.admission.complete(work_id, cell_id=cell_id, epoch=epoch, state=outcome)
             except Exception:  # noqa: BLE001 - one unrepairable row must not stop the rest
                 continue
             repaired.append(work_id)
@@ -718,7 +735,7 @@ class Factory:
 
     def _deliver(self, work_id: str) -> str | None:
         """Deliver this one admitted command now, letting its failure reach the submitter."""
-        intent = self.control.claim_dispatch(work_id)
+        intent = self.control.admission.claim_dispatch(work_id)
         if intent is None:
             return None
         return self._dispatch_intent(intent)
@@ -1110,7 +1127,7 @@ class Factory:
     def _compensate(self, intent: DispatchIntent, detail: str) -> None:
         """Undo this order's own activations so a failed batch leaves no invisible Cell."""
         self._cancel_activations(intent.work_id, f"compensate:{intent.work_id}:{intent.attempt}")
-        self.control.cancel_reservation(intent.work_id, reason=f"activation_failed: {detail}", state="failed")
+        self.control.admission.cancel(intent.work_id, reason=f"activation_failed: {detail}", state="failed")
 
     def _work_document(self, work_id: str) -> dict[str, Any]:
         """The submission answer, rebuilt from durable state rather than from in-flight locals."""
@@ -1233,25 +1250,35 @@ class Factory:
             return self.airflow(method, path, body)
         raise Refused(403, "operation is outside the factory control surface")
 
-    def _gh(self, args: list[str]) -> Any:
-        if not self.repo:
-            raise Refused(503, "SWF_REPO is not configured on the backend")
-        result = subprocess.run(
-            ["gh", *args, "--repo", self.repo],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        if result.returncode:
-            raise Refused(502, "GitHub operation failed; check backend credentials and repository")
-        return json.loads(result.stdout)
-
     def _cell(self, cell_id: str) -> dict[str, Any]:
         try:
             return self.cell_store.get(cell_id)
         except KeyError as error:
             raise Refused(404, f"no Factory Cell {cell_id}") from error
+
+    def _cell_at(self, cell_id: str, epoch: int) -> dict[str, Any]:
+        cell = self._cell(cell_id)
+        if int(cell["epoch"]) != epoch:
+            raise Refused(409, f"stale Factory Cell epoch {epoch}; current epoch is {cell['epoch']}")
+        return cell
+
+    def fenced(self, body: dict[str, Any], *, what: str) -> tuple[dict[str, Any], int, str, str]:
+        """Fence one managed external effect on the caller's Cell before any credential is used.
+
+        The Cell must still be at the caller's epoch, carry the caller's policy digest and be bound
+        to its authoritative Airflow run; ``what`` names the effect a moved policy makes stale.
+        """
+        cell_id = text(body, "cell_id")
+        epoch = body.get("epoch")
+        if type(epoch) is not int or epoch < 1:
+            raise ValueError("epoch must be a positive integer")
+        policy_digest = text(body, "policy_digest")
+        operation_key = text(body, "operation_key", max_len=256)
+        cell = self._cell_at(cell_id, epoch)
+        if cell.get("policy_digest") != policy_digest:
+            raise Refused(409, f"Factory Cell policy digest changed; {what} is stale")
+        airflow_binding(cell)
+        return cell, epoch, policy_digest, operation_key
 
     def capabilities(self) -> dict[str, Any]:
         draining = os.getenv("SWF_DRAIN", "").lower() in {"1", "true", "yes"}
@@ -1300,7 +1327,7 @@ class Factory:
             if state == "dispatching" and not cell.get("airflow_run_id") and now - float(cell["updated_at"]) > 300:
                 stale += 1
                 orphaned += 1
-            if cell.get("compute") and not cell.get("cleanup") and state in TERMINAL_STATES:
+            if has_cleanup_debt(cell):
                 cleanup_debt += 1
         pressure = control["queue"]["pressure"]
         unresolved = control["operations"]
@@ -1315,7 +1342,7 @@ class Factory:
         if callback_debt:
             bottlenecks.append(f"callback_debt:{callback_debt}")
         return {
-            "cells_active": sum(counts.get(s, 0) for s in ("dispatching", "queued", "running")),
+            "cells_active": sum(counts.get(s, 0) for s in LIVE_CELL_STATES),
             "cells_queued": counts.get("queued", 0),
             "cells_failed": counts.get("failed", 0),
             "cells_stale": stale,
@@ -1393,9 +1420,7 @@ class Factory:
             "operation_key",
             max_len=256,
         )
-        current = self._cell(cell_id)
-        if int(current["epoch"]) != epoch:
-            raise Refused(409, f"stale Factory Cell epoch {epoch}; current epoch is {current['epoch']}")
+        current = self._cell_at(cell_id, epoch)
 
         if requested == "cleaned":
             cleanup = {
@@ -1421,11 +1446,11 @@ class Factory:
             next_state = updated["state"]
         else:
             old_state = str(current["state"])
-            if old_state in {"failed", "cancelled", "rejected", "cleaned"} and requested != old_state:
+            if old_state in TERMINAL_STATES - {"success"} and requested != old_state:
                 raise Refused(409, f"terminal Factory Cell cannot transition {old_state} -> {requested}")
             if old_state == "success" and requested not in {"success", "failed"}:
                 raise Refused(409, f"Factory Cell cannot transition success -> {requested}")
-            if requested == "running" and old_state not in {"dispatching", "queued", "running"}:
+            if requested == "running" and old_state not in LIVE_CELL_STATES:
                 raise Refused(409, f"Factory Cell cannot transition {old_state} -> running")
             try:
                 updated = self.cell_store.patch(
@@ -1469,283 +1494,29 @@ class Factory:
         return {"cell": updated, "released_work": released, "resumed_dispatch": resumed}
 
     def operation(self, path: str, body: dict[str, Any]) -> Any:
-        if path == "/doctor":
-            caps = self.capabilities()
-            # Every row carries `ok` as well as `status`. The console deserializes into
-            # `swf_domain::doctor::Check`, whose `ok: bool` has no default and no alias — so a row
-            # with only `status` fails to parse, the whole response is discarded, and `swf doctor`
-            # prints one fabricated failure blaming the operator's token. `doctor` is the command
-            # someone runs when nothing else works; it must not be the thing that lies to them.
-            # `status` is kept alongside for the Python CLI, which reads it.
-            checks = [
-                {
-                    "name": "factory backend",
-                    "ok": True,
-                    "status": "ok",
-                    "detail": "Python API v1",
-                    "required": True,
-                },
-                {
-                    "name": "factory cells",
-                    "ok": True,
-                    "status": "ok",
-                    "detail": f"durable CellStore schema v{SCHEMA_VERSION}",
-                    "required": True,
-                },
-                {
-                    "name": "mutation readiness",
-                    "ok": bool(caps["mutation_ready"]),
-                    "status": "ok" if caps["mutation_ready"] else "warn",
-                    # A capability document rendered as text: `detail` is a string on both sides,
-                    # and an object here failed to parse even once `ok` was present.
-                    "detail": ", ".join(f"{k}={v}" for k, v in sorted(caps.items())),
-                    "required": True,
-                },
-            ]
-            # The row the console path was missing (#2050 added it to the Python doctor only): a
-            # managed cell fails closed in its FIRST stage without SWF_BACKEND_URL/SWF_BACKEND_TOKEN,
-            # and from `swf doctor` that looked like a healthy backend. One honesty caveat, written
-            # into `detail`: this reads THIS process's environment. The workers carry their own copy
-            # (Compose passes the pair to the airflow service separately), so a green row here means
-            # the backend host is configured, not that every worker is -- the compose guard in
-            # tests/test_doctor.py is what pins the worker side.
-            workers = _check_managed_workers(os.environ)
-            # Never `required` on the backend host. The host does not call itself, so it legitimately
-            # has no SWF_BACKEND_URL of its own -- the e2e harness exports that pair into the Airflow
-            # process and nowhere else -- and a required row here failed `swf doctor` against every
-            # healthy backend, which is #1217 by another route. Informational: a red row still shows
-            # the operator that THIS host's copy is unwired, without claiming to know the workers'.
-            checks.append(
-                {
-                    "name": "managed worker callback",
-                    "ok": workers.ok,
-                    "status": "ok" if workers.ok else "warn",
-                    "detail": workers.detail
-                    + " (as seen from the backend host's environment, which is not the workers')",
-                    "fix": workers.fix,
-                    "required": False,
-                }
-            )
-            try:
-                health = self._checked_airflow("GET", "/monitor/health")
-                for name in ("metadatabase", "scheduler"):
-                    healthy = (health.get(name) or {}).get("status") == "healthy"
-                    checks.append(
-                        {
-                            "name": name,
-                            "ok": healthy,
-                            "status": "ok" if healthy else "fail",
-                            "detail": "Airflow health",
-                            "required": True,
-                            "fix": "" if healthy else "restore the Airflow service",
-                        }
-                    )
-                self._checked_airflow("GET", "/dags?limit=1")
-                checks.append({"name": "airflow auth", "ok": True, "status": "ok", "required": True})
-            except (Refused, ControlError, OSError):
-                checks.append(
-                    {
-                        "name": "airflow",
-                        "ok": False,
-                        "status": "fail",
-                        "required": True,
-                        "detail": "Airflow is unavailable or authentication failed",
-                        "fix": "check AIRFLOW_URL and credentials on the backend",
-                    }
-                )
-            for tool, configured in (("gh", bool(self.repo)), ("islo", bool(self.owner))):
-                present = bool(shutil.which(tool))
-                checks.append(
-                    {
-                        "name": tool,
-                        "ok": present,
-                        "status": "ok" if present else "warn",
-                        "required": False,
-                        "detail": (
-                            f"backend tool installed={present}, configured={configured}; credentials not probed"
-                        ),
-                        "fix": "" if present else f"install {tool} on the backend if needed",
-                    }
-                )
-            return checks
-        if path == "/compatibility":
-            return self.capabilities()
-        if path == "/fleet":
-            return self.fleet()
-        if path == "/queue":
-            return self.control.admission.snapshot(limit=self._limit(body))
-        if path == "/queue/resume":
-            # The explicit operator handle on the same redelivery the request paths pump, for the
-            # case where a backend restarted and nothing has submitted or transitioned since.
-            return {"resumed": self.resume_dispatch(limit=self._limit(body))}
-        if path == "/queue/cancel":
-            work_id = text(body, "work_id")
-            state = self.control.admission.state_of(work_id)
-            if state is None:
-                raise Refused(404, f"no admission work {work_id}")
-            if state == "bound":
-                # The Airflow run already exists; cancelling it here would release capacity while
-                # the compute keeps going. Its Factory Cells own that decision.
-                raise Refused(409, "a dispatched work order is cancelled through its Factory Cells")
-            # An order can already have activated its Cells and still be cancellable: a delivery
-            # that failed after activation leaves it admitted with live Cells behind it. Closing
-            # the reservation without closing those Cells leaves a live Cell no work order owns --
-            # and because the Cell's epoch is part of the deterministic work id, the identity then
-            # answers 409 to every resubmission forever. That is #2058 with the arrows reversed.
-            reason = text(body, "reason", max_len=512)
-            cancelled_cells = self._cancel_activations(work_id, f"queue-cancel:{work_id}")
-            released = self.control.cancel_reservation(work_id, reason=reason)
-            return {
-                "work_id": work_id,
-                "was": state,
-                "state": self.control.admission.state_of(work_id),
-                "cancelled_cells": cancelled_cells,
-                "released_work": released,
-                "resumed_dispatch": self.resume_dispatch(),
-                "dispatch": self.control.admission.dispatch_row(work_id),
-            }
-        if path == "/queue/inspect":
-            work_id = text(body, "work_id")
-            snapshot = self.control.admission.snapshot(limit=1000)
-            for section in ("active", "queued"):
-                for row in snapshot[section]:
-                    if row["work_id"] == work_id:
-                        return row
-            raise Refused(404, f"no admission work {work_id}")
-        if path == "/operations":
-            return self.control.operations.unresolved(limit=self._limit(body))
-        if path == "/operations/inspect":
-            try:
-                return self.control.operations.get(text(body, "operation_key"))
-            except KeyError as error:
-                raise Refused(404, "no such operation") from error
-        if path == "/work-orders":
-            if not self.capabilities()["mutation_ready"]:
-                raise Refused(503, "backend is draining or not mutation-ready")
-            return self.submit(body)
-        if path == "/blueprints/preview":
-            line = self._line(text(body, "line"))
-            issues = body.get("issues") or []
-            targets = body.get("targets") or []
-            conf = {"issues": issues, **({"targets": targets} if targets else {})}
-            return build_preview(line=line.name, jobs=list(line.jobs(conf))).to_dict()
-        if path == "/cells":
-            return self.cell_store.list(limit=self._limit(body))
-        if path == "/leases/denials":
-            return self.leases.denials(limit=self._limit(body))
-        if path == "/leases/inspect":
-            try:
-                return self.leases.inspect(text(body, "lease_id"))
-            except KeyError as error:
-                raise Refused(404, "no such credential lease") from error
-        if path == "/cells/inspect":
-            return self._cell(text(body, "cell_id"))
-        if path == "/cells/history":
-            cell_id = text(body, "cell_id")
-            self._cell(cell_id)
-            return self.cell_store.history(cell_id)
-        if path == "/cells/transition":
-            return self._transition(body)
-        if path == "/evidence/verify":
-            cell_id = text(body, "cell_id")
-            ok, tail = self.evidence.verify(cell_id)
-            return {"cell_id": cell_id, "verified": ok, "tail_digest": tail}
-        if path == "/evidence/checkpoint":
-            return self.evidence.checkpoint(text(body, "cell_id"))
-        if path == "/deliveries/prs":
-            if not self.repo:
-                return []
-            return GitHubClient(self.repo).prs(
-                label=text({"label": body.get("label", "factory")}, "label"),
-                limit=self._limit(body),
-            )
-        if path == "/deliveries/issues":
-            if not self.repo:
-                return []
-            return GitHubClient(self.repo).issues(
-                label=text({"label": body.get("label", "factory")}, "label"),
-                limit=self._limit(body),
-            )
-        if path == "/deliveries/head":
-            rows = self._gh(
-                [
-                    "pr",
-                    "list",
-                    "--head",
-                    text(body, "branch"),
-                    "--state",
-                    "all",
-                    "--limit",
-                    "1",
-                    "--json",
-                    "url,state,title,labels,headRefOid,baseRefName",
-                ]
-            )
-            if not rows:
-                return None
-            row = rows[0]
-            return {
-                "url": row["url"],
-                "state": row["state"],
-                "title": row["title"],
-                "labels": [label["name"] for label in row.get("labels", [])],
-                "head_sha": row["headRefOid"],
-                "base_ref": row["baseRefName"],
-            }
-        if path in {"/deliveries/checks", "/deliveries/url"}:
-            from swfactory.control import summarize_checks
+        from .routes import ROUTES  # the table names every service module, each of which imports this one
 
-            number = body.get("number")
-            if type(number) is not int or number <= 0:
-                raise ValueError("number must be a positive integer")
-            if path == "/deliveries/url":
-                return self._gh(["pr", "view", str(number), "--json", "url"])["url"]
-            row = self._gh(["pr", "view", str(number), "--json", "statusCheckRollup"])
-            return summarize_checks(row.get("statusCheckRollup"))
-        if path == "/workers":
-            return IsloClient(self.owner).own_sandboxes()
-        if path == "/workers/remove":
-            return IsloClient(self.owner).remove(text(body, "name"))
-        if path == "/workers/sweep":
-            # The nightly orphan sweep runs HERE, next to the Cell store and the operation journal:
-            # a worker deciding from age alone is #2075. Cells say who still owns a sandbox; the
-            # journal keeps every removal intent so a lost ``islo rm`` reply is reconciled, not printed.
-            # A docker factory (``SWF_SANDBOX=docker``) sweeps its labelled work containers the same
-            # way (#2052); any other factory never runs ``docker`` here.
-            ttl_s = body.get("ttl_s")
-            if type(ttl_s) is not int or ttl_s < 1:
-                raise ValueError("ttl_s must be a positive integer")
-            return maintain.sweep_sandboxes(
-                ttl_s,
-                owner=self.owner,
-                islo=IsloClient(self.owner),
-                cells=self.cell_store.list(limit=1000),
-                control=self.control,
-                docker=maintain.select_containers(os.environ),
-            )
-        if path == "/metrics/runs":
-            return MetricsSource(self.root).runs()
-        if path == "/metrics/summary":
-            return MetricsSource(self.root).summary()
-        if path == "/state/runs":
-            return list_runs(self.state_root, limit=self._limit(body))
-        if path == "/state/inspect":
-            return inspect_run(self.state_root, text(body, "run_id"))
-        if path == "/lines":
-            return [
-                {
-                    "name": bp.name,
-                    "targets": [t.repo for t in bp.targets],
-                    "route": list(bp.order),
-                    "gates": [g.model_dump() for g in bp.gates],
-                }
-                for bp in (blueprint.load(str(p)) for p in blueprint.blueprint_paths())
-            ]
-        raise Refused(404, "unknown factory operation")
+        route = ROUTES.get(path)
+        if route is None:
+            raise Refused(404, "unknown factory route")
+        return route(self, body)
 
-    @staticmethod
-    def _limit(body: dict[str, Any]) -> int:
-        limit = body.get("limit", 30)
-        if type(limit) is not int or not 1 <= limit <= 1000:
-            raise ValueError("limit must be between 1 and 1000")
-        return limit
+
+def _attempt(factory: Factory, operation_key: str) -> int:
+    """The attempt number of one journaled operation; 1 before the journal has a row for it."""
+    try:
+        return max(1, int(factory.control.operations.get(operation_key).get("attempts") or 0))
+    except KeyError:
+        return 1
+
+
+@contextmanager
+def leased(factory: Factory, binding: LeaseBinding, capability: str, purpose: str, *, ttl_s: float) -> Iterator[str]:
+    """A one-shot credential for ``binding``: earlier attempts' leases are revoked before it is minted,
+    and it is revoked on the way out whatever the effect did."""
+    factory.leases.revoke_prior_attempts(binding.cell_id, binding.epoch, binding.attempt_number)
+    handle = factory.leases.mint(binding, capability=capability, purpose=purpose, ttl_s=ttl_s)
+    try:
+        yield factory.leases.redeem(handle, binding, process_nonce=factory.lease_process_nonce)
+    finally:
+        factory.leases.revoke(handle.lease_id)
