@@ -71,6 +71,17 @@ def test_scripted_replay_falls_back_to_the_local_sandbox(job: dict) -> None:
     assert real.sandbox == "islo"
 
 
+def test_the_boat_line_runs_its_scripted_agent_on_boat() -> None:
+    """Config admits only the scripted agent on boat, so falling back to local there would leave
+    `--sandbox boat` unexercised: neither the CLI usage in blueprints/worldgen.toml nor the DAG
+    passes a sandbox override."""
+    bp = load("worldgen")
+    (one,) = bp.jobs({"issues": ["YOS-103"]})
+    cfg = job_config(bp, one, run_id="b0a70001")
+    assert (cfg.agent, cfg.sandbox) == ("scripted", "boat")
+    assert job_config(bp, one, run_id="b0a70001", overrides={"sandbox": "local"}).sandbox == "local"
+
+
 # ---------------------------------------------------------------- build_ctx
 
 

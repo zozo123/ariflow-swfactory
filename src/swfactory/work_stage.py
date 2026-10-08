@@ -337,6 +337,10 @@ def execution_decision(ctx: stages.Ctx, plan: Plan) -> dict[str, Any]:
     provider happens to satisfy the requirement, and a report naming a provider the run is not using
     is worse than no report. A capability-layer failure is recorded as the reason and never raises:
     this decides how to describe the run, never whether it may proceed.
+
+    ``_execute_nodes`` is one serial loop in one workspace; this stage has no fan-out yet. So the
+    run is always reported serial, and a provider whose capabilities would allow fork parallelism
+    (boat) says so as ``parallel_hint``, never as what ran.
     """
     from swfactory.execution_binding import choose_execution
     from swfactory.sandbox_contract import provider_documents, toolset_document
@@ -356,10 +360,10 @@ def execution_decision(ctx: stages.Ctx, plan: Plan) -> dict[str, Any]:
     except Exception as error:  # noqa: BLE001 - a capability answer is evidence, never a gate.
         return {**serial, "provider": name, "reason": str(error)[:400]}
     return {
-        "mode": "provider_fork_parallel" if decision.parallel else "shared_workspace_serial",
-        "parallel": decision.parallel,
+        **serial,
+        "parallel_hint": decision.parallel,
         "provider": decision.provider,
-        "reason": decision.reason,
+        "reason": "serial_executor_no_fan_out" if decision.parallel else decision.reason,
         "required_capabilities": list(decision.required_capabilities),
         "provider_digest": provider.digest(),
     }
