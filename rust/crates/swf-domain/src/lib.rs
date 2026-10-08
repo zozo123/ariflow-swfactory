@@ -6,11 +6,8 @@
 //! state is rolled up is a divergence in what the factory *is*, so it has to be caught by a test
 //! and not by an operator at 2 a.m.
 
-pub mod advisory;
 pub mod blueprint;
-pub mod build_exploration;
 pub mod cell;
-pub mod cognitive_harness;
 pub mod control_plane;
 pub mod credential_lease;
 pub mod doctor;
@@ -29,16 +26,6 @@ pub mod snapshot;
 pub mod states;
 pub mod worker;
 
-pub use cognitive_harness::{
-    classify_self_improvement, ensemble_diversity, gauge_fix, marginal_information_value,
-    memory_phase, pairwise_correlation, plan_cognition, quantity_kind, validate_measurement_set,
-    AuthorityRequest, AuthorityRequestInput, CognitiveAttention, CognitiveError, CognitiveLayer,
-    CognitivePlan, CognitiveReceipt, CognitiveTimescale, DissipationSnapshot, EnsembleMember,
-    GaugeEquivalenceClass, ImprovementDisposition, MeasurementKind, MeasurementReceipt,
-    MemoryAction, MemoryEvidence, MemoryPhase, PairwiseCorrelation, QuantityKind,
-    SelfImprovementExperiment, StochasticField, WorldAction, WorldCandidate,
-    COGNITIVE_HARNESS_AUTHORITY, COGNITIVE_HARNESS_SCHEMA_VERSION, REALITY_BOUNDARY,
-};
 pub use credential_lease::{
     CredentialLeaseBinding, CredentialLeaseContractError, CREDENTIAL_LEASE_SCHEMA_VERSION,
 };
