@@ -1,6 +1,6 @@
 //! Thin CLI rendering for durable Factory Cells.
 //!
-//! Validation and transport live in `swf-app::cells`; this module only chooses human/JSON shapes.
+//! Validation and transport live in `swf-app::backend`; this module only chooses human/JSON shapes.
 //! The context, the credential and the deadline are not decided here either — they come from
 //! [`Ctx::backend`], the one place the whole binary settles what a backend-served view connects to.
 
@@ -13,21 +13,21 @@ use crate::exec::Ctx;
 use crate::exit::Outcome;
 
 pub async fn run(ctx: &Ctx, cmd: &CellsCmd) -> Result<Outcome> {
-    let cells = ctx.backend("durable Factory Cells")?.cells()?;
+    let ops = ctx.backend("durable Factory Cells")?;
 
     match cmd {
         CellsCmd::List { limit } => {
-            let rows = cells.list(*limit, &ctx.cancel).await?;
+            let rows = ops.cells(*limit, &ctx.cancel).await?;
             let doc = serde_json::to_value(&rows).unwrap_or(serde_json::Value::Null);
             Ok(Outcome::new(render_list(&rows), doc))
         }
         CellsCmd::Inspect { cell_id } => {
-            let row = cells.inspect(cell_id, &ctx.cancel).await?;
+            let row = ops.cell(cell_id, &ctx.cancel).await?;
             let doc = serde_json::to_value(&row).unwrap_or(serde_json::Value::Null);
             Ok(Outcome::new(render_cell(&row), doc))
         }
         CellsCmd::History { cell_id } => {
-            let rows = cells.history(cell_id, &ctx.cancel).await?;
+            let rows = ops.cell_history(cell_id, &ctx.cancel).await?;
             let doc = serde_json::to_value(&rows).unwrap_or(serde_json::Value::Null);
             Ok(Outcome::new(render_history(cell_id, &rows), doc))
         }

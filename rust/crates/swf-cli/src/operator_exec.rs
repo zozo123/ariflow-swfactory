@@ -1,10 +1,10 @@
 //! Thin CLI rendering for the backend's operator views.
 //!
 //! Queue pressure, repair debt, the fleet summary and the compatibility report are chosen and
-//! validated in `swf-app::operator`, where `swf tui` reads exactly the same answers; this module
-//! only picks the human and JSON shapes. The context, the credential and the deadline come from
-//! [`Ctx::backend`], so these verbs connect the same way, honour the same `--timeout`, narrate the
-//! same `-v` line and are cancelled by the same Ctrl-C as every other verb the binary answers.
+//! validated in `swf-app::backend`; this module only picks the human and JSON shapes. The context,
+//! the credential and the deadline come from [`Ctx::backend`], so these verbs connect the same way,
+//! honour the same `--timeout`, narrate the same `-v` line and are cancelled by the same Ctrl-C as
+//! every other verb the binary answers.
 //!
 //! This file used to carry a clap parser and a tokio runtime of its own. Both are gone: a second
 //! parser is a second `--help`, a second completion surface and a second usage envelope, which is
@@ -22,7 +22,7 @@ use crate::exit::Outcome;
 
 /// `swf queue …`
 pub async fn queue(ctx: &Ctx, cmd: &QueueCmd) -> Result<Outcome> {
-    let ops = ctx.backend("the admission queue")?.operator()?;
+    let ops = ctx.backend("the admission queue")?;
     match cmd {
         QueueCmd::List { limit } => {
             let row = ops.queue(*limit, &ctx.cancel).await?;
@@ -37,7 +37,7 @@ pub async fn queue(ctx: &Ctx, cmd: &QueueCmd) -> Result<Outcome> {
 
 /// `swf operations …`
 pub async fn operations(ctx: &Ctx, cmd: &OperationsCmd) -> Result<Outcome> {
-    let ops = ctx.backend("external mutation repair debt")?.operator()?;
+    let ops = ctx.backend("external mutation repair debt")?;
     match cmd {
         OperationsCmd::List { limit } => {
             let rows = ops.operations(*limit, &ctx.cancel).await?;
@@ -52,16 +52,14 @@ pub async fn operations(ctx: &Ctx, cmd: &OperationsCmd) -> Result<Outcome> {
 
 /// `swf fleet`
 pub async fn fleet(ctx: &Ctx) -> Result<Outcome> {
-    let ops = ctx.backend("the fleet summary")?.operator()?;
+    let ops = ctx.backend("the fleet summary")?;
     let row = ops.fleet(&ctx.cancel).await?;
     Ok(outcome(render_fleet(&row), &row))
 }
 
 /// `swf compatibility`
 pub async fn compatibility(ctx: &Ctx) -> Result<Outcome> {
-    let ops = ctx
-        .backend("the backend compatibility report")?
-        .operator()?;
+    let ops = ctx.backend("the backend compatibility report")?;
     let row = ops.capabilities(&ctx.cancel).await?;
     Ok(outcome(render_compatibility(&row), &row))
 }
