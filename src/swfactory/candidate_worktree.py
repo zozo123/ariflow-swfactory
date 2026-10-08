@@ -18,6 +18,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from swfactory.canonical import restrict_dir
+
 
 class CandidateWorktreeError(RuntimeError):
     """A candidate workspace could not be created, frozen, or removed safely."""
@@ -90,7 +92,7 @@ def create_candidate_worktree(
 
     root = root.resolve()
     root.mkdir(parents=True, exist_ok=True)
-    _restrict_dir(root)
+    restrict_dir(root)
     token = ref.rsplit("/", 1)[-1]
     destination = root / token
     reservation = root / f".{token}.reserve"
@@ -282,8 +284,3 @@ def _git_proc(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
         timeout=120,
         env=env,
     )
-
-
-def _restrict_dir(path: Path) -> None:
-    if os.name == "posix":
-        path.chmod(0o700)

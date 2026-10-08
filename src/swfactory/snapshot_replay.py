@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import tarfile
@@ -20,6 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from swfactory.canonical import atomic_json, file_digest, restrict_dir, restrict_file
 from swfactory.execution_recipe import (
     BoundExecutionRecipe,
     ExecutionRecipeError,
@@ -158,7 +158,7 @@ def run_snapshot_recipe(
         _extract_snapshot(Path(snapshot.archive_path), extracted)
         cwd = _resolve_cwd(extracted, recipe.cwd)
         executable = _resolve_executable(recipe.argv[0], cwd)
-        executable_digest, _ = _digest_file(executable)
+        executable_digest, _ = file_digest(executable)
         argv = [str(executable), *recipe.argv[1:]]
         stdout_path = destination / "stdout.bin"
         stderr_path = destination / "stderr.bin"
@@ -168,8 +168,8 @@ def run_snapshot_recipe(
         timed_out = False
         exit_code: int | None = None
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-            _restrict_file(stdout_path)
-            _restrict_file(stderr_path)
+            restrict_file(stdout_path)
+            restrict_file(stderr_path)
             try:
                 proc = subprocess.run(
                     argv,
@@ -205,10 +205,10 @@ def run_snapshot_recipe(
             stderr=_retained_stream(stderr_path, destination),
         )
         recipe_document = _bound_recipe_document(bound_recipe)
-        _atomic_json(destination / "recipe.json", recipe_document)
+        atomic_json(destination / "recipe.json", recipe_document)
         receipt_document = receipt.canonical_dict()
         receipt_document["receipt_digest"] = receipt.digest
-        _atomic_json(destination / "receipt.json", receipt_document)
+        atomic_json(destination / "receipt.json", receipt_document)
         verify_snapshot_run(destination, snapshot=snapshot)
         return receipt
     finally:
@@ -277,7 +277,7 @@ def verify_snapshot_run(
         path = destination / stream.path
         if path.is_symlink() or not path.is_file():
             raise SnapshotReplayError(f"retained replay stream is absent or redirected: {stream.path}")
-        digest, size = _digest_file(path)
+        digest, size = file_digest(path)
         if digest != stream.sha256 or size != stream.size_bytes:
             raise SnapshotReplayError(
                 f"retained replay stream changed: {stream.path} "
@@ -287,7 +287,7 @@ def verify_snapshot_run(
     executable = Path(receipt.executable_path)
     if executable.is_symlink() or not executable.is_file():
         raise SnapshotReplayError(f"recorded replay executable is absent or redirected: {executable}")
-    executable_digest, _ = _digest_file(executable)
+    executable_digest, _ = file_digest(executable)
     if executable_digest != receipt.executable_sha256:
         raise SnapshotReplayError("recorded replay executable bytes changed")
 
@@ -340,8 +340,7 @@ def _prepare_destination(destination: Path) -> Path:
     if destination.exists() and any(destination.iterdir()):
         raise SnapshotReplayError(f"replay destination is not empty: {destination}")
     destination.mkdir(parents=True, exist_ok=True)
-    if os.name == "posix":
-        destination.chmod(0o700)
+    restrict_dir(destination)
     return destination
 
 
@@ -391,18 +390,8 @@ def _resolve_executable(argv0: str, cwd: Path) -> Path:
 
 
 def _retained_stream(path: Path, root: Path) -> RetainedStream:
-    digest, size = _digest_file(path)
+    digest, size = file_digest(path)
     return RetainedStream(path.relative_to(root).as_posix(), digest, size)
-
-
-def _digest_file(path: Path) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as stream:
-        while chunk := stream.read(128 * 1024):
-            digest.update(chunk)
-            size += len(chunk)
-    return digest.hexdigest(), size
 
 
 def _load_json(path: Path) -> Mapping[str, Any]:
@@ -415,21 +404,3 @@ def _load_json(path: Path) -> Mapping[str, Any]:
     if not isinstance(value, dict):
         raise SnapshotReplayError(f"replay manifest {path.name} is not an object")
     return value
-
-
-def _atomic_json(path: Path, document: Mapping[str, Any]) -> None:
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
-    os.close(fd)
-    temporary = Path(temporary_name)
-    try:
-        temporary.write_text(json.dumps(dict(document), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        _restrict_file(temporary)
-        os.replace(temporary, path)
-        _restrict_file(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _restrict_file(path: Path) -> None:
-    if os.name == "posix":
-        path.chmod(0o600)

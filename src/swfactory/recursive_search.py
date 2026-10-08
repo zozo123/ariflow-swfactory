@@ -14,7 +14,6 @@ approve a gate, publish, merge, mint credentials, or promote a candidate.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from collections import defaultdict
@@ -29,6 +28,7 @@ from swfactory.adaptive_information import (
     InformationBudgetPolicy,
     evaluate_information_budget,
 )
+from swfactory.canonical import json_digest as _digest
 from swfactory.evolution import DEFAULT_STRATEGIES, REQUIRED_DIMENSIONS, CampaignError, Strategy
 from swfactory.generations import Dimension
 from swfactory.phase_control import Phase, PhaseObservation, assess
@@ -1079,11 +1079,6 @@ def _ratio(numerator: float | int, denominator: float | int) -> float:
     if not denominator:
         return 0.0
     return round(float(numerator) / float(denominator), 6)
-
-
-def _digest(value: object) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 def _artifact_dict(artifact: ResearchArtifact) -> dict[str, Any]:

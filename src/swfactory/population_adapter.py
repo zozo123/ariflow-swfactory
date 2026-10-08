@@ -18,10 +18,13 @@ import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
 from swfactory.backend_http import no_redirect_open
+from swfactory.canonical import json_digest as _digest
+from swfactory.canonical import require_sha256
 from swfactory.population_manifest import PopulationManifestError
 from swfactory.provider_binding import BoundPopulationTask
 
@@ -31,15 +34,7 @@ MAX_INSTRUCTION_BYTES = 256 * 1024
 MAX_ADAPTER_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
-def _digest(value: object) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    return "sha256:" + hashlib.sha256(payload).hexdigest()
-
-
-def _require_sha256(value: str, *, field: str) -> None:
-    raw = value.removeprefix("sha256:")
-    if len(raw) != 64 or any(char not in "0123456789abcdef" for char in raw):
-        raise PopulationManifestError(f"{field} must be a canonical sha256 digest")
+_require_sha256 = partial(require_sha256, error=PopulationManifestError)
 
 
 @dataclass(frozen=True)

@@ -15,14 +15,13 @@ publish, merge or promote.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 
+from swfactory.canonical import json_digest as _digest
 from swfactory.phase_control import ControlMode, PhaseAssessment
 
 SWARM_DYNAMICS_SCHEMA_VERSION = 1
@@ -809,7 +808,7 @@ def _fit_budget(lanes: tuple[PopulationLane, ...], budget: SwarmBudget) -> tuple
             max_count = min(max_count, remaining_deep)
         elif lane.compute_tier == ComputeTier.EXACT_REPLAY:
             max_count = min(max_count, remaining_exact)
-        per = _tier_cost(lane.compute_tier)
+        per = tier_cost(lane.compute_tier)
         max_count = min(max_count, int(remaining_compute // per))
         if max_count <= 0:
             continue
@@ -846,7 +845,7 @@ def _fit_budget(lanes: tuple[PopulationLane, ...], budget: SwarmBudget) -> tuple
     return tuple(fitted)
 
 
-def _tier_cost(tier: ComputeTier) -> float:
+def tier_cost(tier: ComputeTier) -> float:
     return {
         ComputeTier.CHEAP: 1.0,
         ComputeTier.STANDARD: 2.0,
@@ -856,9 +855,4 @@ def _tier_cost(tier: ComputeTier) -> float:
 
 
 def _lane_compute_units(lane: PopulationLane) -> float:
-    return lane.count * _tier_cost(lane.compute_tier)
-
-
-def _digest(value: object) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    return "sha256:" + hashlib.sha256(payload).hexdigest()
+    return lane.count * tier_cost(lane.compute_tier)

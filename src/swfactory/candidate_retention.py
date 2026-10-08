@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from swfactory.candidate_evidence import CandidateEvidenceBundle, verify_candidate_evidence_bundle
+from swfactory.canonical import atomic_json, restrict_dir, restrict_file
 
 
 class CandidateRetentionError(RuntimeError):
@@ -95,8 +96,8 @@ def retain_candidate_evidence(
         expires_at=_format_time(expiry),
         pinned=pinned,
     )
-    _write_json(lease_path, lease.to_dict())
-    _restrict_dir(root)
+    atomic_json(lease_path, lease.to_dict())
+    restrict_dir(root)
     return lease
 
 
@@ -109,7 +110,7 @@ def pin_candidate_evidence(store: Path, digest: str) -> RetentionLease:
     if not (objects / token).is_dir():
         raise CandidateRetentionError(f"retained candidate evidence is absent: {token}")
     pinned = replace(lease, pinned=True)
-    _write_json(lease_path, pinned.to_dict())
+    atomic_json(lease_path, pinned.to_dict())
     return pinned
 
 
@@ -122,7 +123,7 @@ def unpin_candidate_evidence(store: Path, digest: str) -> RetentionLease:
     if not (objects / token).is_dir():
         raise CandidateRetentionError(f"retained candidate evidence is absent: {token}")
     unpinned = replace(lease, pinned=False)
-    _write_json(lease_path, unpinned.to_dict())
+    atomic_json(lease_path, unpinned.to_dict())
     return unpinned
 
 
@@ -177,7 +178,7 @@ def _layout(store: Path) -> tuple[Path, Path, Path]:
     leases = root / "leases"
     for directory in (root, objects, leases):
         directory.mkdir(parents=True, exist_ok=True)
-        _restrict_dir(directory)
+        restrict_dir(directory)
     return root, objects, leases
 
 
@@ -192,9 +193,9 @@ def _copy_bundle(source: Path, destination: Path, objects: Path) -> None:
         shutil.copytree(source, temporary, dirs_exist_ok=True, copy_function=shutil.copyfile)
         for entry in temporary.rglob("*"):
             if entry.is_dir():
-                _restrict_dir(entry)
+                restrict_dir(entry)
             elif entry.is_file():
-                _restrict_file(entry)
+                restrict_file(entry)
         try:
             os.replace(temporary, destination)
         except FileExistsError:
@@ -261,19 +262,6 @@ def _parse_lease(path: Path) -> RetentionLease:
     return lease
 
 
-def _write_json(path: Path, document: dict[str, Any]) -> None:
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
-    os.close(fd)
-    temporary = Path(temporary_name)
-    try:
-        temporary.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        _restrict_file(temporary)
-        os.replace(temporary, path)
-        _restrict_file(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def _utc(value: datetime | None) -> datetime:
     value = datetime.now(UTC) if value is None else value
     if value.tzinfo is None:
@@ -291,13 +279,3 @@ def _parse_time(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise CandidateRetentionError(f"retention timestamp is not timezone-aware: {value!r}")
     return parsed.astimezone(UTC)
-
-
-def _restrict_dir(path: Path) -> None:
-    if os.name == "posix":
-        path.chmod(0o700)
-
-
-def _restrict_file(path: Path) -> None:
-    if os.name == "posix":
-        path.chmod(0o600)

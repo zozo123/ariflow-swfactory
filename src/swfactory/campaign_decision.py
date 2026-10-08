@@ -13,14 +13,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from swfactory.candidate_evidence import CandidateEvidenceBundle
+from swfactory.canonical import atomic_json
 from swfactory.evolution import CampaignReport, CandidateOutcome, Selection, Strategy
 from swfactory.generations import Dimension, Evaluation
 
@@ -265,7 +264,8 @@ def build_campaign_decision_from_document(
 def write_campaign_decision(path: Path, manifest: CampaignDecisionManifest) -> None:
     document = manifest.canonical_dict()
     document["manifest_digest"] = manifest.digest()
-    _atomic_json(path, document)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_json(path, document)
 
 
 def load_campaign_decision(path: Path) -> CampaignDecisionManifest:
@@ -408,19 +408,3 @@ def _valid_digest(value: str | None) -> bool:
         return False
     suffix = value.removeprefix(_DIGEST_PREFIX)
     return len(suffix) == 64 and all(char in "0123456789abcdef" for char in suffix)
-
-
-def _atomic_json(path: Path, document: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
-    os.close(fd)
-    temporary = Path(temporary_name)
-    try:
-        temporary.write_text(json.dumps(dict(document), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        if os.name == "posix":
-            temporary.chmod(0o600)
-        os.replace(temporary, path)
-        if os.name == "posix":
-            path.chmod(0o600)
-    finally:
-        temporary.unlink(missing_ok=True)
