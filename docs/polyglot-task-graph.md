@@ -65,67 +65,7 @@ cannot honestly narrow that built-in task to "everything except Rust source."
 
 The factory therefore defines one explicit root task, `//#python-verify`, which still executes the
 root uv workspace with `uv run --active --frozen --all-packages pytest`. Its startup inputs are
-`$TURBO_DEFAULT# Polyglot task graph: motion, not authority
-
-Turborepo 2.11 adds experimental native understanding of uv and Cargo workspaces. That is useful
-here, but only if it stays on the correct side of the factory boundary.
-
-The software factory has two very different kinds of state:
-
-- **matter**: durable Cell identity, accepted input digests, approval revisions, mutation journals,
-  evidence, and publication state;
-- **motion**: builds, tests, agents, sandboxes, worktrees, task executors, and caches.
-
-Turborepo optimizes motion. Airflow and the Factory Cell control plane govern matter.
-
-That distinction is the whole integration.
-
-## The boundary
-
-```text
-GitHub work order
-      |
-      v
-Airflow lifecycle + Cell authority
-      |
-      +---- stage -------------------------------+
-      |                                          |
-      |  local polyglot task graph               |
-      |                                          |
-      |  native Cargo tasks ----+                 |
-      |                        |                   |
-      |  native uv package ----+--> verification  |
-      |       + factory verify |    fan-in         |
-      |                        |                   |
-      +------------------------------------------+
-      |
-      v
-digest-bound evidence -> human gates -> promotion
-```
-
-Turbo is never allowed to:
-
-- create or transfer Cell authority;
-- answer a human gate;
-- retry an ambiguous external mutation;
-- decide publication or promotion;
-- turn a cache hit into verification evidence.
-
-It may decide that a content-identical local task does not need to execute again. That is a speed
-decision, not a truth decision.
-
-## Current graph
-
-Cargo is a real repository-root workspace: `Cargo.toml`, `Cargo.lock`,
-`rust-toolchain.toml`, and `rustfmt.toml` share one root identity while crate sources remain
-under `rust/crates/`. `[workspace.metadata] name = "swfactory-rust"` gives the native Cargo
-aggregate a stable Turbo package identity.
-
-uv is also discovered natively. The root `pyproject.toml` names the synthetic workspace package
-`swfactory-python`, and `tests/fixtures/contract` is a real virtual uv member named
-`swfactory-contract-fixtures`.
-
- minus `rust/**/*.rs`. Native uv discovery remains enabled and visible in the
+`$TURBO_DEFAULT$` minus `rust/**/*.rs`. Native uv discovery remains enabled and visible in the
 package graph; the explicit task exists only to state this repository's narrower incremental
 verification contract instead of overriding Turbo's generic native contract.
 
