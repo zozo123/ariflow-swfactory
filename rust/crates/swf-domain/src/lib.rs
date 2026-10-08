@@ -8,13 +8,10 @@
 
 pub mod blueprint;
 pub mod cell;
-pub mod control_plane;
 pub mod credential_lease;
 pub mod doctor;
 pub mod evidence;
-pub mod factory;
 pub mod ids;
-pub mod manager_protocol;
 pub mod metrics;
 pub mod model;
 pub mod operator;
@@ -24,20 +21,11 @@ pub mod rollup;
 pub mod sanitize;
 pub mod snapshot;
 pub mod states;
-pub mod worker;
 
 pub use credential_lease::{
     CredentialLeaseBinding, CredentialLeaseContractError, CREDENTIAL_LEASE_SCHEMA_VERSION,
 };
-pub use factory::{
-    FactoryError, FactoryName, FactoryRunId, FactoryRunRequest, FactoryRunState, FactoryRunStatus,
-    FactorySpec, SchedulerBinding,
-};
 pub use ids::{DeliveryId, GateId, IdError, JobId, RunRef};
-pub use manager_protocol::{
-    AirflowInvocation, ManagerEnvelope, ProtocolError, StageDisposition, StageInvocation,
-    StageReceipt, MANAGER_API_VERSION,
-};
 pub use model::{
     Gate, IssueRef, JobRow, PullRequest, Run, SandboxRef, Snapshot, SourceHealth, TaskState,
 };
@@ -51,4 +39,3 @@ pub use phase_control::{
     SpawnDirective, TrajectoryMode, VerificationDirective, PHASE_CONTROL_AUTHORITY,
     PHASE_CONTROL_SCHEMA_VERSION,
 };
-pub use worker::{WorkerBatch, WorkerReceipt, WorkerRole, MAX_WORKERS};

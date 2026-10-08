@@ -42,13 +42,11 @@ ratatui = "0.29"
 crossterm = "0.28"
 unicode-width = "0.2"
 directories = "6"
-futures-util = "0.3"
 async-trait = "0.1"
 tokio-util = "0.7"
 tempfile = "3"
 insta = "1"
 assert_cmd = "2"
-predicates = "3"
 wiremock = "0.6"
 
 # A single native binary is the product; strip it and optimise for size without giving up speed.

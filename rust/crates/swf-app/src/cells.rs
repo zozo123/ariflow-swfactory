@@ -4,14 +4,12 @@
 //! the Python backend remains the persistence/fencing authority.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use swf_adapters::factory::FactoryApi;
 use swf_domain::cell::{CellEvent, CellRecord};
 use tokio_util::sync::CancellationToken;
 
 use crate::backend_context::BackendContext;
-use crate::context::Context;
 use crate::ops::{OpsError, Result};
 
 pub struct CellOps {
@@ -19,12 +17,6 @@ pub struct CellOps {
 }
 
 impl CellOps {
-    /// Connect through the shared backend URL/token/direct-mode policy.
-    pub fn connect(context: &Context, timeout: Duration) -> Result<Self> {
-        let backend = BackendContext::connect(context, timeout, "Factory Cell operations")?;
-        Ok(Self::from_backend(&backend))
-    }
-
     /// Reuse one resolved backend client across CLI/TUI application operations.
     pub fn from_backend(backend: &BackendContext) -> Self {
         Self { api: backend.api() }

@@ -10,8 +10,6 @@ repository.workspace = true
 [dependencies]
 swf-domain.workspace = true
 swf-adapters.workspace = true
-anyhow.workspace = true
-async-trait.workspace = true
 tokio-util.workspace = true
 thiserror.workspace = true
 serde.workspace = true
@@ -23,8 +21,7 @@ directories.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
-wiremock.workspace = true
+async-trait.workspace = true
 # `test-util` buys the paused clock: the gate settle window is three real seconds in production and
 # no seconds at all in a test that asserts it was actually waited out.
 tokio = { workspace = true, features = ["test-util"] }

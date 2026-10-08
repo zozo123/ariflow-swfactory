@@ -113,21 +113,3 @@ pub struct BackendCapabilities {
     #[serde(default)]
     pub draining_generation: Option<String>,
 }
-
-impl BackendCapabilities {
-    pub fn supports(&self, feature: &str) -> bool {
-        self.features.iter().any(|candidate| candidate == feature)
-    }
-
-    pub fn require_mutation(&self, feature: &str) -> Result<(), String> {
-        if !self.mutation_ready {
-            return Err("backend is not mutation-ready".to_string());
-        }
-        if !self.supports(feature) {
-            return Err(format!(
-                "backend does not advertise required feature {feature}"
-            ));
-        }
-        Ok(())
-    }
-}
