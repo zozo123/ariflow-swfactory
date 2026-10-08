@@ -10,18 +10,23 @@ import hashlib
 import json
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any
 
-from swfactory.sandbox_capabilities import SandboxCapabilities, SandboxLineage
 
-TerminationReason = Literal[
-    "completed",
-    "command_failed",
-    "timeout",
-    "cancelled",
-    "provider_terminated",
-    "infrastructure_lost",
-]
+@dataclass(frozen=True)
+class SandboxCapabilities:
+    create: bool = True
+    attach: bool = False
+    snapshot: bool = False
+    fork: bool = False
+    pause_resume: bool = False
+    network_policy: bool = False
+    filesystem_isolation: bool = True
+    ttl: bool = False
+    exact_teardown: bool = True
+
+    def to_dict(self) -> dict[str, bool]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -61,122 +66,44 @@ class ProviderDocument:
         return hashlib.sha256(raw).hexdigest()
 
 
-@dataclass(frozen=True)
-class NetworkPolicyEvidence:
-    requested_domains: tuple[str, ...]
-    enforcement: Literal["native", "host_runtime", "none"]
-    observed_domains: tuple[str, ...] = ()
-    detail: str | None = None
-
-
-@dataclass(frozen=True)
-class ProviderResult:
-    reason: TerminationReason
-    exit_code: int | None
-    timed_out: bool = False
-    provider_terminated: bool = False
-    detail: str | None = None
-
-    @property
-    def ok(self) -> bool:
-        return self.reason == "completed" and self.exit_code == 0
+def _doc(provider: str, implementation: str, notes: tuple[str, ...], **caps: bool) -> ProviderDocument:
+    return ProviderDocument(provider, SandboxCapabilities(attach=True, **caps), implementation, notes=notes)
 
 
 def local_document() -> ProviderDocument:
-    return ProviderDocument(
-        provider="local",
-        implementation="LocalSandbox",
-        capabilities=SandboxCapabilities(
-            create=True,
-            attach=True,
-            snapshot=False,
-            fork=False,
-            pause_resume=False,
-            network_policy=False,
-            filesystem_isolation=False,
-            ttl=False,
-            exact_teardown=True,
-        ),
-        notes=("development host directory; not an isolation boundary",),
-    )
+    notes = ("development host directory; not an isolation boundary",)
+    return _doc("local", "LocalSandbox", notes, filesystem_isolation=False)
 
 
 def srt_document() -> ProviderDocument:
-    return ProviderDocument(
-        provider="srt",
-        implementation="SrtSandbox",
-        capabilities=SandboxCapabilities(
-            create=True,
-            attach=True,
-            snapshot=False,
-            fork=False,
-            pause_resume=False,
-            network_policy=True,
-            filesystem_isolation=True,
-            ttl=False,
-            exact_teardown=True,
-        ),
-        notes=("host directory with Sandbox Runtime filesystem/network confinement",),
-    )
+    notes = ("host directory with Sandbox Runtime filesystem/network confinement",)
+    return _doc("srt", "SrtSandbox", notes, network_policy=True)
 
 
 def docker_document() -> ProviderDocument:
-    return ProviderDocument(
-        provider="docker",
-        implementation="DockerSandbox",
-        capabilities=SandboxCapabilities(
-            create=True,
-            attach=True,
-            snapshot=False,
-            fork=False,
-            pause_resume=False,
-            network_policy=True,
-            filesystem_isolation=True,
-            ttl=False,
-            exact_teardown=True,
-        ),
-        notes=("container isolation shares the host kernel",),
-    )
+    notes = ("container isolation shares the host kernel",)
+    return _doc("docker", "DockerSandbox", notes, network_policy=True)
 
 
-def toolset_document(backend: str, *, attach: bool = True, ttl: bool = False) -> ProviderDocument:
-    return ProviderDocument(
-        provider=f"toolset:{backend}",
-        implementation="ToolsetSandbox",
-        capabilities=SandboxCapabilities(
-            create=True,
-            attach=attach,
-            snapshot=False,
-            fork=False,
-            pause_resume=False,
-            network_policy=True,
-            filesystem_isolation=True,
-            ttl=ttl,
-            exact_teardown=True,
-        ),
-        notes=("optional backend features, including TTL, remain false until conformance proves them",),
-    )
+def toolset_document(backend: str) -> ProviderDocument:
+    notes = ("optional backend features, including TTL, remain false until conformance proves them",)
+    return _doc(f"toolset:{backend}", "ToolsetSandbox", notes, network_policy=True)
 
 
 def islo_document(*, snapshot: bool = False, fork: bool = False) -> ProviderDocument:
-    return ProviderDocument(
-        provider="islo",
-        implementation="IsloSandbox",
-        capabilities=SandboxCapabilities(
-            create=True,
-            attach=True,
-            snapshot=snapshot,
-            fork=fork,
-            pause_resume=True,
-            network_policy=True,
-            filesystem_isolation=True,
-            ttl=True,
-            exact_teardown=True,
-        ),
-        notes=(
-            "pause/resume and TTL are native",
-            "snapshot/fork are advertised only when the configured provider contract enables them",
-        ),
+    notes = (
+        "pause/resume and TTL are native",
+        "snapshot/fork are advertised only when the configured provider contract enables them",
+    )
+    return _doc(
+        "islo",
+        "IsloSandbox",
+        notes,
+        snapshot=snapshot,
+        fork=fork,
+        pause_resume=True,
+        network_policy=True,
+        ttl=True,
     )
 
 
@@ -198,34 +125,20 @@ def boat_document() -> ProviderDocument:
     environment control, but egress policy was NOT exercised here, and a capability document is the
     one place a guess is indistinguishable from a measurement.
     """
-    return ProviderDocument(
-        provider="boat",
-        implementation="BoatSandbox",
-        capabilities=SandboxCapabilities(
-            create=True,
-            attach=True,
-            snapshot=True,
-            fork=True,
-            pause_resume=True,
-            network_policy=False,
-            filesystem_isolation=True,
-            ttl=True,
-            exact_teardown=True,
-        ),
-        notes=(
-            "fork observed: two forks from one snapshot inherited parent state and stayed isolated",
-            "egress policy unexercised; network_policy is not claimed",
-        ),
+    notes = (
+        "fork observed: two forks from one snapshot inherited parent state and stayed isolated",
+        "egress policy unexercised; network_policy is not claimed",
     )
+    return _doc("boat", "BoatSandbox", notes, snapshot=True, fork=True, pause_resume=True, ttl=True)
 
 
-def provider_documents(*, islo_snapshot: bool = False, islo_fork: bool = False) -> tuple[ProviderDocument, ...]:
+def provider_documents(*, islo_fork: bool = False) -> tuple[ProviderDocument, ...]:
     return (
         local_document(),
         srt_document(),
         docker_document(),
         toolset_document("configured"),
-        islo_document(snapshot=islo_snapshot, fork=islo_fork),
+        islo_document(fork=islo_fork),
         boat_document(),
     )
 
@@ -247,49 +160,4 @@ def select_provider(
     return min(
         compatible,
         key=lambda doc: (preferred_order.get(doc.provider, len(preferred_order)), doc.provider),
-    )
-
-
-def validate_lineage(
-    lineage: SandboxLineage,
-    *,
-    cell_id: str,
-    epoch: int,
-    policy_digest: str | None,
-) -> None:
-    if lineage.cell_id != cell_id:
-        raise ValueError(f"compute belongs to {lineage.cell_id}, not {cell_id}")
-    if lineage.epoch != epoch:
-        raise ValueError(f"stale compute epoch {lineage.epoch}; current epoch is {epoch}")
-    if policy_digest is not None and lineage.policy_digest != policy_digest:
-        raise ValueError("compute policy digest does not match the current Factory Cell")
-
-
-def normalize_result(
-    *,
-    exit_code: int | None,
-    timed_out: bool = False,
-    cancelled: bool = False,
-    provider_terminated: bool = False,
-    infrastructure_lost: bool = False,
-    detail: str | None = None,
-) -> ProviderResult:
-    if cancelled:
-        reason: TerminationReason = "cancelled"
-    elif timed_out:
-        reason = "timeout"
-    elif provider_terminated:
-        reason = "provider_terminated"
-    elif infrastructure_lost:
-        reason = "infrastructure_lost"
-    elif exit_code == 0:
-        reason = "completed"
-    else:
-        reason = "command_failed"
-    return ProviderResult(
-        reason=reason,
-        exit_code=exit_code,
-        timed_out=timed_out,
-        provider_terminated=provider_terminated,
-        detail=detail,
     )

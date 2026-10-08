@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from swfactory.backend_population import BackendPopulationRunner, PopulationTaskInput
@@ -23,7 +23,6 @@ from swfactory.population_execution import (
 from swfactory.population_manifest import PopulationManifest
 from swfactory.provider_binding import ProviderBindingManifest
 from swfactory.sandbox_contract import CapabilityRequirement, ProviderDocument, select_provider
-from swfactory.work_executor import Cancellation, ExecutionReport, WorkExecutor
 from swfactory.workgraph import WorkNode, conflict_set
 
 
@@ -40,18 +39,12 @@ def choose_execution(
     providers: Iterable[ProviderDocument],
     *,
     preferred: Iterable[str] = (),
-    require_network_policy: bool = False,
 ) -> tuple[ProviderDocument, ExecutionDecision]:
     ordered = tuple(nodes)
     has_parallel_wave = any(node.parallel_safe for node in ordered) and len(ordered) > 1
     conflicts = conflict_set(ordered)
     want_fork = has_parallel_wave and not conflicts
-    requirement = CapabilityRequirement(
-        fork=want_fork,
-        network_policy=require_network_policy,
-        filesystem_isolation=True,
-        exact_teardown=True,
-    )
+    requirement = CapabilityRequirement(fork=want_fork)
     try:
         provider = select_provider(providers, requirement, preferred=preferred)
         parallel = want_fork and provider.capabilities.fork
@@ -59,58 +52,12 @@ def choose_execution(
     except ValueError:
         # Fork is an optimization.  If no provider can preserve fork lineage, retry selection for
         # the same graph in deterministic serial mode rather than inventing provider behavior.
-        serial_requirement = CapabilityRequirement(
-            fork=False,
-            network_policy=require_network_policy,
-            filesystem_isolation=True,
-            exact_teardown=True,
-        )
-        provider = select_provider(providers, serial_requirement, preferred=preferred)
+        serial = replace(requirement, fork=False)
+        provider = select_provider(providers, serial, preferred=preferred)
         parallel = False
         reason = "serial_fallback_missing_fork"
-    required = tuple(name for name, needed in requirement.__dict__.items() if bool(needed))
+    required = tuple(name for name, needed in asdict(requirement).items() if needed)
     return provider, ExecutionDecision(provider.provider, parallel, reason, required)
-
-
-def execute_bound_work(
-    executor: WorkExecutor,
-    *,
-    cell_id: str,
-    epoch: int,
-    input_head: str,
-    nodes: Iterable[WorkNode],
-    provider: ProviderDocument,
-    decision: ExecutionDecision,
-    cancellation: Cancellation | None = None,
-) -> ExecutionReport:
-    if decision.provider != provider.provider:
-        raise ValueError("execution decision/provider mismatch")
-    return executor.execute(
-        cell_id=cell_id,
-        epoch=epoch,
-        input_head=input_head,
-        nodes=tuple(nodes),
-        supports_fork=decision.parallel and provider.capabilities.fork,
-        cancellation=cancellation,
-    )
-
-
-def execute_bound_population(
-    executor: PopulationExecutor,
-    *,
-    manifest: PopulationManifest,
-    binding: ProviderBindingManifest,
-    cancellation: PopulationCancellation | None = None,
-) -> PopulationExecutionReport:
-    """Execute one search-only population inside an already-scheduled Airflow lifecycle task."""
-
-    if binding.population_manifest_digest != manifest.digest():
-        raise ValueError("population execution binding/manifest mismatch")
-    return executor.execute(
-        manifest=manifest,
-        binding=binding,
-        cancellation=cancellation,
-    )
 
 
 def execute_managed_population(
@@ -153,12 +100,9 @@ def execute_managed_population(
             require_distinct_independent_verifiers=True,
         ),
     )
-    report = execute_bound_population(
-        executor,
-        manifest=manifest,
-        binding=binding,
-        cancellation=cancellation,
-    )
+    if binding.population_manifest_digest != manifest.digest():
+        raise ValueError("population execution binding/manifest mismatch")
+    report = executor.execute(manifest=manifest, binding=binding, cancellation=cancellation)
     if report_path is not None:
         write_population_execution_report(report_path, report)
     return report
