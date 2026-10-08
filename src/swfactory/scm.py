@@ -107,19 +107,6 @@ def _run(
     return stdout
 
 
-def _run_scoped(
-    argv: Sequence[str],
-    cwd: Path | None,
-    input: bytes | None = None,
-    *,
-    env: Mapping[str, str] | None = None,
-) -> str:
-    """Preserve the legacy _run call shape unless a scoped credential env is actually required."""
-    if env is None:
-        return _run(argv, cwd, input)
-    return _run(argv, cwd, input, env=env)
-
-
 def parse_issue_file(path: Path) -> Issue:
     """Parse a ``--- yaml ---`` front-matter markdown file into an Issue. Body is kept verbatim."""
     try:
@@ -159,12 +146,18 @@ def _issue_from_gh(data: dict) -> Issue:
     )
 
 
-def _gh_json(argv: Sequence[str], *, env: Mapping[str, str] | None = None) -> object:
-    out = _run_scoped(argv, None, env=env)
+def _gh_json(argv: Sequence[str], *, env: Mapping[str, str] | None = None, retryable: bool = False) -> object:
+    out = _run(argv, None, env=env)
     try:
         return json.loads(out)
     except json.JSONDecodeError as e:
-        raise StageError("scm", f"{' '.join(argv[:3])} returned non-JSON: {out[:200]}") from e
+        raise StageError("scm", f"{' '.join(argv[:3])} returned non-JSON: {out[:200]}", retryable=retryable) from e
+
+
+def _first_token(out: str) -> str:
+    """The first whitespace-separated field of ``out`` (the sha of an ``ls-remote`` line), or ""."""
+    first = out.split(maxsplit=1)
+    return first[0] if first else ""
 
 
 def _window(rows: list, *, limit: int, what: str) -> list:
@@ -197,10 +190,10 @@ def _apply_and_push(
     (``git am`` restamps committer dates, so even an identical patch yields new shas), so those
     refs are force-pushed. Any other branch keeps plain (fast-forward only) push semantics.
     """
-    _run_scoped(["git", "checkout", "-b", branch], clone, env=env)
-    _run_scoped(["git", *_GIT_IDENT, "am", "--3way"], clone, input=patch, env=env)
+    _run(["git", "checkout", "-b", branch], clone, env=env)
+    _run(["git", *_GIT_IDENT, "am", "--3way"], clone, input=patch, env=env)
     if not branch.startswith(FACTORY_BRANCH_PREFIX):
-        _run_scoped(["git", "push", "-u", "origin", branch], clone, env=env)
+        _run(["git", "push", "-u", "origin", branch], clone, env=env)
         return
     # Compare-and-swap against WHAT THIS INSTANCE LAST PUSHED, not against what it just observed.
     # The branch is keyed on the work rather than the run (see `Ctx.branch`), so a second factory
@@ -214,7 +207,7 @@ def _apply_and_push(
     # and cannot be expressed as a fast-forward.
     remote_head = _remote_head(clone, branch, env=env)
     if not remote_head:
-        _run_scoped(["git", "push", "-u", "origin", branch], clone, env=env)
+        _run(["git", "push", "-u", "origin", branch], clone, env=env)
         return
     # Both sides of the comparison come from commits: the patch just applied says who made it, the
     # remote head says who made that. No caller has to know its own name, so the managed boundary
@@ -231,7 +224,7 @@ def _apply_and_push(
             retryable=False,
         )
     try:
-        _run_scoped(
+        _run(
             ["git", "push", "-u", f"--force-with-lease={branch}:{remote_head}", "origin", branch],
             clone,
             env=env,
@@ -265,10 +258,10 @@ def _instance_of(
     and is therefore not ours to replace.
     """
     try:
-        _run_scoped(["git", "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], clone, env=env)
+        _run(["git", "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], clone, env=env)
     except StageError:  # not in the clone yet: the ref moved after we cloned
-        _run_scoped(["git", "fetch", "--quiet", "--depth", "1", "origin", sha], clone, env=env)
-    message = _run_scoped(
+        _run(["git", "fetch", "--quiet", "--depth", "1", "origin", sha], clone, env=env)
+    message = _run(
         ["git", "log", "-1", "--format=%(trailers:key=Factory-Instance,valueonly)", sha],
         clone,
         env=env,
@@ -283,9 +276,7 @@ def _remote_head(
     env: Mapping[str, str] | None = None,
 ) -> str:
     """The sha the remote currently holds for ``branch``, or "" when it has no such ref."""
-    out = _run_scoped(["git", "ls-remote", "origin", f"refs/heads/{branch}"], clone, env=env)
-    first = out.split(maxsplit=1)
-    return first[0] if first else ""
+    return _first_token(_run(["git", "ls-remote", "origin", f"refs/heads/{branch}"], clone, env=env))
 
 
 def patch_content_digest(patch: bytes) -> str:
@@ -580,7 +571,10 @@ class GitHubScm:
         self.repo = repo
         self.base_branch = base_branch
         self.token_env = token_env
-        self.token = token
+        # Without a token every command inherits the orchestrator's environment. A backend-issued
+        # scoped token gets an explicit scrubbed environment so it cannot inherit a broader credential.
+        scrubbed = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
+        self._env = None if token is None else {**scrubbed, token_env: token}
 
     def fetch_issue(self, ref: str) -> Issue:
         """Numeric -> ``gh issue view``; anything else -> front-matter file."""
@@ -670,12 +664,7 @@ class GitHubScm:
             # Persist the helper in the clone so `git push` uses it (empty value resets globals).
             self._exec(["git", "config", "--add", "credential.helper", ""], clone)
             self._exec(["git", "config", "--add", "credential.helper", self._helper], clone)
-            _apply_and_push(
-                clone,
-                branch=branch,
-                patch=patch,
-                env=self._environment if self.token is not None else None,
-            )
+            _apply_and_push(clone, branch=branch, patch=patch, env=self._env)
             self._ensure_labels(labels)
             body_file = Path(tmp) / "pr-body.md"
             # The marker travels in the body because the body is the one PR field every instance
@@ -726,17 +715,13 @@ class GitHubScm:
         absent. The content digest comes from the PR's own diff (it outlives the merge and a deleted
         branch) or, for a bare branch, from the compare against the base -- never from the body.
         """
-        out = self._exec(
+        rows = self._gh_json(
             [
                 "gh", "pr", "list", "--repo", self.repo, "--head", branch, "--state", "all",
                 "--limit", "20", "--json", "number,url,state,headRefOid,baseRefName",
             ],
-            None,
+            retryable=True,
         )  # fmt: skip
-        try:
-            rows = json.loads(out or "[]")
-        except ValueError as e:
-            raise StageError("scm", f"gh pr list returned non-JSON: {out[:200]}", retryable=True) from e
         for state, pr_state in (("OPEN", "open"), ("MERGED", "merged"), ("CLOSED", "closed")):
             row = next((r for r in rows if isinstance(r, dict) and r.get("state") == state), None)
             if row is None:
@@ -753,14 +738,14 @@ class GitHubScm:
                 pr_state=pr_state,
                 url=str(row.get("url") or "") or None,
             )
-        out = self._exec(
-            ["git", *self._cred, "ls-remote", f"https://github.com/{self.repo}.git", f"refs/heads/{branch}"],
-            None,
+        head = _first_token(
+            self._exec(
+                ["git", *self._cred, "ls-remote", f"https://github.com/{self.repo}.git", f"refs/heads/{branch}"],
+                None,
+            )
         )
-        first = out.split(maxsplit=1)
-        if not first:
+        if not head:
             return None
-        head = first[0]
         diff = self._exec(
             [
                 "gh", "api", "-H", "Accept: application/vnd.github.patch",
@@ -841,31 +826,11 @@ class GitHubScm:
         if not isinstance(result, dict) or result.get("merged") is not True:
             raise StageError("scm", "GitHub refused the verified merge")
 
-    def _exec(
-        self,
-        argv: Sequence[str],
-        cwd: Path | None,
-        input: bytes | None = None,
-    ) -> str:
-        # Ambient-token instances preserve the legacy adapter contract. Backend-issued scoped
-        # tokens get an explicit scrubbed environment so they cannot inherit a broader credential.
-        if self.token is None:
-            return _run(argv, cwd, input)
-        return _run(argv, cwd, input, env=self._environment)
+    def _exec(self, argv: Sequence[str], cwd: Path | None, input: bytes | None = None) -> str:
+        return _run(argv, cwd, input, env=self._env)
 
-    def _gh_json(self, argv: Sequence[str]) -> object:
-        if self.token is None:
-            return _gh_json(argv)
-        return _gh_json(argv, env=self._environment)
-
-    @property
-    def _environment(self) -> dict[str, str]:
-        env = dict(os.environ)
-        if self.token is not None:
-            env.pop("GH_TOKEN", None)
-            env.pop("GITHUB_TOKEN", None)
-            env[self.token_env] = self.token
-        return env
+    def _gh_json(self, argv: Sequence[str], *, retryable: bool = False) -> object:
+        return _gh_json(argv, env=self._env, retryable=retryable)
 
     # -- internals
 
@@ -878,7 +843,7 @@ class GitHubScm:
         return ["-c", "credential.helper=", "-c", f"credential.helper={self._helper}"]
 
     def _require_token(self) -> None:
-        if self.token is None and not os.environ.get(self.token_env):
+        if self._env is None and not os.environ.get(self.token_env):
             raise StageError("scm", f"{self.token_env} is not set; cannot push to GitHub")
 
     def _ensure_labels(self, labels: Sequence[str]) -> None:
@@ -894,17 +859,13 @@ class GitHubScm:
         it is the failure this exists to prevent. The marker is parsed strictly (see
         `publication_identity.adopts`) so a key quoted in a log excerpt cannot adopt the wrong PR.
         """
-        out = self._exec(
+        rows = self._gh_json(
             [
                 "gh", "pr", "list", "--repo", self.repo, "--state", "open",
                 "--limit", "100", "--json", "url,body",
             ],
-            None,
+            retryable=True,
         )  # fmt: skip
-        try:
-            rows = json.loads(out or "[]")
-        except ValueError:
-            return None
         for row in rows if isinstance(rows, list) else []:
             if isinstance(row, dict) and adopts(str(row.get("body") or ""), key):
                 return str(row.get("url") or "") or None
