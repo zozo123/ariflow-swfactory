@@ -93,6 +93,7 @@ protected = [
   "factory.toml",                       # a cell must not rewrite its own contract
   ".github/",                           # nor the required checks that gate its own PR
   "config/capability-inventory.json",   # support claims are a human governance decision
+  "docs/future-factory.md",             # recursive-search constitution cannot self-rewrite
   # --- what governs every FUTURE run ----------------------------------------------------------
   "blueprints/",                        # gates, limits, budgets and sandbox of every line
   "dags/",                              # Airflow is the only lifecycle scheduler

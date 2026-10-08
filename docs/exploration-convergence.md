@@ -14,8 +14,6 @@ and retained evidence. Candidate arrival order, worker timing and scheduler inte
 change the selected result. Canonical ordering, explicit required dimensions, deterministic
 serialization and one promotion authority collapse the search space to one auditable decision.
 
-The machine-readable policy is [config/exploration-convergence.yaml](../config/exploration-convergence.yaml).
-
 ## Non-negotiable boundary
 
 Exploration entropy can influence **which hypotheses are generated**. It cannot influence the

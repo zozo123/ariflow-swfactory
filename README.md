@@ -156,11 +156,10 @@ queue posture, but it cannot approve, publish, merge, mint credentials or promot
 snapshot locally with `swfactory phase-assess phase.json --json` or `swf phase phase.json --json`. See
 [phase-aware control](docs/phase-control.md).
 
-### Cognitive harness and acceleration
+### Search posture and acceleration
 
-The experimental cognitive contracts separate **System 1** proposal generation from **System 2**
-measurement and convergence. Phase control recommends search posture; retained observations inform
-later search. None supplies approval or mutation authority. Model, prompt, and reasoning style may
+Phase control recommends search posture; retained observations inform later search. Neither
+supplies approval or mutation authority. Model, prompt, and reasoning style may
 vary; evidence must identify the exact candidate, inputs, policy, and procedure measured.
 
 The current managed authority and stage implementation lives in the **Python backend/application**;
