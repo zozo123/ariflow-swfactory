@@ -86,16 +86,6 @@ impl EvidenceStatus {
     pub fn unavailable(&self) -> bool {
         matches!(self, Self::Unavailable { .. })
     }
-
-    /// The word a report prints.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Pass => "pass",
-            Self::Fail => "fail",
-            Self::Skipped { .. } => "skipped",
-            Self::Unavailable { .. } => "unavailable",
-        }
-    }
 }
 
 /// One atomic thing the verifier looked at.

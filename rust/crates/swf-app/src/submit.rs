@@ -28,13 +28,13 @@ use crate::ops::{OpsError, Result};
 pub const BLUEPRINTS_DIR: &str = "blueprints";
 
 /// Points directly at a blueprints directory, for an operator whose checkout is elsewhere.
-pub const BLUEPRINTS_ENV: &str = "SWF_BLUEPRINTS_DIR";
+const BLUEPRINTS_ENV: &str = "SWF_BLUEPRINTS_DIR";
 
 /// Points at a factory checkout; its `blueprints/` is searched after the working directory's.
-pub const FACTORY_ROOT_ENV: &str = "SWF_FACTORY_ROOT";
+const FACTORY_ROOT_ENV: &str = "SWF_FACTORY_ROOT";
 
 /// Names whose file stem differs from the blueprint name (`_FILE_ALIASES`).
-pub const FILE_ALIASES: &[(&str, &str)] = &[("factory", "default")];
+const FILE_ALIASES: &[(&str, &str)] = &[("factory", "default")];
 
 /// The longest an issue reference may be, and the character set it may use.
 const MAX_ISSUE_CHARS: usize = 128;
@@ -317,7 +317,7 @@ fn load_file(path: &Path, expected_name: Option<&str>) -> Result<Blueprint> {
 }
 
 /// Where a blueprint might be, in the order the Python looks: cwd first, then the factory root.
-pub fn blueprint_roots() -> Vec<PathBuf> {
+fn blueprint_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(dir) = std::env::var_os(BLUEPRINTS_ENV).filter(|v| !v.is_empty()) {
         roots.push(PathBuf::from(dir));
@@ -329,25 +329,6 @@ pub fn blueprint_roots() -> Vec<PathBuf> {
         roots.push(PathBuf::from(root).join(BLUEPRINTS_DIR));
     }
     roots
-}
-
-/// Every blueprint file directly under one root, sorted by path (`blueprint_paths`).
-pub fn blueprint_paths(root: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(std::result::Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
-        })
-        .collect();
-    paths.sort();
-    paths
 }
 
 /// Find the file for a name or a path: root-major, stem-minor, first hit wins.
@@ -396,7 +377,7 @@ pub fn find_blueprint(name_or_path: &str) -> Option<PathBuf> {
 /// still applies, but three stages later and to a value the factory derives, not to the reference
 /// an operator types. Validating the wrong layer is how a client refuses work the server would
 /// have accepted.
-pub fn validate_issue(value: &str) -> std::result::Result<(), String> {
+fn validate_issue(value: &str) -> std::result::Result<(), String> {
     if value.is_empty() || value.chars().count() > MAX_ISSUE_CHARS {
         return Err(format!("issue must be 1-{MAX_ISSUE_CHARS} characters"));
     }
@@ -530,24 +511,6 @@ mod tests {
         let err = resolve_blueprint(&path.display().to_string()).expect_err("broken");
         assert_eq!(err.exit_code(), 1);
         assert!(err.message.contains("broken.toml"), "{err}");
-    }
-
-    #[test]
-    fn blueprint_paths_lists_only_toml_files_directly_under_the_root() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("b.toml"), "").expect("write");
-        std::fs::write(dir.path().join("a.toml"), "").expect("write");
-        std::fs::write(dir.path().join("notes.md"), "").expect("write");
-        std::fs::create_dir(dir.path().join("nested")).expect("mkdir");
-        std::fs::write(dir.path().join("nested").join("c.toml"), "").expect("write");
-
-        let paths = blueprint_paths(dir.path());
-        let names: Vec<String> = paths
-            .iter()
-            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .collect();
-        assert_eq!(names, vec!["a.toml", "b.toml"], "sorted, non-recursive");
-        assert!(blueprint_paths(Path::new("/nope/nope")).is_empty());
     }
 
     #[test]

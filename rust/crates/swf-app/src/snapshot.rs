@@ -31,16 +31,16 @@ use crate::gates;
 
 /// How many runs of each DAG a pass reads. `herd`'s default, and the reason the Runs pane is
 /// bounded work no matter how long the factory has been up.
-pub const DEFAULT_RUNS_PER_DAG: usize = 20;
+const DEFAULT_RUNS_PER_DAG: usize = 20;
 
 /// How many runs of each DAG get real job rows before the rest collapse to one line each.
-pub const DEFAULT_JOBS_PER_DAG: usize = 5;
+const DEFAULT_JOBS_PER_DAG: usize = 5;
 
 /// The label `gh pr list` filters on when nothing says otherwise.
-pub const DEFAULT_PR_LABEL: &str = "factory";
+const DEFAULT_PR_LABEL: &str = "factory";
 
 /// How many pull requests a pass reads.
-pub const DEFAULT_PR_LIMIT: u32 = 30;
+const DEFAULT_PR_LIMIT: u32 = 30;
 
 /// What one pass is allowed to cost.
 ///

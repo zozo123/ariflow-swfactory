@@ -20,7 +20,7 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
-use crate::ids::{GateId, JobId, RunRef, UNMAPPED};
+use crate::ids::{GateId, JobId, RunRef};
 use crate::rollup::py_str;
 use crate::states;
 
@@ -29,7 +29,7 @@ use crate::states;
 pub const NO_ISSUE: &str = "-";
 
 /// The roll-up word a job carries before any task has a state.
-pub const DEFAULT_JOB_STATE: &str = "queued";
+const DEFAULT_JOB_STATE: &str = "queued";
 
 /// The source key `collect()` files a whole-Airflow failure under.
 pub const SOURCE_AIRFLOW: &str = "airflow";
@@ -288,14 +288,6 @@ impl JobRow {
             state: default_job_state(),
             tasks: Vec::new(),
         }
-    }
-
-    /// True once `fan_out` has given this row a real job index.
-    ///
-    /// `map_index == -1` happens only before `fan_out` produced the job list, or for a run whose
-    /// task instances were not fetched. There is no job index yet — there is no job numbered -1.
-    pub fn mapped(&self) -> bool {
-        self.map_index > UNMAPPED
     }
 
     /// The identity this row addresses, which is what a selection or a command argument keys on.
@@ -1000,10 +992,7 @@ mod tests {
     }
 
     #[test]
-    fn a_job_row_without_an_index_is_not_job_minus_one() {
-        assert!(!JobRow::new("f", "r", -1).mapped());
-        assert!(JobRow::new("f", "r", 0).mapped());
-        assert!(JobRow::new("f", "r", 3).mapped());
+    fn a_new_job_row_starts_blank_and_addresses_its_job() {
         assert_eq!(JobRow::new("f", "r", -1).issue, NO_ISSUE);
         assert_eq!(JobRow::new("f", "r", -1).state, DEFAULT_JOB_STATE);
         assert_eq!(JobRow::new("f", "r", 2).id().to_string(), "f/r#2");

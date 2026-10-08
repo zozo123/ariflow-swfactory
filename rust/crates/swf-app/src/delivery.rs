@@ -39,28 +39,25 @@ use crate::context::Context;
 use crate::ops::{OpsError, Result};
 
 /// The labels every factory delivery carries (`stages.DEFAULT_LABELS`).
-pub const REQUIRED_LABELS: &[&str] = &["factory", "agent-authored"];
+const REQUIRED_LABELS: &[&str] = &["factory", "agent-authored"];
 
 /// Where a target's contract lives, relative to the target directory.
-pub const CONTRACT_FILE: &str = "factory.toml";
-
-/// Where the committed artifact chain lives, relative to the target directory.
-pub const ARTIFACT_DIR: &str = "docs/factory";
+const CONTRACT_FILE: &str = "factory.toml";
 
 /// The default JUnit path, and the prefix every JUnit path must start with.
-pub const DEFAULT_JUNIT: &str = ".factory/junit.xml";
+const DEFAULT_JUNIT: &str = ".factory/junit.xml";
 
 /// The prefix `[paths].junit` must live under.
-pub const JUNIT_PREFIX: &str = ".factory/";
+const JUNIT_PREFIX: &str = ".factory/";
 
 /// How deep to look for a `factory.toml` when the target directory was not named.
-pub const CONTRACT_SEARCH_DEPTH: usize = 3;
+const CONTRACT_SEARCH_DEPTH: usize = 3;
 
 /// How long a re-run test suite may take before it is a hang rather than a slow suite.
-pub const TEST_TIMEOUT: Duration = Duration::from_secs(1800);
+const TEST_TIMEOUT: Duration = Duration::from_secs(1800);
 
 /// How much history a verification clone needs.
-pub const CLONE_DEPTH: &str = "50";
+const CLONE_DEPTH: &str = "50";
 
 /// One published delivery, as the forge knows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -123,7 +120,7 @@ pub async fn list(
 }
 
 /// True when a delivery legitimately carries a `[BLOCKED]`/`[REJECTED]` banner or label.
-pub fn is_blocked(title: &str, labels: &[String]) -> bool {
+fn is_blocked(title: &str, labels: &[String]) -> bool {
     BLOCKED_LABELS
         .iter()
         .any(|blocked| labels.iter().any(|have| have == *blocked))
@@ -137,7 +134,7 @@ pub fn is_blocked(title: &str, labels: &[String]) -> bool {
 /// Issue ids may contain `-` and `.`, so the branch is not splittable from the left. Getting this
 /// backwards produces an issue id that is a prefix of the real one, which then fails to match the
 /// artifact directory for reasons nobody can see.
-pub fn split_branch(branch: &str) -> (String, String) {
+fn split_branch(branch: &str) -> (String, String) {
     match DeliveryId::parse(branch) {
         Ok(DeliveryId::Branch { issue_id, run_id }) => (issue_id, run_id),
         _ => (String::new(), String::new()),
@@ -953,7 +950,7 @@ pub struct TargetContract {
 ///
 /// The error strings are the Python's, verbatim, because they are what an operator has already
 /// seen once in a run log and will search for.
-pub fn parse_contract(text: &str) -> std::result::Result<TargetContract, String> {
+fn parse_contract(text: &str) -> std::result::Result<TargetContract, String> {
     let table: toml::Table = toml::from_str(text).map_err(|e| e.message().to_string())?;
     let string_at = |section: &str, key: &str| -> Option<String> {
         table
@@ -1011,7 +1008,7 @@ pub fn parse_contract(text: &str) -> std::result::Result<TargetContract, String>
 }
 
 /// Find the directory holding a `factory.toml`, shallowest first, deterministically.
-pub fn find_contract(root: &Path) -> Option<PathBuf> {
+fn find_contract(root: &Path) -> Option<PathBuf> {
     let mut frontier = vec![root.to_path_buf()];
     for _ in 0..=CONTRACT_SEARCH_DEPTH {
         if let Some(found) = frontier
@@ -1048,7 +1045,7 @@ pub fn find_contract(root: &Path) -> Option<PathBuf> {
 
 /// What a JUnit report actually says, recomputed rather than believed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct JunitCounts {
+struct JunitCounts {
     /// Tests that passed, derived rather than read.
     pub passed: u32,
     /// Tests that failed.
@@ -1066,7 +1063,7 @@ pub struct JunitCounts {
 /// The two rules that matter: element names are read namespace-insensitively, and a `testsuites`
 /// root contributes only its **direct** `testsuite` children. Recursing would double-count a
 /// nested suite's totals against its parent's, which turns a green run into an impossible one.
-pub fn parse_junit(xml: &str) -> std::result::Result<JunitCounts, String> {
+fn parse_junit(xml: &str) -> std::result::Result<JunitCounts, String> {
     let elements = scan_elements(xml);
     let root = elements
         .first()

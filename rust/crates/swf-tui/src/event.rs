@@ -19,7 +19,7 @@ use tokio::sync::mpsc::Sender;
 use crate::model::{Mode, Msg, View};
 
 /// How long the reader waits for a key before looking at whether it should stop.
-pub const POLL: Duration = Duration::from_millis(100);
+const POLL: Duration = Duration::from_millis(100);
 
 /// One thing a key can ask for. The command palette runs exactly these, by name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,12 +111,12 @@ pub const HELP: &[(&str, &str)] = &[
 /// Raw mode delivers Ctrl-C as a keystroke rather than a signal, so the interrupt has to be
 /// recognised here as well as in the signal handler, or the one escape hatch every terminal user
 /// relies on would do nothing (non-negotiable 8).
-pub fn is_interrupt(key: &KeyEvent) -> bool {
+fn is_interrupt(key: &KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c' | 'C'))
 }
 
 /// Turn one terminal event into a message, or discard it.
-pub fn to_msg(event: Event) -> Option<Msg> {
+fn to_msg(event: Event) -> Option<Msg> {
     match event {
         // Windows reports press *and* release; acting on both doubles every keystroke.
         Event::Key(key) if key.kind != KeyEventKind::Press => None,

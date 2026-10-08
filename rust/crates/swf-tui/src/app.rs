@@ -35,13 +35,13 @@ use crate::view;
 
 /// How often the clock advances on screen. Ages and staleness are worth a second's precision; the
 /// collection interval is a separate, much longer thing.
-pub const TICK: Duration = Duration::from_secs(1);
+const TICK: Duration = Duration::from_secs(1);
 
 static PANIC_HOOK: Once = Once::new();
 
 /// How the session should behave, for a caller that has flags of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TuiOptions {
+struct TuiOptions {
     /// How often to re-read every source.
     pub refresh: Duration,
     /// False under `--no-color` or `NO_COLOR`.
@@ -67,7 +67,7 @@ pub async fn run(ops: Arc<Ops>) -> anyhow::Result<()> {
 }
 
 /// The same, with the caller's own refresh interval and colour decision.
-pub async fn run_with(ops: Arc<Ops>, opts: TuiOptions) -> anyhow::Result<()> {
+async fn run_with(ops: Arc<Ops>, opts: TuiOptions) -> anyhow::Result<()> {
     if !io::stdout().is_tty() {
         anyhow::bail!(
             "swf tui needs a terminal; use `swf attention` or `swf jobs list --json` when piping"
@@ -217,7 +217,7 @@ impl Drop for Guard {
 /// Order is the whole point: a backtrace written into a raw-mode alternate screen is a backtrace
 /// nobody reads, and the shell it is written over is left unusable. Installed once — a second
 /// session in the same process must not stack a second hook.
-pub fn install_panic_hook() {
+fn install_panic_hook() {
     PANIC_HOOK.call_once(|| {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {

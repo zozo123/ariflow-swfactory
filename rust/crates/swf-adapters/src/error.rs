@@ -138,7 +138,7 @@ impl ErrorKind {
 ///
 /// The Python client truncates service `detail` at 300 characters (`01-domain-control.md` §5) and
 /// these strings end up in `Snapshot.errors`, which is a byte-compatibility surface.
-pub const MAX_DETAIL_CHARS: usize = 300;
+const MAX_DETAIL_CHARS: usize = 300;
 
 impl AdapterError {
     /// Which row of the exit-code table this error is (`00-architecture.md` §C.2).

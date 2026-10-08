@@ -10,7 +10,7 @@
 use ring::digest::{digest, SHA256};
 use serde_json::{Number, Value};
 
-pub const POLICY_DIGEST_FAMILY: &str = "v1";
+const POLICY_DIGEST_FAMILY: &str = "v1";
 pub const POLICY_MAX_EXACT_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[derive(Debug, thiserror::Error)]

@@ -22,39 +22,39 @@ use swf_adapters::airflow::Auth as WireAuth;
 use swf_adapters::error::ErrorKind;
 
 /// The name of the context that exists even when nothing is configured.
-pub const BUILTIN_CONTEXT: &str = "local";
+const BUILTIN_CONTEXT: &str = "local";
 
 /// Where a stock local stack listens (`08-local-stack.md` §A.2).
-pub const DEFAULT_AIRFLOW_URL: &str = "http://localhost:8080";
+const DEFAULT_AIRFLOW_URL: &str = "http://localhost:8080";
 
 /// The tag the shipped DAGs carry, and the one `list_dags` filters on by default.
 pub const DEFAULT_DAG_TAG: &str = "swfactory";
 
 /// Where `metrics.json` files are looked for when a context does not say.
-pub const DEFAULT_METRICS_ROOT: &str = ".";
+const DEFAULT_METRICS_ROOT: &str = ".";
 
 /// The only schema version that exists. An unknown one is refused rather than guessed at: a file
 /// written by a newer `swf` may mean something different by the same key.
-pub const CONFIG_VERSION: u32 = 1;
+const CONFIG_VERSION: u32 = 1;
 
 /// Keys that may never appear in the file, at any depth.
 ///
 /// Not a warning — a load error. A warning teaches people that a token in the config is a thing
 /// you can do if you accept a little yellow text, and it is not.
-pub const SECRET_KEYS: &[&str] = &["password", "token", "secret"];
+const SECRET_KEYS: &[&str] = &["password", "token", "secret"];
 
 /// Overrides the active context, below `--context` and above the file's `default`.
-pub const CONTEXT_ENV: &str = "SWF_CONTEXT";
+const CONTEXT_ENV: &str = "SWF_CONTEXT";
 
 /// Points at a different config file entirely. Not part of C.1's schema; it exists so a test, a
 /// sandbox or a second identity on one machine does not have to write the operator's real file.
-pub const CONFIG_ENV: &str = "SWF_CONFIG";
+const CONFIG_ENV: &str = "SWF_CONFIG";
 
-/// The XDG variable [`ContextStore::config_path`] honours before asking `directories`.
+/// The XDG variable `ContextStore::config_path` honours before asking `directories`.
 pub const XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 
 /// The file name under the config directory.
-pub const CONFIG_FILE: &str = "config.toml";
+const CONFIG_FILE: &str = "config.toml";
 
 /// Why a context could not be read, written or chosen.
 ///
@@ -344,7 +344,7 @@ impl ContextStore {
     /// `$SWF_CONFIG` wins outright. Otherwise `$XDG_CONFIG_HOME/swf/config.toml` when that is set
     /// — on every platform, because an operator who exports XDG_CONFIG_HOME means it — and only
     /// then the platform's own answer via `directories`.
-    pub fn config_path() -> Result<PathBuf, ContextError> {
+    fn config_path() -> Result<PathBuf, ContextError> {
         if let Some(explicit) = env::var_os(CONFIG_ENV).filter(|v| !v.is_empty()) {
             return Ok(PathBuf::from(explicit));
         }
@@ -423,7 +423,7 @@ impl ContextStore {
     }
 
     /// The `default` key, if the file names one that exists.
-    pub fn default_name(&self) -> Option<&str> {
+    fn default_name(&self) -> Option<&str> {
         self.file
             .default
             .as_deref()
@@ -501,7 +501,7 @@ impl ContextStore {
     ///
     /// Atomic because a half-written config is a machine that cannot reach its factory, and
     /// `0600` because even a file that holds no secrets holds the shape of someone's estate.
-    pub fn save(&self) -> Result<(), ContextError> {
+    fn save(&self) -> Result<(), ContextError> {
         let io = |detail: String| ContextError::Io {
             path: self.path.display().to_string(),
             detail,

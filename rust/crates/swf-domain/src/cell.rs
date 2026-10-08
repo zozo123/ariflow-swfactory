@@ -55,14 +55,6 @@ pub struct CellRecord {
 }
 
 impl CellRecord {
-    /// Whether this projection is in a lifecycle-terminal state.
-    pub fn is_terminal(&self) -> bool {
-        matches!(
-            self.state.as_str(),
-            "success" | "failed" | "cancelled" | "rejected" | "cleaned"
-        )
-    }
-
     /// Stable `dag/run#index` identity when Airflow has accepted the cell.
     pub fn airflow_identity(&self) -> Option<String> {
         Some(format!(

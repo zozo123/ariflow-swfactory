@@ -126,7 +126,7 @@ fn bounded(limit: usize, what: &str) -> Result<usize> {
     }
 }
 
-pub fn validate_cell_id(cell_id: &str) -> Result<()> {
+fn validate_cell_id(cell_id: &str) -> Result<()> {
     // Delegates rather than restating the rule: this surface already required the full shape while
     // the domain types accepted a bare prefix, which is how the two drifted apart.
     if swf_domain::cell::is_cell_id(cell_id) {

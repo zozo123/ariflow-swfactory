@@ -125,7 +125,7 @@ impl Runtime {
     }
 
     /// Abandon everything outstanding and issue a fresh token for what comes next.
-    pub fn cancel_in_flight(&self) {
+    fn cancel_in_flight(&self) {
         let mut guard = match self.token.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),

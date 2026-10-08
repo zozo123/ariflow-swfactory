@@ -29,14 +29,14 @@ pub const CANONICAL_ORDER: &[&str] = &[
 /// Gates exist to catch a wrong *direction* early, while a course correction is cheap. A gate
 /// after `build_and_test` would ask a human to approve work that has already been done, which is
 /// theatre, so the schema does not allow one.
-pub const GATE_STAGES: &[&str] = &["intent", "plan"];
+const GATE_STAGES: &[&str] = &["intent", "plan"];
 
 /// The agent-policy stage names — deliberately not [`CANONICAL_ORDER`].
 ///
 /// `build` and `fix` are two policies of the one `build_and_test` stage, and `diagnose` has no
 /// stage of its own at all. Conflating the two vocabularies is the mistake this constant exists
 /// to make impossible.
-pub const POLICY_STAGES: &[&str] = &["spec", "plan", "build", "fix", "review", "diagnose"];
+const POLICY_STAGES: &[&str] = &["spec", "plan", "build", "fix", "review", "diagnose"];
 
 /// The policy stages whose agents may write files. Everything else is read-only, and a blueprint
 /// may not promote it.
@@ -81,7 +81,7 @@ const GATE_ARTIFACTS: &[(&str, &[&str])] = &[
 pub const DEFAULT_BLUEPRINT: &str = "factory";
 
 /// The name a blueprint (and therefore a DAG, and therefore an islo sandbox) may carry.
-pub const NAME_PATTERN: &str = "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$";
+const NAME_PATTERN: &str = "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$";
 
 /// Why a blueprint was refused.
 ///
@@ -178,7 +178,7 @@ fn default_base_branch() -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GateSpec {
-    /// The stage this gate follows. Must be in `stages.order` and in [`GATE_STAGES`].
+    /// The stage this gate follows. Must be in `stages.order` and in `GATE_STAGES`.
     pub after: String,
     /// The artifact the approver is shown.
     pub artifact: String,
@@ -191,7 +191,7 @@ pub struct GateSpec {
     /// True for an unattended line: the gate answers itself, recorded as actor `auto`.
     ///
     /// Superseded by [`GateSpec::mode`], kept so a blueprint written before the rename still
-    /// parses. Read [`GateSpec::requires_human`] rather than either field directly.
+    /// parses. `mode` wins when both are present.
     #[serde(default)]
     pub auto: bool,
     /// Who is allowed to answer: `"human"`, `"auto"`, or a backend-checked `"policy"`.
@@ -211,7 +211,8 @@ impl GateSpec {
     /// `mode` wins when present; `auto` is the legacy spelling. A blueprint that sets both to
     /// contradictory values is rejected at load time on the Python side, so agreeing with `mode`
     /// here cannot disagree with what the runtime does.
-    pub fn requires_human(&self) -> bool {
+    #[cfg(test)]
+    fn requires_human(&self) -> bool {
         match self.mode.as_deref() {
             Some("auto" | "policy") => false,
             Some(_) => true,
@@ -379,7 +380,7 @@ pub struct Blueprint {
     /// The per-job budget.
     #[serde(default)]
     pub limits: Limits,
-    /// Additive agent-policy relaxations, keyed by [`POLICY_STAGES`] name.
+    /// Additive agent-policy relaxations, keyed by `POLICY_STAGES` name.
     #[serde(default)]
     pub policy: BTreeMap<String, PolicyOverride>,
     /// The review policy.
@@ -419,7 +420,8 @@ impl Blueprint {
     }
 
     /// The gate that follows one stage, if any.
-    pub fn gate_after(&self, stage: &str) -> Option<&GateSpec> {
+    #[cfg(test)]
+    fn gate_after(&self, stage: &str) -> Option<&GateSpec> {
         self.gates.iter().find(|g| g.after == stage)
     }
 
@@ -987,7 +989,7 @@ pub fn normalize_relative_path(
 }
 
 /// Normalise a path inside a sandbox, which must be absolute and must not be the root itself.
-pub fn normalize_absolute_posix_path(value: &str, field: &str) -> Result<String, String> {
+fn normalize_absolute_posix_path(value: &str, field: &str) -> Result<String, String> {
     if has_control(value) {
         return Err(format!("{field} contains control characters"));
     }

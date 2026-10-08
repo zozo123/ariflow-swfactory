@@ -27,7 +27,7 @@ use swf_adapters::gh::GhCli;
 use swf_adapters::islo::IsloCli;
 use swf_adapters::metrics_store::FsMetrics;
 use swf_adapters::traits::{
-    CommandRunner, Deliveries, MetricsStore, Runs, Sandboxes, SystemRunner, DEFAULT_HTTP_TIMEOUT,
+    CommandRunner, Deliveries, MetricsStore, Runs, Sandboxes, SystemRunner,
 };
 use swf_domain::blueprint::BlueprintError;
 use swf_domain::doctor::Check;
@@ -309,12 +309,6 @@ impl OpsBuilder {
         self
     }
 
-    /// Override where the local stack lives.
-    pub fn stack_opts(mut self, opts: StackOpts) -> Self {
-        self.ops.stack = opts;
-        self
-    }
-
     /// Finish.
     pub fn build(self) -> Ops {
         self.ops
@@ -343,16 +337,12 @@ impl Ops {
         }
     }
 
-    /// Build the adapters a context implies and connect them.
+    /// Build the adapters a context implies and connect them, with the HTTP deadline `--timeout`
+    /// sets. It never bounds a subprocess (§C.6).
     ///
     /// The credential is read here, once, and a missing environment variable fails now rather than
     /// on the third pane's refresh. `repo` and `owner` are optional and their absence is silent:
     /// there is nothing wrong with a context that only watches Airflow.
-    pub fn connect(context: Context) -> Result<Self> {
-        Self::connect_with_timeout(context, DEFAULT_HTTP_TIMEOUT)
-    }
-
-    /// The same, with the HTTP deadline `--timeout` sets. It never bounds a subprocess (§C.6).
     pub fn connect_with_timeout(mut context: Context, timeout: Duration) -> Result<Self> {
         if BackendContext::endpoint(&context).is_some() {
             let backend_context = BackendContext::connect(&context, timeout, "factory operations")?;
@@ -389,11 +379,6 @@ impl Ops {
         &self.context
     }
 
-    /// The collection policy in force.
-    pub fn collect_opts(&self) -> &CollectOpts {
-        &self.collect
-    }
-
     /// Airflow, or an error naming the setting that would provide it.
     pub fn runs(&self) -> Result<&dyn Runs> {
         self.runs
@@ -402,7 +387,7 @@ impl Ops {
     }
 
     /// The same adapter, shareable — what a bulk answer hands to each of its tasks.
-    pub fn runs_shared(&self) -> Result<Arc<dyn Runs>> {
+    fn runs_shared(&self) -> Result<Arc<dyn Runs>> {
         self.runs
             .clone()
             .ok_or_else(|| OpsError::operational("no Airflow is configured for this context"))
@@ -752,11 +737,6 @@ impl Ops {
         }
     }
 
-    /// The job rows of one run.
-    pub async fn job_rows(&self, run: &RunRef, cancel: &CancellationToken) -> Result<Vec<JobRow>> {
-        Ok(self.runs()?.job_rows(run, &[], cancel).await?.rows)
-    }
-
     /// Mark one Airflow run failed.
     ///
     /// Named for what Airflow actually does. Nothing is killed, no sandbox is cleaned up, and any
@@ -778,24 +758,6 @@ impl Ops {
     /// The aggregate over the committed history.
     pub async fn metrics_summary(&self, cancel: &CancellationToken) -> Result<MetricsSummary> {
         Ok(self.metrics_store()?.summary(cancel).await?)
-    }
-
-    /// One gate by identity, out of the pending list.
-    pub async fn gate(&self, id: &GateId, cancel: &CancellationToken) -> Result<Gate> {
-        let listing = self.gates(cancel).await?;
-        listing
-            .gates
-            .into_iter()
-            .find(|gate| gate.id() == *id)
-            .ok_or_else(|| {
-                OpsError::not_found(format!("no gate {id} is waiting for an answer"))
-                    .with_hint("swf gates list")
-            })
-    }
-
-    /// Where the local stack is expected to live.
-    pub fn stack_opts(&self) -> &StackOpts {
-        &self.stack
     }
 }
 
@@ -890,9 +852,9 @@ mod tests {
         ctx.dag_tag = "custom".into();
         let ops = Ops::builder(ctx).build();
         assert_eq!(
-            ops.collect_opts().dag_ids.as_deref(),
+            ops.collect.dag_ids.as_deref(),
             Some(&["factory".to_string(), "hotfix".to_string()][..])
         );
-        assert_eq!(ops.collect_opts().dag_tag, "custom");
+        assert_eq!(ops.collect.dag_tag, "custom");
     }
 }

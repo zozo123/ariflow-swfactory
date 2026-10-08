@@ -30,7 +30,7 @@ pub const HEALTH_COMPONENTS: &[&str] = &["metadatabase", "scheduler", "dag_proce
 
 /// The components whose failure means the API cannot be trusted at all. `dag_processor` and
 /// `triggerer` may legitimately be `null` on a server that has never run one.
-pub const REQUIRED_COMPONENTS: &[&str] = &["metadatabase", "scheduler"];
+const REQUIRED_COMPONENTS: &[&str] = &["metadatabase", "scheduler"];
 
 /// Everything this client can check for itself, in the order an operator would fix them.
 ///

@@ -644,7 +644,7 @@ pub fn verb(decision: swf_app::gates::Decision) -> &'static str {
 }
 
 /// A state word, coloured only to repeat what it already says.
-pub fn state_word(state: &str, term: &Term) -> String {
+fn state_word(state: &str, term: &Term) -> String {
     match state {
         "success" => term.good(state),
         _ if states::is_failed(state) => term.bad(state),
@@ -654,7 +654,7 @@ pub fn state_word(state: &str, term: &Term) -> String {
 }
 
 /// Readiness, as a word first and a colour second (`00-architecture.md` §7).
-pub fn ready_word(ready: bool, term: &Term) -> String {
+fn ready_word(ready: bool, term: &Term) -> String {
     if ready {
         term.good("ready")
     } else {
@@ -663,7 +663,7 @@ pub fn ready_word(ready: bool, term: &Term) -> String {
 }
 
 /// A boolean claim, as a word.
-pub fn yes_no(value: bool, term: &Term) -> String {
+fn yes_no(value: bool, term: &Term) -> String {
     if value {
         term.good("yes")
     } else {

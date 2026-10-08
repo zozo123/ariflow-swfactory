@@ -11,7 +11,7 @@
 //! never be able to make `swf metrics` refuse to answer at all.
 //!
 //! The discovery order is not a detail either. `load_all` sorts candidate *paths*
-//! lexicographically, applies the [`MAX_RUNS`] bound to that sorted list — so a malformed file
+//! lexicographically, applies the `MAX_RUNS` bound to that sorted list — so a malformed file
 //! still consumes a slot — and then orders the accepted runs by `(finished, issue_id)`. Any other
 //! order produces a different `p50_cycle_s` on the same checkout, and the aggregate is supposed to
 //! be reproducible.
@@ -28,60 +28,36 @@ use crate::error::{AdapterError, Result};
 use crate::traits::{first_timestamp, MetricsStore, FINISHED_KEYS};
 
 /// How many candidate files one scan will look at. `metrics._MAX_RUNS`.
-pub const MAX_RUNS: usize = 10_000;
+const MAX_RUNS: usize = 10_000;
 
 /// The directory a run's artifacts are committed under, relative to a target checkout.
-pub const ARTIFACT_DIR: &str = "docs/factory";
+const ARTIFACT_DIR: &str = "docs/factory";
 
 /// The file name every run writes.
-pub const METRICS_FILE: &str = "metrics.json";
+const METRICS_FILE: &str = "metrics.json";
 
 /// How deep the `**` of `**/docs/factory/*/metrics.json` will descend.
 ///
 /// Python's `Path.glob` is unbounded; a bound is added here because `swf metrics --root /` is a
 /// typo an operator can make, and walking a whole filesystem is not a useful answer to it.
-pub const MAX_DEPTH: usize = 24;
+const MAX_DEPTH: usize = 24;
 
 /// The committed metrics tree of one checkout.
 #[derive(Debug, Clone)]
 pub struct FsMetrics {
     root: PathBuf,
-    include_scripted: bool,
-    newest_first: bool,
 }
 
 impl FsMetrics {
     /// Read every run under `root`, scripted replays included, oldest first — what `swf metrics`
     /// aggregates.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self {
-            root: root.into(),
-            include_scripted: true,
-            newest_first: false,
-        }
-    }
-
-    /// Drop `agent == "scripted"` records: demo replays are real files but not real work, and a
-    /// fleet report that counts them flatters itself.
-    pub fn without_scripted(mut self) -> Self {
-        self.include_scripted = false;
-        self
-    }
-
-    /// Order newest first, for a "what happened lately" view rather than an aggregate.
-    pub fn newest_first(mut self) -> Self {
-        self.newest_first = true;
-        self
-    }
-
-    /// The checkout being read.
-    pub fn root(&self) -> &Path {
-        &self.root
+        Self { root: root.into() }
     }
 
     /// Every `metrics.json` under the root, in `**/docs/factory/*/metrics.json` order.
     ///
-    /// Returned sorted by full path string, because that is the list [`MAX_RUNS`] truncates and a
+    /// Returned sorted by full path string, because that is the list `MAX_RUNS` truncates and a
     /// different sort would truncate a different set of runs.
     pub fn discover(&self) -> Vec<PathBuf> {
         let mut found = Vec::new();
@@ -106,13 +82,6 @@ impl FsMetrics {
             if !data.is_object() || data.get("run_id").is_none() {
                 continue;
             }
-            let agent = data
-                .get("agent")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if !self.include_scripted && agent == "scripted" {
-                continue;
-            }
             let issue_id = path
                 .parent()
                 .and_then(|p| p.file_name())
@@ -133,9 +102,6 @@ impl FsMetrics {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.1.cmp(&b.1))
         });
-        if self.newest_first {
-            rows.reverse();
-        }
         rows.into_iter().map(|(_, _, run)| run).collect()
     }
 }
@@ -275,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn ordering_is_by_finished_then_issue_id_and_reverses_wholesale() {
+    fn ordering_is_by_finished_then_issue_id() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path();
         // Same instant, different issue directories: the directory name is the tie-break.
@@ -301,18 +267,6 @@ mod tests {
             .map(|r| r.run_id)
             .collect();
         assert_eq!(oldest, vec!["first", "second", "third"]);
-
-        let newest: Vec<String> = FsMetrics::new(root)
-            .newest_first()
-            .load()
-            .into_iter()
-            .map(|r| r.run_id)
-            .collect();
-        assert_eq!(
-            newest,
-            vec!["third", "second", "first"],
-            "both key parts reverse"
-        );
     }
 
     #[test]
@@ -360,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn scripted_replays_can_be_excluded_from_a_fleet_report() {
+    fn scripted_replays_are_read_like_any_other_run() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path();
         write(
@@ -375,9 +329,6 @@ mod tests {
         );
 
         assert_eq!(FsMetrics::new(root).load().len(), 2);
-        let real = FsMetrics::new(root).without_scripted().load();
-        assert_eq!(real.len(), 1);
-        assert_eq!(real[0].run_id, "real");
     }
 
     #[test]

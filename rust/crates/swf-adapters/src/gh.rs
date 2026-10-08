@@ -28,14 +28,14 @@ use crate::traits::{CommandRunner, Deliveries, PrHead, SUBPROCESS_TIMEOUT};
 /// The fields `gh pr list` must return for the herd table. Order is part of the contract only in
 /// the sense that the tests pin it — `gh` itself does not care — but a *missing* field silently
 /// becomes an empty column, so the list is written once, here.
-pub const PR_FIELDS: &str = "number,title,url,labels,state,headRefName,statusCheckRollup";
+const PR_FIELDS: &str = "number,title,url,labels,state,headRefName,statusCheckRollup";
 
 /// The fields `gh issue list` must return.
-pub const ISSUE_FIELDS: &str = "number,title,url,labels";
+const ISSUE_FIELDS: &str = "number,title,url,labels";
 
 /// The fields the delivery verifier needs about the PR on one branch
 /// (`06-delivery-evidence.md` §4.3, check `pr.exists`).
-pub const PR_HEAD_FIELDS: &str = "url,state,title,labels,headRefOid,baseRefName";
+const PR_HEAD_FIELDS: &str = "url,state,title,labels,headRefOid,baseRefName";
 
 /// GitHub as seen through `gh`.
 pub struct GhCli {
@@ -52,13 +52,8 @@ impl GhCli {
         }
     }
 
-    /// The repository every command is scoped to.
-    pub fn repo(&self) -> &str {
-        &self.repo
-    }
-
     /// `gh pr list` for one label — the argv, built so a test can read it.
-    pub fn prs_argv(&self, label: &str, limit: u32) -> Vec<String> {
+    fn prs_argv(&self, label: &str, limit: u32) -> Vec<String> {
         argv([
             "gh",
             "pr",
@@ -77,7 +72,7 @@ impl GhCli {
     }
 
     /// `gh issue list` for one label.
-    pub fn issues_argv(&self, label: &str, limit: u32) -> Vec<String> {
+    fn issues_argv(&self, label: &str, limit: u32) -> Vec<String> {
         argv([
             "gh",
             "issue",
@@ -94,7 +89,7 @@ impl GhCli {
     }
 
     /// `gh pr list --head` — the one PR whose head is this branch, if any.
-    pub fn pr_for_branch_argv(&self, branch: &str) -> Vec<String> {
+    fn pr_for_branch_argv(&self, branch: &str) -> Vec<String> {
         argv([
             "gh",
             "pr",
@@ -113,7 +108,7 @@ impl GhCli {
     }
 
     /// `gh pr view --json statusCheckRollup` for one PR.
-    pub fn checks_argv(&self, number: i64) -> Vec<String> {
+    fn checks_argv(&self, number: i64) -> Vec<String> {
         argv([
             "gh",
             "pr",
@@ -127,7 +122,7 @@ impl GhCli {
     }
 
     /// `gh pr view --web` — hand the PR to the operator's browser.
-    pub fn pr_view_argv(&self, number: i64) -> Vec<String> {
+    fn pr_view_argv(&self, number: i64) -> Vec<String> {
         argv([
             "gh",
             "pr",

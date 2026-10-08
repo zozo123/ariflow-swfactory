@@ -11,29 +11,29 @@ use ratatui::style::{Color, Modifier, Style};
 
 /// The cyanotype drafting sheet `herd` used (`02-herd-tui.md` §9.2). An operator moving between
 /// the two tools should recognise the paper.
-pub const PAPER: Color = Color::Rgb(0x0d, 0x27, 0x40);
+const PAPER: Color = Color::Rgb(0x0d, 0x27, 0x40);
 /// Panel backgrounds: header, tables, the log pane.
-pub const GRAPHITE: Color = Color::Rgb(0x08, 0x19, 0x2b);
+const GRAPHITE: Color = Color::Rgb(0x08, 0x19, 0x2b);
 /// Foreground for anything that must be read first.
 pub const LINE: Color = Color::Rgb(0xee, 0xf4, 0xf8);
 /// Foreground for labels and chrome that must be read second.
-pub const LINE_MUTE: Color = Color::Rgb(0x8a, 0xa5, 0xbb);
+const LINE_MUTE: Color = Color::Rgb(0x8a, 0xa5, 0xbb);
 /// Ordinary body text: table cells, detail values.
-pub const BODY: Color = Color::Rgb(0xa9, 0xc1, 0xd4);
+const BODY: Color = Color::Rgb(0xa9, 0xc1, 0xd4);
 /// Hairline rules. The layout's rhythm comes from these, not from zebra stripes.
-pub const RULE: Color = Color::Rgb(0x22, 0x40, 0x5c);
+const RULE: Color = Color::Rgb(0x22, 0x40, 0x5c);
 /// The selected row.
 pub const CURSOR: Color = Color::Rgb(0x16, 0x34, 0x4f);
 /// Something is wrong and a human is the fix.
-pub const STAMP: Color = Color::Rgb(0xeb, 0x6a, 0x52);
+const STAMP: Color = Color::Rgb(0xeb, 0x6a, 0x52);
 /// Something passed.
 pub const OK: Color = Color::Rgb(0x74, 0xc9, 0xa1);
 /// Something is waiting, degraded or merely old.
-pub const WARN: Color = Color::Rgb(0xe3, 0xb3, 0x41);
+const WARN: Color = Color::Rgb(0xe3, 0xb3, 0x41);
 
 /// The glyph a state that no `TASK_ORDER` word covers gets, so an unknown state is still a shape
 /// and not a blank.
-pub const UNKNOWN_GLYPH: &str = "?";
+const UNKNOWN_GLYPH: &str = "?";
 
 /// One row of the state vocabulary: the Airflow word, the glyph that stands for it, and how it
 /// should feel.
@@ -80,7 +80,7 @@ pub enum Tone {
 }
 
 /// The glyph that stands for an Airflow state, distinct per state.
-pub fn state_glyph(state: &str) -> &'static str {
+fn state_glyph(state: &str) -> &'static str {
     STATES
         .iter()
         .find(|(word, _, _)| *word == state)

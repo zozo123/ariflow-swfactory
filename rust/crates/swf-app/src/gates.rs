@@ -102,7 +102,7 @@ pub fn settle_window() -> Duration {
 }
 
 /// The window [`SETTLE_ENV`] asks for, if it asks for one this code will honour.
-pub fn settle_from_env() -> Option<Duration> {
+fn settle_from_env() -> Option<Duration> {
     parse_settle(&std::env::var(SETTLE_ENV).ok()?)
 }
 
@@ -123,7 +123,7 @@ fn parse_settle(raw: &str) -> Option<Duration> {
 ///
 /// A count on its own is not the rule — [`CONFIRM_INTERVAL`] is — but two reads remain the minimum
 /// because the write has to be preceded by a read that was not the one that selected the gate.
-pub const REQUIRED_SIGHTINGS: u32 = 2;
+const REQUIRED_SIGHTINGS: u32 = 2;
 
 /// Approve or reject. There is no third answer, and no free-text option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,25 +261,6 @@ impl Sightings {
         }
     }
 
-    /// How many times this gate has been observed parked.
-    pub fn count(&self, id: &GateId) -> u32 {
-        self.get(id).map(|seen| seen.count).unwrap_or(0)
-    }
-
-    /// How long this gate has been under observation, or `None` if it has never been seen parked.
-    pub fn settled(&self, id: &GateId) -> Option<Duration> {
-        self.get(id)
-            .map(|seen| Instant::now().saturating_duration_since(seen.first))
-    }
-
-    /// This gate's record, if it has one.
-    fn get(&self, id: &GateId) -> Option<Sighting> {
-        match self.seen.lock() {
-            Ok(guard) => guard.get(&id.to_string()).copied(),
-            Err(poisoned) => poisoned.into_inner().get(&id.to_string()).copied(),
-        }
-    }
-
     /// Forget a gate, once it has been answered or has disappeared.
     pub fn forget(&self, id: &GateId) {
         let mut guard = match self.seen.lock() {
@@ -294,7 +275,7 @@ impl Sightings {
 ///
 /// The join is on `(task_id, map_index)` and not on `task_id` alone: a fanned-out run has one
 /// `job.approve_plan` per job, and job 3 being parked says nothing about job 5.
-pub fn is_ready(gate: &Gate, tasks: &[TaskState]) -> bool {
+fn is_ready(gate: &Gate, tasks: &[TaskState]) -> bool {
     tasks.iter().any(|task| {
         task.task_id == gate.task_id
             && task.map_index == gate.map_index
@@ -309,13 +290,6 @@ fn task_state_of(gate: &Gate, tasks: &[TaskState]) -> String {
         .find(|task| task.task_id == gate.task_id && task.map_index == gate.map_index)
         .map(|task| task.state_or_none().to_string())
         .unwrap_or_else(|| "unknown".to_string())
-}
-
-/// Every pending gate, with readiness established against the task states.
-pub async fn list(runs: &dyn Runs, cancel: &CancellationToken) -> Result<GateList> {
-    Ok(select(runs, &GateFilter::default(), cancel)
-        .await?
-        .into_list())
 }
 
 /// Establish readiness for the gates of a snapshot that has already been collected.
@@ -672,13 +646,13 @@ impl GateFilter {
     }
 
     /// True when this DAG id survives `--dag` and `--blueprint`.
-    pub fn matches_dag(&self, dag_id: &str) -> bool {
+    fn matches_dag(&self, dag_id: &str) -> bool {
         let wanted = [self.dag.as_deref(), self.blueprint.as_deref()];
         wanted.iter().flatten().all(|want| want.trim() == dag_id)
     }
 
     /// True when this task id is the gate `--gate` named.
-    pub fn matches_gate(&self, task_id: &str) -> bool {
+    fn matches_gate(&self, task_id: &str) -> bool {
         match &self.gate {
             None => true,
             Some(want) => stage_of(want).eq_ignore_ascii_case(stage_of(task_id)),
@@ -689,7 +663,7 @@ impl GateFilter {
     ///
     /// An issue that could not be established does **not** match: the filter selects a set that is
     /// about to be answered, and "we could not tell" has to fall outside it.
-    pub fn matches_issue(&self, issue: Option<&str>) -> bool {
+    fn matches_issue(&self, issue: Option<&str>) -> bool {
         match &self.issue {
             None => true,
             Some(want) => issue.is_some_and(|have| have.trim().eq_ignore_ascii_case(want.trim())),
@@ -894,7 +868,7 @@ impl BatchOutcome {
     }
 
     /// True only for the outcome that means something actually went wrong.
-    pub fn is_failure(self) -> bool {
+    fn is_failure(self) -> bool {
         matches!(self, Self::Failed)
     }
 }
@@ -1340,14 +1314,12 @@ mod tests {
     fn sightings_count_per_gate_and_are_forgotten_once_answered() {
         let seen = Sightings::default();
         let id = gate().id();
-        assert_eq!(seen.count(&id), 0);
-        assert!(seen.settled(&id).is_none(), "a gate nobody has seen");
         assert_eq!(seen.record(&id).count, 1);
         assert_eq!(seen.record(&id).count, 2);
-        assert_eq!(seen.count(&id), 2);
         seen.forget(&id);
-        assert_eq!(seen.count(&id), 0);
-        assert!(seen.settled(&id).is_none(), "and its clock goes with it");
+        let fresh = seen.record(&id);
+        assert_eq!(fresh.count, 1, "a forgotten gate starts counting again");
+        assert_eq!(fresh.settled, Duration::ZERO, "and its clock goes with it");
     }
 
     #[test]

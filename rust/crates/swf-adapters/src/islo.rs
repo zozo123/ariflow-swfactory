@@ -29,7 +29,7 @@ use crate::error::{AdapterError, Result};
 use crate::traits::{first_timestamp, CommandRunner, Sandboxes, CREATED_KEYS, SUBPROCESS_TIMEOUT};
 
 /// The status `islo` reports for a sandbox that is already gone.
-pub const DELETED_STATUS: &str = "deleted";
+const DELETED_STATUS: &str = "deleted";
 
 /// Sandboxes as seen through `islo`.
 pub struct IsloCli {
@@ -46,11 +46,6 @@ impl IsloCli {
         }
     }
 
-    /// The configured owner, already trimmed.
-    pub fn owner(&self) -> &str {
-        &self.owner
-    }
-
     /// `islo ls --output json` — the listing argv. Never `--all`: see the module docs.
     pub fn list_argv(&self) -> Vec<String> {
         ["islo", "ls", "--output", "json"]
@@ -60,7 +55,7 @@ impl IsloCli {
     }
 
     /// `islo rm <name> --output plain` — only ever reached past all three guards.
-    pub fn remove_argv(&self, name: &str) -> Vec<String> {
+    fn remove_argv(&self, name: &str) -> Vec<String> {
         vec![
             "islo".to_string(),
             "rm".to_string(),
@@ -124,7 +119,7 @@ fn status(item: &Value) -> String {
 ///
 /// A blank owner yields nothing at all rather than everything — the failure mode of the opposite
 /// choice is a list of other people's sandboxes with a delete key next to each one.
-pub fn owned_sandboxes(listing: &str, owner: &str) -> Vec<SandboxRef> {
+fn owned_sandboxes(listing: &str, owner: &str) -> Vec<SandboxRef> {
     let owner = owner.trim().to_lowercase();
     if owner.is_empty() {
         return Vec::new();
