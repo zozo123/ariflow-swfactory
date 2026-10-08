@@ -26,19 +26,19 @@ use crate::model::{source_status, Model, Row as ModelRow, RowKind, View};
 use crate::theme::{state_label, Theme, Tone};
 
 /// The separator `herd` used between header parts: two spaces, a middle dot, two spaces.
-pub const SEP: &str = "  ·  ";
+const SEP: &str = "  ·  ";
 
 /// How tall the activity pane is when there is room for it.
-pub const LOG_ROWS: u16 = 9;
+const LOG_ROWS: u16 = 9;
 
 /// How tall it shrinks to on a short terminal, before it is worth having at all.
-pub const LOG_ROWS_SHORT: u16 = 6;
+const LOG_ROWS_SHORT: u16 = 6;
 
 /// Width of the left navigation.
-pub const NAV_COLS: u16 = 20;
+const NAV_COLS: u16 = 20;
 
 /// Width of the right detail pane.
-pub const DETAIL_COLS: u16 = 38;
+const DETAIL_COLS: u16 = 38;
 
 /// Draw the whole screen.
 pub fn render(frame: &mut Frame, model: &Model, theme: Theme) {

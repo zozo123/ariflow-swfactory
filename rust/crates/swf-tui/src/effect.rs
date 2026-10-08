@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use swf_app::delivery::VerifyOpts;
 use swf_app::gates::{AnswerOpts, Decision};
 use swf_app::logs::LogOpts;
-use swf_app::ops::{Ops, OpsError};
+use swf_app::ops::{ErrorKind, Ops, OpsError};
 use swf_app::submit::SubmitRequest;
 use swf_domain::ids::{DeliveryId, GateId, JobId, RunRef};
 use tokio::sync::mpsc::Sender;
@@ -125,7 +125,7 @@ impl Runtime {
     }
 
     /// Abandon everything outstanding and issue a fresh token for what comes next.
-    pub fn cancel_in_flight(&self) {
+    fn cancel_in_flight(&self) {
         let mut guard = match self.token.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -299,8 +299,8 @@ fn classify(label: String, err: OpsError) -> Msg {
         Some(hint) => format!("{} (fix: {hint})", err.message),
         None => err.message.clone(),
     };
-    match err.exit_code() {
-        1 | 6 => Msg::Refused { label, message },
+    match err.kind {
+        ErrorKind::Operational | ErrorKind::Conflict => Msg::Refused { label, message },
         _ => Msg::Failed { label, message },
     }
 }
@@ -331,7 +331,6 @@ fn open_url(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swf_app::ops::ErrorKind;
 
     #[test]
     fn a_cancelled_read_is_never_shown_to_the_operator_as_a_failure() {

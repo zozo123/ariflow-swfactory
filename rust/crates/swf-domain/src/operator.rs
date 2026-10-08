@@ -1,4 +1,4 @@
-//! Read-only operator contracts shared by CLI and TUI.
+//! Read-only operator contracts the factory backend serves.
 //!
 //! The Python backend owns persistence and mutation authority. These types mirror its versioned
 //! JSON so Rust can render queue pressure, repair debt, fleet state and compatibility without
@@ -112,22 +112,4 @@ pub struct BackendCapabilities {
     pub serving_generation: Option<String>,
     #[serde(default)]
     pub draining_generation: Option<String>,
-}
-
-impl BackendCapabilities {
-    pub fn supports(&self, feature: &str) -> bool {
-        self.features.iter().any(|candidate| candidate == feature)
-    }
-
-    pub fn require_mutation(&self, feature: &str) -> Result<(), String> {
-        if !self.mutation_ready {
-            return Err("backend is not mutation-ready".to_string());
-        }
-        if !self.supports(feature) {
-            return Err(format!(
-                "backend does not advertise required feature {feature}"
-            ));
-        }
-        Ok(())
-    }
 }

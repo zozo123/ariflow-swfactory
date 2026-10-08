@@ -17,7 +17,7 @@
 //! This module never touches `deploy/islo/*`. That is a production deployment with its own script,
 //! its own credentials and its own blast radius.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -30,13 +30,13 @@ use crate::doctor::HEALTH_COMPONENTS;
 use crate::ops::{OpsError, Result};
 
 /// The compose file, relative to the repo root.
-pub const COMPOSE_FILE: &str = "deploy/docker/compose.yml";
+const COMPOSE_FILE: &str = "deploy/docker/compose.yml";
 
 /// The sandbox image's Dockerfile, relative to the repo root.
-pub const SANDBOX_DOCKERFILE: &str = "deploy/docker/sandbox.Dockerfile";
+const SANDBOX_DOCKERFILE: &str = "deploy/docker/sandbox.Dockerfile";
 
 /// The tag the sandbox image is built under.
-pub const SANDBOX_IMAGE: &str = "swfactory-sandbox:local";
+const SANDBOX_IMAGE: &str = "swfactory-sandbox:local";
 
 /// The services `compose.yml` runs by default. `sandbox-image` is a build target (profile
 /// `build`) and never runs. `backend` is here because it is no longer profile-gated: it is the
@@ -48,13 +48,13 @@ pub const SANDBOX_IMAGE: &str = "swfactory-sandbox:local";
 pub const SERVICES: &[&str] = &["airflow", "backend", "webhook"];
 
 /// How long a cold `up` may take before it is a hang: the first run does `uv sync` into a volume.
-pub const UP_TIMEOUT: Duration = Duration::from_secs(900);
+const UP_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// How long to keep polling for health after `up` returns.
-pub const READY_TIMEOUT: Duration = Duration::from_secs(360);
+const READY_TIMEOUT: Duration = Duration::from_secs(360);
 
 /// How often to poll while waiting for health.
-pub const READY_POLL: Duration = Duration::from_secs(5);
+const READY_POLL: Duration = Duration::from_secs(5);
 
 /// What to do to the stack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,18 +105,6 @@ impl Default for StackOpts {
             repo_root: root,
             ready_timeout: READY_TIMEOUT,
             poll: READY_POLL,
-        }
-    }
-}
-
-impl StackOpts {
-    /// Point at one checkout.
-    pub fn at(root: impl Into<PathBuf>) -> Self {
-        let root = root.into();
-        Self {
-            compose_file: root.join(COMPOSE_FILE),
-            repo_root: root,
-            ..Self::default()
         }
     }
 }
@@ -234,7 +222,7 @@ pub async fn run(
 ///
 /// `env` rather than a shell: the repo root is a path, and a path is one argument no matter what
 /// characters it contains.
-pub fn compose_argv(opts: &StackOpts, args: &[&str]) -> Vec<String> {
+fn compose_argv(opts: &StackOpts, args: &[&str]) -> Vec<String> {
     let root = opts.repo_root.display().to_string();
     let mut argv = vec![
         "env".to_string(),
@@ -251,7 +239,7 @@ pub fn compose_argv(opts: &StackOpts, args: &[&str]) -> Vec<String> {
 }
 
 /// The sandbox image build, which is a plain `docker build` and not a compose service.
-pub fn build_argv(opts: &StackOpts) -> Vec<String> {
+fn build_argv(opts: &StackOpts) -> Vec<String> {
     vec![
         "docker".to_string(),
         "build".to_string(),
@@ -415,7 +403,7 @@ async fn wait_healthy(runs: Option<&dyn Runs>, opts: &StackOpts, cancel: &Cancel
 
 /// One service, as `docker compose ps` describes it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ComposeService {
+struct ComposeService {
     /// The container name.
     pub name: String,
     /// The compose service name.
@@ -432,7 +420,7 @@ pub struct ComposeService {
 ///
 /// Modern compose emits one JSON object per line; older versions emit a single array. Guessing
 /// wrong means reporting an empty stack while everything is running, so both are read.
-pub fn parse_ps(text: &str) -> Vec<ComposeService> {
+fn parse_ps(text: &str) -> Vec<ComposeService> {
     let mut out = Vec::new();
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -475,7 +463,7 @@ fn service_from(value: &Value) -> ComposeService {
 }
 
 /// Walk up from the working directory looking for the compose file.
-pub fn find_repo_root() -> Option<PathBuf> {
+fn find_repo_root() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
         if dir.join(COMPOSE_FILE).is_file() {
@@ -487,18 +475,17 @@ pub fn find_repo_root() -> Option<PathBuf> {
     }
 }
 
-/// True when this path looks like a factory checkout — used by callers that want to explain why
-/// `swf stack` has nothing to drive.
-pub fn is_repo_root(path: &Path) -> bool {
-    path.join(COMPOSE_FILE).is_file()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn opts() -> StackOpts {
-        StackOpts::at("/src/my repo")
+        let root = PathBuf::from("/src/my repo");
+        StackOpts {
+            compose_file: root.join(COMPOSE_FILE),
+            repo_root: root,
+            ..StackOpts::default()
+        }
     }
 
     #[test]

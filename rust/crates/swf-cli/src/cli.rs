@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 /// The exit-code table, printed under `swf --help` because scripts branch on it.
-pub const EXIT_CODES: &str = "\
+const EXIT_CODES: &str = "\
 Exit codes:
   0  success
   1  operational failure (a check is red, a gate answer was refused, verification failed)

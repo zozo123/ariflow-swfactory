@@ -89,38 +89,70 @@ pub enum AdapterError {
     Cancelled,
 }
 
+/// The six outcomes the exit-code table names, plus the one that never reaches a process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// A check is red, a gate answer was refused by policy, verification was refuted. Exit 1.
+    Operational,
+    /// The operator asked for something that is not a request. Exit 2.
+    Usage,
+    /// No such run, job, gate, delivery, sandbox or context. Exit 3.
+    NotFound,
+    /// A credential is missing, expired or rejected. Exit 4.
+    Auth,
+    /// Nothing answered: DNS, connect, TLS, a timeout, a missing tool. Exit 5.
+    Unreachable,
+    /// Someone else got there first, or the evidence moved. Exit 6.
+    Conflict,
+    /// The caller stopped wanting the answer. Never rendered as a failure.
+    Cancelled,
+}
+
+impl ErrorKind {
+    /// The `kind` string of the `--json` error envelope.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Operational | Self::Cancelled => "operational",
+            Self::Usage => "usage",
+            Self::NotFound => "not_found",
+            Self::Auth => "auth",
+            Self::Unreachable => "unreachable",
+            Self::Conflict => "conflict",
+        }
+    }
+
+    /// The process exit code.
+    pub fn exit_code(self) -> i32 {
+        match self {
+            Self::Operational | Self::Cancelled => 1,
+            Self::Usage => 2,
+            Self::NotFound => 3,
+            Self::Auth => 4,
+            Self::Unreachable => 5,
+            Self::Conflict => 6,
+        }
+    }
+}
+
 /// How long an error message may be before it stops being a message and starts being a body dump.
 ///
 /// The Python client truncates service `detail` at 300 characters (`01-domain-control.md` §5) and
 /// these strings end up in `Snapshot.errors`, which is a byte-compatibility surface.
-pub const MAX_DETAIL_CHARS: usize = 300;
+const MAX_DETAIL_CHARS: usize = 300;
 
 impl AdapterError {
-    /// The `kind` string of the `--json` error envelope (`00-architecture.md` §C.2).
+    /// Which row of the exit-code table this error is (`00-architecture.md` §C.2).
     ///
-    /// The CLI renders this verbatim, so it is spelled here once rather than re-derived from a
-    /// match arm in another crate that could drift.
-    pub fn kind(&self) -> &'static str {
+    /// Classified here once, rather than re-derived from a match arm in another crate that could
+    /// drift.
+    pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::Unreachable { .. } | Self::Timeout { .. } => "unreachable",
-            Self::Auth { .. } => "auth",
-            Self::NotFound { .. } => "not_found",
-            Self::Conflict { .. } => "conflict",
-            Self::Status { .. } | Self::Decode { .. } | Self::Cancelled => "operational",
-        }
-    }
-
-    /// The process exit code this error implies.
-    ///
-    /// `Cancelled` answers `1` only because every code has to be *something*; a cancelled request
-    /// is the caller's own doing and must never reach a process boundary.
-    pub fn exit_code(&self) -> i32 {
-        match self {
-            Self::Unreachable { .. } | Self::Timeout { .. } => 5,
-            Self::Auth { .. } => 4,
-            Self::NotFound { .. } => 3,
-            Self::Conflict { .. } => 6,
-            Self::Status { .. } | Self::Decode { .. } | Self::Cancelled => 1,
+            Self::Unreachable { .. } | Self::Timeout { .. } => ErrorKind::Unreachable,
+            Self::Auth { .. } => ErrorKind::Auth,
+            Self::NotFound { .. } => ErrorKind::NotFound,
+            Self::Conflict { .. } => ErrorKind::Conflict,
+            Self::Status { .. } | Self::Decode { .. } => ErrorKind::Operational,
+            Self::Cancelled => ErrorKind::Cancelled,
         }
     }
 
@@ -216,28 +248,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_kind_vocabulary_is_the_exit_table() {
+        let cases = [
+            (ErrorKind::Operational, "operational", 1),
+            (ErrorKind::Usage, "usage", 2),
+            (ErrorKind::NotFound, "not_found", 3),
+            (ErrorKind::Auth, "auth", 4),
+            (ErrorKind::Unreachable, "unreachable", 5),
+            (ErrorKind::Conflict, "conflict", 6),
+        ];
+        for (kind, word, code) in cases {
+            assert_eq!(kind.as_str(), word);
+            assert_eq!(kind.exit_code(), code);
+        }
+        assert_eq!(ErrorKind::Cancelled.exit_code(), 1);
+    }
+
+    #[test]
     fn the_status_map_is_the_one_the_exit_table_promises() {
-        assert_eq!(
-            AdapterError::from_status(401, "GET /dags", "Not authenticated").exit_code(),
-            4
-        );
-        assert_eq!(
-            AdapterError::from_status(401, "x", "Token Expired").kind(),
-            "auth"
-        );
-        assert_eq!(AdapterError::from_status(404, "run", "gone").exit_code(), 3);
-        assert_eq!(
-            AdapterError::from_status(409, "gate", "answered").exit_code(),
-            6
-        );
-        assert_eq!(
-            AdapterError::from_status(422, "trigger", "bad body").exit_code(),
-            1
-        );
-        assert_eq!(
-            AdapterError::from_status(500, "x", "boom").kind(),
-            "operational"
-        );
+        let cases = [
+            (401, "Not authenticated", ErrorKind::Auth),
+            (401, "Token Expired", ErrorKind::Auth),
+            (404, "gone", ErrorKind::NotFound),
+            (409, "answered", ErrorKind::Conflict),
+            (422, "bad body", ErrorKind::Operational),
+            (500, "boom", ErrorKind::Operational),
+        ];
+        for (code, detail, kind) in cases {
+            assert_eq!(AdapterError::from_status(code, "x", detail).kind(), kind);
+        }
     }
 
     #[test]
@@ -253,7 +292,7 @@ mod tests {
             !forbidden.is_auth(),
             "retrying a permission decision is never right"
         );
-        assert_eq!(forbidden.exit_code(), 1);
+        assert_eq!(forbidden.kind(), ErrorKind::Operational);
 
         let respondent = AdapterError::from_status(
             403,
@@ -266,8 +305,7 @@ mod tests {
     #[test]
     fn a_local_refusal_is_operational_and_carries_no_status() {
         let err = AdapterError::refused("'prod-db' was not created by 'me'; refusing");
-        assert_eq!(err.exit_code(), 1);
-        assert_eq!(err.kind(), "operational");
+        assert_eq!(err.kind(), ErrorKind::Operational);
         assert!(matches!(err, AdapterError::Status { code: None, .. }));
     }
 
@@ -293,8 +331,7 @@ mod tests {
             what: "GET /dags".into(),
             after: Duration::from_secs(15),
         };
-        assert_eq!(err.exit_code(), 5);
-        assert_eq!(err.kind(), "unreachable");
+        assert_eq!(err.kind(), ErrorKind::Unreachable);
         assert!(err.to_string().contains("15"));
     }
 }

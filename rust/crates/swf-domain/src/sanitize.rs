@@ -17,13 +17,13 @@
 
 /// How much of a single untrusted line is worth keeping. Longer than any real log line, short
 /// enough that a one-gigabyte "line" cannot be pasted into a render loop.
-pub const MAX_LINE_CHARS: usize = 4096;
+const MAX_LINE_CHARS: usize = 4096;
 
 /// How much of an untrusted block (a gate body, an issue description) is worth keeping.
-pub const MAX_BLOCK_CHARS: usize = 64 * 1024;
+const MAX_BLOCK_CHARS: usize = 64 * 1024;
 
 /// What replaces the tail when a bound is hit. Visible, one character, never mistaken for content.
-pub const TRUNCATION_MARK: char = '\u{2026}';
+const TRUNCATION_MARK: char = '\u{2026}';
 
 /// Make one untrusted line safe to print. Newlines are removed: a "line" that smuggles in a `\n`
 /// is trying to forge a second line of output.
@@ -32,7 +32,7 @@ pub fn sanitize_line(input: &str) -> String {
 }
 
 /// [`sanitize_line`] with an explicit bound, for a caller that knows its column budget.
-pub fn sanitize_line_bounded(input: &str, max_chars: usize) -> String {
+fn sanitize_line_bounded(input: &str, max_chars: usize) -> String {
     scrub(input, false, max_chars)
 }
 
@@ -42,7 +42,7 @@ pub fn sanitize_block(input: &str) -> String {
 }
 
 /// [`sanitize_block`] with an explicit bound.
-pub fn sanitize_block_bounded(input: &str, max_chars: usize) -> String {
+fn sanitize_block_bounded(input: &str, max_chars: usize) -> String {
     scrub(input, true, max_chars)
 }
 

@@ -6,7 +6,7 @@
 //! new Airflow state is a one-line change with a test, not a hunt through five call sites.
 
 /// A DAG run Airflow has not finished with. Anything else is history.
-pub const ACTIVE_RUN_STATES: &[&str] = &["queued", "running"];
+const ACTIVE_RUN_STATES: &[&str] = &["queued", "running"];
 
 /// Task states that mean "this job is still moving".
 ///
@@ -28,23 +28,22 @@ pub const ACTIVE_TASK_STATES: &[&str] = &[
 ];
 
 /// Task states that condemn the whole job. Failure always wins the roll-up.
-pub const FAILED_TASK_STATES: &[&str] = &["failed", "upstream_failed"];
+const FAILED_TASK_STATES: &[&str] = &["failed", "upstream_failed"];
 
 /// Task states Airflow will not move away from on its own.
-pub const FINAL_TASK_STATES: &[&str] =
-    &["failed", "upstream_failed", "success", "skipped", "removed"];
+const FINAL_TASK_STATES: &[&str] = &["failed", "upstream_failed", "success", "skipped", "removed"];
 
 /// What a missing state is called once it enters the roll-up. Airflow reports `null` for a task
 /// instance it has created but not scheduled; `job_state` maps that to a word so the set
 /// membership tests below have something to test.
-pub const NONE_STATE: &str = "none";
+const NONE_STATE: &str = "none";
 
 /// Where Airflow parks a task that is waiting on a human, newest spelling first.
 ///
 /// A HITL *detail* exists from the moment the operator task creates it — a beat before the task
 /// actually defers. Answering inside that window makes the scheduler fail the gate, so
 /// `Gate::ready` is true only for a task instance sitting in one of these.
-pub const GATE_PARKED_STATES: &[&str] = &["awaiting_input", "deferred"];
+const GATE_PARKED_STATES: &[&str] = &["awaiting_input", "deferred"];
 
 /// Normalise Airflow's `state` field the way the Python roll-up does: `None` **and** `""` both
 /// become `"none"`, because `t.state or "none"` treats them identically and the fixtures pin it.

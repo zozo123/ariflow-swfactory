@@ -3,10 +3,10 @@
 //! This module contains identity only. Raw credentials and redeem I/O belong to the trusted
 //! adapter/control plane, never to the domain contract or an Airflow worker.
 
-use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 use thiserror::Error;
+
+use crate::policy::sha256_hex;
 
 pub const CREDENTIAL_LEASE_SCHEMA_VERSION: u32 = 1;
 
@@ -65,42 +65,21 @@ impl CredentialLeaseBinding {
         Ok(())
     }
 
-    /// Python uses json.dumps(sort_keys=True,separators=(",",":")); reproduce that exact byte
-    /// contract rather than relying on struct declaration order.
+    /// Python uses json.dumps(sort_keys=True,separators=(",",":")). Without serde_json's
+    /// `preserve_order` feature a `Value` object is a `BTreeMap`, so `to_value` sorts the keys and
+    /// `to_string` is already compact: the exact byte contract, independent of declaration order.
     pub fn canonical_json(&self) -> Result<String, CredentialLeaseContractError> {
         self.validate()?;
-        let raw = serde_json::to_value(self)
-            .map_err(|error| CredentialLeaseContractError::Serialization(error.to_string()))?;
-        let Value::Object(object) = raw else {
-            return Err(CredentialLeaseContractError::Serialization(
-                "binding was not an object".into(),
-            ));
-        };
-        let mut keys: Vec<_> = object.keys().cloned().collect();
-        keys.sort();
-        let mut ordered = Map::new();
-        for key in keys {
-            if let Some(value) = object.get(&key) {
-                ordered.insert(key, value.clone());
-            }
-        }
-        serde_json::to_string(&Value::Object(ordered))
+        serde_json::to_value(self)
+            .and_then(|value| serde_json::to_string(&value))
             .map_err(|error| CredentialLeaseContractError::Serialization(error.to_string()))
     }
 
     pub fn digest(&self) -> Result<String, CredentialLeaseContractError> {
         let canonical = self.canonical_json()?;
-        let hash = digest(&SHA256, canonical.as_bytes());
-        Ok(format!("lease-binding:{}", hex(hash.as_ref())))
+        Ok(format!(
+            "lease-binding:{}",
+            sha256_hex(canonical.as_bytes())
+        ))
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(DIGITS[(byte >> 4) as usize] as char);
-        out.push(DIGITS[(byte & 0x0f) as usize] as char);
-    }
-    out
 }

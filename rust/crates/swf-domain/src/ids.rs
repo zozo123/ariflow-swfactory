@@ -19,11 +19,11 @@ use serde::{Deserialize, Serialize};
 
 /// Every HITL task the shipped DAGs can create is `job.approve_<stage>` (`04-dags-blueprints.md`
 /// §1.4), so a bare gate name typed at a prompt expands to exactly one real task id.
-pub const GATE_TASK_PREFIX: &str = "job.approve_";
+const GATE_TASK_PREFIX: &str = "job.approve_";
 
 /// `map_index` for a task that was never expanded. It means "there is no job index yet", not
-/// "job number minus one" — see `JobRow::mapped`.
-pub const UNMAPPED: i32 = -1;
+/// "job number minus one" — see `JobId::mapped`.
+const UNMAPPED: i32 = -1;
 
 /// What a delivery branch is called before the issue/run tail (`06-delivery-evidence.md` §4.3).
 pub const DELIVERY_BRANCH_PREFIX: &str = "factory/";
@@ -113,15 +113,6 @@ impl RunRef {
             });
         }
         Ok(Self::new(dag_id, run_id))
-    }
-
-    /// The whole run, seen as the unmapped job — what a collapsed table row addresses.
-    pub fn job(&self) -> JobId {
-        JobId {
-            dag_id: self.dag_id.clone(),
-            run_id: self.run_id.clone(),
-            map_index: UNMAPPED,
-        }
     }
 }
 
@@ -379,16 +370,6 @@ impl DeliveryId {
         }
         Ok(Self::Path(text.to_string()))
     }
-
-    /// The git branch this delivery lives on, when the identity carries enough to know it.
-    pub fn branch_name(&self) -> Option<String> {
-        match self {
-            Self::Branch { issue_id, run_id } => {
-                Some(format!("{DELIVERY_BRANCH_PREFIX}{issue_id}-{run_id}"))
-            }
-            _ => None,
-        }
-    }
 }
 
 impl fmt::Display for DeliveryId {
@@ -565,10 +546,7 @@ mod tests {
                 run_id: "r99".into()
             }
         );
-        assert_eq!(
-            id.branch_name().as_deref(),
-            Some("factory/demo-issue-1-r99")
-        );
+        assert_eq!(id.to_string(), "factory/demo-issue-1-r99");
     }
 
     #[test]
@@ -586,7 +564,6 @@ mod tests {
     fn job_and_gate_and_run_convert_between_each_other() {
         let job = JobId::new("factory", "r1", 2);
         assert_eq!(job.run(), RunRef::new("factory", "r1"));
-        assert_eq!(job.run().job().map_index, UNMAPPED);
         assert_eq!(
             job.gate("job.approve_plan").to_string(),
             "factory/r1#2:job.approve_plan"

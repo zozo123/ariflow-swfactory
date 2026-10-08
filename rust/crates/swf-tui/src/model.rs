@@ -37,22 +37,22 @@ use crate::theme::{state_tone, Tone};
 ///
 /// Bounded because a failing source logs once per poll for as long as it is broken, and an
 /// unbounded buffer turns a service outage into a memory leak on the operator's laptop.
-pub const LOG_CAPACITY: usize = 500;
+const LOG_CAPACITY: usize = 500;
 
 /// A source is stale once its data is older than this many refresh intervals.
-pub const STALE_FACTOR: u32 = 3;
+const STALE_FACTOR: u32 = 3;
 
 /// Below this width the right-hand detail pane is folded away.
-pub const NARROW_COLS: u16 = 100;
+const NARROW_COLS: u16 = 100;
 
 /// Below this width the left navigation goes too, and the centre gets the whole screen.
-pub const VERY_NARROW_COLS: u16 = 72;
+const VERY_NARROW_COLS: u16 = 72;
 
 /// How often the screen re-reads the factory when nobody has pressed anything.
 pub const DEFAULT_REFRESH: Duration = Duration::from_secs(5);
 
 /// The DAG a trigger falls back to when the context names none.
-pub const FALLBACK_DAG: &str = "factory";
+const FALLBACK_DAG: &str = "factory";
 
 /// The seven screens, in the order `1`–`7` select them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -114,7 +114,7 @@ impl View {
     }
 
     /// The previous view, wrapping.
-    pub fn prev(self) -> View {
+    fn prev(self) -> View {
         let n = self.number();
         let back = if n == 1 { View::ALL.len() } else { n - 1 };
         View::from_number(back).unwrap_or(View::Attention)
@@ -219,21 +219,6 @@ impl LogRing {
     pub fn dropped(&self) -> usize {
         self.dropped
     }
-
-    /// How many lines are held.
-    pub fn len(&self) -> usize {
-        self.lines.len()
-    }
-
-    /// True while nothing has been logged.
-    pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
-    }
-
-    /// The most recent line, which is what the status bar echoes.
-    pub fn last(&self) -> Option<&str> {
-        self.lines.back().map(String::as_str)
-    }
 }
 
 /// The `/` filter over the active table.
@@ -258,7 +243,7 @@ pub struct Command {
 
 /// Everything `:` offers. It is exactly the key map, spelled out, so that a key nobody remembers
 /// is still reachable by name.
-pub const COMMANDS: &[Command] = &[
+const COMMANDS: &[Command] = &[
     Command {
         name: "attention",
         help: "what needs a human right now",
@@ -493,7 +478,7 @@ impl Env {
     }
 
     /// The blueprint a trigger defaults to.
-    pub fn default_dag(&self) -> String {
+    fn default_dag(&self) -> String {
         self.dag_ids
             .first()
             .cloned()
@@ -506,7 +491,7 @@ impl Env {
 /// Cosmetic and labelled as such: Airflow records the credential's own user, so a shared token
 /// makes every approval look like the same person (`02-herd-tui.md` §10.30). Showing the name of
 /// the variable the token comes from is the most honest thing this side of the wire can say.
-pub fn actor_of(auth: &Auth) -> String {
+fn actor_of(auth: &Auth) -> String {
     match auth {
         Auth::None => "anonymous".to_string(),
         Auth::TokenEnv { var } => format!("${var}"),
@@ -1009,7 +994,7 @@ impl Model {
     }
 
     /// Move the cursor by `delta` rows, clamped, and select whatever lands under it.
-    pub fn move_by(&mut self, delta: isize) -> Vec<Effect> {
+    fn move_by(&mut self, delta: isize) -> Vec<Effect> {
         let rows = self.rows();
         if rows.is_empty() {
             return Vec::new();
@@ -1021,7 +1006,7 @@ impl Model {
     }
 
     /// Put the cursor on the first row, or the last if `end`.
-    pub fn move_to_edge(&mut self, end: bool) -> Vec<Effect> {
+    fn move_to_edge(&mut self, end: bool) -> Vec<Effect> {
         let rows = self.rows();
         let Some(row) = (if end { rows.last() } else { rows.first() }) else {
             return Vec::new();
@@ -1089,7 +1074,7 @@ impl Model {
 /// Rule 7 of the architecture. Doing it here rather than in the renderer means a string cannot
 /// reach a widget by a path that forgot to call it — and a control sequence in a PR title that
 /// repositions the operator's cursor is a security bug, not a cosmetic one.
-pub fn sanitize_snapshot(snapshot: &mut Snapshot) {
+fn sanitize_snapshot(snapshot: &mut Snapshot) {
     for run in &mut snapshot.runs {
         run.dag_id = sanitize_line(&run.dag_id);
         run.run_id = sanitize_line(&run.run_id);
@@ -1847,7 +1832,6 @@ mod tests {
         for i in 0..10 {
             ring.push(format!("line {i}"));
         }
-        assert_eq!(ring.len(), 3);
         assert_eq!(ring.dropped(), 7);
         assert_eq!(
             ring.lines().collect::<Vec<_>>(),
@@ -1859,7 +1843,7 @@ mod tests {
     fn a_log_line_from_a_service_cannot_reposition_the_cursor() {
         let mut ring = LogRing::new(4);
         ring.push("gh says \u{1b}[2Jnothing\u{7}");
-        assert_eq!(ring.last(), Some("gh says nothing"));
+        assert_eq!(ring.lines().next_back(), Some("gh says nothing"));
     }
 
     #[test]

@@ -15,7 +15,7 @@ pub const CELL_ID_LEN: usize = CELL_ID_PREFIX.len() + CELL_ID_DIGEST_LEN;
 ///
 /// Python's `CellIdentity.stable_id` is the only minter and it produces `cell_` plus 24 lowercase
 /// hex characters. That was previously checked ten different ways across the two languages: the
-/// operator surface here already required the full shape, while `StageInvocation` and the worker
+/// operator surface here already required the full shape, while the stage invocation and the worker
 /// batch tested only the prefix, and the Python readers split between prefix-only and prefix-plus-
 /// length. So `cell_`, `cell_zzz` and `cell_` followed by two hundred characters were each valid to
 /// some readers and invalid to others -- on the identity every epoch fence is keyed to.
@@ -55,14 +55,6 @@ pub struct CellRecord {
 }
 
 impl CellRecord {
-    /// Whether this projection is in a lifecycle-terminal state.
-    pub fn is_terminal(&self) -> bool {
-        matches!(
-            self.state.as_str(),
-            "success" | "failed" | "cancelled" | "rejected" | "cleaned"
-        )
-    }
-
     /// Stable `dag/run#index` identity when Airflow has accepted the cell.
     pub fn airflow_identity(&self) -> Option<String> {
         Some(format!(

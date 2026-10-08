@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use chrono::Utc;
 use swf_adapters::traits::DEFAULT_HTTP_TIMEOUT;
-use swf_app::cells::CellOps;
 use swf_app::context::{Auth, Context, ContextStore};
 use swf_app::delivery::VerifyOpts;
 use swf_app::gates::{AnswerOpts, BatchOutcome, BatchReport, Decision, GateFilter, Selection};
@@ -23,8 +22,7 @@ use swf_app::logs::LogOpts;
 use swf_app::ops::{JobFilter, Ops, OpsError, Result};
 use swf_app::stack::StackAction;
 use swf_app::submit::SubmitRequest;
-use swf_app::BackendContext;
-use swf_app::OperatorOps;
+use swf_app::{BackendContext, BackendOps};
 use swf_domain::doctor;
 use swf_domain::evidence::DeliveryReport;
 use swf_domain::ids::{DeliveryId, GateId, JobId, RunRef};
@@ -120,7 +118,7 @@ impl Ctx {
     /// adapters fail would answer with whatever `gh` or Airflow complained about, and an operator
     /// would read a factory problem where the truth is that this context cannot see the queue at
     /// all — which is exactly how somebody ends up believing they went through the backend.
-    pub fn backend(&self, group: &str) -> Result<Backend> {
+    pub fn backend(&self, group: &str) -> Result<BackendOps> {
         let context = self.context()?;
         let backend = BackendContext::connect(&context, self.timeout()?, group)?;
         self.note(&format!(
@@ -128,24 +126,7 @@ impl Ctx {
             context.name,
             backend.base_url()
         ));
-        Ok(Backend { backend })
-    }
-}
-
-/// One resolved backend client shared by every backend-only command group in this invocation.
-pub struct Backend {
-    backend: BackendContext,
-}
-
-impl Backend {
-    /// The durable Factory Cell views.
-    pub fn cells(&self) -> Result<CellOps> {
-        Ok(CellOps::from_backend(&self.backend))
-    }
-
-    /// The queue, repair-debt, fleet and compatibility views.
-    pub fn operator(&self) -> Result<OperatorOps> {
-        Ok(OperatorOps::from_backend(&self.backend))
+        Ok(BackendOps::from_backend(&backend))
     }
 }
 

@@ -15,19 +15,19 @@
 //! *not configured* rather than *broken*: the two must never render the same way, so asking for a
 //! source that was never wired up is an operational error naming the setting that is missing.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
 use swf_adapters::airflow::AirflowApi;
 use swf_adapters::error::AdapterError;
+pub use swf_adapters::error::ErrorKind;
 use swf_adapters::factory::FactoryApi;
 use swf_adapters::gh::GhCli;
 use swf_adapters::islo::IsloCli;
 use swf_adapters::metrics_store::FsMetrics;
 use swf_adapters::traits::{
-    CommandRunner, Deliveries, MetricsStore, Runs, Sandboxes, SystemRunner, DEFAULT_HTTP_TIMEOUT,
+    CommandRunner, Deliveries, MetricsStore, Runs, Sandboxes, SystemRunner,
 };
 use swf_domain::blueprint::BlueprintError;
 use swf_domain::doctor::Check;
@@ -50,51 +50,6 @@ use crate::logs::{LogOpts, LogStream};
 use crate::snapshot::{CollectOpts, Sources};
 use crate::stack::{StackAction, StackOpts, StackStatus};
 use crate::submit::{Submission, SubmitRequest};
-
-/// The six outcomes the exit-code table names, plus the one that never reaches a process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorKind {
-    /// A check is red, a gate answer was refused by policy, verification was refuted. Exit 1.
-    Operational,
-    /// The operator asked for something that is not a request. Exit 2.
-    Usage,
-    /// No such run, job, gate, delivery, sandbox or context. Exit 3.
-    NotFound,
-    /// A credential is missing, expired or rejected. Exit 4.
-    Auth,
-    /// Nothing answered: DNS, connect, TLS, a timeout, a missing tool. Exit 5.
-    Unreachable,
-    /// Someone else got there first, or the evidence moved. Exit 6.
-    Conflict,
-    /// The caller stopped wanting the answer. Never rendered as a failure.
-    Cancelled,
-}
-
-impl ErrorKind {
-    /// The `kind` string of the `--json` error envelope.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Operational | Self::Cancelled => "operational",
-            Self::Usage => "usage",
-            Self::NotFound => "not_found",
-            Self::Auth => "auth",
-            Self::Unreachable => "unreachable",
-            Self::Conflict => "conflict",
-        }
-    }
-
-    /// The process exit code.
-    pub fn exit_code(self) -> i32 {
-        match self {
-            Self::Operational | Self::Cancelled => 1,
-            Self::Usage => 2,
-            Self::NotFound => 3,
-            Self::Auth => 4,
-            Self::Unreachable => 5,
-            Self::Conflict => 6,
-        }
-    }
-}
 
 /// One failed operation, already classified.
 ///
@@ -197,34 +152,23 @@ impl OpsError {
 }
 
 impl From<AdapterError> for OpsError {
+    // `Cancelled` keeps its own kind (and its message is "cancelled"), so it stays a non-failure.
     fn from(err: AdapterError) -> Self {
-        let message = err.to_string();
-        match err {
-            AdapterError::Unreachable { .. } | AdapterError::Timeout { .. } => {
-                Self::unreachable(message)
-            }
-            AdapterError::Auth { .. } => Self::auth(message)
-                .with_hint("check the credential this context names: swf context show"),
-            AdapterError::NotFound { .. } => Self::not_found(message),
-            AdapterError::Conflict { .. } => Self::conflict(message),
-            AdapterError::Cancelled => Self::cancelled(),
-            AdapterError::Status { .. } | AdapterError::Decode { .. } => Self::operational(message),
+        let out = Self::new(err.kind(), err.to_string());
+        if err.is_auth() {
+            return out.with_hint("check the credential this context names: swf context show");
         }
+        out
     }
 }
 
 impl From<ContextError> for OpsError {
     fn from(err: ContextError) -> Self {
-        let hint = err.hint();
-        let mut out = match err.exit_code() {
-            3 => Self::not_found(err.to_string()),
-            4 => Self::auth(err.to_string()),
-            _ => Self::operational(err.to_string()),
-        };
-        if let Some(hint) = hint {
-            out = out.with_hint(hint);
+        let out = Self::new(err.kind(), err.to_string());
+        match err.hint() {
+            Some(hint) => out.with_hint(hint),
+            None => out,
         }
-        out
     }
 }
 
@@ -365,12 +309,6 @@ impl OpsBuilder {
         self
     }
 
-    /// Override where the local stack lives.
-    pub fn stack_opts(mut self, opts: StackOpts) -> Self {
-        self.ops.stack = opts;
-        self
-    }
-
     /// Finish.
     pub fn build(self) -> Ops {
         self.ops
@@ -399,16 +337,12 @@ impl Ops {
         }
     }
 
-    /// Build the adapters a context implies and connect them.
+    /// Build the adapters a context implies and connect them, with the HTTP deadline `--timeout`
+    /// sets. It never bounds a subprocess (§C.6).
     ///
     /// The credential is read here, once, and a missing environment variable fails now rather than
     /// on the third pane's refresh. `repo` and `owner` are optional and their absence is silent:
     /// there is nothing wrong with a context that only watches Airflow.
-    pub fn connect(context: Context) -> Result<Self> {
-        Self::connect_with_timeout(context, DEFAULT_HTTP_TIMEOUT)
-    }
-
-    /// The same, with the HTTP deadline `--timeout` sets. It never bounds a subprocess (§C.6).
     pub fn connect_with_timeout(mut context: Context, timeout: Duration) -> Result<Self> {
         if BackendContext::endpoint(&context).is_some() {
             let backend_context = BackendContext::connect(&context, timeout, "factory operations")?;
@@ -445,11 +379,6 @@ impl Ops {
         &self.context
     }
 
-    /// The collection policy in force.
-    pub fn collect_opts(&self) -> &CollectOpts {
-        &self.collect
-    }
-
     /// Airflow, or an error naming the setting that would provide it.
     pub fn runs(&self) -> Result<&dyn Runs> {
         self.runs
@@ -458,7 +387,7 @@ impl Ops {
     }
 
     /// The same adapter, shareable — what a bulk answer hands to each of its tasks.
-    pub fn runs_shared(&self) -> Result<Arc<dyn Runs>> {
+    fn runs_shared(&self) -> Result<Arc<dyn Runs>> {
         self.runs
             .clone()
             .ok_or_else(|| OpsError::operational("no Airflow is configured for this context"))
@@ -808,11 +737,6 @@ impl Ops {
         }
     }
 
-    /// The job rows of one run.
-    pub async fn job_rows(&self, run: &RunRef, cancel: &CancellationToken) -> Result<Vec<JobRow>> {
-        Ok(self.runs()?.job_rows(run, &[], cancel).await?.rows)
-    }
-
     /// Mark one Airflow run failed.
     ///
     /// Named for what Airflow actually does. Nothing is killed, no sandbox is cleaned up, and any
@@ -835,51 +759,11 @@ impl Ops {
     pub async fn metrics_summary(&self, cancel: &CancellationToken) -> Result<MetricsSummary> {
         Ok(self.metrics_store()?.summary(cancel).await?)
     }
-
-    /// One gate by identity, out of the pending list.
-    pub async fn gate(&self, id: &GateId, cancel: &CancellationToken) -> Result<Gate> {
-        let listing = self.gates(cancel).await?;
-        listing
-            .gates
-            .into_iter()
-            .find(|gate| gate.id() == *id)
-            .ok_or_else(|| {
-                OpsError::not_found(format!("no gate {id} is waiting for an answer"))
-                    .with_hint("swf gates list")
-            })
-    }
-
-    /// Where the local stack is expected to live.
-    pub fn stack_opts(&self) -> &StackOpts {
-        &self.stack
-    }
-
-    /// The scratch directory verification clones into, for a caller that wants to name it.
-    pub fn scratch_root(&self) -> PathBuf {
-        std::env::temp_dir()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_kind_vocabulary_is_the_exit_table() {
-        let cases = [
-            (ErrorKind::Operational, "operational", 1),
-            (ErrorKind::Usage, "usage", 2),
-            (ErrorKind::NotFound, "not_found", 3),
-            (ErrorKind::Auth, "auth", 4),
-            (ErrorKind::Unreachable, "unreachable", 5),
-            (ErrorKind::Conflict, "conflict", 6),
-        ];
-        for (kind, word, code) in cases {
-            assert_eq!(kind.as_str(), word);
-            assert_eq!(kind.exit_code(), code);
-        }
-        assert_eq!(ErrorKind::Cancelled.exit_code(), 1);
-    }
 
     #[test]
     fn adapter_errors_keep_their_classification_across_the_boundary() {
@@ -968,9 +852,9 @@ mod tests {
         ctx.dag_tag = "custom".into();
         let ops = Ops::builder(ctx).build();
         assert_eq!(
-            ops.collect_opts().dag_ids.as_deref(),
+            ops.collect.dag_ids.as_deref(),
             Some(&["factory".to_string(), "hotfix".to_string()][..])
         );
-        assert_eq!(ops.collect_opts().dag_tag, "custom");
+        assert_eq!(ops.collect.dag_tag, "custom");
     }
 }

@@ -19,41 +19,42 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use swf_adapters::airflow::Auth as WireAuth;
+use swf_adapters::error::ErrorKind;
 
 /// The name of the context that exists even when nothing is configured.
-pub const BUILTIN_CONTEXT: &str = "local";
+const BUILTIN_CONTEXT: &str = "local";
 
 /// Where a stock local stack listens (`08-local-stack.md` §A.2).
-pub const DEFAULT_AIRFLOW_URL: &str = "http://localhost:8080";
+const DEFAULT_AIRFLOW_URL: &str = "http://localhost:8080";
 
 /// The tag the shipped DAGs carry, and the one `list_dags` filters on by default.
 pub const DEFAULT_DAG_TAG: &str = "swfactory";
 
 /// Where `metrics.json` files are looked for when a context does not say.
-pub const DEFAULT_METRICS_ROOT: &str = ".";
+const DEFAULT_METRICS_ROOT: &str = ".";
 
 /// The only schema version that exists. An unknown one is refused rather than guessed at: a file
 /// written by a newer `swf` may mean something different by the same key.
-pub const CONFIG_VERSION: u32 = 1;
+const CONFIG_VERSION: u32 = 1;
 
 /// Keys that may never appear in the file, at any depth.
 ///
 /// Not a warning — a load error. A warning teaches people that a token in the config is a thing
 /// you can do if you accept a little yellow text, and it is not.
-pub const SECRET_KEYS: &[&str] = &["password", "token", "secret"];
+const SECRET_KEYS: &[&str] = &["password", "token", "secret"];
 
 /// Overrides the active context, below `--context` and above the file's `default`.
-pub const CONTEXT_ENV: &str = "SWF_CONTEXT";
+const CONTEXT_ENV: &str = "SWF_CONTEXT";
 
 /// Points at a different config file entirely. Not part of C.1's schema; it exists so a test, a
 /// sandbox or a second identity on one machine does not have to write the operator's real file.
-pub const CONFIG_ENV: &str = "SWF_CONFIG";
+const CONFIG_ENV: &str = "SWF_CONFIG";
 
-/// The XDG variable [`ContextStore::config_path`] honours before asking `directories`.
+/// The XDG variable `ContextStore::config_path` honours before asking `directories`.
 pub const XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 
 /// The file name under the config directory.
-pub const CONFIG_FILE: &str = "config.toml";
+const CONFIG_FILE: &str = "config.toml";
 
 /// Why a context could not be read, written or chosen.
 ///
@@ -118,21 +119,12 @@ pub enum ContextError {
 }
 
 impl ContextError {
-    /// The `kind` of the `--json` error envelope (`00-architecture.md` §C.2).
-    pub fn kind(&self) -> &'static str {
+    /// Which row of the exit-code table this error is (`00-architecture.md` §C.2).
+    pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::NotFound { .. } => "not_found",
-            Self::MissingEnv { .. } => "auth",
-            _ => "operational",
-        }
-    }
-
-    /// The process exit code this error implies.
-    pub fn exit_code(&self) -> i32 {
-        match self {
-            Self::NotFound { .. } => 3,
-            Self::MissingEnv { .. } => 4,
-            _ => 1,
+            Self::NotFound { .. } => ErrorKind::NotFound,
+            Self::MissingEnv { .. } => ErrorKind::Auth,
+            _ => ErrorKind::Operational,
         }
     }
 
@@ -352,7 +344,7 @@ impl ContextStore {
     /// `$SWF_CONFIG` wins outright. Otherwise `$XDG_CONFIG_HOME/swf/config.toml` when that is set
     /// — on every platform, because an operator who exports XDG_CONFIG_HOME means it — and only
     /// then the platform's own answer via `directories`.
-    pub fn config_path() -> Result<PathBuf, ContextError> {
+    fn config_path() -> Result<PathBuf, ContextError> {
         if let Some(explicit) = env::var_os(CONFIG_ENV).filter(|v| !v.is_empty()) {
             return Ok(PathBuf::from(explicit));
         }
@@ -431,7 +423,7 @@ impl ContextStore {
     }
 
     /// The `default` key, if the file names one that exists.
-    pub fn default_name(&self) -> Option<&str> {
+    fn default_name(&self) -> Option<&str> {
         self.file
             .default
             .as_deref()
@@ -509,7 +501,7 @@ impl ContextStore {
     ///
     /// Atomic because a half-written config is a machine that cannot reach its factory, and
     /// `0600` because even a file that holds no secrets holds the shape of someone's estate.
-    pub fn save(&self) -> Result<(), ContextError> {
+    fn save(&self) -> Result<(), ContextError> {
         let io = |detail: String| ContextError::Io {
             path: self.path.display().to_string(),
             detail,
@@ -761,8 +753,7 @@ password_env = "AIRFLOW_PASSWORD"
         let err = store
             .resolve(Some("prd"))
             .expect_err("typo must not resolve");
-        assert_eq!(err.exit_code(), 3);
-        assert_eq!(err.kind(), "not_found");
+        assert_eq!(err.kind(), ErrorKind::NotFound);
     }
 
     #[test]
@@ -794,7 +785,7 @@ password_env = "AIRFLOW_PASSWORD"
         let path = dir.path().join(CONFIG_FILE);
         std::fs::write(&path, "version = 2\n").expect("write");
         let err = ContextStore::open_at(&path).expect_err("version 2");
-        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.kind(), ErrorKind::Operational);
         std::fs::write(&path, "default = \"x\"\n").expect("write");
         assert!(ContextStore::open_at(&path).is_err(), "version is required");
     }
@@ -879,7 +870,11 @@ password_env = "AIRFLOW_PASSWORD"
             var: "SWF_TEST_TOKEN_THAT_IS_UNSET".into(),
         };
         let err = auth.resolve().expect_err("unset");
-        assert_eq!(err.exit_code(), 4, "a missing credential is exit 4");
+        assert_eq!(
+            err.kind(),
+            ErrorKind::Auth,
+            "a missing credential is exit 4"
+        );
         assert!(err.to_string().contains("SWF_TEST_TOKEN_THAT_IS_UNSET"));
         assert_eq!(auth.env_vars(), vec!["SWF_TEST_TOKEN_THAT_IS_UNSET"]);
         assert!(matches!(Auth::None.resolve(), Ok(WireAuth::None)));

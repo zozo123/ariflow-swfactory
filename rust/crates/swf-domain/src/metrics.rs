@@ -262,7 +262,7 @@ pub fn median(values: &[f64]) -> f64 {
 }
 
 /// `statistics.fmean`: the arithmetic mean, and `0.0` rather than an error for no input.
-pub fn fmean(values: &[f64]) -> f64 {
+fn fmean(values: &[f64]) -> f64 {
     if values.is_empty() {
         return 0.0;
     }

@@ -34,7 +34,7 @@ pub const BLOCKED_BANNERS: &[&str] = &["[BLOCKED] ", "[REJECTED] "];
 /// Six hours, because the longest shipped gate timeout is measured in hours and a MicroVM that
 /// outlives its job is money. It is a prompt to look, never an instruction to delete: nothing in
 /// this module removes anything.
-pub const ORPHAN_AFTER_S: i64 = 6 * 3600;
+const ORPHAN_AFTER_S: i64 = 6 * 3600;
 
 /// One approval waiting for a person.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -123,11 +123,6 @@ impl Attention {
     /// not tell".
     pub fn is_clear(&self) -> bool {
         self.count() == 0 && self.errors.is_empty()
-    }
-
-    /// The gates that can be answered right now.
-    pub fn ready_gates(&self) -> impl Iterator<Item = &GateItem> {
-        self.gates.iter().filter(|gate| gate.ready)
     }
 
     /// Read one pass and keep only what a person can act on.
@@ -305,7 +300,7 @@ mod tests {
         let attention = Attention::from_snapshot(&snap, now());
         assert_eq!(attention.gates[0].gate, "approve_intent");
         assert_eq!(attention.gates[0].id, "factory/r1#1:job.approve_intent");
-        assert_eq!(attention.ready_gates().count(), 1);
+        assert_eq!(attention.gates.iter().filter(|gate| gate.ready).count(), 1);
         assert_eq!(attention.count(), 2);
     }
 

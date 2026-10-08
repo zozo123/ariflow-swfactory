@@ -7,13 +7,10 @@
 //! Unicode/DEL where JSON permits it, and numbers constrained to the exact cross-language range.
 //! Float spelling follows Python json.dumps/repr semantics so both languages hash identical bytes.
 
-use std::fmt::Write as _;
-
 use ring::digest::{digest, SHA256};
 use serde_json::{Number, Value};
 
-pub const POLICY_SCHEMA_VERSION: u64 = 1;
-pub const POLICY_DIGEST_FAMILY: &str = "v1";
+const POLICY_DIGEST_FAMILY: &str = "v1";
 pub const POLICY_MAX_EXACT_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[derive(Debug, thiserror::Error)]
@@ -31,12 +28,19 @@ pub fn policy_digest(policy: &Value) -> Result<String, PolicyError> {
     let canonical = canonical_value(policy)?;
     let payload = canonical_json(&canonical)?;
     let domain = format!("{POLICY_DIGEST_FAMILY}\0{payload}");
-    let hash = digest(&SHA256, domain.as_bytes());
-    let mut hex = String::with_capacity(64);
-    for byte in hash.as_ref() {
-        write!(&mut hex, "{byte:02x}").expect("writing to String cannot fail");
-    }
-    Ok(format!("policy:{POLICY_DIGEST_FAMILY}:{hex}"))
+    Ok(format!(
+        "policy:{POLICY_DIGEST_FAMILY}:{}",
+        sha256_hex(domain.as_bytes())
+    ))
+}
+
+/// Lowercase hex SHA-256, the digest spelling every domain identity shares.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    digest(&SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn canonical_value(value: &Value) -> Result<Value, PolicyError> {

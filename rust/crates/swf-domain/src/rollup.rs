@@ -39,10 +39,10 @@ pub const TASK_ORDER: &[&str] = &[
 ];
 
 /// The label `stage_progress` uses when a job has started nothing and finished nothing.
-pub const PENDING_STAGE: &str = "pending";
+const PENDING_STAGE: &str = "pending";
 
 /// The label `stage_progress` returns for a job with no task instances at all.
-pub const NO_STAGE: &str = "-";
+const NO_STAGE: &str = "-";
 
 /// GitHub check verdicts that count as green. `NEUTRAL` and `SKIPPED` are here because a check
 /// that declined to run has not failed, and colouring it red trains operators to ignore red.

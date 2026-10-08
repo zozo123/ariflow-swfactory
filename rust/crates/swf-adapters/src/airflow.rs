@@ -14,7 +14,7 @@
 //!   [`MAX_PAGES`] — and in that last case it sets [`Page::truncated`](crate::traits::Page) rather
 //!   than pretending it saw everything.
 //! * **Percent-encoding.** A manual run id is `manual__2026-09-03T08:18:24.904858+00:00`: it
-//!   carries `:` and `+`. Every dynamic path segment goes through [`seg`], which encodes down to
+//!   carries `:` and `+`. Every dynamic path segment goes through `seg`, which encodes down to
 //!   the unreserved set exactly as Python's `quote(v, safe="")` does. An unencoded `+` in a query
 //!   string decodes to a space and addresses a run that does not exist.
 //! * **One re-mint, then stop.** The default JWT lives 24 h, so a TUI left open overnight *will*
@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use reqwest::{Client, Method, StatusCode};
+use reqwest::{Client, Method};
 use serde_json::{json, Map, Value};
 use swf_domain::ids::{GateId, JobId, RunRef};
 use swf_domain::model::{Gate, JobRow, Run, TaskState, Timestamp};
@@ -46,17 +46,14 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{truncate, AdapterError, Result};
-use crate::traits::{parse_ts, LogPage, Page, Runs, DEFAULT_HTTP_TIMEOUT};
+use crate::traits::{parse_ts, LogPage, Page, Runs};
 
 /// The stable public prefix. Everything below it is versioned and backward-compatible.
-pub const API_PREFIX: &str = "/api/v2";
+const API_PREFIX: &str = "/api/v2";
 
 /// The auth manager's own route. It is **not** under `/api/v2` — it is a separately mounted app,
 /// and a client that prefixes it will 404 on every login (`03-airflow-rest.md` §0).
-pub const TOKEN_PATH: &str = "/auth/token";
-
-/// The tag the shipped blueprints carry.
-pub const DEFAULT_DAG_TAG: &str = "swfactory";
+const TOKEN_PATH: &str = "/auth/token";
 
 /// The sentinel [`AirflowApi::skew_ms`] holds until a response carries a `Date` header.
 ///
@@ -65,10 +62,10 @@ pub const DEFAULT_DAG_TAG: &str = "swfactory";
 const NO_SKEW: i64 = i64::MIN;
 
 /// The task whose XCom lists the jobs a run fanned out into.
-pub const FAN_OUT_TASK_ID: &str = "fan_out";
+const FAN_OUT_TASK_ID: &str = "fan_out";
 
 /// The XCom key a task's return value is stored under.
-pub const XCOM_RETURN_KEY: &str = "return_value";
+const XCOM_RETURN_KEY: &str = "return_value";
 
 /// The answer Airflow's `ApprovalOperator` accepts for "yes".
 pub const GATE_APPROVE: &str = "Approve";
@@ -95,7 +92,7 @@ pub enum Auth {
     /// A token supplied by the operator's environment. It cannot be re-minted, so its expiry is
     /// reported rather than papered over.
     Token(String),
-    /// A username and password to exchange for a JWT at [`TOKEN_PATH`]. An empty password is
+    /// A username and password to exchange for a JWT at `TOKEN_PATH`. An empty password is
     /// allowed — the simple auth manager accepts one.
     Basic {
         /// The account name.
@@ -150,16 +147,6 @@ impl AirflowApi {
             token: Arc::new(Mutex::new(None)),
             skew_ms: Arc::new(AtomicI64::new(NO_SKEW)),
         })
-    }
-
-    /// A client with the Python default timeout of 15 s.
-    pub fn with_defaults(base_url: &str, auth: Auth) -> Result<Self> {
-        Self::new(base_url, auth, DEFAULT_HTTP_TIMEOUT)
-    }
-
-    /// The base URL, already stripped of its trailing slash.
-    pub fn base_url(&self) -> &str {
-        &self.base
     }
 
     /// True when a fresh credential can be obtained without asking the operator.
@@ -446,7 +433,7 @@ impl AirflowApi {
         self
     }
 
-    pub fn deep_link(&self, dag_id: &str, run_id: &str) -> String {
+    fn deep_link(&self, dag_id: &str, run_id: &str) -> String {
         format!(
             "{}/dags/{}/runs/{}",
             self.ui_base.as_deref().unwrap_or(&self.base),
@@ -461,7 +448,7 @@ impl AirflowApi {
 /// Nothing survives but `A-Za-z0-9_.-~`, so `:` becomes `%3A` and `+` becomes `%2B`. A "path
 /// segment" encode set that spares `+` looks right and is wrong: the same id is also used in query
 /// strings, where a raw `+` decodes to a space and quietly addresses a different run.
-pub fn seg(value: &str) -> String {
+fn seg(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.as_bytes() {
         match byte {
@@ -538,7 +525,7 @@ fn or_str<'a>(object: &'a Value, keys: &[&str]) -> &'a str {
 }
 
 /// Read one `DAGRunResponse` (`03-airflow-rest.md` §4).
-pub fn run_from(d: &Value) -> Run {
+fn run_from(d: &Value) -> Run {
     let state = or_str(d, &["state"]);
     let mut run = Run::new(
         py_get_str(d, "dag_id"),
@@ -558,7 +545,7 @@ pub fn run_from(d: &Value) -> Run {
 /// `state` is `Option<String>` and unknown states pass through untouched: the enum gained
 /// `awaiting_input` in 3.3 and will gain more, and a client that hard-fails on a state it has not
 /// heard of is a client that breaks on the next upgrade (gotcha 8).
-pub fn task_state_from(ti: &Value) -> TaskState {
+fn task_state_from(ti: &Value) -> TaskState {
     TaskState::new(
         py_get_str(ti, "task_id"),
         ti.get("map_index").and_then(Value::as_i64).unwrap_or(-1) as i32,
@@ -574,7 +561,7 @@ pub fn task_state_from(ti: &Value) -> TaskState {
 /// The nested `task_instance` wins for identity and the flat keys are a fallback for older builds.
 /// `map_index` is read with a *default* chain rather than a falsy one, because a job index of `0`
 /// is a real job and an `or` chain would skip straight past it.
-pub fn gate_from(h: &Value) -> Gate {
+fn gate_from(h: &Value) -> Gate {
     let empty = Value::Object(Map::new());
     let ti = match h.get("task_instance") {
         Some(v) if v.is_object() => v,
@@ -956,15 +943,10 @@ impl Runs for AirflowApi {
     }
 }
 
-/// Whether a status is one this client re-mints for. Exposed for the tests that pin §11's table.
-pub fn is_auth_status(status: StatusCode, detail: &str) -> bool {
-    status == StatusCode::UNAUTHORIZED
-        || (status == StatusCode::FORBIDDEN && detail.contains("Invalid JWT token"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::DEFAULT_HTTP_TIMEOUT;
 
     #[test]
     fn a_run_id_survives_its_colons_and_pluses() {
@@ -978,9 +960,8 @@ mod tests {
 
     #[test]
     fn the_base_url_loses_exactly_one_trailing_slash() {
-        let api =
-            AirflowApi::with_defaults("https://host/airflow/", Auth::None).expect("client builds");
-        assert_eq!(api.base_url(), "https://host/airflow");
+        let api = AirflowApi::new("https://host/airflow/", Auth::None, DEFAULT_HTTP_TIMEOUT)
+            .expect("client builds");
         assert_eq!(
             api.deep_link("factory", "manual__x:1"),
             "https://host/airflow/dags/factory/runs/manual__x%3A1"
@@ -1155,32 +1136,28 @@ mod tests {
 
     #[test]
     fn only_a_password_can_be_re_minted() {
-        let basic = AirflowApi::with_defaults(
+        let basic = AirflowApi::new(
             "http://x",
             Auth::Basic {
                 username: "admin".into(),
                 password: String::new(),
             },
+            DEFAULT_HTTP_TIMEOUT,
         )
         .expect("client builds");
         assert!(basic.can_remint(), "an empty password is still a password");
 
         let static_token =
-            AirflowApi::with_defaults("http://x", Auth::Token("t".into())).expect("client builds");
+            AirflowApi::new("http://x", Auth::Token("t".into()), DEFAULT_HTTP_TIMEOUT)
+                .expect("client builds");
         assert!(
             !static_token.can_remint(),
             "an expired static token is a fact to report, not a retry to hide"
         );
-        assert!(!AirflowApi::with_defaults("http://x", Auth::None)
-            .expect("client builds")
-            .can_remint());
-    }
-
-    #[test]
-    fn the_auth_statuses_are_the_ones_section_eleven_names() {
-        assert!(is_auth_status(StatusCode::UNAUTHORIZED, "Token Expired"));
-        assert!(is_auth_status(StatusCode::FORBIDDEN, "Invalid JWT token"));
-        assert!(!is_auth_status(StatusCode::FORBIDDEN, "Forbidden"));
-        assert!(!is_auth_status(StatusCode::NOT_FOUND, "gone"));
+        assert!(
+            !AirflowApi::new("http://x", Auth::None, DEFAULT_HTTP_TIMEOUT)
+                .expect("client builds")
+                .can_remint()
+        );
     }
 }

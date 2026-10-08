@@ -144,8 +144,8 @@ async fn the_removal_guard_holds_through_a_trait_object_too() {
         .await
         .expect_err("not mine to remove");
     assert_eq!(
-        refused.exit_code(),
-        1,
+        refused.kind(),
+        swf_adapters::error::ErrorKind::Operational,
         "a refusal is operational, not an auth failure"
     );
 

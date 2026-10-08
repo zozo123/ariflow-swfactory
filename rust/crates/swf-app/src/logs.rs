@@ -23,10 +23,10 @@ use tokio_util::sync::CancellationToken;
 use crate::ops::{OpsError, Result};
 
 /// How long to wait between polls when following.
-pub const DEFAULT_POLL: Duration = Duration::from_secs(2);
+const DEFAULT_POLL: Duration = Duration::from_secs(2);
 
 /// The attempt an operator means when they do not say: the first one.
-pub const DEFAULT_ATTEMPT: u32 = 1;
+const DEFAULT_ATTEMPT: u32 = 1;
 
 /// Which log to read, and how hard to keep reading it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,20 +49,6 @@ impl Default for LogOpts {
             poll: DEFAULT_POLL,
             max_polls: None,
         }
-    }
-}
-
-impl LogOpts {
-    /// Read this task rather than choosing one.
-    pub fn for_task(mut self, task: impl Into<String>) -> Self {
-        self.task = Some(task.into());
-        self
-    }
-
-    /// Read this attempt.
-    pub fn attempt(mut self, attempt: u32) -> Self {
-        self.attempt = attempt;
-        self
     }
 }
 
@@ -214,11 +200,6 @@ mod tests {
         assert_eq!(opts.attempt, 1);
         assert!(opts.task.is_none());
         assert_eq!(opts.poll, Duration::from_secs(2));
-        let named = LogOpts::default()
-            .for_task(" job.build_and_test ")
-            .attempt(3);
-        assert_eq!(named.attempt, 3);
-        assert_eq!(named.task.as_deref(), Some(" job.build_and_test "));
     }
 
     #[test]

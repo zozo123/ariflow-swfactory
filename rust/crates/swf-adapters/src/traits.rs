@@ -17,6 +17,10 @@
 //!   silently hiding jobs the path of least resistance, and hiding jobs is the failure mode this
 //!   whole binary exists to replace.
 
+#[cfg(test)]
+use std::collections::VecDeque;
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -309,6 +313,20 @@ pub struct CommandOutput {
 }
 
 impl CommandOutput {
+    /// Stdout on exit 0; otherwise the Python client's exact `"{argv} failed rc={code}: {message}"`,
+    /// because this text reaches `Snapshot.errors`.
+    pub fn checked(self, argv: &[String]) -> Result<String> {
+        if self.code != 0 {
+            return Err(crate::error::AdapterError::refused(format!(
+                "{} failed rc={}: {}",
+                argv.join(" "),
+                self.code,
+                self.message()
+            )));
+        }
+        Ok(self.stdout)
+    }
+
     /// The error text the Python client uses: stderr if it has anything, else stdout.
     pub fn message(&self) -> String {
         let err = self.stderr.trim();
@@ -387,6 +405,53 @@ impl CommandRunner for SystemRunner {
     }
 }
 
+/// A runner that replays a script and records every argv, so a test can prove a refusal ran
+/// nothing rather than merely returned an error. A spent script answers exit 0 with no output.
+#[cfg(test)]
+pub(crate) struct ScriptedRunner {
+    calls: Mutex<Vec<Vec<String>>>,
+    replies: Mutex<VecDeque<Result<CommandOutput>>>,
+}
+
+#[cfg(test)]
+impl ScriptedRunner {
+    pub(crate) fn new(replies: Vec<Result<CommandOutput>>) -> Arc<Self> {
+        Arc::new(Self {
+            calls: Mutex::default(),
+            replies: Mutex::new(replies.into()),
+        })
+    }
+
+    /// Every argv run so far, in order.
+    pub(crate) fn seen(&self) -> Vec<Vec<String>> {
+        self.calls.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl CommandRunner for ScriptedRunner {
+    async fn run(
+        &self,
+        argv: &[String],
+        _timeout: Duration,
+        cancel: &CancellationToken,
+    ) -> Result<CommandOutput> {
+        if cancel.is_cancelled() {
+            return Err(crate::error::AdapterError::Cancelled);
+        }
+        self.calls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(argv.to_vec());
+        self.replies
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop_front()
+            .unwrap_or_else(|| Ok(CommandOutput::default()))
+    }
+}
+
 /// Read a timestamp the way `metrics.parse_ts` does, because half the services spell it
 /// differently and none of them is worth failing a whole snapshot over.
 ///
@@ -402,11 +467,6 @@ pub fn parse_ts(value: &Value) -> Option<Timestamp> {
         Value::Number(number) => epoch_seconds(number.as_f64()?),
         other => parse_timestamp(other),
     }
-}
-
-/// The string arm alone, for a caller that already has a `&str`.
-pub fn parse_ts_str(text: &str) -> Option<Timestamp> {
-    parse_timestamp(&Value::String(text.to_string()))
 }
 
 /// Epoch seconds, fractional part included, as an offset-aware instant.

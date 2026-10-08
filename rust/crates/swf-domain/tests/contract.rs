@@ -9,18 +9,18 @@
 //! The boundary this file defends is that it never *invents* a contract. It reads whatever the
 //! generator wrote, is tolerant about how an argument is spelled (a bare array, or named under
 //! the Python keyword), and is completely intolerant about the answer: a mismatch fails, loudly,
-//! naming the fixture, the case and both values. When the directory does not exist yet — another
-//! agent generates it — the test skips with a message instead of failing, because a missing
-//! safety net is a different problem from a broken one and should not look the same.
+//! naming the fixture, the case and both values. A missing fixture directory and a fixture this
+//! harness cannot dispatch fail too, exactly as `tests/test_contract_fixtures.py` does: a silent
+//! skip is how the two halves would drift apart while the suite stayed green.
 
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Number, Value};
 
-use swf_domain::model::{Run, Snapshot, TaskState};
-use swf_domain::{blueprint, doctor, metrics, policy, rollup, snapshot};
+use swf_domain::model::{Snapshot, TaskState};
+use swf_domain::{metrics, policy, rollup, snapshot};
 
 /// One fixture file: every case for one ported function.
 #[derive(Debug, Deserialize)]
@@ -44,33 +44,24 @@ struct Case {
 
 #[test]
 fn rust_reproduces_every_python_contract_fixture() {
-    let Some(dir) = fixture_dir() else {
-        println!(
-            "SKIP: no contract fixtures at {}. They are generated from the Python \
-             implementation; run the generator (or wait for the agent that owns it) and re-run \
-             this test. Set SWF_CONTRACT_FIXTURES to point somewhere else.",
-            expected_dir().display()
-        );
-        return;
-    };
-
+    let dir = fixture_dir();
     let mut files: Vec<PathBuf> = match std::fs::read_dir(&dir) {
         Ok(entries) => entries
             .flatten()
             .map(|e| e.path())
             .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
             .collect(),
-        Err(e) => panic!("cannot read {}: {e}", dir.display()),
+        Err(e) => panic!(
+            "no contract fixtures at {}: {e}. Set SWF_CONTRACT_FIXTURES to point somewhere else.",
+            dir.display()
+        ),
     };
     files.sort();
-
-    if files.is_empty() {
-        println!(
-            "SKIP: {} exists but holds no *.json fixtures yet.",
-            dir.display()
-        );
-        return;
-    }
+    assert!(
+        !files.is_empty(),
+        "no *.json contract fixtures under {}",
+        dir.display()
+    );
 
     let mut failures: Vec<String> = Vec::new();
     let mut unhandled: Vec<String> = Vec::new();
@@ -125,11 +116,10 @@ fn rust_reproduces_every_python_contract_fixture() {
 
     unhandled.sort();
     unhandled.dedup();
-    if !unhandled.is_empty() {
-        // Not a failure: a newer generator may cover functions this harness has not learned yet.
-        // It is printed so nobody believes those fixtures were checked.
-        println!("NOT CHECKED (no Rust binding in this harness): {unhandled:?}");
-    }
+    assert!(
+        unhandled.is_empty(),
+        "fixtures for functions this harness cannot call: {unhandled:?}"
+    );
     println!(
         "contract: {checked} cases checked from {} files",
         files.len()
@@ -255,8 +245,7 @@ enum Outcome {
 
 /// Run one ported function against one fixture input.
 ///
-/// The name aliases are generosity about spelling only. Every arm below runs the real function
-/// from `swf-domain`; none of them reimplements anything.
+/// Every arm below runs the real function from `swf-domain`; none of them reimplements anything.
 fn apply(function: &str, input: &Value) -> Outcome {
     match function {
         "job_state" => match tasks_of(input) {
@@ -264,10 +253,6 @@ fn apply(function: &str, input: &Value) -> Outcome {
             Err(e) => Outcome::Error(e),
         },
         "group_jobs" => group_jobs(input),
-        "collapsed_job" => match run_of(input) {
-            Ok(run) => to_value(&rollup::collapsed_job(&run)),
-            Err(e) => Outcome::Error(e),
-        },
         "stage_progress" => match tasks_of(input) {
             Ok(tasks) => Outcome::Value(json!(rollup::stage_progress(&tasks))),
             Err(e) => Outcome::Error(e),
@@ -284,14 +269,8 @@ fn apply(function: &str, input: &Value) -> Outcome {
             input,
             &["map_index", "value", "idx"]
         )))),
-        "age" => age(input),
-        "summarize" | "metrics_summarize" => summarize(input),
-        "table" | "metrics_table" => metrics_table(input),
-        "snapshot_data" | "snapshot_json" => snapshot_json(input),
-        "snapshot_text" => snapshot_text(input),
-        "doctor_table" => doctor_table(input),
-        "doctor_to_json" => doctor_to_json(input),
-        "blueprint_loads" | "blueprint_from_toml" => blueprint_from_toml(input),
+        "summarize" => summarize(input),
+        "snapshot_json" => snapshot_json(input),
         "policy_digest" => match policy::policy_digest(input) {
             Ok(digest) => Outcome::Value(json!(digest)),
             Err(error) => Outcome::Error(format!("policy did not canonicalize: {error}")),
@@ -372,15 +351,6 @@ fn group_jobs(input: &Value) -> Outcome {
     ))
 }
 
-fn age(input: &Value) -> Outcome {
-    let then = pick(input, &["value", "then", "at"]);
-    let now = match parse_dt(pick(input, &["now"])) {
-        Some(now) => now,
-        None => return Outcome::Error("`now` must be a parseable timestamp".into()),
-    };
-    Outcome::Value(json!(rollup::age(parse_dt(then), now)))
-}
-
 fn summarize(input: &Value) -> Outcome {
     let runs = pick(input, &["runs", "value"]).clone();
     match serde_json::from_value::<Vec<metrics::RunMetrics>>(runs) {
@@ -389,51 +359,10 @@ fn summarize(input: &Value) -> Outcome {
     }
 }
 
-fn metrics_table(input: &Value) -> Outcome {
-    let summary = pick(input, &["summary", "value", "metrics"]).clone();
-    match serde_json::from_value::<metrics::MetricsSummary>(summary) {
-        Ok(summary) => Outcome::Value(json!(metrics::table(&summary))),
-        Err(e) => Outcome::Error(format!("`summary` is not a metrics summary: {e}")),
-    }
-}
-
 fn snapshot_json(input: &Value) -> Outcome {
     match snapshot_of(input) {
         Ok(snap) => Outcome::Value(snapshot::snapshot_json(&snap, Utc::now())),
         Err(e) => Outcome::Error(e),
-    }
-}
-
-fn snapshot_text(input: &Value) -> Outcome {
-    match snapshot_of(input) {
-        Ok(snap) => Outcome::Value(json!(snapshot::snapshot_text(&snap))),
-        Err(e) => Outcome::Error(e),
-    }
-}
-
-fn doctor_table(input: &Value) -> Outcome {
-    match checks_of(input) {
-        Ok(checks) => Outcome::Value(json!(doctor::table(&checks))),
-        Err(e) => Outcome::Error(e),
-    }
-}
-
-fn doctor_to_json(input: &Value) -> Outcome {
-    match checks_of(input) {
-        Ok(checks) => Outcome::Value(doctor::to_json_value(&checks)),
-        Err(e) => Outcome::Error(e),
-    }
-}
-
-/// A blueprint case's `expected` is either the parsed blueprint or `{"error": "<message>"}`, so
-/// the message text stays under test alongside the happy path.
-fn blueprint_from_toml(input: &Value) -> Outcome {
-    let Some(text) = pick(input, &["text", "toml", "value"]).as_str() else {
-        return Outcome::Error("expected the TOML source under `text`".into());
-    };
-    match blueprint::Blueprint::from_toml(text) {
-        Ok(bp) => to_value(&bp),
-        Err(e) => Outcome::Value(json!({"error": e.to_string()})),
     }
 }
 
@@ -511,19 +440,9 @@ fn tasks_of(input: &Value) -> Result<Vec<TaskState>, String> {
         .collect()
 }
 
-fn run_of(input: &Value) -> Result<Run, String> {
-    serde_json::from_value(pick(input, &["run", "value"]).clone())
-        .map_err(|e| format!("not a run record: {e}"))
-}
-
 fn snapshot_of(input: &Value) -> Result<Snapshot, String> {
     serde_json::from_value(pick(input, &["snapshot", "value"]).clone())
         .map_err(|e| format!("not a snapshot: {e}"))
-}
-
-fn checks_of(input: &Value) -> Result<Vec<doctor::Check>, String> {
-    serde_json::from_value(pick(input, &["checks", "value"]).clone())
-        .map_err(|e| format!("not a list of checks: {e}"))
 }
 
 fn to_value<T: serde::Serialize>(value: &T) -> Outcome {
@@ -544,32 +463,6 @@ fn stringify(value: &Value) -> String {
     }
 }
 
-/// Accept the ISO-8601 spellings Python's `fromisoformat` does, plus a `Z` suffix. A naive
-/// timestamp is *stamped* UTC, not converted — that is what `herd._as_datetime` does.
-fn parse_dt(value: &Value) -> Option<DateTime<Utc>> {
-    let text = value.as_str()?.trim();
-    if text.is_empty() {
-        return None;
-    }
-    let text = text.replace('Z', "+00:00").replace(' ', "T");
-    if let Ok(dt) = DateTime::parse_from_rfc3339(&text) {
-        return Some(dt.with_timezone(&Utc));
-    }
-    for format in [
-        "%Y-%m-%dT%H:%M:%S%.f",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%dT%H:%M",
-    ] {
-        if let Ok(naive) = NaiveDateTime::parse_from_str(&text, format) {
-            return Some(Utc.from_utc_datetime(&naive));
-        }
-    }
-    NaiveDate::parse_from_str(&text, "%Y-%m-%d")
-        .ok()
-        .and_then(|d| d.and_hms_opt(0, 0, 0))
-        .map(|naive| Utc.from_utc_datetime(&naive))
-}
-
 fn kind(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
@@ -586,14 +479,9 @@ fn pretty(value: &Value) -> String {
 }
 
 /// Where the fixtures live, unless `SWF_CONTRACT_FIXTURES` says otherwise.
-fn expected_dir() -> PathBuf {
+fn fixture_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("SWF_CONTRACT_FIXTURES") {
         return PathBuf::from(dir);
     }
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/contract")
-}
-
-fn fixture_dir() -> Option<PathBuf> {
-    let dir = expected_dir();
-    dir.is_dir().then_some(dir)
 }

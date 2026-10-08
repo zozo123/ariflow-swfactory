@@ -6,24 +6,19 @@
 //! drifting apart while the factory underneath keeps moving.
 
 pub mod attention;
+pub mod backend;
 pub mod backend_context;
-pub mod cells;
 pub mod context;
-pub mod control_attention;
-pub mod control_plane;
 pub mod delivery;
 pub mod doctor;
 pub mod gates;
 pub mod logs;
-pub mod operator;
 pub mod ops;
 pub mod snapshot;
 pub mod stack;
-pub mod stage_runtime;
 pub mod submit;
 
+pub use backend::BackendOps;
 pub use backend_context::BackendContext;
 pub use context::{Auth, Context, ContextStore};
-pub use control_attention::ControlAttention;
-pub use operator::OperatorOps;
 pub use ops::{Ops, OpsError};

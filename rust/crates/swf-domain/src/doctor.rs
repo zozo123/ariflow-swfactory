@@ -172,22 +172,12 @@ pub fn table(checks: &[Check]) -> String {
 }
 
 /// The `--json` report: an array, never an object, so a consumer can stream it.
-///
-/// Six keys per element in a fixed order, `status` last because it is derived from the two before
-/// it and a reader should meet the raw facts first.
-pub fn to_json(checks: &[Check]) -> String {
-    let report: Vec<CheckReport<'_>> = checks.iter().map(CheckReport::from).collect();
-    serde_json::to_string_pretty(&report).unwrap_or_else(|_| "[]".to_string())
-}
-
-/// The same report as a value, for a caller embedding it in a larger document.
 pub fn to_json_value(checks: &[Check]) -> serde_json::Value {
     let report: Vec<CheckReport<'_>> = checks.iter().map(CheckReport::from).collect();
     serde_json::to_value(report).unwrap_or(serde_json::Value::Null)
 }
 
-/// The JSON projection. A separate type because `status` is derived and must still serialise in
-/// the position the Python's `asdict` + explicit key puts it.
+/// The JSON projection. A separate type because `status` is derived from `ok` and `required`.
 #[derive(Serialize)]
 struct CheckReport<'a> {
     name: &'a str,
@@ -290,12 +280,16 @@ mod tests {
     fn an_empty_check_list_still_reports_a_summary() {
         assert_eq!(table(&[]), "0 checks, 0 failed");
         assert_eq!(exit_code(&[]), 0);
-        assert_eq!(to_json(&[]), "[]");
+        assert_eq!(
+            serde_json::to_string_pretty(&to_json_value(&[])).expect("json"),
+            "[]"
+        );
     }
 
     #[test]
-    fn the_json_report_is_an_array_of_six_ordered_keys() {
-        let text = to_json(&[Check::pass("islo cli", "islo 0.48.1")]);
+    fn the_json_report_is_an_array_of_six_sorted_keys() {
+        let report = to_json_value(&[Check::pass("islo cli", "islo 0.48.1")]);
+        let text = serde_json::to_string_pretty(&report).expect("json");
         assert!(text.starts_with('['), "{text}");
         let keys: Vec<&str> = text
             .lines()
@@ -304,7 +298,7 @@ mod tests {
             .collect();
         assert_eq!(
             keys,
-            vec!["name", "ok", "detail", "fix", "required", "status"]
+            vec!["detail", "fix", "name", "ok", "required", "status"]
         );
         assert!(text.contains("\"status\": \"ok\""), "{text}");
         assert!(!text.ends_with('\n'));
