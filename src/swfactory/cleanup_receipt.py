@@ -12,9 +12,12 @@ import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from swfactory.store_schema import connect_write, ensure_named_schema, guard_before_ddl
+
+if TYPE_CHECKING:
+    from swfactory.idempotency import OperationRef
 
 CleanupStatus = Literal["converged", "already_absent", "refused", "ambiguous", "failed"]
 
@@ -61,6 +64,29 @@ class CleanupReceipt:
             observed_at=time.time(),
             attempts=attempts,
             detail=detail[:2000],
+        )
+
+    @classmethod
+    def for_operation(
+        cls,
+        ref: OperationRef,
+        resource_id: str,
+        status: CleanupStatus,
+        *,
+        provider: str,
+        requested_at: float,
+        detail: str = "",
+    ) -> CleanupReceipt:
+        """The receipt for the journaled cleanup operation ``ref`` on ``resource_id``."""
+        return cls.build(
+            cell_id=ref.cell_id,
+            epoch=ref.epoch,
+            operation_key=ref.key,
+            provider=provider,
+            resource_id=resource_id,
+            status=status,
+            requested_at=requested_at,
+            detail=detail,
         )
 
     @property

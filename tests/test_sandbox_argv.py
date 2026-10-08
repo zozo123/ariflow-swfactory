@@ -462,39 +462,6 @@ def test_srt_set_protected_rewrites_settings_and_run_resyncs_stale_file(tmp_path
     assert sb.settings_path.stat().st_mtime_ns == stamp
 
 
-def test_srt_ensure_inits_git_host_side_then_runs_confined(tmp_path, monkeypatch) -> None:
-    """srt forbids creating `.git`: ensure() runs `git init` unconfined; run() goes through srt."""
-    calls: list[list[str]] = []
-
-    def fake_run(argv, **kwargs):
-        calls.append(argv)
-        if argv[:4] == ["bash", "--noprofile", "--norc", "-c"]:
-            (tmp_path / "work" / ".git").mkdir(parents=True)
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(sandbox_mod.subprocess, "run", fake_run)
-    monkeypatch.setattr(sandbox_mod.shutil, "which", lambda name: "/usr/local/bin/srt")
-    sb = _srt(tmp_path)
-    sb.ensure()
-    assert calls == [["bash", "--noprofile", "--norc", "-c", "git init -q -b main"]]
-    assert sb.settings_path.exists()
-    sb.ensure()  # idempotent: .git present -> no second init
-    assert len(calls) == 1
-    sb.run("git status")
-    assert calls[-1][:3] == ["srt", "-s", str(sb.settings_path)]
-
-
-def test_srt_ensure_raises_on_git_init_failure(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        sandbox_mod.subprocess,
-        "run",
-        lambda argv, **kw: subprocess.CompletedProcess(argv, 128, stdout="", stderr="boom"),
-    )
-    with pytest.raises(sandbox_mod.StageError) as ei:
-        _srt(tmp_path).ensure()
-    assert ei.value.kind == "sandbox" and "boom" in str(ei.value)
-
-
 def test_srt_macos_caches_listed_only_when_present(tmp_path, monkeypatch) -> None:
     home = tmp_path / "home"
     (home / "Library" / "Caches").mkdir(parents=True)
@@ -519,27 +486,13 @@ def test_srt_argv_prefers_srt_binary_else_npx(tmp_path, monkeypatch) -> None:
         assert a not in FORBIDDEN_FLAGS
 
 
-def test_srt_run_propagates_rc_and_writes_settings_lazily(tmp_path, monkeypatch) -> None:
+def test_srt_run_writes_settings_lazily(tmp_path, monkeypatch) -> None:
     sb = _srt(tmp_path)
-    seen = _fake_srt(monkeypatch, rc=3)
+    seen = _fake_srt(monkeypatch)
     assert not sb.settings_path.exists()
-    res = sb.run("exit 3", timeout_s=17)
+    sb.run("true")
     assert sb.settings_path.exists()
-    assert isinstance(res, RunResult) and res.exit_code == 3 and not res.ok
-    assert res.stdout == "out\n" and res.timed_out is False
-    assert seen["kwargs"]["timeout"] == 17
-    assert seen["kwargs"]["cwd"] == sb.root
-    assert seen["argv"][0] in ("srt", "npx")
     assert seen["argv"][-1].startswith(f"cd {sb.workdir} && ")
-
-
-def test_srt_run_timeout_sets_timed_out(tmp_path, monkeypatch) -> None:
-    def fake_run(argv, **kwargs):
-        raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output=b"partial", stderr=None)
-
-    monkeypatch.setattr(sandbox_mod.subprocess, "run", fake_run)
-    res = _srt(tmp_path).run("sleep 999", timeout_s=1)
-    assert res.timed_out is True and res.exit_code == sandbox_mod.TIMEOUT_EXIT_CODE
 
 
 def test_srt_credentials_are_scoped_to_agent_process(tmp_path, monkeypatch) -> None:
@@ -576,14 +529,6 @@ def test_srt_credentials_are_scoped_to_agent_process(tmp_path, monkeypatch) -> N
     monkeypatch.delenv("ANTHROPIC_API_KEY")
     _srt(tmp_path, pass_env=("ANTHROPIC_API_KEY",)).run_agent("true")
     assert "ANTHROPIC_API_KEY" not in seen["kwargs"]["env"]  # absent on host -> not invented
-
-
-def test_srt_is_a_local_sandbox_for_files(tmp_path) -> None:
-    sb = _srt(tmp_path)
-    assert isinstance(sb, LocalSandbox) and isinstance(sb, Sandbox)
-    sb.write("docs/x.md", "# x\n")  # orchestrator-side file access is unconfined
-    assert sb.exists("docs/x.md") and sb.read("docs/x.md") == "# x\n"
-    sb.close()
 
 
 # ---------------------------------------------------------------- scrub_env / protocol / factory
@@ -894,22 +839,39 @@ def test_docker_host_login_is_mounted_only_for_agent_process_when_present(tmp_pa
     assert not any(str(home) in a for a in seen["argv"])
 
 
-def test_docker_run_propagates_rc_and_timeout(tmp_path, monkeypatch) -> None:
+# ---------------------------------------------------------------- srt and docker alike
+
+
+@pytest.fixture(params=["srt", "docker"])
+def host_backend(request, monkeypatch):
+    """``(make, launcher)`` for each confined host sandbox: a ``LocalSandbox`` for files and
+    ``git init``, whose every command launches through its own binary."""
+    monkeypatch.setattr(sandbox_mod.shutil, "which", lambda name: "/usr/local/bin/srt")
+    return {"srt": _srt, "docker": _docker}[request.param], request.param
+
+
+def test_host_run_propagates_rc_and_timeout(host_backend, tmp_path, monkeypatch) -> None:
+    make, launcher = host_backend
     seen = _fake_srt(monkeypatch, rc=3)
-    res = _docker(tmp_path).run("exit 3")
-    assert res.exit_code == 3 and not res.ok and res.stdout == "out\n"
-    assert seen["argv"][0] == "docker"
+    sb = make(tmp_path)
+    res = sb.run("exit 3", timeout_s=17)
+    assert isinstance(res, RunResult) and res.exit_code == 3 and not res.ok
+    assert res.stdout == "out\n" and res.timed_out is False
+    assert seen["argv"][0] == launcher
+    assert seen["kwargs"]["timeout"] == 17 and seen["kwargs"]["cwd"] == sb.root
 
     def boom(argv, **kwargs):
-        raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output=b"partial", stderr=None)
 
     monkeypatch.setattr(sandbox_mod.subprocess, "run", boom)
-    res = _docker(tmp_path).run("sleep 999", timeout_s=1)
-    assert res.timed_out and res.exit_code == sandbox_mod.TIMEOUT_EXIT_CODE
+    res = make(tmp_path).run("sleep 999", timeout_s=1)
+    assert res.timed_out is True and res.exit_code == sandbox_mod.TIMEOUT_EXIT_CODE
 
 
-def test_docker_ensure_inits_git_host_side_then_runs_in_container(tmp_path, monkeypatch) -> None:
-    """Like srt: `git init` is the orchestrator's own action on the host; run() is a container."""
+def test_host_ensure_inits_git_host_side_then_runs_confined(host_backend, tmp_path, monkeypatch) -> None:
+    """srt forbids creating `.git` and a container would own it as another uid: `git init` is the
+    orchestrator's own action on the host; run() goes through the backend."""
+    make, launcher = host_backend
     calls: list[list[str]] = []
     real_run = subprocess.run
 
@@ -920,29 +882,33 @@ def test_docker_ensure_inits_git_host_side_then_runs_in_container(tmp_path, monk
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     monkeypatch.setattr(sandbox_mod.subprocess, "run", fake_run)
-    sb = _docker(tmp_path)
+    sb = make(tmp_path)
     sb.ensure()
     assert (sb.root / ".git").is_dir()
-    assert calls[0][:4] == ["bash", "--noprofile", "--norc", "-c"] and "git init" in calls[0][4]
-    sb.ensure()  # idempotent: no second git init
+    assert calls == [["bash", "--noprofile", "--norc", "-c", "git init -q -b main"]]
+    sb.ensure()  # idempotent: .git present -> no second init
     assert len(calls) == 1
-    sb.run("true")
-    assert calls[-1][:2] == ["docker", "run"]
+    sb.run("git status")
+    assert calls[-1][0] == launcher
 
 
-def test_docker_ensure_raises_on_git_init_failure(tmp_path, monkeypatch) -> None:
-    def fail(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, 128, stdout="", stderr="fatal: nope")
+def test_host_ensure_raises_on_git_init_failure(host_backend, tmp_path, monkeypatch) -> None:
+    make, _ = host_backend
+    monkeypatch.setattr(
+        sandbox_mod.subprocess,
+        "run",
+        lambda argv, **kw: subprocess.CompletedProcess(argv, 128, stdout="", stderr="fatal: nope"),
+    )
+    with pytest.raises(StageError, match="git init failed") as ei:
+        make(tmp_path).ensure()
+    assert ei.value.kind == "sandbox" and "fatal: nope" in str(ei.value)
 
-    monkeypatch.setattr(sandbox_mod.subprocess, "run", fail)
-    with pytest.raises(StageError, match="git init failed"):
-        _docker(tmp_path).ensure()
 
-
-def test_docker_is_a_local_sandbox_for_files(tmp_path) -> None:
-    sb = _docker(tmp_path)
+def test_host_sandbox_is_a_local_sandbox_for_files(host_backend, tmp_path) -> None:
+    make, _ = host_backend
+    sb = make(tmp_path)
     assert isinstance(sb, LocalSandbox) and isinstance(sb, Sandbox)
-    sb.write("docs/x.md", "# x\n")  # orchestrator-side file access is the host path
+    sb.write("docs/x.md", "# x\n")  # orchestrator-side file access is unconfined, on the host path
     assert sb.exists("docs/x.md") and sb.read("docs/x.md") == "# x\n"
     assert (tmp_path / "work" / "docs" / "x.md").exists()
     sb.close()

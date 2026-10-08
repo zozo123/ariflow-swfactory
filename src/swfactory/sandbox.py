@@ -26,6 +26,7 @@ No environment passthrough exists on this protocol, by design.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -182,35 +183,50 @@ SCRUB_EXACT = frozenset(
         "ENV",
         "DATABASE_URL",
         "DOCKER_AUTH_CONFIG",
-        "HF_TOKEN",
         "KUBECONFIG",
         "NETRC",
-        "NODE_AUTH_TOKEN",
-        "NPM_TOKEN",
         "SSH_AUTH_SOCK",
     }
 )
 
 
-def owns_sandbox(list_json: str, name: str, *, owner: str | None = None) -> bool:
-    """True iff ``name`` appears in this ``islo ls --output json`` listing (own scope) and, when
-    ``owner`` is given, its ``created_by`` equals ``owner``. Pure; used before every ``islo rm``."""
+def islo_rows(list_json: str) -> list[dict]:
+    """The entries of an ``islo ls --output json`` listing. Pure. Tolerates a JSON array or an
+    object wrapping one (its first list value); anything else is empty, and non-objects are dropped."""
     try:
         data = json.loads(list_json or "")
     except ValueError:
-        return False
+        return []
     if isinstance(data, dict):
         data = next((v for v in data.values() if isinstance(v, list)), [])
     if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _creator(item: Mapping[str, Any]) -> str:
+    return str(item.get("created_by") or "").strip().lower()
+
+
+def owns_sandbox(list_json: str, name: str, *, owner: str | None = None) -> bool:
+    """True iff the first ``name`` entry of this listing (own scope) is not deleted and, when
+    ``owner`` is given, its ``created_by`` equals ``owner``. Pure; used before every ``islo rm``."""
+    item = next((it for it in islo_rows(list_json) if it.get("name") == name), None)
+    if item is None or item.get("status") == "deleted":
         return False
-    for item in data:
-        if not isinstance(item, dict) or item.get("name") != name:
-            continue
-        if item.get("status") == "deleted":
-            return False
-        creator = str(item.get("created_by") or "").strip().lower()
-        return not owner or creator == owner.strip().lower()
-    return False
+    return not owner or _creator(item) == owner.strip().lower()
+
+
+def owned_sandboxes(list_json: str, owner: str) -> list[dict]:
+    """Entries of an ``islo ls --output json`` listing whose ``created_by`` is ``owner``.
+
+    Pure. Drops deleted entries and anything whose creator is missing or different; without an
+    owner nothing is returned. Never call ``islo ls --all`` to feed this.
+    """
+    owner = (owner or "").strip().lower()
+    if not owner:
+        return []
+    return [item for item in islo_rows(list_json) if item.get("status") != "deleted" and _creator(item) == owner]
 
 
 #: The factory's own operational namespace. `Config` reads it with `env_prefix="SWF_"`, so any of
@@ -298,7 +314,7 @@ def scrub_env(env: Mapping[str, str]) -> dict[str, str]:
         # AIRFLOW_TOKEN both ended in it and both survived the scrub, which handed the operator's
         # authority to the process running model-written code. The allow-list was written against
         # other people's credential names and never checked against ours.
-        and not key.endswith(("_API_KEY", "_ACCESS_TOKEN", "_AUTH_TOKEN", "_TOKEN", "_PASSWORD", "_SECRET", "_KEY"))
+        and not key.endswith(("_TOKEN", "_PASSWORD", "_SECRET", "_KEY"))
     }
 
 
@@ -374,23 +390,27 @@ class LocalSandbox:
         so initialising an empty directory stays the orchestrator's own action."""
         if (self.root / ".git").exists():
             return
-        res = LocalSandbox.run(self, "git init -q -b main")
+        res = LocalSandbox._launch(self, "git init -q -b main", cwd=None, agent=False, timeout_s=1800)
         if not res.ok:
             raise StageError("sandbox", f"git init failed in {self.root}: {res.stderr.strip()}")
 
     def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
-        """Run ``cmd`` without host login profiles restoring credentials after the scrub."""
+        """Run a credential-free command; its exit code propagates."""
+        return self._launch(cmd, cwd=cwd, agent=False, timeout_s=timeout_s)
+
+    def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
+        """Run only the model process, with the backend's agent credential scope."""
+        return self._launch(cmd, cwd=None, agent=True, timeout_s=timeout_s)
+
+    def _launch(self, cmd: str, *, cwd: str | None, agent: bool, timeout_s: int) -> RunResult:
+        """``bash`` on the host without login profiles restoring credentials after the scrub. ``agent``
+        changes nothing here: the development-only local escape hatch uses the host's Claude login."""
         return _run_subprocess(
             ["bash", "--noprofile", "--norc", "-c", cmd],
             cwd=self._abs(cwd) if cwd else self.root,
             env=scrub_env(os.environ),
             timeout_s=timeout_s,
         )
-
-    def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
-        """Development-only agent path; the local escape hatch uses the host's Claude login."""
-
-        return self.run(cmd, timeout_s=timeout_s)
 
     def read(self, path: str) -> str:
         """Read a UTF-8 file relative to ``workdir``; raises ``FileNotFoundError``."""
@@ -417,7 +437,25 @@ class LocalSandbox:
             raise StageError("policy", str(e)) from e
 
 
-class SrtSandbox(LocalSandbox):
+class _ConfinedHost(LocalSandbox):
+    """A host directory whose commands launch through a subclass's confining ``argv`` (srt or
+    docker) with the ``cell_env`` allow-list; the ``pass_env`` credentials reach only ``run_agent``."""
+
+    def __init__(self, workdir: Path, *, pass_env: Sequence[str] = ()) -> None:
+        super().__init__(workdir)
+        self.pass_env = tuple(pass_env)
+
+    def env(self, *, agent: bool = False) -> dict[str, str]:
+        """Allow-listed host env; model credentials exist only for ``run_agent``."""
+        return _credential_env(self.pass_env if agent else ())
+
+    def _launch(self, cmd: str, *, cwd: str | None, agent: bool, timeout_s: int) -> RunResult:
+        return _run_subprocess(
+            self.argv(cmd, cwd=cwd, agent=agent), cwd=self.root, env=self.env(agent=agent), timeout_s=timeout_s
+        )
+
+
+class SrtSandbox(_ConfinedHost):
     """A host directory whose commands run under the Anthropic Sandbox Runtime (``srt``).
 
     ``read``/``write``/``exists`` are the orchestrator's own file access (unconfined, like
@@ -429,9 +467,9 @@ class SrtSandbox(LocalSandbox):
     identity must travel as ``git -c user.name=...``, never ``git config``), shell rc files,
     ``.mcp.json``, Git metadata, shell profiles and IDE configuration.
 
-    Ordinary commands receive ``scrub_env(os.environ)``. Only ``run_agent`` adds the explicit
-    ``pass_env`` allowlist (copied from the host only when present), so target verification cannot
-    inherit the model credential. Nothing else crosses the boundary.
+    Ordinary commands receive the ``cell_env(os.environ)`` allow-list. Only ``run_agent`` adds the
+    explicit ``pass_env`` allowlist (copied from the host only when present), so target verification
+    cannot inherit the model credential. Nothing else crosses the boundary.
     """
 
     def __init__(
@@ -442,11 +480,10 @@ class SrtSandbox(LocalSandbox):
         protected: Sequence[str] = (),
         pass_env: Sequence[str] = (),
     ) -> None:
-        super().__init__(workdir)
+        super().__init__(workdir, pass_env=pass_env)
         self.name = f"srt:{self.root.name}"
         self.allowed_domains = tuple(allowed_domains)
         self.protected = tuple(protected)
-        self.pass_env = tuple(pass_env)
         self.settings_path = self.root / SRT_SETTINGS_PATH
 
     def settings(self) -> dict:
@@ -496,21 +533,22 @@ class SrtSandbox(LocalSandbox):
         except (OSError, ValueError):
             return False
 
-    def argv(self, cmd: str, *, cwd: str | None = None) -> list[str]:
-        """``srt -s <settings> -c 'cd <cwd> && <cmd>'`` (``npx`` fallback when srt is absent)."""
+    def argv(self, cmd: str, *, cwd: str | None = None, agent: bool = False) -> list[str]:
+        """``srt -s <settings> -c 'cd <cwd> && <cmd>'`` (``npx`` fallback when srt is absent).
+        ``agent`` is ignored: srt scopes the credential through ``env`` alone."""
         run_cwd = str(self._abs(cwd)) if cwd else self.workdir
         script = f"cd {shlex.quote(run_cwd)} && {cmd}"
         return [*_srt_bin(), "-s", str(self.settings_path), "-c", script]
 
     def env(self, *, agent: bool = False) -> dict[str, str]:
-        """Scrubbed host env, with agent credentials only for the model process.
+        """Allow-listed host env, with agent credentials only for the model process.
 
         GitHub's setup-uv exports ``UV_CACHE_DIR`` under ``$RUNNER_TEMP``. That path is outside
         the SRT write allowlist, so forwarding it makes ``uv sync`` fail read-only. Always pin uv
         to the sandbox-owned cache under ``.factory/uv-cache`` while preserving the exact credential
         allowlist.
         """
-        env = _credential_env(self.pass_env if agent else ())
+        env = super().env(agent=agent)
         env["UV_CACHE_DIR"] = str(self.root / ".factory" / "uv-cache")
         return env
 
@@ -526,21 +564,13 @@ class SrtSandbox(LocalSandbox):
         self.write_settings()
         self._host_git_init()
 
-    def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
-        """Run a credential-free command under srt; its exit code propagates."""
+    def _launch(self, cmd: str, *, cwd: str | None, agent: bool, timeout_s: int) -> RunResult:
         if not self._settings_current():  # settings() reflects paths that appeared since
             self.write_settings()
-        return _run_subprocess(self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s)
-
-    def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
-        """Run only the model process with the explicitly allowlisted credential."""
-
-        if not self._settings_current():
-            self.write_settings()
-        return _run_subprocess(self.argv(cmd), cwd=self.root, env=self.env(agent=True), timeout_s=timeout_s)
+        return super()._launch(cmd, cwd=cwd, agent=agent, timeout_s=timeout_s)
 
 
-class DockerSandbox(LocalSandbox):
+class DockerSandbox(_ConfinedHost):
     """A host directory whose commands each run in a fresh ``docker run --rm`` container.
 
     In-place model like ``SrtSandbox``: the workdir is bind-mounted read-write at the SAME
@@ -549,8 +579,8 @@ class DockerSandbox(LocalSandbox):
     access on the host, and ``git init`` in ``ensure`` runs host-side. Confinement is the
     container: the process sees only the workdir (plus ``.claude``/``.github`` and the
     ``protected`` globs' literal prefixes re-mounted read-only), the image, a cache volume and
-    the ``network`` given (``"none"`` = no egress). The docker CLI itself runs with
-    ``scrub_env(os.environ)``. Only ``run_agent`` adds the ``pass_env`` allowlist (``-e NAME``,
+    the ``network`` given (``"none"`` = no egress). The docker CLI itself runs with the
+    ``cell_env(os.environ)`` allow-list. Only ``run_agent`` adds the ``pass_env`` allowlist (``-e NAME``,
     value read from the CLI's env — never in argv) or, with ``credentials="host"``, mounts the
     host's ``~/.claude`` + ``~/.claude.json`` into the container ``$HOME``. Target verification
     receives neither credential mode.
@@ -579,7 +609,7 @@ class DockerSandbox(LocalSandbox):
         home: str = DOCKER_HOME,
         state: RunState | None = None,
     ) -> None:
-        super().__init__(workdir)
+        super().__init__(workdir, pass_env=pass_env)
         # Required, not optional: a container without the Cell/epoch/run stamp is the orphan #2035
         # describes -- alive after its docker client died, attributable to nobody.
         identity.validate()
@@ -588,7 +618,6 @@ class DockerSandbox(LocalSandbox):
         self.receipts: list[dict[str, Any]] = []  # what the last close() observed, for callers without state
         self.name = f"docker:{self.root.name}"
         self.image = image
-        self.pass_env = tuple(pass_env)
         self.credentials = credentials
         self.protected = tuple(protected)
         self.network = network
@@ -662,31 +691,6 @@ class DockerSandbox(LocalSandbox):
                     argv += ["-e", k]
         return [*argv, self.image, "bash", "-lc", cmd]
 
-    def env(self, *, agent: bool = False) -> dict[str, str]:
-        """Docker CLI environment; model credentials exist only for ``run_agent``."""
-
-        return _credential_env(self.pass_env if agent else ())
-
-    def ensure(self) -> None:
-        """Create the directory and ``git init`` host-side (see ``_host_git_init``); everything
-        after this point runs in a container."""
-        self.root.mkdir(parents=True, exist_ok=True)
-        self._host_git_init()
-
-    def run(self, cmd: str, *, cwd: str | None = None, timeout_s: int = 1800) -> RunResult:
-        """Run ``cmd`` in a fresh credential-free container."""
-        return _run_subprocess(self.argv(cmd, cwd=cwd), cwd=self.root, env=self.env(), timeout_s=timeout_s)
-
-    def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
-        """Run only the model process with the API key or mounted Claude login."""
-
-        return _run_subprocess(
-            self.argv(cmd, agent=True),
-            cwd=self.root,
-            env=self.env(agent=True),
-            timeout_s=timeout_s,
-        )
-
     def close(self) -> None:
         """Reclaim the containers this identity labelled, and record what happened.
 
@@ -732,15 +736,8 @@ class DockerSandbox(LocalSandbox):
         ref = OperationRef.build(
             self.identity.cell_id, self.identity.epoch, "sandbox_cleanup", resource_id, self.identity.attempt_id
         )
-        return CleanupReceipt.build(
-            cell_id=self.identity.cell_id,
-            epoch=self.identity.epoch,
-            operation_key=ref.key,
-            provider="docker",
-            resource_id=resource_id,
-            status=status,
-            requested_at=requested_at,
-            detail=detail,
+        return CleanupReceipt.for_operation(
+            ref, resource_id, status, provider="docker", requested_at=requested_at, detail=detail
         ).to_dict()
 
     def _record(self, receipts: list[dict[str, Any]]) -> None:
@@ -1344,17 +1341,15 @@ class ToolsetSandbox:
             self.state.clear_control(TOOLSET_STATE_FILE)
 
 
-def _docker_identity(cfg: Config, issue_id: str, run_dir: Path | None) -> SandboxIdentity:
+def _docker_identity(cfg: Config, issue_id: str, state: RunState | None) -> SandboxIdentity:
     """The Cell/epoch this run executes as, read from the host-owned ``cell.json`` that
     ``runtime._prepare_ctx`` writes before the sandbox exists -- the evidence ``stages.cell_evidence``
     trusts, never a job dict. A direct run has no binding and is labelled as the Cell it would be at
     epoch 1, so the backend sweep can still attribute (and refuse to touch) its containers; the
     attempt is the run id, so two runs of one Cell never share a container identity."""
     binding: dict[str, Any] = {}
-    if run_dir is not None:
-        state = RunState(run_dir)
-        if state.has_control("cell.json"):
-            binding = json.loads(state.read_control("cell.json"))
+    if state is not None and state.has_control("cell.json"):
+        binding = json.loads(state.read_control("cell.json"))
     cell_id = binding.get("cell_id") or CellIdentity(cfg.repo, cfg.target_dir, issue_id).stable_id()
     return SandboxIdentity("docker", str(cell_id), int(binding.get("epoch") or 1), cfg.run_id)
 
@@ -1374,6 +1369,7 @@ def make_sandbox(
     call); ``repo`` (owner/name) makes the islo sandbox name unique per (issue, target).
     """
     claude_env = ("ANTHROPIC_API_KEY",) if cfg.agent == "claude" else ()
+    state = RunState(run_dir) if run_dir is not None else None
     if cfg.sandbox == "local":
         return LocalSandbox(Path(cfg.workdir))
     if cfg.sandbox == "srt":
@@ -1386,6 +1382,7 @@ def make_sandbox(
     if cfg.sandbox == "toolset":
         repo_root = cfg.toolset_workdir.rstrip("/") or "/workspace/repo"
         workdir = _checkout_dir(repo_root, cfg.target_dir)
+        agent_env = {k: os.environ[k] for k in claude_env if k in os.environ}
         backend_kwargs = {}
         if cfg.toolset_backend == "sbx":
             backend_kwargs = {
@@ -1393,8 +1390,6 @@ def make_sandbox(
                 "image": cfg.toolset_sbx_image,
             }
         elif cfg.toolset_backend == "smolvm":
-            import hashlib
-
             # Bind the VM to this run and target before the backend sends its create request.
             identity = f"{cfg.repo}\0{cfg.target_dir}\0{issue_id}\0{cfg.run_id}"
             backend_kwargs = {
@@ -1403,30 +1398,30 @@ def make_sandbox(
                 "cpus": cfg.toolset_smolvm_cpus,
                 "memory_mb": cfg.toolset_smolvm_memory_mb,
                 "machine_name": "swf-smol-" + hashlib.sha256(identity.encode()).hexdigest()[:32],
-                "state": RunState(run_dir) if run_dir is not None else None,
-                "env": {k: os.environ[k] for k in claude_env if k in os.environ},
+                "state": state,
+                "env": agent_env,
             }
         return ToolsetSandbox(
             load_toolset_backend(cfg.toolset_backend, **backend_kwargs),
             workdir=workdir,
-            env={k: os.environ[k] for k in claude_env if k in os.environ},
+            env=agent_env,
             allow_egress_to=_dedupe([*cfg.srt_allowed_domains, *SRT_CLAUDE_DOMAINS, "github.com"]),
             repo_root=repo_root,
             source=f"https://github.com/{cfg.repo}.git",
             base_branch=cfg.base_branch,
-            state=RunState(run_dir) if run_dir is not None else None,
+            state=state,
         )
     if cfg.sandbox == "docker":
         return DockerSandbox(
             Path(cfg.workdir),
             image=cfg.docker_image,
-            identity=_docker_identity(cfg, issue_id, run_dir),
+            identity=_docker_identity(cfg, issue_id, state),
             pass_env=claude_env if cfg.docker_credentials == "env" else (),
             credentials=cfg.docker_credentials,
             protected=protected,
             network=cfg.docker_network,
             user=cfg.docker_user or default_docker_user(),
-            state=RunState(run_dir) if run_dir is not None else None,
+            state=state,
         )
     if cfg.sandbox == "boat":
         # Imported lazily like smolvm: the boat module owns the transport and the VM cell, and
@@ -1442,7 +1437,7 @@ def make_sandbox(
             base_branch=cfg.base_branch,
             target_dir=cfg.target_dir,
             ttl_s=cfg.sandbox_ttl_s,
-            state=RunState(run_dir) if run_dir is not None else None,
+            state=state,
         )
     return IsloSandbox(
         cfg.sandbox_name(issue_id, repo),
