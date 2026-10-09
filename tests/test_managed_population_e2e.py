@@ -4,6 +4,7 @@ import json
 import threading
 from pathlib import Path
 
+from backend_support import TOKEN
 from support import bound_population, lane, swarm_plan
 
 from swfactory.backend import Factory, make_server
@@ -14,7 +15,6 @@ from swfactory.population_execution import PopulationExecutor
 from swfactory.provider_binding import ProviderChoiceSet
 from swfactory.swarm_dynamics import AgentRole, ComputeTier
 
-TOKEN = "b" * 40
 SECRET = "model-token-held-only-by-backend"
 POLICY = "policy:v1:" + "a" * 64
 

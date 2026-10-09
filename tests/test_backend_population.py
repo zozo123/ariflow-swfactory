@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from backend_support import TOKEN
 from support import bound_population, lane, swarm_plan
 
 from swfactory.backend.service import Factory, Refused
@@ -13,7 +14,6 @@ from swfactory.population_adapter import PopulationAdapterResult
 from swfactory.provider_binding import ProviderChoiceSet
 from swfactory.swarm_dynamics import AgentRole, ComputeTier
 
-TOKEN = "t" * 40
 POLICY = "policy:v1:" + "a" * 64
 SECRET = "provider-secret-never-persist"
 

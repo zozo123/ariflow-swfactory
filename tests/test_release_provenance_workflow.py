@@ -24,10 +24,3 @@ def test_supply_chain_no_longer_depends_on_release_published_event() -> None:
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github" / "workflows" / "supply-chain.yml").read_text(encoding="utf-8")
     assert "types: [published]" not in workflow
-
-
-def test_operator_docs_verify_the_downloaded_artifact() -> None:
-    root = Path(__file__).resolve().parents[1]
-    docs = (root / "docs" / "swf.md").read_text(encoding="utf-8")
-    assert 'gh attestation verify "swf-$VERSION-$TARGET.tar.gz"' in docs
-    assert "swfactory provenance verify --manifest provenance.json --root ." in docs

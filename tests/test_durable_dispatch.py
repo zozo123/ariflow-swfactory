@@ -4,7 +4,7 @@ The failure this module exists for (#2058): with capacity one, submitting A then
 completing A drained B into an "active" admission with no Factory Cell behind it. Nothing ever
 dispatched B, retrying it answered 409, and the operator watched a queue that claimed to be moving.
 
-Everything here is hermetic. ``FakeAirflow`` answers the four calls the backend really makes and
+Everything here is hermetic. ``AirflowRuns`` answers the four calls the backend really makes and
 counts the POSTs, which is the only honest way to say "exactly once". A restart is a real restart:
 the ``Factory`` is closed and a new one is opened on the same state directory, so anything the tests
 observe afterwards came out of SQLite rather than out of a live object.
@@ -12,20 +12,19 @@ observe afterwards came out of SQLite rather than out of a live object.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import threading
 import time
-import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 import pytest
+from backend_support import SECOND_TARGET, FakeResponse
 
 from swfactory import cell_callback
 from swfactory.admission import Limits, Priority
-from swfactory.backend.service import Factory, Refused
+from swfactory.backend.service import Refused
 from swfactory.cells import CellIdentity, CellStore
 from swfactory.durable_admission import (
     MAX_DISPATCH_ATTEMPTS,
@@ -35,175 +34,12 @@ from swfactory.durable_admission import (
     WorkOrderConflict,
 )
 
-TOKEN = "t" * 40
-AIRFLOW_URL = "https://airflow.invalid:8080"
-
-LINE = """
-[blueprint]
-name = "line"
-version = 1
-description = "test line"
-
-[trigger]
-kind = "manual"
-
-[[targets]]
-repo = "owner/one"
-dir = "a"
-base_branch = "main"
-
-[stages]
-order = ["intent", "spec", "plan", "build_and_test", "review", "deliver"]
-
-[[gates]]
-after = "intent"
-artifact = "intent.md"
-timeout_h = 1
-assigned = []
-auto = true
-
-[limits]
-max_build_iterations = 3
-max_review_fixes = 1
-max_turns = 40
-budget_usd_per_stage = 2.0
-budget_usd = 8.0
-stage_timeout_h = 1
-max_parallel_jobs = 2
-
-[review]
-policy = "REVIEW.md"
-nit_cap = 3
-
-[sandbox]
-kind = "local"
-ttl_s = 7200
-idle_s = 900
-
-[deliver]
-labels = ["factory"]
-"""
-
-SECOND_TARGET = """
-[[targets]]
-repo = "owner/two"
-dir = "b"
-base_branch = "main"
-"""
-
 SAME_REPO_TARGET = """
 [[targets]]
 repo = "owner/one"
 dir = "b"
 base_branch = "main"
 """
-
-
-class FakeAirflow:
-    """The four calls the backend makes, plus a truthful record of which runs really exist.
-
-    ``posts`` counts attempts and ``runs`` holds the runs a POST actually created; a refused POST
-    creates nothing, which is what makes the next attempt's reconcile answer ``definitely_absent``.
-    """
-
-    def __init__(self) -> None:
-        self.posts: list[dict[str, Any]] = []
-        self.created: list[dict[str, Any]] = []
-        self.runs: dict[str, dict[str, Any]] = {}
-        self.post_hook = None
-        self.post_status = 200
-
-    def __call__(self, method: str, path: str, body: dict | None) -> tuple[int, Any]:
-        if path.count("/") == 2 and method in {"GET", "PATCH"}:
-            return 200, {"is_paused": False}
-        if method == "POST" and path.endswith("/dagRuns"):
-            run_id = str(body["dag_run_id"])
-            work_id = str(body["conf"]["_factory_submission_id"])
-            self.posts.append({"dag_run_id": run_id, "work_id": work_id, "conf": body["conf"]})
-            if self.post_hook is not None:
-                self.post_hook(run_id)
-            if self.post_status >= 300:
-                return self.post_status, {"detail": "airflow refused"}
-            if run_id in self.runs:
-                # Airflow refuses a duplicate deterministic run id; a second dispatch must be
-                # visible as a conflict rather than as a silently repeated run.
-                return 409, {"detail": "duplicate dag_run_id"}
-            self.runs[run_id] = {"dag_run_id": run_id, "state": "queued"}
-            self.created.append({"dag_run_id": run_id, "work_id": work_id})
-            return 200, self.runs[run_id]
-        if method == "GET" and "/dagRuns/" in path:
-            run_id = urllib.parse.unquote(path.rsplit("/", 1)[1])
-            if run_id in self.runs:
-                return 200, self.runs[run_id]
-            return 404, {"detail": "absent"}
-        raise AssertionError(f"unexpected Airflow call {method} {path}")
-
-    def created_for(self, work_id: str) -> list[str]:
-        return [run["dag_run_id"] for run in self.created if run["work_id"] == work_id]
-
-
-class Backend:
-    """One backend on one state directory, restartable in place."""
-
-    def __init__(self, root: Path, limits: Limits) -> None:
-        self.root = root
-        self.limits = limits
-        self.airflow = FakeAirflow()
-        self.factory = self._open()
-
-    def _open(self) -> Factory:
-        factory = Factory(token=TOKEN, airflow_url=AIRFLOW_URL, root=self.root, state_root=self.root / ".factory")
-        factory.control.admission.limits = self.limits
-        # A crashed process cannot hand its dispatch lease back, so redelivery waits for the lease
-        # to expire. These tests restart instantly, so the lease has to expire instantly too.
-        factory.control.admission.dispatch_lease_s = 0.0
-        # Likewise a lost report is only looked for once the Cell's last write is older than the
-        # read floor; these tests lose it and restart within the same second.
-        factory.reconcile_interval_s = 0.0
-        factory.airflow = self.airflow  # type: ignore[method-assign]
-        return factory
-
-    def restart(self) -> Factory:
-        self.factory.close()
-        self.factory = self._open()
-        return self.factory
-
-    def close(self) -> None:
-        self.factory.close()
-
-    # ---------------------------------------------------------------- helpers
-
-    def submit(self, *issues: str, actor: str = "op", targets: list[str] | None = None) -> dict[str, Any]:
-        body: dict[str, Any] = {"line": "line", "issues": list(issues), "actor": actor}
-        if targets is not None:
-            body["targets"] = targets
-        return self.factory.submit(body)
-
-    def finish(self, cell_id: str, state: str = "success") -> dict[str, Any]:
-        epoch = int(self.factory.cell_store.get(cell_id)["epoch"])
-        return self.factory._transition(
-            {"cell_id": cell_id, "epoch": epoch, "state": state, "operation_key": f"airflow:{state}:{cell_id}"}
-        )
-
-    def admission_state(self, work_id: str) -> str | None:
-        return self.factory.control.admission.state_of(work_id)
-
-
-def _line(root: Path, *extra: str) -> None:
-    (root / "blueprints").mkdir(parents=True, exist_ok=True)
-    (root / "blueprints" / "line.toml").write_text(LINE + "".join(extra))
-
-
-@pytest.fixture
-def backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """A factory whose blueprint lives in the cwd, since that is how blueprints resolve."""
-
-    def build(limits: Limits, *extra: str) -> Backend:
-        _line(tmp_path, *extra)
-        monkeypatch.chdir(tmp_path)
-        return Backend(tmp_path, limits)
-
-    return build
 
 
 # --------------------------------------------------------------- the reported failure
@@ -564,21 +400,6 @@ def test_a_legacy_active_row_is_repaired_instead_of_holding_capacity_forever(tmp
 # --------------------------------------------------------------- the lifecycle callback
 
 
-class _Response:
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self._raw = json.dumps(payload).encode()
-        self.status = 200
-
-    def read(self, _limit: int | None = None) -> bytes:
-        return self._raw
-
-    def __enter__(self) -> _Response:
-        return self
-
-    def __exit__(self, *_exc: object) -> None:
-        return None
-
-
 def _managed_job() -> dict[str, Any]:
     return {"cell_managed": True, "cell_id": "cell_555aa0b670e50aef10c1f7fd", "cell_epoch": 2}
 
@@ -592,7 +413,7 @@ def test_the_callback_reports_the_resumed_dispatch_and_does_not_perform_it(monke
         "released_work": ["submit_b"],
         "resumed_dispatch": [{"work_id": "submit_b", "dispatched": True, "run_id": "swf__b"}],
     }
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _Response(body))
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: FakeResponse(body))
     result = cell_callback.transition(_managed_job(), "success", operation_key="airflow:success")
     assert result == {
         "cell": body["cell"],
@@ -605,7 +426,7 @@ def test_the_callback_refuses_an_answer_about_a_different_cell_epoch(monkeypatch
     monkeypatch.setenv("SWF_BACKEND_URL", "https://backend.invalid")
     monkeypatch.setenv("SWF_BACKEND_TOKEN", "b" * 40)
     body = {"cell": {"cell_id": "cell_555aa0b670e50aef10c1f7fd", "epoch": 3, "state": "success"}, "released_work": []}
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _Response(body))
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: FakeResponse(body))
     with pytest.raises(cell_callback.CellCallbackError):
         cell_callback.transition(_managed_job(), "success", operation_key="airflow:success")
 

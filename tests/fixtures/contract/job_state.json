@@ -82,6 +82,24 @@
       "expected": "failed"
     },
     {
+      "name": "upstream_failed_beats_running",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.intent",
+            "map_index": 0,
+            "state": "upstream_failed"
+          },
+          {
+            "task_id": "job.spec",
+            "map_index": 0,
+            "state": "running"
+          }
+        ]
+      },
+      "expected": "failed"
+    },
+    {
       "name": "failed_beats_skipped_and_none",
       "input": {
         "tasks": [
@@ -159,6 +177,24 @@
       "expected": "running"
     },
     {
+      "name": "running_is_active",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.intent",
+            "map_index": 0,
+            "state": "running"
+          }
+        ]
+      },
+      "expected": "running"
+    },
+    {
       "name": "entirely_skipped",
       "input": {
         "tasks": [
@@ -175,6 +211,24 @@
         ]
       },
       "expected": "skipped"
+    },
+    {
+      "name": "all_success",
+      "input": {
+        "tasks": [
+          {
+            "task_id": "job.setup",
+            "map_index": 0,
+            "state": "success"
+          },
+          {
+            "task_id": "job.deliver",
+            "map_index": 0,
+            "state": "success"
+          }
+        ]
+      },
+      "expected": "success"
     },
     {
       "name": "skipped_plus_success_is_success",

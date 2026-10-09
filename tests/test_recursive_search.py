@@ -322,9 +322,10 @@ def test_research_adapt_cli_consumes_retained_population_telemetry(tmp_path: Pat
     assert document["plan"]["population_telemetry"]["manifest_digest"] == telemetry.manifest_digest
 
 
-def test_research_adapt_cli_consumes_managed_population_execution_report(tmp_path: Path) -> None:
+def _write_adapt_inputs(tmp_path: Path) -> tuple[Path, Path, Path, PopulationExecutionReport]:
+    """A campaign report with no outcomes, plus retained telemetry and a managed execution report
+    over four answered receipts: (report, telemetry, execution report) paths and the execution."""
     report_path = tmp_path / "campaign.json"
-    execution_path = tmp_path / "population-execution.json"
     report_path.write_text(
         json.dumps(
             {
@@ -337,7 +338,6 @@ def test_research_adapt_cli_consumes_managed_population_execution_report(tmp_pat
         ),
         encoding="utf-8",
     )
-    telemetry = _population_telemetry()
     receipts = tuple(
         BehaviorReceipt(
             task_id=f"pop_{index:024x}",
@@ -347,9 +347,11 @@ def test_research_adapt_cli_consumes_managed_population_execution_report(tmp_pat
         for index in range(4)
     )
     telemetry = replace(
-        telemetry,
+        _population_telemetry(),
         receipt_digests=tuple(sorted(receipt.digest() for receipt in receipts)),
     )
+    telemetry_path = tmp_path / "population-telemetry.json"
+    telemetry_path.write_text(json.dumps(telemetry.canonical_dict()), encoding="utf-8")
     execution = PopulationExecutionReport(
         population_manifest_digest=telemetry.manifest_digest,
         provider_binding_digest="sha256:" + "9" * 64,
@@ -358,7 +360,13 @@ def test_research_adapt_cli_consumes_managed_population_execution_report(tmp_pat
         cancelled=False,
         started_tasks=4,
     )
+    execution_path = tmp_path / "population-execution.json"
     write_population_execution_report(execution_path, execution)
+    return report_path, telemetry_path, execution_path, execution
+
+
+def test_research_adapt_cli_consumes_managed_population_execution_report(tmp_path: Path) -> None:
+    report_path, _, execution_path, execution = _write_adapt_inputs(tmp_path)
 
     result = CliRunner().invoke(
         app,
@@ -373,8 +381,8 @@ def test_research_adapt_cli_consumes_managed_population_execution_report(tmp_pat
 
     assert result.exit_code == 0, result.output
     document = json.loads(result.stdout)
-    assert document["plan"]["population_telemetry_digest"] == telemetry.digest()
-    assert document["plan"]["population_telemetry"]["manifest_digest"] == telemetry.manifest_digest
+    assert document["plan"]["population_telemetry_digest"] == execution.telemetry.digest()
+    assert document["plan"]["population_telemetry"]["manifest_digest"] == execution.telemetry.manifest_digest
     assert document["plan"]["information_budget_digest"].startswith("sha256:")
     assert document["plan"]["information_budget"]["source_execution_report_digest"] == execution.digest()
     assert document["plan"]["information_budget"]["next_budget"]["max_agents"] <= 4
@@ -473,44 +481,7 @@ def test_settled_correlated_execution_stops_recursive_strategy_spawning() -> Non
 
 
 def test_research_adapt_refuses_two_population_feedback_sources(tmp_path: Path) -> None:
-    report_path = tmp_path / "campaign.json"
-    telemetry_path = tmp_path / "telemetry.json"
-    execution_path = tmp_path / "execution.json"
-    report_path.write_text(
-        json.dumps(
-            {
-                "campaign_id": "campaign-mutual-exclusion",
-                "input_head": "abc123",
-                "experiment_round": {"depth": 0},
-                "exploration_selection": {"winner": None},
-                "outcomes": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-    telemetry = _population_telemetry()
-    telemetry_path.write_text(json.dumps(telemetry.canonical_dict()), encoding="utf-8")
-    receipts = tuple(
-        BehaviorReceipt(
-            task_id=f"pop_{index:024x}",
-            state="answered",
-            behavior_signature=(f"trajectory-{index}",),
-        )
-        for index in range(4)
-    )
-    telemetry = replace(
-        telemetry,
-        receipt_digests=tuple(sorted(receipt.digest() for receipt in receipts)),
-    )
-    execution = PopulationExecutionReport(
-        population_manifest_digest=telemetry.manifest_digest,
-        provider_binding_digest="sha256:" + "8" * 64,
-        receipts=receipts,
-        telemetry=telemetry,
-        cancelled=False,
-        started_tasks=4,
-    )
-    write_population_execution_report(execution_path, execution)
+    report_path, telemetry_path, execution_path, _ = _write_adapt_inputs(tmp_path)
 
     result = CliRunner().invoke(
         app,

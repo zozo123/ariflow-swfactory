@@ -18,10 +18,9 @@ only thing that can repair the damage is durable state read back by a restarted 
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 
 import pytest
-from test_durable_dispatch import LINE, SECOND_TARGET, Backend, _line  # noqa: F401
+from backend_support import SECOND_TARGET
 
 from swfactory.admission import Limits
 from swfactory.durable_admission import MAX_DISPATCH_ATTEMPTS
@@ -29,16 +28,6 @@ from swfactory.durable_admission import MAX_DISPATCH_ATTEMPTS
 
 class Crash(BaseException):
     """Not an Exception: bypasses every in-process recovery handler, like a real SIGKILL."""
-
-
-@pytest.fixture
-def backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    def build(limits: Limits, *extra: str) -> Backend:
-        _line(tmp_path, *extra)
-        monkeypatch.chdir(tmp_path)
-        return Backend(tmp_path, limits)
-
-    return build
 
 
 def _state(box, work_id):
@@ -604,39 +593,27 @@ def test_a_lost_terminal_callback_is_reconciled_against_airflow_on_restart(backe
     assert any(e["kind"] == "patch" and e["payload"].get("state") == "failed" for e in history)
 
 
-def test_a_lost_success_report_adopts_the_run_outcome(backend) -> None:
+@pytest.mark.parametrize(
+    ("run_state", "cell_state", "queued_state"),
+    [
+        pytest.param("success", "success", "bound", id="lost_success_report_adopts_the_run_outcome"),
+        # A run deleted under the backend certainly is not computing; the unit is held for nothing.
+        pytest.param(None, "cancelled", "bound", id="absent_airflow_run_releases_its_unit_as_cancelled"),
+        # Only Airflow's verdict ends a Cell; a run still going keeps its unit.
+        pytest.param("running", "running", "queued", id="live_airflow_run_is_not_mistaken_for_a_lost_callback"),
+    ],
+)
+def test_a_lost_report_follows_the_airflow_run(
+    backend, run_state: str | None, cell_state: str, queued_state: str
+) -> None:
     box = backend(Limits(global_active=1))
     a = box.submit("1")
     b = box.submit("2")
-    cell_id = _lose_the_terminal_report(box, a, "success")
+    cell_id = _lose_the_terminal_report(box, a, run_state)
     box.restart()
     box.factory.resume_dispatch()
-    assert box.factory.cell_store.get(cell_id)["state"] == "success"
-    assert _state(box, b["submission_id"]) == "bound"
-
-
-def test_an_absent_airflow_run_releases_its_unit_as_cancelled(backend) -> None:
-    """A run deleted under the backend certainly is not computing; the unit is held for nothing."""
-    box = backend(Limits(global_active=1))
-    a = box.submit("1")
-    b = box.submit("2")
-    cell_id = _lose_the_terminal_report(box, a, None)
-    box.restart()
-    box.factory.resume_dispatch()
-    assert box.factory.cell_store.get(cell_id)["state"] == "cancelled"
-    assert _state(box, b["submission_id"]) == "bound"
-
-
-def test_a_live_airflow_run_is_not_mistaken_for_a_lost_callback(backend) -> None:
-    """Only Airflow's verdict ends a Cell; a run still going keeps its unit."""
-    box = backend(Limits(global_active=1))
-    a = box.submit("1")
-    b = box.submit("2")
-    cell_id = _lose_the_terminal_report(box, a, "running")
-    box.restart()
-    assert box.factory.resume_dispatch() == []
-    assert box.factory.cell_store.get(cell_id)["state"] == "running"
-    assert _state(box, b["submission_id"]) == "queued"
+    assert box.factory.cell_store.get(cell_id)["state"] == cell_state
+    assert _state(box, b["submission_id"]) == queued_state
     assert box.factory.fleet()["callback_debt"] == 0
 
 

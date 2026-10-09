@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from backend_support import FakeResponse
 from support import git
 
 from swfactory import maintain
@@ -550,24 +551,13 @@ def test_request_sweep_goes_through_the_backend_and_refuses_without_one(monkeypa
 
     sent: list[tuple[str, dict]] = []
 
-    class _Response:
-        status = 200
-
-        def __init__(self, request) -> None:
-            sent.append((request.full_url, json.loads(request.data)))
-
-        def read(self, _n: int = -1) -> bytes:
-            return json.dumps({"removed": ["swf-a-1-aaaaaaaa"], "kept": [], "debt": [], "reconciled": []}).encode()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_exc) -> None:
-            return None
+    def urlopen(request, **_k) -> FakeResponse:
+        sent.append((request.full_url, json.loads(request.data)))
+        return FakeResponse({"removed": ["swf-a-1-aaaaaaaa"], "kept": [], "debt": [], "reconciled": []})
 
     monkeypatch.setenv("SWF_BACKEND_URL", "http://backend:8082/")
     monkeypatch.setenv("SWF_BACKEND_TOKEN", "t" * 32)
-    monkeypatch.setattr(urllib.request, "urlopen", lambda request, **_k: _Response(request))
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     assert maintain.request_sweep(3600)["removed"] == ["swf-a-1-aaaaaaaa"]
     assert sent == [("http://backend:8082/v1/workers/sweep", {"ttl_s": 3600})]
 

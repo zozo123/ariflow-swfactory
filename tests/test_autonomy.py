@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 
 import pytest
-import test_backend_service as shared
+from backend_support import REPO
 
 from swfactory.autonomy import AutonomyStore, load_policy
 from swfactory.backend import autonomous_service as autonomous
@@ -14,11 +14,6 @@ from swfactory.cell_runtime import identity_for_job
 from swfactory.config import FACTORY_ROOT
 from swfactory.models import Issue, StageError
 from swfactory.security_contract import CanonicalPolicy
-
-REPO = shared.REPO
-airflow = shared.airflow
-env = shared.env
-factory = shared.factory
 
 SHA = "a" * 40
 

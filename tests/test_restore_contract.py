@@ -20,6 +20,7 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
+from backend_support import AF, TOKEN
 from typer.testing import CliRunner
 
 from swfactory.admission import Limits, Priority
@@ -734,7 +735,7 @@ def test_the_backend_refuses_its_whole_mutation_surface_after_a_restore(tmp_path
         create_backup(root, backup, actor="operator")
     restore(backup, root, actor="operator", reason="drill", replace_existing=True)
 
-    with closing(Factory(token="t" * 40, airflow_url="http://127.0.0.1:8080", state_root=root)) as factory:
+    with closing(Factory(token=TOKEN, airflow_url=AF, state_root=root)) as factory:
         capabilities = factory.capabilities()
         assert capabilities["mutation_ready"] is False
         assert "backup resume" in capabilities["detail"]
@@ -755,7 +756,7 @@ def test_the_backend_refuses_to_open_a_state_root_it_must_not_own(tmp_path: Path
     db.execute("PRAGMA user_version=42")
     db.close()
     with pytest.raises(StoreSchemaError, match="operations"):
-        Factory(token="t" * 40, airflow_url="http://127.0.0.1:8080", state_root=root)
+        Factory(token=TOKEN, airflow_url=AF, state_root=root)
 
 
 # ------------------- acceptance box 3, continued: the effects the snapshot never recorded

@@ -12,17 +12,16 @@ So `cell_`, `cell_zzz` and `cell_` followed by two hundred characters were each 
 readers and invalid to others -- on the identity every epoch fence is keyed to. Nothing anywhere
 checked the alphabet, though the minter can only ever produce lowercase hex.
 
-These tests read `tests/fixtures/contract/is_cell_id.json` through the same contract-equivalence
-harness that pins `policy_digest`, so the Rust crate answers the identical cases and a divergence
-fails on both sides rather than in whichever language happens to be looked at.
+`tests/fixtures/contract/is_cell_id.json` is run case by case by `tests/test_contract_fixtures.py`,
+the same contract-equivalence harness that pins `policy_digest`, so the Rust crate answers the
+identical cases and a divergence fails on both sides rather than in whichever language happens to
+be looked at. This file pins what the fixture alone cannot: its constants, the minter, the guard.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-
-import pytest
 
 from swfactory.cells import (
     CELL_ID_DIGEST_LEN,
@@ -36,7 +35,6 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "contract" / "is_cell_i
 CONTRACT = json.loads(FIXTURE.read_text(encoding="utf-8"))
 
 
-ACCEPT = [c["input"]["value"] for c in CONTRACT["cases"] if c["expected"]]
 REFUSE = [c for c in CONTRACT["cases"] if not c["expected"]]
 
 
@@ -44,16 +42,6 @@ def test_the_fixture_agrees_with_the_constants_the_code_uses() -> None:
     assert CONTRACT["prefix"] == CELL_ID_PREFIX
     assert CONTRACT["digest_len"] == CELL_ID_DIGEST_LEN
     assert CONTRACT["total_len"] == CELL_ID_LEN
-
-
-@pytest.mark.parametrize("value", ACCEPT)
-def test_every_accepted_shape_is_accepted(value: str) -> None:
-    assert is_cell_id(value)
-
-
-@pytest.mark.parametrize("case", REFUSE, ids=lambda c: c["name"])
-def test_every_refused_shape_is_refused(case: dict) -> None:
-    assert not is_cell_id(case["input"]["value"]), case.get("why", case["name"])
 
 
 def test_what_the_minter_produces_is_what_the_readers_accept() -> None:

@@ -247,29 +247,36 @@ def test_the_gate_ignores_base_drift(tmp_path: Path) -> None:
     assert '"${BASE_SHA}...${HEAD_SHA}"' in workflow, "the gate must use a three-dot diff"
 
 
-def test_the_gate_refuses_a_factory_authored_control_plane_change(tmp_path: Path) -> None:
-    done = _run_gate(tmp_path, "src/swfactory/sandbox.py\nblueprints/selfhost.toml\n")
-    assert done.returncode == 1, done.stdout + done.stderr
-    assert "src/swfactory/sandbox.py" in done.stdout
-    assert "protected by 'blueprints'" in done.stdout, "a directory prefix must match too"
-
-
-def test_the_gate_permits_ordinary_work(tmp_path: Path) -> None:
-    done = _run_gate(tmp_path, "docs/selfhost.md\nsrc/swfactory/dispatch.py\n")
-    assert done.returncode == 0, done.stdout + done.stderr
-    assert "no protected path touched" in done.stdout
-
-
-def test_budget_and_review_evidence_cannot_be_rewritten_as_ordinary_work(tmp_path: Path) -> None:
-    done = _run_gate(tmp_path, "src/swfactory/metrics.py\n")
-    assert done.returncode == 1, done.stdout + done.stderr
-    assert "protected by 'src/swfactory/metrics.py'" in done.stdout
-
-
-def test_the_gate_waives_tests_because_build_may_add_them(tmp_path: Path) -> None:
-    """``tests/`` is protected only for ``fix``, so a factory-authored diff may add tests."""
-    done = _run_gate(tmp_path, "tests/test_new_thing.py\n")
-    assert done.returncode == 0, done.stdout + done.stderr
+@pytest.mark.parametrize(
+    ("changed", "returncode", "expected"),
+    [
+        pytest.param(
+            "src/swfactory/sandbox.py\nblueprints/selfhost.toml\n",
+            1,
+            ("src/swfactory/sandbox.py", "protected by 'blueprints'"),  # a directory prefix must match too
+            id="refuses_a_factory_authored_control_plane_change",
+        ),
+        pytest.param(
+            "docs/selfhost.md\nsrc/swfactory/dispatch.py\n",
+            0,
+            ("no protected path touched",),
+            id="permits_ordinary_work",
+        ),
+        pytest.param(
+            "src/swfactory/metrics.py\n",
+            1,
+            ("protected by 'src/swfactory/metrics.py'",),
+            id="budget_and_review_evidence_cannot_be_rewritten_as_ordinary_work",
+        ),
+        # ``tests/`` is protected only for ``fix``, so a factory-authored diff may add tests.
+        pytest.param("tests/test_new_thing.py\n", 0, (), id="waives_tests_because_build_may_add_them"),
+    ],
+)
+def test_the_control_plane_gate(tmp_path: Path, changed: str, returncode: int, expected: tuple[str, ...]) -> None:
+    done = _run_gate(tmp_path, changed)
+    assert done.returncode == returncode, done.stdout + done.stderr
+    for text in expected:
+        assert text in done.stdout
 
 
 def test_the_root_contract_is_the_only_new_target_and_demo_still_works() -> None:

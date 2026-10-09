@@ -7,7 +7,7 @@ import urllib.request
 from dataclasses import replace
 
 import pytest
-from test_durable_dispatch import LINE, Backend
+from backend_support import LINE_TOML, Backend
 from typer.testing import CliRunner
 
 from swfactory import blueprint, cell_callback, runtime
@@ -41,7 +41,7 @@ PREVIEW = LinearPreview(
     archived_at=None,
 )
 NATIVE_LINE = (
-    LINE.replace("auto = true", 'mode = "human"')
+    LINE_TOML.replace("auto = true", 'mode = "human"')
     + f'''
 [[gates]]
 after = "plan"
@@ -338,7 +338,7 @@ def test_native_blueprint_refuses_unmanaged_worker_before_sandbox(box, monkeypat
 
 
 def test_legacy_blueprint_serialization_is_unchanged():
-    assert "work_source" not in blueprint.loads(LINE).model_dump(mode="json")
+    assert "work_source" not in blueprint.loads(LINE_TOML).model_dump(mode="json")
 
 
 @pytest.mark.parametrize(

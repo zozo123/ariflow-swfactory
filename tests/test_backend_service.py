@@ -5,110 +5,37 @@ console deliberately does not — so every assertion here is about what the boun
 only about what it returns.
 
 Hermetic, in the house style of ``tests/test_control.py``: the Airflow transport is an ``opener``
-answering a canned ``(method, path)`` table, ``gh``/``islo`` are fake client classes swapped into
-the route table, and no test reaches a real network or a live Airflow. The server itself is
-real: ``make_server`` on an ephemeral loopback port, driven with ``http.client``, because the
-header-level guards (bearer compare, ``Content-Length`` bounds, ``Transfer-Encoding``) only exist
-inside ``BaseHTTPRequestHandler`` and cannot be exercised by calling ``Factory`` directly.
+answering a canned ``(method, path)`` table (``backend_support.FakeAirflow``), ``gh``/``islo`` are
+fake client classes swapped into the route table, and no test reaches a real network or a live
+Airflow. The server itself is real (the ``client`` fixture): ``make_server`` on an ephemeral
+loopback port, driven with ``http.client``, because the header-level guards (bearer compare,
+``Content-Length`` bounds, ``Transfer-Encoding``) only exist inside ``BaseHTTPRequestHandler`` and
+cannot be exercised by calling ``Factory`` directly.
 """
 
 from __future__ import annotations
 
 import http.client
-import io
 import json
 import subprocess
-import threading
 import types
-import urllib.error
-import urllib.request
-from collections.abc import Iterator
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 import pytest
+from backend_support import AF, LINE, REPO, TOKEN, Client, FakeAirflow
 
-from swfactory.backend import Factory, make_server
+from swfactory.backend import Factory
 from swfactory.backend import routes as routes_mod
 from swfactory.backend import scm_service as scm_mod
 from swfactory.backend import service as service_mod
-from swfactory.control import AirflowClient, GitHubClient
+from swfactory.backend.server import MAX_BODY, MAX_POPULATION_BODY, MAX_SCM_BODY
+from swfactory.control import GitHubClient
 from swfactory.models import StageError
 from swfactory.recovery_accounting import PublicationReceipt
 from swfactory.scm import patch_content_digest
 
-TOKEN = "t" * 40  # Factory demands >= 32 non-whitespace characters
-REPO = "zozo123/ariflow-swfactory"  # the repo blueprints/default.toml targets
-AF = "http://localhost:8080"
-LINE = "factory"
-
-
 # ---------------------------------------------------------------- fakes
-
-
-class _Resp:
-    """Enough of ``http.client.HTTPResponse`` for ``Factory.airflow``: code, sized read, context."""
-
-    def __init__(self, code: int, payload: Any) -> None:
-        self.code = code
-        # bytes pass through so a test can hand back the non-JSON body a proxy really returns
-        if isinstance(payload, bytes):
-            self._raw = payload
-        else:
-            self._raw = b"" if payload is None else json.dumps(payload).encode()
-
-    def read(self, amount: int | None = None) -> bytes:
-        return self._raw if amount is None else self._raw[:amount]
-
-    def close(self) -> None:
-        return None
-
-    def __enter__(self) -> _Resp:
-        return self
-
-    def __exit__(self, *_exc: object) -> None:
-        return None
-
-
-class FakeAirflow:
-    """Answers ``(METHOD, path-after-/api/v2)`` from ``routes``; records every request."""
-
-    def __init__(self, routes: dict[tuple[str, str], Any] | None = None) -> None:
-        self.routes = dict(routes or {})
-        self.requests: list[tuple[str, str, Any]] = []
-
-    def open(self, request: urllib.request.Request, timeout: float = 0) -> _Resp:
-        path = request.full_url.removeprefix(AF + "/api/v2")
-        body = json.loads(request.data) if request.data else None
-        self.requests.append((request.get_method(), path, body))
-        entry = self.routes.get((request.get_method(), path))
-        if entry is None:
-            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, io.BytesIO(b'{"detail":"no route"}'))
-        if isinstance(entry, Exception):
-            raise entry
-        status, payload = entry if isinstance(entry, tuple) else (200, entry)
-        return _Resp(status, payload)
-
-    def calls(self, method: str) -> list[tuple[str, str, Any]]:
-        return [row for row in self.requests if row[0] == method]
-
-
-DAG_HEALTHY = {
-    "metadatabase": {"status": "healthy"},
-    "scheduler": {"status": "healthy", "latest_scheduler_heartbeat": "2026-09-08T00:00:00Z"},
-    "triggerer": {"status": "healthy"},
-}
-SUBMIT_ROUTES: dict[tuple[str, str], Any] = {
-    ("GET", "/monitor/health"): DAG_HEALTHY,
-    ("GET", "/dags?limit=1"): {"dags": [{"dag_id": LINE}], "total_entries": 1},
-    ("GET", f"/dags/{LINE}"): {"dag_id": LINE, "is_paused": False},
-    ("PATCH", f"/dags/{LINE}"): {"dag_id": LINE, "is_paused": False},
-    ("POST", f"/dags/{LINE}/dagRuns"): (
-        200,
-        {"dag_run_id": "swf__run", "dag_id": LINE, "state": "queued"},
-    ),
-}
 
 
 class FakeGitHubClient(GitHubClient):
@@ -141,93 +68,6 @@ class FakeIsloClient:
     def remove(self, name: str) -> dict[str, Any]:
         self.removed.append(name)
         return {"removed": name}
-
-
-# ---------------------------------------------------------------- harness
-
-
-class Client:
-    """Loopback driver for one live backend; ``raw`` exists for headers http.client will not send."""
-
-    def __init__(self, server: ThreadingHTTPServer, airflow: FakeAirflow) -> None:
-        self.host, self.port = server.server_address[0], server.server_address[1]
-        self.airflow = airflow
-
-    def call(
-        self,
-        method: str,
-        path: str,
-        body: Any = None,
-        *,
-        token: str | None = TOKEN,
-        headers: dict[str, str] | None = None,
-    ) -> tuple[int, Any]:
-        raw = b"" if body is None else json.dumps(body).encode()
-        sent = {"Content-Length": str(len(raw))}
-        if token is not None:
-            sent["Authorization"] = f"Bearer {token}"
-        sent.update(headers or {})
-        return self.raw(method, path, raw, sent)
-
-    def raw(self, method: str, path: str, body: bytes, headers: dict[str, str]) -> tuple[int, Any]:
-        conn = http.client.HTTPConnection(self.host, self.port, timeout=10)
-        try:
-            conn.putrequest(method, path, skip_accept_encoding=True)
-            for name, value in headers.items():
-                conn.putheader(name, value)
-            conn.endheaders()
-            if body:
-                conn.send(body)
-            response = conn.getresponse()
-            payload = response.read()
-            return response.status, (json.loads(payload) if payload else None)
-        finally:
-            conn.close()
-
-
-@pytest.fixture
-def env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ambient credentials/flags decide backend behavior; pin them so the suite is order-free."""
-    for name in ("AIRFLOW_TOKEN", "AIRFLOW_USER", "AIRFLOW_PASSWORD", "SWF_DRAIN", "SWF_GENERATION"):
-        monkeypatch.delenv(name, raising=False)
-
-
-@pytest.fixture
-def airflow() -> FakeAirflow:
-    return FakeAirflow(SUBMIT_ROUTES)
-
-
-@pytest.fixture
-def factory(tmp_path: Path, airflow: FakeAirflow, env: None) -> Iterator[Factory]:
-    made = Factory(
-        token=TOKEN,
-        airflow_url=AF,
-        repo=REPO,
-        owner="operator",
-        root=tmp_path / "metrics",
-        state_root=tmp_path / "state",
-    )
-    # Replace the transport *after* construction, the way test_control fakes an opener: the real
-    # one is a urllib opener that would dial 127.0.0.1:8080 on the first read route.
-    made.opener = types.SimpleNamespace(open=airflow.open)  # type: ignore[assignment]
-    made.credentials = AirflowClient(AF, token="airflow-token", opener=airflow.open)
-    try:
-        yield made
-    finally:
-        made.close()
-
-
-@pytest.fixture
-def client(factory: Factory, airflow: FakeAirflow) -> Iterator[Client]:
-    server = make_server(factory, "127.0.0.1", 0)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield Client(server, airflow)
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 @pytest.fixture
@@ -403,6 +243,27 @@ def test_doctor_detail_is_text_even_for_the_capability_document(client: Client, 
     assert isinstance(row["detail"], str) and "mutation_ready=" in row["detail"]
 
 
+def test_doctor_reports_managed_worker_callback_contract(
+    client: Client, gh: list[list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SWF_BACKEND_URL", raising=False)
+    monkeypatch.setenv("SWF_BACKEND_TOKEN", TOKEN)
+    _, checks = client.call("POST", "/v1/doctor", {})
+    callback = next(row for row in checks if row["name"] == "managed worker callback")
+    # Informational, not required. This test first asserted `required is True`, and the row it
+    # demanded failed `swf doctor` against a healthy backend in the live e2e harness: the backend
+    # host never sets its own SWF_BACKEND_URL (it does not call itself), so a required row here
+    # can only ever be red on a correct deployment. That is #1217, re-created by a test.
+    assert callback["ok"] is False
+    assert callback["required"] is False and callback["status"] == "warn"
+    assert "SWF_BACKEND_URL" in callback["fix"] and "SWF_BACKEND_TOKEN" in callback["fix"]
+
+    monkeypatch.setenv("SWF_BACKEND_URL", "http://backend:8082")
+    _, checks = client.call("POST", "/v1/doctor", {})
+    callback = next(row for row in checks if row["name"] == "managed worker callback")
+    assert callback["ok"] is True and callback["fix"] == ""
+
+
 # ---------------------------------------------------------------- read routes
 
 
@@ -505,14 +366,11 @@ def test_sweep_route_consults_the_cell_store_and_journals_each_removal(
     assert key["cell_id"] == done and key["operation_key"].startswith("sandbox_cleanup:")
 
 
-def test_deliveries_are_empty_when_no_repo_is_configured(tmp_path: Path, env: None) -> None:
+def test_deliveries_are_empty_when_no_repo_is_configured(factory: Factory) -> None:
     """No repo means no credential; the read answers empty rather than shelling out."""
-    bare = Factory(token=TOKEN, airflow_url=AF, state_root=tmp_path / "s")
-    try:
-        assert bare.operation("/deliveries/prs", {}) == []
-        assert bare.operation("/deliveries/issues", {}) == []
-    finally:
-        bare.close()
+    factory.repo = ""
+    assert factory.operation("/deliveries/prs", {}) == []
+    assert factory.operation("/deliveries/issues", {}) == []
 
 
 # ---------------------------------------------------------------- /v1/work-orders
@@ -546,18 +404,24 @@ def test_work_order_replay_is_idempotent(client: Client) -> None:
     assert len(client.airflow.calls("POST")) == 1
 
 
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        pytest.param("/v1/work-orders", {"line": LINE, "issues": ["101"]}, id="work-orders"),
+        pytest.param(f"/v1/airflow/api/v2/dags/{LINE}/dagRuns", {"conf": {"issues": ["101"]}}, id="compatibility"),
+    ],
+)
 def test_work_order_is_refused_while_draining(
-    client: Client, factory: Factory, monkeypatch: pytest.MonkeyPatch
+    client: Client, factory: Factory, monkeypatch: pytest.MonkeyPatch, path: str, body: dict[str, Any]
 ) -> None:
     """The drain guard is what stands between a rolling upgrade and a stranded half-run.
 
-    Asserted at the HTTP boundary: the refusal must arrive as a 503 that says why, and it must
-    arrive *before* a Factory Cell is activated or an Airflow run is created — a drain that refuses
-    after the write has already gone out has drained nothing. (Whether the compatibility mount
-    refuses identically is ``tests/test_backend_drain.py``'s subject, not this file's.)
+    Asserted at the HTTP boundary, on both submission routes: the refusal must arrive as a 503 that
+    says why, and it must arrive *before* a Factory Cell is activated or an Airflow run is created —
+    a drain that refuses after the write has already gone out has drained nothing.
     """
     monkeypatch.setenv("SWF_DRAIN", "true")
-    status, payload = client.call("POST", "/v1/work-orders", {"line": LINE, "issues": ["101"]})
+    status, payload = client.call("POST", path, body)
     assert status == 503, payload
     assert "drain" in payload["detail"].lower(), payload
     assert client.airflow.requests == []
@@ -949,14 +813,11 @@ def test_scm_issue_bounds_the_ref(client: Client, scm: type[FakeScm]) -> None:
         assert detail in payload["detail"]
 
 
-def test_scm_refuses_when_no_repo_is_configured(tmp_path: Path, env: None, scm: type[FakeScm]) -> None:
-    bare = Factory(token=TOKEN, airflow_url=AF, state_root=tmp_path / "s")
-    try:
-        with pytest.raises(service_mod.Refused) as caught:
-            bare.operation("/scm/issue", {"ref": "1"})
-        assert caught.value.status == 503
-    finally:
-        bare.close()
+def test_scm_refuses_when_no_repo_is_configured(factory: Factory, scm: type[FakeScm]) -> None:
+    factory.repo = ""
+    with pytest.raises(service_mod.Refused) as caught:
+        factory.operation("/scm/issue", {"ref": "1"})
+    assert caught.value.status == 503
 
 
 def _publish_body(cell: dict[str, Any], **changes: Any) -> dict[str, Any]:
@@ -1176,6 +1037,25 @@ def test_body_larger_than_the_backend_limit_is_refused_before_it_is_read(client:
         {"Authorization": f"Bearer {TOKEN}", "Content-Length": str(1024**3)},
     )
     assert status == 413 and payload == {"detail": "request exceeds backend limit"}
+
+
+@pytest.mark.parametrize(
+    ("path", "limit"),
+    [
+        pytest.param("/v1/fleet", MAX_BODY, id="default"),
+        pytest.param("/v1/population/execute", MAX_POPULATION_BODY, id="population"),
+        pytest.param("/v1/scm/publish", MAX_SCM_BODY, id="scm-publish"),
+        pytest.param("/v1/scm/open-issue", MAX_SCM_BODY, id="scm-open-issue"),
+    ],
+)
+def test_only_population_and_scm_patch_routes_raise_the_body_limit(client: Client, path: str, limit: int) -> None:
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    status, payload = client.raw("POST", path, b"", {**auth, "Content-Length": str(limit + 1)})
+    assert status == 413 and payload == {"detail": "request exceeds backend limit"}
+    if limit > MAX_BODY:  # a body over the default limit still reaches this route's own parser
+        body = b" " * (MAX_BODY + 1)
+        status, payload = client.raw("POST", path, body, {**auth, "Content-Length": str(len(body))})
+        assert status == 400, payload
 
 
 def test_a_negative_content_length_is_refused(client: Client) -> None:

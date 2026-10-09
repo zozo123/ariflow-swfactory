@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from backend_support import FakeResponse
 
 from swfactory.control import (
     MAX_PAGES,
@@ -32,11 +33,8 @@ from swfactory.control import (
     MetricsSource,
     Run,
     Sandbox,
-    TaskState,
     collapsed_job,
     collect,
-    group_jobs,
-    job_state,
     summarize_checks,
 )
 
@@ -48,17 +46,6 @@ RUN_SEG = "manual__2026-09-03T08%3A04%3A02.456739%2B00%3A00"
 # ---------------------------------------------------------------- fakes
 
 
-class _Resp:
-    def __init__(self, payload: Any) -> None:
-        self._raw = b"" if payload is None else json.dumps(payload).encode()
-
-    def read(self) -> bytes:
-        return self._raw
-
-    def close(self) -> None:
-        pass
-
-
 class FakeOpener:
     """Answers ``(METHOD, path-with-query)`` from ``routes``; records every request."""
 
@@ -66,7 +53,7 @@ class FakeOpener:
         self.routes = routes or {}
         self.requests: list[urllib.request.Request] = []
 
-    def __call__(self, request: urllib.request.Request, *, timeout: float) -> _Resp:
+    def __call__(self, request: urllib.request.Request, *, timeout: float) -> FakeResponse:
         self.requests.append(request)
         path = request.full_url.removeprefix(AF)
         key = (request.get_method(), path)
@@ -75,7 +62,7 @@ class FakeOpener:
         payload = self.routes[key]
         if isinstance(payload, Exception):
             raise payload
-        return _Resp(payload)
+        return FakeResponse(payload)
 
     @property
     def last(self) -> urllib.request.Request:
@@ -248,7 +235,7 @@ class PagedOpener:
         self.asks: list[tuple[int, int]] = []  # (limit asked, offset asked), in order
         self.queries: list[dict[str, list[str]]] = []
 
-    def __call__(self, request: urllib.request.Request, *, timeout: float) -> _Resp:
+    def __call__(self, request: urllib.request.Request, *, timeout: float) -> FakeResponse:
         query = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)
         self.queries.append(query)
         limit, offset = int(query["limit"][0]), int(query["offset"][0])
@@ -258,7 +245,7 @@ class PagedOpener:
             body["total_entries"] = len(self.rows)
         elif self.total == "null":
             body["total_entries"] = None
-        return _Resp(body)
+        return FakeResponse(body)
 
 
 class EndlessOpener:
@@ -268,9 +255,9 @@ class EndlessOpener:
         self.asks = 0
         self.exhausted = False
 
-    def __call__(self, request: urllib.request.Request, *, timeout: float) -> _Resp:
+    def __call__(self, request: urllib.request.Request, *, timeout: float) -> FakeResponse:
         self.asks += 1
-        return _Resp({"task_instances": [] if self.exhausted else _tis(PAGE_LIMIT)})
+        return FakeResponse({"task_instances": [] if self.exhausted else _tis(PAGE_LIMIT)})
 
 
 def _tis(n: int) -> list[dict]:
@@ -520,48 +507,12 @@ def test_job_rows_before_fan_out_and_with_junk_xcom() -> None:
     assert empty.job_rows("factory", RUN_ID) == []
 
 
-def test_job_state_and_group_jobs_are_pure() -> None:
-    def ts(task_id: str, state: str | None, idx: int = 0) -> TaskState:
-        return TaskState(task_id=task_id, map_index=idx, state=state)
-
-    assert job_state([]) == "queued"
-    assert job_state([ts("job.setup", None), ts("job.intent", None)]) == "queued"
-    assert job_state([ts("job.setup", "success"), ts("job.intent", None)]) == "running"
-    assert job_state([ts("job.setup", "success"), ts("job.intent", "running")]) == "running"
-    assert job_state([ts("job.intent", "upstream_failed"), ts("job.spec", "running")]) == "failed"
-    assert job_state([ts("job.setup", "success"), ts("job.deliver", "success")]) == "success"
-    assert job_state([ts("job.spec", "skipped"), ts("job.plan", "skipped")]) == "skipped"
-    # A rejected gate skips the work stages but deliver still publishes: that is a success.
-    assert job_state([ts("job.spec", "skipped"), ts("job.deliver", "success")]) == "success"
-
-    rows = group_jobs("factory", "r1", [ts("job.setup", "success", 2), ts("job.setup", None, 0)])
-    assert [r.map_index for r in rows] == [0, 2]  # ascending, gaps kept as they come
-    assert group_jobs("factory", "r1", []) == []
-
+def test_collapsed_job_names_the_run_issues() -> None:
+    """``job_state``/``group_jobs`` are pinned case by case by ``tests/fixtures/contract``."""
     run = Run("factory", "r1", "success", None, None, {"issues": ["42", "43"]})
     collapsed = collapsed_job(run)
     assert (collapsed.map_index, collapsed.issue, collapsed.state) == (-1, "42, 43", "success")
     assert collapsed_job(Run("f", "r", "queued", None, None)).issue == "-"
-
-
-def test_a_job_parked_on_a_human_gate_counts_as_active() -> None:
-    """``awaiting_input`` is how Airflow 3.3 parks a HITL task, so it must roll up as in-flight.
-
-    Regression for a live-only bug: with that state missing from ``ACTIVE_TASK_STATES`` a job
-    waiting on a gate had no active task, so both the state roll-up and the herd frontier fell
-    back to its last *finished* task and the Runs tab named ``intent`` — never the gate the
-    operator has to answer.
-    """
-    from swfactory.control import ACTIVE_TASK_STATES
-
-    assert {"awaiting_input", "deferred"} <= ACTIVE_TASK_STATES
-    parked = [
-        TaskState("job.setup", 0, "success"),
-        TaskState("job.intent", 0, "success"),
-        TaskState("job.approve_intent", 0, "awaiting_input"),
-        TaskState("job.deliver", 0, None),
-    ]
-    assert job_state(parked) == "running"
 
 
 def test_airflow_username_password_mints_token_once() -> None:

@@ -8,7 +8,7 @@ list bound half a run. The run now submits itself through ``POST /v1/work-orders
 instead of dispatching a second copy of the schedule.
 
 Hermetic, in the style of ``tests/test_durable_dispatch.py``: the backend is a real ``Factory`` over
-``FakeAirflow``, which records every POST so "no second run" is an assertion, and the worker client
+``AirflowRuns``, which records every POST so "no second run" is an assertion, and the worker client
 speaks to it through a monkeypatched ``urlopen`` so the HTTP contract is the one exercised.
 """
 
@@ -17,11 +17,12 @@ from __future__ import annotations
 import io
 import json
 import urllib.request
-from pathlib import Path
+from collections.abc import Iterator
+from contextlib import closing
 from typing import Any
 
 import pytest
-from test_durable_dispatch import Backend, _line  # noqa: F401
+from backend_support import Backend, FakeResponse
 
 from swfactory.admission import Limits
 from swfactory.backend.server import _json_default
@@ -34,18 +35,13 @@ SCHEDULED = "scheduled__2026-09-10T06:17:00+00:00"
 
 
 @pytest.fixture
-def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
-    _line(tmp_path)
-    monkeypatch.chdir(tmp_path)
-    built = Backend(tmp_path, Limits(global_active=1))
-    try:
+def box(backend) -> Iterator[Backend]:
+    with closing(backend(Limits(global_active=1))) as built:
         yield built
-    finally:
-        built.close()
 
 
 def _run(box: Backend, run_id: str = SCHEDULED, *, state: str = "running", run_type: str = "scheduled") -> None:
-    """A run Airflow's scheduler created on its own, the way ``FakeAirflow`` answers a GET for it."""
+    """A run Airflow's scheduler created on its own, the way ``AirflowRuns`` answers a GET for it."""
     box.airflow.runs[run_id] = {"dag_run_id": run_id, "dag_id": "line", "run_type": run_type, "state": state}
 
 
@@ -150,24 +146,12 @@ def test_a_deferred_scheduled_run_that_is_still_alive_is_bound_when_capacity_fre
 # ---------------------------------------------------------------- the worker side of the contract
 
 
-class _Response(io.BytesIO):
-    def __init__(self, data: bytes, status: int = 200) -> None:
-        super().__init__(data)
-        self.status = status
-
-    def __enter__(self) -> _Response:
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()
-
-
 @pytest.fixture
 def worker(box, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     """An Airflow worker configured for the backend, whose ``urlopen`` reaches the real ``Factory``."""
     calls: list[dict[str, Any]] = []
 
-    def urlopen(request: urllib.request.Request, timeout: float | None = None) -> _Response:
+    def urlopen(request: urllib.request.Request, timeout: float | None = None) -> FakeResponse:
         body = json.loads(request.data.decode())
         calls.append({"url": request.full_url, "body": body, "auth": request.get_header("Authorization")})
         assert request.full_url == "http://backend.invalid:8082/v1/work-orders"
@@ -177,7 +161,7 @@ def worker(box, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
             raise urllib.error.HTTPError(request.full_url, error.status, str(error), {}, io.BytesIO(b"{}")) from error
         # The same encoder the real transport uses, so a dataclass in a queued answer (its
         # ``limiting`` block) is not a difference between this fake and ``swfactory.backend.server``.
-        return _Response(json.dumps(document, default=_json_default).encode())
+        return FakeResponse(json.dumps(document, default=_json_default).encode())
 
     monkeypatch.setenv("SWF_BACKEND_URL", "http://backend.invalid:8082")
     monkeypatch.setenv("SWF_BACKEND_TOKEN", "t" * 40)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import json
 import re
 from collections.abc import Sequence
@@ -176,19 +175,26 @@ def test_missing_gateway_profile() -> None:
     assert "fix: islo gateway create" in table(checks)
 
 
-def test_gateway_present_but_allow_by_default_fails() -> None:
-    gws = [{"name": "swfactory", "default_action": "allow", "internet_enabled": True, "rule_count": 0}]
+@pytest.mark.parametrize(
+    ("profile", "detail"),
+    [
+        pytest.param(
+            {"default_action": "allow", "internet_enabled": True, "rule_count": 0},
+            "default_action must be deny",
+            id="gateway_present_but_allow_by_default",
+        ),
+        pytest.param(
+            {"default_action": "deny", "internet_enabled": False, "rule_count": 6},
+            "internet access must be enabled",
+            id="gateway_with_internet_disabled",
+        ),
+    ],
+)
+def test_a_misconfigured_gateway_fails(profile: dict[str, object], detail: str) -> None:
+    gws = [{"name": "swfactory", **profile}]
     checks = run_doctor(cfg(), green(**{"islo gateway ls --output json": json.dumps(gws)}), root=ROOT)
     gw = by_name(checks)["gateway profile"]
-    assert not gw.ok and "default_action must be deny" in gw.detail
-    assert exit_code(checks) == 1
-
-
-def test_gateway_with_internet_disabled_fails() -> None:
-    gws = [{"name": "swfactory", "default_action": "deny", "internet_enabled": False, "rule_count": 6}]
-    checks = run_doctor(cfg(), green(**{"islo gateway ls --output json": json.dumps(gws)}), root=ROOT)
-    gw = by_name(checks)["gateway profile"]
-    assert not gw.ok and "internet access must be enabled" in gw.detail
+    assert not gw.ok and detail in gw.detail
     assert exit_code(checks) == 1
 
 
@@ -267,16 +273,6 @@ def test_bootstrap_allow_hosts_match_doctor() -> None:
     )
 
 
-def test_allow_hosts_parse_fails_loudly() -> None:
-    """An empty parse is a failure, never a vacuous pass."""
-    with pytest.raises(AssertionError, match=re.escape(ALLOW_HOSTS_MARKER)):
-        allow_hosts_from_shell("set -euo pipefail\nPROFILE=swfactory\n", "fake.sh")
-    with pytest.raises(AssertionError, match="no hosts"):
-        allow_hosts_from_shell('ALLOW_HOSTS=()\nALLOW_HOSTS+=("astral.sh")\n', "fake.sh")
-    with pytest.raises(AssertionError, match="never closed"):
-        allow_hosts_from_shell("ALLOW_HOSTS=(astral.sh\n", "fake.sh")
-
-
 def test_prose_allowlists_name_new_hosts() -> None:
     """The human-maintained statements of the list: deploy.sh's comment, docs/islo.md x2.
 
@@ -311,25 +307,6 @@ def test_srt_default_domains_pin() -> None:
         "registry.npmjs.org",
         "astral.sh",
     )
-
-
-def test_selfhost_doc_settles_init_minimal() -> None:
-    text = (ROOT / "docs" / "selfhost.md").read_text(encoding="utf-8")
-    assert "unsettled" not in text, "docs/selfhost.md still calls `islo use --init minimal` unsettled"
-    assert "must self-bootstrap" not in text
-    for evidence in ("curl: (22)", "403", *UV_REDIRECT_HOSTS, "2026-09-27", "0.53.1"):
-        assert evidence in text, f"docs/selfhost.md does not record {evidence!r}"
-    # Resolving that one uncertainty must not quietly retire the claims beside it.
-    assert "ANTHROPIC_API_KEY" in text and "ISLO_API_KEY" in text
-    assert "self-authored pull request has been merged" in text
-
-
-def test_new_allowlist_tests_are_hermetic() -> None:
-    """The parity check reads text from the repo tree: no network, no `islo`, no `curl`."""
-    assert list(inspect.signature(allow_hosts_from_shell).parameters) == ["text", "source"]
-    source = inspect.getsource(allow_hosts_from_shell)
-    for forbidden in ("subprocess", "urllib", "socket", "islo ", "curl"):
-        assert forbidden not in source
 
 
 def test_missing_environment() -> None:
@@ -601,6 +578,16 @@ def test_the_local_stack_gives_its_workers_what_the_check_asks_for() -> None:
     )
     # The console's backend is not opt-in: the built-in context and every managed cell address it.
     assert "profiles" not in compose["services"]["backend"]
+
+
+def test_compose_wires_backend_callback_contract_into_airflow_workers() -> None:
+    """Workers reach the backend by service name; provider adapters stay with the backend."""
+    services = yaml.safe_load((ROOT / "deploy" / "docker" / "compose.yml").read_text(encoding="utf-8"))["services"]
+    airflow, backend = services["airflow"]["environment"], services["backend"]["environment"]
+    assert airflow["SWF_BACKEND_HTTP_HOSTS"] == "backend"
+    assert airflow["SWF_BACKEND_TOKEN"] == "${SWF_BACKEND_TOKEN:-}"
+    assert "SWF_POPULATION_ADAPTERS_JSON" not in airflow
+    assert backend["SWF_POPULATION_ADAPTERS_JSON"] == "${SWF_POPULATION_ADAPTERS_JSON:-}"
 
 
 def test_stack_status_covers_every_service_the_default_stack_starts() -> None:

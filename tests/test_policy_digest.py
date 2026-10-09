@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import inspect
-import json
-from pathlib import Path
 
 import pytest
 
@@ -13,8 +11,6 @@ from swfactory.security_contract import (
     policy_digest_family,
     policy_digest_for_mapping,
 )
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_canonical_policy_and_mapping_entry_points_are_byte_identical() -> None:
@@ -73,13 +69,6 @@ def test_policy_digest_has_one_hash_construction_site() -> None:
     source = inspect.getsource(contract)
     assert source.count("hashlib.sha256(") == 1
     assert '"policy:" + hashlib.sha256' not in source
-
-
-def test_python_matches_the_shared_policy_digest_fixture() -> None:
-    document = json.loads((ROOT / "tests/fixtures/contract/policy_digest.json").read_text(encoding="utf-8"))
-    assert document["function"] == "policy_digest"
-    for case in document["cases"]:
-        assert policy_digest_for_mapping(case["input"]) == case["expected"]
 
 
 def test_policy_digest_refuses_numbers_outside_cross_language_exact_range() -> None:

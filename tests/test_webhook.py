@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from backend_support import FakeResponse
 from typer.testing import CliRunner
 
 from swfactory import webhook
@@ -50,18 +51,6 @@ def comment_payload(
     return payload
 
 
-class FakeResponse(io.BytesIO):
-    def __init__(self, data: bytes, status: int = 200) -> None:
-        super().__init__(data)
-        self.status = status
-
-    def __enter__(self) -> FakeResponse:
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()
-
-
 class FakeOpener:
     """Records every request; answers by URL suffix. Raises when told to."""
 
@@ -82,8 +71,8 @@ class FakeOpener:
         if self.fail is not None:
             raise self.fail
         if req.full_url.endswith("/auth/token"):
-            return FakeResponse(json.dumps({"access_token": "jwt-123"}).encode(), 201)
-        return FakeResponse(json.dumps({"dag_run_id": "manual__2026-01-01", "state": "queued"}).encode(), 200)
+            return FakeResponse({"access_token": "jwt-123"}, 201)
+        return FakeResponse({"dag_run_id": "manual__2026-01-01", "state": "queued"})
 
 
 def sign(body: bytes, secret: str = SECRET) -> str:
