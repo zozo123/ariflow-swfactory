@@ -69,27 +69,26 @@ without giving any lane a different candidate view.
 
 ## Constrained harness research
 
-Harness auto-research is useful only if efficiency is subordinate to the factory invariants.
-HarnessTrial therefore separates:
+Harness auto-research is useful only if efficiency is subordinate to the factory invariants. A
+trial of a harness mechanism must keep separate:
 
-- candidate_sha: exact bytes the experiment produced;
-- authority_digest: canonical promotion-relevant facts;
-- evidence_digest: retained evidence for that experiment;
-- efficiency vector: prompt bytes, micro-USD cost, wall time, and model turns.
+- candidate SHA: exact bytes the experiment produced;
+- authority digest: canonical promotion-relevant facts;
+- evidence digest: retained evidence for that experiment;
+- efficiency vector: prompt bytes, cost, wall time, and model turns.
 
-A candidate mechanism is refused if its candidate SHA changes, its authority digest changes, its
-evidence is incomplete, or its verifier is red.
-
-Among admissible trials there is no invented weighted score. The factory keeps the Pareto frontier:
-a mechanism is dominated only when another admissible trial is no worse on every measured
-efficiency dimension and strictly better on at least one.
+Refuse a mechanism if its candidate SHA changes, its authority digest changes, its evidence is
+incomplete, or its verifier is red. Among admissible trials, keep the Pareto frontier rather than an
+invented weighted score: a mechanism is dominated only when another admissible trial is no worse on
+every measured efficiency dimension and strictly better on at least one.
 
 That encodes the governing rule directly:
 
 > An accelerator may change time-to-answer, never the answer.
 
-Selection is research-only. It returns no promotion action and has no callback into Airflow,
-GitHub, approvals, or candidate readiness.
+No module implements trial selection today; an unwired prototype was removed. An implementation
+must stay research-only, with no promotion action and no callback into Airflow, GitHub, approvals,
+or candidate readiness.
 
 ## Mapping the other SoL-Pi mechanisms
 

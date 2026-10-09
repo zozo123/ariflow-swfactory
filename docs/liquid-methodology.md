@@ -34,7 +34,7 @@ twenty control planes. More issue slices do not require more permanent services 
 
 Here, *entropy* means temporary implementation diversity and integration uncertainty. It is a useful
 engineering metaphor, not a measured thermodynamic quantity. The
-[non-equilibrium control doctrine](non-equilibrium-factory.md) separately requires measurable inputs,
+[non-equilibrium control doctrine](research/non-equilibrium-factory.md) separately requires measurable inputs,
 falsifiable behavior, and bounded authority for any physics-inspired control model.
 
 ## Search and authority glossary
@@ -323,8 +323,7 @@ executor currently launches multiple candidate sandboxes for one issue.
 ## Historical fan-in and what it proves
 
 [PR #1196](https://github.com/zozo123/ariflow-swfactory/pull/1196) records the original
-`stabilize/liquid-all` fan-in. The current [Liquid manifest](../config/liquid-spec.yaml)
-checks these declared bundles and legacy ranks:
+`stabilize/liquid-all` fan-in. It declared these bundles and legacy ranks:
 
 | Wave | Coverage model | Integration units |
 | --- | --- | --- |
@@ -340,20 +339,22 @@ Reproduce the structural check from the repository root:
 uv run python -m swfactory.liquid_spec
 ```
 
-The manifest checks bundle shape, declared source counts, contiguous/non-overlapping spans, and
-configured authority names. The bundle engine validates inputs and emits `ExecutionIntent` values.
-It does not itself implement every domain effect or prove every acceptance criterion. Legacy ranks
-are positions in a snapshot, not a range of GitHub issue numbers.
+The current [Liquid manifest](../config/liquid-spec.yaml) keeps only the 90 domain rows and the ten
+legacy areas; the bundle, rank and tranche bookkeeping lives in git history. The checker validates
+the owner roles, the concern axis, each family's domain count, that every `runtime_anchor` resolves
+under `src/swfactory/`, and that every `capability_claim` exists in the capability inventory. It
+does not implement a domain effect or prove an acceptance criterion. Legacy ranks were positions in
+a snapshot, not a range of GitHub issue numbers.
 
 PR #1196 records head `0603693a99aa675eb5d10592c7a30ebfb8161fda` and merge commit
 `22c92ac7951dfe3d1c8f42103192b18b966e1daf`. These identify the historical candidate and merge;
 they are not a substitute for retained check results or a claim that current `main` passed them.
 
-Later [PR #2016](https://github.com/zozo123/ariflow-swfactory/pull/2016) records Ocean120,
-Phase240, and StatMech360: a further 720 declared slots. Their
-[Liquid spec checker](../src/swfactory/liquid_spec.py) has the same limitation:
-coverage and routing are distinct from integrated, measured runtime capability. The original 900
-is a historical wave size, not a claim about the entire current backlog or product feature count.
+Later [PR #2016](https://github.com/zozo123/ariflow-swfactory/pull/2016) recorded Ocean120,
+Phase240, and StatMech360: a further 720 declared research slots, since removed from the manifest.
+The same limitation applies: coverage and routing are distinct from integrated, measured runtime
+capability. The original 900 is a historical wave size, not a claim about the entire current
+backlog or product feature count.
 
 ## Security follows authority
 

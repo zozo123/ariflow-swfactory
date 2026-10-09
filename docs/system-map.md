@@ -76,10 +76,10 @@ service, state machine, command family, or storage system.
 | Atelier | Human intent, alternatives, critique, and judgment | Product method; [software atelier](software-atelier.md) |
 | Liquid | Explore broadly, then converge on one exact candidate | Engineering method; [Liquid methodology](liquid-methodology.md) |
 | Gas / liquid / critical / crystal / glass / jammed | Classify measured search and resource conditions | Experimental search-only contract; [phase control](phase-control.md) |
-| Cognitive harness / System 1 and 2 | Distinguish proposal generation from measurement | Experimental domain model; [cognitive harness](cognitive-harness.md) |
+| System 1 and System 2 | Distinguish proposal generation from measurement | Vocabulary only; [future factory](future-factory.md) |
 | Swarms / recursive search | Allocate bounded compute using diversity, correlation, disagreement, and retained results | Experimental population path; [future factory](future-factory.md) |
 | Annealing | Repair material defects under limits | [Liquid review](liquid-annealing.md); never erase failed evidence |
-| Formal claims / crystallization | Decide what can be stated and which verification method fits | Pure experimental contracts; runtime refinement and readiness integration remain outstanding |
+| Formal claims / crystallization | Decide what can be stated and which verification method fits | A TLA+ model of the authority kernel; no runtime contract or refinement yet; [formal correctness](formal-correctness.md) |
 | Memory / blackboard | Retain lineage and observations for later search | Search evidence; a repeated belief cannot become permission |
 | Caches / Turbo / snapshots | Avoid repeated computation | Acceleration within the same verification contract |
 | Self-improvement | Propose a bounded change against measured debt | Ordinary reviewed work, with the current policy still in force |
@@ -101,8 +101,8 @@ qualified support for every model/provider combination.
 
 `authority.py`, `control_kernel.py`, `core_capabilities.py`, and `backend/` describe the current
 Python authority implementation. A Rust protocol or domain type is not evidence that the deployed
-mutation path calls a Rust manager. The [Rust RFC](rfc-rust-first-factory-manager.md) and
-[migration plan](rust-first-harness.md) describe the intended destination.
+mutation path calls a Rust manager. The [Rust manager RFC](rfc-rust-first-factory-manager.md)
+describes the intended destination and its migration rule.
 
 For each migration: freeze the external contract, implement the use case, check shared fixtures
 and failure/recovery behavior, switch the managed caller, then remove the old owner. Keep persisted

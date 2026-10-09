@@ -240,9 +240,9 @@ annealing semantics.
 
 ## Boundary with the broader physics doctrine
 
-`docs/non-equilibrium-factory.md` contains a much larger research program: multi-current control,
-maximum-entropy model mixing, hysteresis, non-equilibrium work relations, rare-event control, and
-other ideas. This implementation does **not** claim that whole controller exists. It implements only
+The [non-equilibrium research notes](research/non-equilibrium-factory.md) contain a much larger
+research program: multi-current control, maximum-entropy model mixing, hysteresis, non-equilibrium
+work relations, rare-event control, and other ideas. This implementation does **not** claim that whole controller exists. It implements only
 one narrow, testable transfer: review relaxation plus phase/nucleation diagnostics around a real
 software readiness predicate.
 

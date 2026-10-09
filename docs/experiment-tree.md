@@ -92,24 +92,23 @@ different question rather than an accidental replay alias.
 
 ## Verified evidence-backed descent
 
-The annealing loop may choose a promising answer for the next research round without
-granting that answer release authority. Before turning that exploration choice into
-new child requests, `plan_descendant_campaign(...)` re-establishes the complete
-evidence chain:
+An exploration choice may become the parent of the next research round without gaining release
+authority. Before it does, rebuild the evidence chain:
 
 1. the exploration winner must be an answered, frozen candidate;
-2. every answered sibling's retained evidence bundle is re-verified against Git;
-3. deterministic fan-in is rebuilt from those verified bundles;
-4. the experiment-tree winner must equal the exploration winner;
-5. the tree's recorded head must equal the frozen candidate output;
-6. the resulting campaign-decision SHA-256 is bound into every child's stable identity;
-7. every child starts from that exact frozen output SHA at `depth + 1`.
+2. `swfactory campaign-decision build` re-verifies every answered sibling's retained evidence
+   bundle against Git and rebuilds the deterministic fan-in;
+3. the experiment-tree winner must equal the exploration winner, and its recorded head must equal
+   the frozen candidate output;
+4. the children are planned from that exact output SHA at `depth + 1`, and
+   `plan_requests(..., parent_decision_digest=...)` binds the campaign-decision SHA-256 into every
+   child's stable identity.
 
-This means two child questions with the same apparent source SHA are still different
-questions when they descend from different verified parent decisions.
+Two child questions with the same apparent source SHA are therefore different questions when they
+descend from different verified parent decisions.
 
-The operation only plans the next sibling bush. Airflow remains the lifecycle
-scheduler, and promotion still requires the existing human/branch-protection gate.
+Planning requests schedules nothing. Airflow remains the lifecycle scheduler, and promotion still
+requires the existing human/branch-protection gate.
 
 ## Authority boundary
 
@@ -194,20 +193,3 @@ candidate-controlled strings cannot create graph edges or alter lineage semantic
 This feature strengthens the **experimental candidate-campaign/generation model**. It does not mean
 the default managed build stage now launches recursive provider forks. Provider-native fork
 execution remains governed by the existing capability inventory and lifecycle contracts.
-
-
-## Completion-driven observation
-
-A wide round should not hide useful evidence until its slowest sibling finishes. The evolution
-kernel exposes `iter_completed_candidates(...)`, which yields each independent candidate as soon
-as that candidate completes.
-
-This deliberately does **not** make "first finished" the winner:
-
-1. Airflow still owns the bounded campaign lifecycle.
-2. Completion order is an observation surface for logs, evidence, UI, and follow-up planning.
-3. `run_campaign` consumes the completed set and restores durable request order.
-4. Selection ranks only stored candidate properties; wall-clock arrival order is never an input.
-
-That gives the factory the useful OpenResearch-style "wait for the next result and inspect it"
-workflow without turning timing into policy or introducing a second scheduler.

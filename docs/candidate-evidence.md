@@ -40,9 +40,8 @@ layer.
 
 ## Campaign invariant
 
-The isolated campaign adapter now seals this bundle **before** it removes a successful candidate
-worktree. That makes evidence retention part of the candidate lifecycle rather than an optional
-post-processing step:
+Seal the bundle **before** removing a successful candidate worktree, so evidence retention is part
+of the candidate lifecycle rather than an optional post-processing step:
 
 ```text
 isolated worktree -> commit -> freeze immutable ref -> snapshot input -> seal evidence -> delete worktree
@@ -50,26 +49,24 @@ isolated worktree -> commit -> freeze immutable ref -> snapshot input -> seal ev
                                                         +-> failure => candidate refused
 ```
 
-A successful frozen candidate returned by `worktree_candidate_runner` carries both
-`evidence_bundle_path` and `evidence_digest`. If source snapshotting, artifact collection, or
-bundle verification fails, the frozen ref is retained for diagnosis but the outcome becomes
-`refused` and cannot win selection. The experiment tree records the evidence digest beside the
-candidate ref.
+A campaign outcome carries the bundle beside its candidate ref (`CandidateOutcome.evidence_bundle_path`
+and `evidence_digest`). A frozen candidate whose snapshot, artifact collection, or bundle
+verification failed keeps its ref for diagnosis but is recorded `refused`, and `campaign-decision`
+refuses a winner without answered candidate evidence. No in-tree runner drives campaigns today; the
+worktree adapter that enforced this order was removed with the unwired campaign drivers.
 
-An optional artifact collector can name files inside the disposable workspace; the adapter copies
-those bytes into the bundle before cleanup. With no collector, the bundle still retains the exact
-source identity and Git diff.
+Named artifacts (`--artifact NAME=PATH`) are copied into the bundle. With none, the bundle still
+retains the exact source identity and Git diff.
 
-Campaigns may also configure an inherited execution-recipe path. When configured, the adapter
-loads that recipe from the candidate **input commit**, not from the mutable worktree or the
-candidate output. The bundle records recipe digest, input commit, and path, and verification reloads
-the recipe from Git to prove the digest still describes the inherited contract.
+A bundle may also bind an inherited execution recipe (`build_candidate_evidence_bundle(...,
+inherited_recipe=...)`) loaded from the candidate **input commit**, not from the mutable worktree or
+the candidate output. The bundle records recipe digest, input commit, and path, and verification
+reloads the recipe from Git to prove the digest still describes the inherited contract.
 
 This is intentionally distinct from the release-side execution recipe in
 [execution-recipes.md](execution-recipes.md): release verification binds to the candidate source
 being verified, while campaign provenance records the trusted contract the sibling inherited before
-it started editing. Missing or invalid required campaign recipe evidence makes the frozen candidate
-`refused`.
+it started editing.
 
 ## Build
 

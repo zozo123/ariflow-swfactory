@@ -29,18 +29,27 @@ root SHA
                                              promotion
 ```
 
+## Wild exploration, deterministic convergence
+
+**Exploration is allowed to be wild. Convergence is not.** Exploration entropy may change which
+hypotheses are tried. It may not change the meaning of the final gate: replaying the same candidate
+identities, evidence digests, requirements and authority state must reproduce the same promotion
+decision. First-finisher wins, majority votes without evidence and random tie-breaks at promotion
+are therefore forbidden.
+
 ## Two decisions, not one
 
 A research loop needs permission to decide **what to test next**. It does not need permission to
 decide **what reaches main**.
 
-`CampaignReport` therefore carries two explicit selections:
+A stored `CampaignReport` therefore carries two explicit selections:
 
-- `exploration_selection` — deterministic evidence-based choice for descendant experiments;
-- `selection` — the existing promotion-aware choice, including `human_gate`.
+- `exploration_selection` — the evidence-based choice for descendant experiments;
+- `selection` — the promotion-aware choice, including `human_gate`.
 
-Both require a successful candidate, a distinct output SHA, and all required evaluation dimensions.
-Only promotion requires human approval.
+Only promotion requires human approval. The readers enforce the rest: `experiment-tree` refuses a
+selected node that is not answered, and `campaign-decision` refuses a winner without answered
+candidate evidence.
 
 This separation fixes an earlier modeling ambiguity where the experiment tree could only descend
 after setting `human_approved=True`. Exploration can now be autonomous while release authority
@@ -58,48 +67,28 @@ depth 2   repair
 depth 3   repair
 ```
 
-The exact strategy schedule may be supplied explicitly. Every round still obeys
-`CampaignBudget.max_candidates`, and duplicate strategies in a round are rejected.
+`swfactory research-schedule --max-depth 3` prints the same schedule (`--json` for the document).
+Width never exceeds `--max-candidates`, and duplicate strategies are refused.
 
 The default is intentionally simple and deterministic. It is a control surface, not a claim that
 this exact cooling law is universally optimal.
 
 ## Exact descent
 
-After a round finishes:
+`ExperimentTree.validate()` rechecks the complete stacked lineage:
 
-1. all sibling outcomes are retained in request order;
-2. `exploration_selection` ranks only stored candidate properties, never completion order;
-3. the selected candidate must have an exact distinct `output_head`;
-4. the next round's `input_head` is exactly that output SHA;
-5. the next round's `parent_candidate` is exactly that candidate id;
-6. `ExperimentTree.validate()` rechecks the complete stacked lineage.
+1. the selected candidate must be answered, with an exact recorded output head;
+2. the next round's `input_head` is exactly that output SHA;
+3. the next round's `parent_candidate` is exactly that candidate id;
+4. depths are contiguous and no candidate id is reused.
 
 A later round cannot silently restart from the original base, skip a depth, or descend from an
-unselected sibling.
-
-## Global bounds
-
-`run_annealing_loop(...)` treats the existing `CampaignBudget` as a loop-wide envelope:
-
-- `max_depth` bounds how many descendant decisions can accumulate;
-- `max_candidates` bounds width in each round;
-- `max_cost_usd` is decremented cumulatively across rounds;
-- `max_wall_s` is decremented cumulatively across rounds.
-
-The loop stops with an explicit reason:
-
-- `max_depth`;
-- `budget_exhausted`;
-- `no_exploration_candidate`;
-- `cancelled`;
-- `schedule_exhausted`.
-
-No winner is invented when required evidence is missing.
+unselected sibling. No winner is invented when required evidence is missing.
 
 ## What remains human
 
-The loop can end with an `exploration_winner` while `promotion_winner` is still `null`.
+A campaign can end with an `exploration_selection` winner while the promotion `selection` winner is
+still `null`.
 
 That is the expected autonomous case. A model or agent may decide that a result is worth another
 experiment. It may not convert that research decision into a merge decision. Branch protection,
@@ -107,25 +96,8 @@ the existing human gate, and the ordinary publication/promotion path remain auth
 
 ## Scheduler boundary
 
-`run_annealing_loop` is an in-stage bounded controller. It does not create a new lifecycle
-scheduler. Airflow still decides when the governed stage runs, retries, times out, or is cancelled.
+The cooling schedule is data, not a controller. No in-tree driver runs annealing rounds; Airflow
+still decides when a governed stage runs, retries, times out, or is cancelled.
 
 This preserves the Liquid rule: create entropy inside a bounded execution phase, then destroy that
 entropy before promotion.
-
-
-## Jev-weighted stochastic build lanes
-
-The current Python campaign runtime can consume the replayable build-hypothesis receipt emitted by
-the Rust exploration contract. This is a migration bridge, not a second Jev implementation:
-Python never calls the provider and never interprets probability vectors.
-
-A receipt whose `choices.strategy` is `repair`, `rethink`, or `scratch` moves that declared
-strategy to the front of the campaign schedule. With a narrow candidate budget this changes which
-real candidate build runs; with a wider budget the remaining declared strategies stay behind it so
-diversity is preserved.
-
-The bridge refuses receipts that are not `authority=exploration-only`, refuses unknown strategy
-values, and refuses simultaneous ownership by an explicit strategy schedule. Candidate evaluation,
-evidence requirements, `exploration_selection`, the human gate, and promotion selection are
-unchanged.

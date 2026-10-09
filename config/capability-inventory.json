@@ -397,7 +397,6 @@
         "tests/test_recursive_search.py",
         "src/swfactory/adaptive_information.py",
         "src/swfactory/population_stage.py",
-        "docs/dark-factory.md",
         "docs/future-factory.md"
       ],
       "follow_up": "Calibrate thresholds from real retained workloads, compare predicted marginal value with realized evidence gain, and graduate a stable cross-language contract into Rust before treating it as supported.",

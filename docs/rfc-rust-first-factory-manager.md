@@ -1,6 +1,12 @@
 # RFC: Rust-first factory manager, Airflow as scheduler
 
-Status: proposed
+Status: proposed.
+
+Today `swf` is an operator client of the Python backend, Airflow runs Python stages, and Rust holds
+the operator CLI/TUI plus the shared domain contracts; the [system map](system-map.md) records current
+ownership. An earlier Rust scaffold for this design (the `swf-domain` `factory`, `manager_protocol`
+and `worker` types and the `swf-app` `stage_runtime`) had no caller and was removed in #2367. Unless a
+line says *today*, every type, endpoint and command below is a proposal.
 
 ## Product principle
 
@@ -35,7 +41,8 @@ The intended developer experience is closer to Pydantic/FastAPI than to a pile o
 Today the normal path is roughly:
 
 ```text
-harness -> swf Rust client -> Python backend -> Airflow -> Python stages -> sandbox```
+harness -> swf Rust client -> Python backend -> Airflow -> Python stages -> sandbox
+```
 
 Target:
 
@@ -80,9 +87,13 @@ That distinction is strict:
 
 Airflow does not own business state. Rust does not invent another scheduler.
 
+The end state in one line: **Rust is the factory. Airflow is the scheduler. `swf` is the harness.
+The manager protocol is the binding.**
+
 ## One Rust application core
 
-The dependency direction becomes:
+Today's workspace has five crates: `swf-domain`, `swf-app`, `swf-adapters`, `swf-cli` and
+`swf-tui`. `swf-api` and `swf-runtime` are proposed. The dependency direction becomes:
 
 ```text
 swf-cli / swf-tui / swf-api
@@ -100,7 +111,7 @@ swf-cli / swf-tui / swf-api
 
 Pure versioned types only.
 
-Examples:
+Proposed types:
 - `FactorySpec`
 - `FactoryId`
 - `FactoryRunRequest`
@@ -176,11 +187,27 @@ Preferred production path:
 Airflow task -> HTTP/Unix socket -> swf manager API -> swf-app use case
 ```
 
-Acceptable local/transition path:
+Conceptual endpoint:
 
 ```text
-Airflow BashOperator -> swf internal stage execute --run ... --stage ...
+POST /v1/manager/stages/execute
+StageInvocation -> StageReceipt
 ```
+
+The invocation is a versioned envelope carrying the factory/run identity, the Factory Cell id and
+epoch, the stage and attempt, and the Airflow dag/run/task/map/try identity. The manager validates
+that identity, executes the use case and returns a receipt with an explicit disposition and
+evidence digest. The disposition alone decides the Airflow task result:
+
+| Disposition | Airflow result |
+| --- | --- |
+| `completed` | task success |
+| `waiting_approval` | human-in-the-loop wait |
+| `retryable` | retry under Airflow policy |
+| `failed` | task failure |
+| `in_doubt` | stop automatic replay and surface recovery debt |
+
+Airflow never reconstructs those semantics itself.
 
 The HTTP path is preferred because it gives:
 - cancellation/deadline propagation;
@@ -191,6 +218,12 @@ The HTTP path is preferred because it gives:
 
 Unix-domain sockets may be used on a single host. TCP + authenticated HTTPS is used across hosts.
 
+Acceptable local/transition path:
+
+```text
+Airflow BashOperator -> swf internal stage execute --run ... --stage ...
+```
+
 ## Python end state
 
 Python is not deleted on day one.
@@ -200,8 +233,11 @@ Python shrinks to:
 - very small Airflow operators/hooks/sensors where native Airflow Python integration is useful;
 - compatibility fixtures during migration.
 
-It must not retain an independent implementation of admission, recovery, publication, stage
-selection or operation identity.
+Python Airflow code should be boring: build the invocation from task context, call the manager, and
+map the returned disposition to Airflow behavior. It must not contain admission policy, stage
+implementations, publication credentials, retry-safety logic, Cell epoch decisions, evidence
+fan-in, or provider-specific sandbox semantics, and it must not retain an independent
+implementation of recovery, publication, stage selection or operation identity.
 
 A Python module that contains factory semantics is migration debt.
 
@@ -242,7 +278,8 @@ The stable JSON response returns:
 - admitted Cell identities;
 - evidence/status URLs or local handles.
 
-A harness never needs to know Python package names or DAG internals.
+A harness never needs to know Python package names or DAG internals. Today the same session
+identity travels as `swf submit --harness <h> --factory-id <id>`.
 
 ## Factory as a typed object
 
@@ -287,45 +324,46 @@ FactoryRunId
 
 Airflow state is an observation used to reconcile this state machine, never the canonical identity.
 
-## Migration strategy
+## Migration
 
-### Phase 1: define the Rust target
-- add Rust factory/run contracts;
-- add `swf factory` CLI namespace;
-- preserve current backend path underneath.
+Do not rewrite everything in one flag day. The migration unit is a **use case**, not a file. For
+each slice:
 
-### Phase 2: move reads and validation
-- FactorySpec parsing/validation;
-- work-order validation;
-- admission decisions;
-- Cell identity;
-- operator projections.
+1. freeze the current external contract;
+2. implement it in Rust;
+3. run Python and Rust against the same fixtures and evidence;
+4. switch the Airflow stage shim to call the Rust manager;
+5. remove the Python implementation;
+6. keep Airflow scheduling unchanged.
 
-Each migrated contract gets Python/Rust fixture equivalence until Python is removed.
+Suggested order:
 
-### Phase 3: move mutations
-- operation journal;
-- stage execution;
-- sandbox ownership;
-- recovery;
-- publication;
-- evidence retention.
+1. Rust factory/run contracts and the `swf factory` namespace, over the current backend;
+2. reads and validation: FactorySpec, work orders, admission decisions, Cell identity, operator
+   projections;
+3. stage registry and the execution envelope;
+4. operation journal and recovery;
+5. evidence and candidate fan-in;
+6. sandbox and provider adapters;
+7. publication;
+8. the backend HTTP surface (`swf factory serve`), leaving Python with DAG composition only.
 
-Every mutation must have restart/crash/lost-response tests before Python authority is deleted.
+Every mutation needs restart, crash and lost-response tests before its Python authority is deleted.
+Delete a Python implementation only when current-main E2E is green, Airflow scheduling is intact,
+restart/recovery tests are retained, API/CLI compatibility is documented, and no second scheduler
+has appeared.
 
-### Phase 4: replace Python backend
-- `swf factory serve` exposes the manager API;
-- Airflow callbacks point to Rust;
-- CLI talks to Rust manager;
-- Python backend becomes compatibility-only.
+## Invariants
 
-### Phase 5: delete duplicate authority
-Delete Python implementations only after:
-- current-main E2E is green;
-- Airflow scheduling remains intact;
-- restart/recovery tests are retained;
-- API/CLI compatibility is documented;
-- no second scheduler has appeared.
+- There is exactly one lifecycle scheduler: Airflow.
+- After a slice migrates, there is exactly one application authority for it: Rust.
+- The Rust CLI is the public harness entrypoint.
+- Airflow talks to Rust through a versioned protocol, never imports or the Airflow metadata DB.
+- Python DAG code may compose tasks but cannot implement factory state machines.
+- Every external mutation stays bound to Cell + epoch + operation identity.
+- A stage receipt is evidence-bearing and replay-safe; Python cannot turn an `in_doubt` receipt
+  into an automatic retry.
+- Final candidate promotion stays deterministic and human/policy gated.
 
 ## Non-goals
 
