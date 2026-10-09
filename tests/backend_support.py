@@ -21,7 +21,7 @@ from swfactory.admission import Limits
 from swfactory.backend.service import Factory
 
 TOKEN = "t" * 40  # Factory demands >= 32 non-whitespace characters
-REPO = "zozo123/ariflow-swfactory"  # the repo blueprints/default.toml targets
+REPO_SLUG = "zozo123/ariflow-swfactory"  # the repo blueprints/default.toml targets
 AF = "http://localhost:8080"
 LINE = "factory"
 

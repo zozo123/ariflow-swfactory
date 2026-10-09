@@ -611,7 +611,9 @@ def test_a_lost_report_follows_the_airflow_run(
     b = box.submit("2")
     cell_id = _lose_the_terminal_report(box, a, run_state)
     box.restart()
-    box.factory.resume_dispatch()
+    resumed = box.factory.resume_dispatch()
+    if queued_state == "queued":
+        assert resumed == [], "nothing was released, so nothing may be dispatched"
     assert box.factory.cell_store.get(cell_id)["state"] == cell_state
     assert _state(box, b["submission_id"]) == queued_state
     assert box.factory.fleet()["callback_debt"] == 0

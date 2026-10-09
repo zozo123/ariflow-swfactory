@@ -23,13 +23,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from backend_support import AF, LINE, REPO, TOKEN, Client, FakeAirflow
+from backend_support import AF, LINE, REPO_SLUG, TOKEN, Client, FakeAirflow
 
 from swfactory.backend import Factory
 from swfactory.backend import routes as routes_mod
 from swfactory.backend import scm_service as scm_mod
 from swfactory.backend import service as service_mod
-from swfactory.backend.server import MAX_BODY, MAX_POPULATION_BODY, MAX_SCM_BODY
+from swfactory.backend.server import LARGE_SCM_ROUTES, MAX_BODY, MAX_POPULATION_BODY, MAX_SCM_BODY, POPULATION_ROUTES
 from swfactory.control import GitHubClient
 from swfactory.models import StageError
 from swfactory.recovery_accounting import PublicationReceipt
@@ -294,7 +294,7 @@ def test_lines_lists_installed_blueprints(client: Client) -> None:
     assert LINE in names
     row = next(r for r in lines if r["name"] == LINE)
     assert row["route"][0] == "intent" and row["route"][-1] == "deliver"
-    assert REPO in row["targets"]
+    assert REPO_SLUG in row["targets"]
 
 
 def test_blueprint_preview_resolves_jobs_without_touching_airflow(client: Client) -> None:
@@ -338,8 +338,8 @@ def test_sweep_route_consults_the_cell_store_and_journals_each_removal(
     from swfactory.runtime import run_id_for
 
     run_id = "manual__2026-09-01T00:00:00+00:00"
-    live = factory.cell_store.activate(CellIdentity(REPO, "", "1"), "test")["cell_id"]
-    done = factory.cell_store.activate(CellIdentity(REPO, "", "2"), "test")["cell_id"]
+    live = factory.cell_store.activate(CellIdentity(REPO_SLUG, "", "1"), "test")["cell_id"]
+    done = factory.cell_store.activate(CellIdentity(REPO_SLUG, "", "2"), "test")["cell_id"]
     for cell_id, idx in ((live, 0), (done, 1)):
         factory.cell_store.patch(cell_id, 1, f"bind:{idx}", state="running", airflow_run_id=run_id, map_index=idx)
     factory.cell_store.patch(done, 1, "finish", state="success")
@@ -813,7 +813,7 @@ def test_scm_issue_resolves_a_numeric_ref(client: Client, scm: type[FakeScm]) ->
     status, payload = client.call("POST", "/v1/scm/issue", {"ref": " 1220 "})
     assert status == 200 and payload["number"] == 1220
     assert scm.instances[-1].fetched == ["1220"]
-    assert scm.instances[-1].repo == REPO  # the backend's repo, never the caller's
+    assert scm.instances[-1].repo == REPO_SLUG  # the backend's repo, never the caller's
 
 
 def test_scm_issue_bounds_the_ref(client: Client, scm: type[FakeScm]) -> None:
@@ -870,7 +870,7 @@ def test_scm_publish_refuses_a_cell_with_no_airflow_binding(
     """Without a bound run there is no authority for the write, so it must fail closed."""
     from swfactory.cell_runtime import identity_for_job
 
-    identity = identity_for_job({"issue": "9", "repo": REPO, "dir": "", "base_branch": "main", "job_idx": 0})
+    identity = identity_for_job({"issue": "9", "repo": REPO_SLUG, "dir": "", "base_branch": "main", "job_idx": 0})
     cell = factory.cell_store.activate(identity, actor="test")
     cell = factory.cell_store.patch(cell["cell_id"], int(cell["epoch"]), "policy:test", policy_digest="sha256:x")
     status, payload = client.call("POST", "/v1/scm/publish", _publish_body(cell))
@@ -921,7 +921,7 @@ def test_scm_publish_and_open_issue_reach_the_credential_once_identity_holds(
     # against is the immutable git content below, never the editable body.
     assert "swfactory-patch-sha256:" + payload["patch_sha256"] in published["body"]
     # The receipt binds the observed repository, base, head and content, and names the PR state.
-    assert payload["repository"] == REPO and payload["base_revision"] == "main"
+    assert payload["repository"] == REPO_SLUG and payload["base_revision"] == "main"
     assert payload["head_revision"] == "abc" and payload["pr_state"] == "open"
     assert payload["content_digest"] == patch_content_digest(b"diff")
 
@@ -1052,20 +1052,28 @@ def test_body_larger_than_the_backend_limit_is_refused_before_it_is_read(client:
 @pytest.mark.parametrize(
     ("path", "limit"),
     [
-        pytest.param("/v1/fleet", MAX_BODY, id="default"),
-        pytest.param("/v1/population/execute", MAX_POPULATION_BODY, id="population"),
-        pytest.param("/v1/scm/publish", MAX_SCM_BODY, id="scm-publish"),
-        pytest.param("/v1/scm/open-issue", MAX_SCM_BODY, id="scm-open-issue"),
+        pytest.param("/v1/fleet", 64 * 1024, id="default"),
+        pytest.param("/v1/population/execute", 512 * 1024, id="population"),
+        pytest.param("/v1/scm/publish", 16 * 1024 * 1024, id="scm-publish"),
+        pytest.param("/v1/scm/open-issue", 16 * 1024 * 1024, id="scm-open-issue"),
     ],
 )
 def test_only_population_and_scm_patch_routes_raise_the_body_limit(client: Client, path: str, limit: int) -> None:
     auth = {"Authorization": f"Bearer {TOKEN}"}
     status, payload = client.raw("POST", path, b"", {**auth, "Content-Length": str(limit + 1)})
     assert status == 413 and payload == {"detail": "request exceeds backend limit"}
-    if limit > MAX_BODY:  # a body over the default limit still reaches this route's own parser
-        body = b" " * (MAX_BODY + 1)
+    if limit > 64 * 1024:  # a body over the default limit still reaches this route's own parser
+        body = b" " * (64 * 1024 + 1)
         status, payload = client.raw("POST", path, body, {**auth, "Content-Length": str(len(body))})
         assert status == 400, payload
+
+
+def test_the_body_limits_and_the_routes_that_raise_them_are_exact() -> None:
+    """The probe above only bounds each limit from above, and only on these four routes; this pins
+    the values themselves and that no other route is lifted off the 64 KiB default."""
+    assert (MAX_BODY, MAX_POPULATION_BODY, MAX_SCM_BODY) == (64 * 1024, 512 * 1024, 16 * 1024 * 1024)
+    assert {"/v1/scm/publish", "/v1/scm/open-issue"} == LARGE_SCM_ROUTES
+    assert {"/v1/population/execute"} == POPULATION_ROUTES
 
 
 def test_a_negative_content_length_is_refused(client: Client) -> None:
@@ -1250,7 +1258,7 @@ def test_live_epoch_policy_mismatch_is_refused_before_the_row_is_overwritten(
 
     from swfactory.cell_runtime import identity_for_job
 
-    job = {"issue": "991", "repo": REPO, "dir": "", "base_branch": "main", "job_idx": 0}
+    job = {"issue": "991", "repo": REPO_SLUG, "dir": "", "base_branch": "main", "job_idx": 0}
     cell = factory.cell_store.activate(identity_for_job(job), actor="test")
     legacy = "policy:" + "a" * 64
     cell = factory.cell_store.patch(

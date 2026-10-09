@@ -32,13 +32,16 @@ def _quiet(factory: Factory, airflow: FakeAirflow) -> bool:
 def test_both_submission_routes_refuse_while_the_backend_is_draining(
     factory: Factory, airflow: FakeAirflow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The guard is backend-wide and fires before the line is resolved, so the refusal names the
-    backend rather than a line. `mutation_ready` is not a per-line property; a message claiming
-    otherwise would tell an operator to look at the wrong thing."""
+    """The guard is backend-wide, so the refusal names the backend rather than a line. On
+    ``/work-orders`` it fires before the line is resolved (pinned: resolving it fails the test); the
+    compatibility mount resolves the line from its path first, then reaches the same guard.
+    `mutation_ready` is not a per-line property; a message claiming otherwise would tell an operator
+    to look at the wrong thing."""
     monkeypatch.setenv("SWF_DRAIN", "1")
     assert factory.capabilities()["mutation_ready"] is False
 
-    with pytest.raises(Refused) as caught:
+    with pytest.MonkeyPatch.context() as mp, pytest.raises(Refused) as caught:
+        mp.setattr(factory, "_line", lambda name: pytest.fail(f"/work-orders resolved line {name!r} before draining"))
         factory.operation("/work-orders", {"line": LINE, "issues": ["42"]})
     canonical = caught.value
     with pytest.raises(Refused) as caught:

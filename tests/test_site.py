@@ -94,6 +94,32 @@ def test_homepage_accessibility_and_discovery_contract() -> None:
     assert_local_references_exist(page)
 
 
+def test_homepage_loads_no_script() -> None:
+    source, _ = parse_page("index.html")
+
+    assert "<script" not in source
+
+
+def test_sandbox_table_is_complete_and_honest() -> None:
+    source, _ = parse_page("index.html")
+
+    rows = re.findall(r'data-sandbox="([^"]+)"', source)
+    assert rows == [
+        "local",
+        "srt",
+        "docker",
+        "islo",
+        "toolset",
+        "daytona",
+        "e2b",
+        "tensorlake",
+        "boat",
+    ]
+    assert "policy support is backend-specific" in source.lower()
+    assert source.count("custom backend required") == 3
+    assert "--sandbox toolset" in source
+
+
 def test_custom_not_found_page_is_self_contained() -> None:
     source, page = parse_page("404.html")
 

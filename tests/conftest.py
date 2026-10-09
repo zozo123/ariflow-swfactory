@@ -13,7 +13,7 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
-from backend_support import AF, REPO, SUBMIT_ROUTES, TOKEN, Backend, Client, FakeAirflow, write_line
+from backend_support import AF, REPO_SLUG, SUBMIT_ROUTES, TOKEN, Backend, Client, FakeAirflow, write_line
 from support import make_repo
 
 from swfactory.admission import Limits
@@ -63,7 +63,7 @@ def factory(tmp_path: Path, airflow: FakeAirflow, env: None) -> Iterator[Factory
         Factory(
             token=TOKEN,
             airflow_url=AF,
-            repo=REPO,
+            repo=REPO_SLUG,
             owner="operator",
             root=tmp_path / "metrics",
             state_root=tmp_path / "state",
