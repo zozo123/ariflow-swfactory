@@ -2,9 +2,10 @@
 #
 # dag-factory (astronomer/dag-factory) is the YAML -> DAG library. It owns THIS file: the outer,
 # declarative composition. The line it triggers -- `factory`, emitted by `dags/blueprints.py` from
-# `blueprints/factory.toml` -- keeps the inner state machine: issue x target mapping, human gates,
-# isolated agent cells, delivery authority. YAML chooses a line and its inputs; it cannot redefine
-# a stage, a gate or a budget, because none of those are addressable from here.
+# `blueprints/default.toml` (name = "factory") -- keeps the inner state machine: issue x target
+# mapping, human gates, isolated agent cells, delivery authority. YAML chooses a line and its
+# inputs; it cannot redefine a stage, a gate or a budget, because none of those are addressable
+# from here.
 #
 # The trigger is deferrable so the composed DAG holds no worker slot while the line runs, and it
 # waits, so "this task succeeded" means "the line finished" -- which is not "the change was

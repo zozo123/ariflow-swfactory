@@ -1,4 +1,4 @@
-# Compose factory lines with Astronomer Blueprint
+# Compose factory lines with Astronomer Blueprint or dag-factory
 
 Astronomer Blueprint and swfactory solve different layers of the system, so they compose cleanly:
 
@@ -71,3 +71,29 @@ not equate child-DAG success with approval.
 The Astronomer no-code Blueprint UI is currently preview and `airflow-blueprint` identifies itself
 as alpha. The bridge is therefore an optional integration, not the factory's only DAG surface. It
 was statically audited but not live-executed as part of this 2.0 delivery.
+
+## dag-factory
+
+[astronomer/dag-factory](https://github.com/astronomer/dag-factory) builds Airflow DAGs from YAML
+and meets the line at the same boundary: its YAML owns the outer composition, and one
+`TriggerDagRunOperator` (deferrable, waiting) starts the line DAG.
+
+```bash
+uv sync --group airflow
+uv pip install "dag-factory>=1.0"
+mkdir -p dags/composed
+cp examples/dag-factory/loader.py examples/dag-factory/software_factory.yml dags/composed/
+airflow dags list | grep product_change
+```
+
+`examples/dag-factory/software_factory.yml` triggers the `factory` line for `demo/issue.md` and
+succeeds when the line finishes; as above, read the pull request for the verdict. dag-factory is
+not a dependency of this repository and no test imports it; the example file is the whole
+integration.
+
+The line itself is not generated from dag-factory YAML. It is a mapped task group over
+`(issue x target)` whose stages, gates and evidence tasks are derived from one blueprint and
+checked against the runtime's approval policy (`tests/test_dag_parity.py`); a composition layer
+that could express the line could also express it without its human gate. A direct trigger from a
+composed DAG is an *unmanaged* submission, without the durable admission and Cell fencing of a
+backend work order (`/v1/work-orders`): compose for convenience, admit through the backend.

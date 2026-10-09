@@ -253,15 +253,15 @@ The exit-code table is public surface under the project's semver policy
 ([design.md](design.md#versioning-and-release)); so are the command names and the `--json` document
 keys. A script that sees `4` must know it needs a credential and not a retry.
 
-| Code | Meaning |
-| --- | --- |
-| 0 | success |
-| 1 | operational failure — a check is red, a gate answer was refused by policy, verification failed |
-| 2 | usage error — a bad flag, an unparseable id, a mutation without `--yes` on a non-TTY |
-| 3 | not found — no such context, run, job, gate, delivery or sandbox |
-| 4 | authentication or authorisation failure |
-| 5 | service unreachable — DNS, connect, TLS, timeout, or a missing `gh`/`islo` |
-| 6 | conflict — the gate was already answered, or the evidence moved under the operator |
+| Code | `kind` | Meaning |
+| --- | --- | --- |
+| 0 | — | success |
+| 1 | `operational` | a check is red, a gate answer was refused by policy, verification failed |
+| 2 | `usage` | a bad flag, an unparseable id, a mutation without `--yes` on a non-TTY |
+| 3 | `not_found` | no such context, run, job, gate, delivery or sandbox |
+| 4 | `auth` | HTTP 401, an invalid JWT, or an unset credential environment variable |
+| 5 | `unreachable` | DNS, connect, TLS, timeout, or a missing `gh`/`islo` |
+| 6 | `conflict` | the gate was already answered, or the evidence moved under the operator |
 
 Three commands exit on a *report* rather than an error. `swf doctor` prints the checks and exits 1
 when a required row is red — the rows are the answer, so there is no error envelope.
@@ -285,10 +285,9 @@ A non-zero exit still leaves a parseable answer:
 {"error": {"kind": "conflict", "message": "…", "exit_code": 6, "hint": "…"}}
 ```
 
-`kind` is a 1:1 map onto the table above — `operational`, `usage`, `not_found`, `auth`,
-`unreachable`, `conflict` — and `exit_code` is duplicated inside the object on purpose, so a
-consumer reading a captured document never has to inspect `$?`. `message` is one sentence, already
-sanitised.
+`kind` maps 1:1 onto the [exit-code table](#exit-codes), and `exit_code` is duplicated inside the
+object on purpose, so a consumer reading a captured document never has to inspect `$?`. `message`
+is one sentence, already sanitised.
 
 A degraded read says which source it lost, in the document rather than beside it:
 

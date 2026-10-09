@@ -300,11 +300,11 @@ npx skills add zozo123/ariflow-swfactory --skill airflow-software-factory --skil
 For a configured harness, keep `(harness, factory_id)` stable throughout one session:
 
 ```sh
-scripts/swf_harness.sh codex codex-session-17 --blueprint your-product --issue 42
+swf submit --harness codex --factory-id codex-session-17 --blueprint your-product --issue 42
 ```
 
-The wrapper submits through `swf`; Airflow continues to own lifecycle scheduling. See
-[harness setup](docs/harnesses.md) and [concurrent harness methodology](docs/harness-concurrency-methodology.md).
+Airflow continues to own lifecycle scheduling. See the [`swfactory` skill](skills/swfactory/SKILL.md)
+and [concurrent harness methodology](docs/harness-concurrency-methodology.md).
 
 ## Status and verification
 

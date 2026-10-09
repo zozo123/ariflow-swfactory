@@ -69,26 +69,16 @@ without giving any lane a different candidate view.
 
 ## Constrained harness research
 
-Harness auto-research is useful only if efficiency is subordinate to the factory invariants. A
-trial of a harness mechanism must keep separate:
-
-- candidate SHA: exact bytes the experiment produced;
-- authority digest: canonical promotion-relevant facts;
-- evidence digest: retained evidence for that experiment;
-- efficiency vector: prompt bytes, cost, wall time, and model turns.
-
-Refuse a mechanism if its candidate SHA changes, its authority digest changes, its evidence is
-incomplete, or its verifier is red. Among admissible trials, keep the Pareto frontier rather than an
-invented weighted score: a mechanism is dominated only when another admissible trial is no worse on
-every measured efficiency dimension and strictly better on at least one.
-
-That encodes the governing rule directly:
+Harness auto-research is useful only if efficiency stays subordinate to the factory invariants. An
+experiment with a harness mechanism keeps its candidate SHA (the exact bytes produced), authority
+digest (canonical promotion-relevant facts) and evidence digest separate from its efficiency
+vector (prompt bytes, cost, wall time, model turns). A mechanism that changes the candidate SHA or
+the authority digest, leaves evidence incomplete, or turns the verifier red is refused:
 
 > An accelerator may change time-to-answer, never the answer.
 
-No module implements trial selection today; an unwired prototype was removed. An implementation
-must stay research-only, with no promotion action and no callback into Airflow, GitHub, approvals,
-or candidate readiness.
+Such research stays research-only, with no promotion action and no callback into Airflow, GitHub,
+approvals, or candidate readiness.
 
 ## Mapping the other SoL-Pi mechanisms
 

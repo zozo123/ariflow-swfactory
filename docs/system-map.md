@@ -38,7 +38,7 @@ The rejection path publishes a labeled, blocked evidence PR; it does not approve
 | Commission | Backend admission, accepted inputs, `intent`, human gate | Work identity, pinned inputs, approved intent digest |
 | Sketch | `spec`, `plan`, human gate, `work_stage.build_and_test` | Typed plan, approved plan digest, bounded attempts and test receipts |
 | Critique | `review`, including bounded repair | Findings and verdict; reviewer approval is not merge authority |
-| Freeze and verify | Workspace-head checks, patch validation; candidate and CI evidence paths | Exact source/base/tested identity and retained artifact digests; no single universal claim certificate yet |
+| Freeze and verify | Workspace-head checks, patch validation; [candidate](candidate-evidence.md) and CI evidence paths | Exact source/base/tested identity and retained artifact digests; no single universal claim certificate yet |
 | Steward | Trusted publication, repository checks, human merge decision | Publication identity and applicable repository policy |
 | Learn and recover | Metrics, operation journals, recovery paths, `swfactory improve` | Observations and proposals; no automatic self-authorization |
 

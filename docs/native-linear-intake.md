@@ -2,8 +2,9 @@
 
 The backend can admit one explicitly selected Linear issue through the existing durable
 admission and Airflow dispatch path. It retains accepted source text and serves it to workers
-through the current Cell epoch. This is a maintenance implementation with local behavior
-tests. It is not a deployment qualification or a successful managed product run.
+through the current Cell epoch. This is a maintenance implementation of the
+[intake design in PR2361](https://github.com/zozo123/ariflow-swfactory/pull/2361) with local
+behavior tests. It is not a deployment qualification or a successful managed product run.
 
 ## Configure a reviewed manual blueprint
 
@@ -29,17 +30,40 @@ configuration and `SWF_SCM=github` so publication uses the backend proxy. Linear
 service credentials must remain outside stage sandboxes. No credential appears in source
 snapshots, work-order requests, Airflow run configuration, or XCom.
 
-## Preview, then submit the accepted revision
+## Preview
 
-On a trusted controller, inspect the source with `linear-preview` and retain its intent digest.
-The preview preserves the original title and description. A status change does not change its
-digest, while a title or description edit does. A preview remains `admission_ready: false` because
-only the backend can resolve eligibility and reserve a Cell.
+`linear-preview` reads one issue on a trusted controller and prints a JSON preview:
 
 ```bash
 uv run swfactory linear-preview <issue-uuid> \
   --workspace-id <workspace-uuid> --project-id <project-uuid>
+```
 
+It needs the immutable issue UUID and the expected workspace and project UUIDs. The workspace ID is
+Linear's organization UUID; a team UUID or URL slug cannot substitute for it. The title and
+description are preserved exactly, and mismatched identities are refused. `SWF_LINEAR_API_KEY`, a
+Linear personal API key (see Linear's
+[GraphQL authentication and errors](https://linear.app/developers/graphql)), comes from the
+controller's secret configuration, never from the command, issue text, a work cell or a worker
+bundle. A missing key is refused before network I/O.
+
+The source key is `linear:<workspace UUID>:<issue UUID>`; display identifiers and URLs do not
+determine identity. The intent digest covers that key, the project and team UUIDs and the original
+title and description. A status, identifier, URL or `updatedAt` change keeps the digest; a title or
+description edit changes it, including an appended PR link, so status projection must use Linear
+attachments rather than edit accepted text. The digest identifies the preview text only. It is not
+the work-order key or an accepted-input receipt, and every preview says `admission_ready: false`,
+because only the backend can resolve eligibility and reserve a Cell.
+
+The client makes one bounded GraphQL read, refuses redirects and does not retry. Partial GraphQL
+errors, oversized or malformed responses, unknown workflow states and missing required fields
+refuse the read, and error messages never echo server text. Known credential patterns and a
+response containing the controller key are rejected. That check cannot detect every secret in free
+text, so a preview must not be passed directly to a work cell.
+
+## Submit the accepted revision
+
+```bash
 uv run swfactory linear-submit <issue-uuid> \
   --line <installed-blueprint> --intent-digest sha256:<accepted-digest>
 ```
@@ -123,6 +147,12 @@ decisions. No deployment credentials or live policy are changed by this patch. D
 controller back to a version without native source support while native work orders are pending.
 
 ## Tests
+
+`tests/test_linear_source.py` drives the real parser and CLI through an injected HTTP transport:
+immutable text, UUID identity across JSON reloads, intent edits versus status-only changes,
+malformed or unauthorized source data, partial GraphQL success, credential rejection, bounded
+responses, API errors and no admission in the CLI output. It requires one GraphQL query and no
+mutation.
 
 `tests/test_native_linear_intake.py` exercises the canonical CLI through a real loopback backend
 HTTP server, with fake Linear and Airflow transports. It checks duplicate submissions, concurrent

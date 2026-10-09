@@ -208,31 +208,10 @@ If a Cell is cancelled:
 
 ## 9. Outer harness mode vs inner stage mode
 
-An agent can appear in two fundamentally different roles.
-
-### Outer harness
-
-The outer harness:
-
-- submits governed work with `swf`;
-- inspects Cells, runs, jobs, gates, and deliveries;
-- may answer human-in-the-loop gates only with explicit user authority;
-- does not invent stage transitions;
-- does not publish directly;
-- does not become a scheduler.
-
-### Inner stage agent
-
-An agent launched by Airflow inside a Factory Cell:
-
-- follows the Cell intent/spec/plan;
-- stays inside the assigned workspace/sandbox;
-- uses only stage-granted tools and credentials;
-- returns stage artifacts/results;
-- does not schedule future stages;
-- does not publish or promote itself.
-
-Confusing these roles is an authority bug.
+An agent is either an outer harness that submits and inspects through `swf`, or an inner stage
+agent that Airflow launched inside a Factory Cell. The
+[`swfactory` skill](../skills/swfactory/SKILL.md) states what each may do; confusing the two roles
+is an authority bug.
 
 ## 10. Publication remains centralized
 
