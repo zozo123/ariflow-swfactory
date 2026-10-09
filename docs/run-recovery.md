@@ -199,7 +199,7 @@ context limit, a killed container, a spend limit reached mid-loop — and a lock
 strand its issue forever. Taking over an expired claim is itself a compare-and-swap, so two
 sessions recovering the same dead claim cannot both win.
 
-    swf claim demo/issue.md          # this session's identity, the key, the ref, the branch
+    uv run swfactory claim demo/issue.md   # this session's identity, the key, the ref, the branch
 
 **What lands on the remote** — the publish branch is keyed on the work rather than the run:
 `factory/<issue>-<sha256(repo, target, issue)[:12]>`, the same inputs `CellIdentity.stable_id`

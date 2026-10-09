@@ -164,8 +164,15 @@ filesystem paths or command strings. No route accepts a caller-provided executab
 | --- | --- | --- |
 | `GET /v1/health` | none | service name and API version |
 | `POST /v1/doctor` | `{}` | readiness checks from the backend host |
+| `POST /v1/compatibility` | `{}` | contract versions, features and mutation readiness |
+| `POST /v1/fleet` | `{}` | one fleet summary: cells, queue depth and repair debt |
 | `POST /v1/lines` | `{}` | installed line names, routes, gates and targets |
-| `POST /v1/work-orders` | `line`, `issues`, optional `targets`; `airflow_run_id` from actor `airflow-schedule` binds a run Airflow's scheduler already created instead of dispatching one | run identity, validated blueprint, mapped job count and, once bound, the complete Cell `bindings` |
+| `POST /v1/blueprints/preview` | `line`, optional `issues`, `targets` | the jobs a submission would map, without submitting |
+| `POST /v1/work-orders` | `line`, `issues`, optional `targets`; `airflow_run_id` from actor `airflow-schedule` binds a run Airflow's scheduler already created instead of dispatching one; or `line` and a [Linear `work_source`](native-linear-intake.md) | run identity, validated blueprint, mapped job count and, once bound, the complete Cell `bindings` |
+| `POST /v1/queue` / `queue/inspect` | optional `limit` / `work_id` | admission queue pressure, active and queued work / one entry |
+| `POST /v1/queue/resume` / `queue/cancel` | optional `limit` / `work_id`, `reason` | redeliver pending dispatch / cancel work not yet bound to an Airflow run |
+| `POST /v1/operations` / `operations/inspect` | optional `limit` / `operation_key` | unresolved external-mutation debts / one operation |
+| `POST /v1/cells` / `cells/inspect` / `cells/history` | optional `limit` / `cell_id` | durable Factory Cells / one Cell's projection / its append-only history |
 | `POST /v1/population/execute` | internal managed-worker request: Cell/epoch/policy/operation identity, exact bound population task, invocation/manifest/binding digests and bounded instruction/context | sanitized BehaviorReceipt/artifact/evidence identities; raw provider credential and raw provider output are not returned |
 | `POST /v1/workers` | `{}` | configured owner's active worker references |
 | `POST /v1/workers/remove` | `name` | argv executed after fresh server-side ownership checks |
@@ -175,6 +182,11 @@ filesystem paths or command strings. No route accepts a caller-provided executab
 | `POST /v1/metrics/runs` / `summary` | `{}` | committed metrics / aggregate |
 | `POST /v1/state/runs` | optional `limit` | saved run summaries |
 | `POST /v1/state/inspect` | `run_id` | ownership, journal health and interruption evidence |
+
+The remaining routes are internal, not a public contract: managed workers and Airflow call
+`/v1/cells/transition`, `/v1/scm/*`, `/v1/population/artifact` and `/v1/workers/sweep`
+(`swfactory state autonomy --backend-url` reads `/v1/scm/autonomy-status`), and `/v1/evidence/*`,
+`/v1/core/*` and `/v1/leases/*` serve diagnostics and may change shape in any release.
 
 The compatibility mount `/v1/airflow/api/v2/...` preserves Airflow's published JSON, pagination,
 log continuation and conflict responses for the existing console. It allows the console's reads

@@ -21,8 +21,8 @@ through their GitHub profile without including exploit details in a public issue
 
 swfactory treats agent-generated code as untrusted. The production design separates the agent
 sandbox from the orchestrator that holds source-control credentials, validates patch paths, scans
-for secret-shaped values, and alone performs delivery. See the trust-boundary diagram and sandbox
-comparison in [README.md](README.md) before operating the real-agent path.
+for secret-shaped values, and alone performs delivery. See the trust-boundary section and sandbox
+table in [README.md](README.md#execution-and-trust-boundaries) before operating the real-agent path.
 
 ## Credential authority
 

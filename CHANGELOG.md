@@ -6,9 +6,84 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
-- Consolidate the repository (#2367, #2368, #2369, #2370, #2371 and the follow-up tests and docs
-  work): about 20,000 fewer lines, with every `swfactory` and `swf` command, backend route and exit
-  code kept. Delete code nothing called: the Rust Jev/advisory/build-exploration island, the
+- Add native Linear work orders (#2362). `swfactory linear-preview <issue-uuid> --workspace-id …
+  --project-id …` reads one Linear issue on a trusted controller and prints its intent digest
+  without admitting anything; `swfactory linear-submit <issue-uuid> --line … --intent-digest …`
+  submits that accepted revision through the backend's `POST /v1/work-orders` as a `work_source`
+  of kind `linear`, so admission, Factory Cells and Airflow scheduling are the same as for any other
+  work order. A blueprint opts in with a `[work_source] kind = "linear"` table, which older workers
+  refuse to load. `SWF_LINEAR_API_KEY` stays on the controller and backend; no Linear or GitHub
+  credential reaches a work cell. Linear status and PR projection, dependency receipts and Linear
+  webhooks are not implemented. See `docs/native-linear-intake.md`.
+
+- Count JUnit evidence from concrete testcase outcomes (#2362): Node's root-level testcases are no
+  longer dropped, a Node TODO failure that also carries `<skipped>` counts once, as failed, and a
+  report whose summary disagrees with its testcases, or whose test evidence is misplaced, nested or
+  ambiguous, is refused. A report that verified before can now fail verification.
+
+- Add a `boat` sandbox kind (#2364, #2365, #2366): work cells on boat.dev VMs, the product sandbox
+  provider on the WorldGen side. `BOAT_API_KEY` (optional `BOAT_BASE_URL`, which must be `https://`
+  except to loopback) is read from the process environment only and never enters an error or a
+  report; the VM is created credential-free (`noEnv`), clones the public target itself, and always
+  stops and waits for the archive. Ship `blueprints/worldgen.toml`, the WorldGen pilot line
+  (`jop8281/zozo123-genworld` at `code/` on `stabilize/main`), which `swf` reads too; a scripted run
+  of a `boat` line without a sandbox override runs on boat instead of dropping to `local`, so
+  `swfactory run --blueprint worldgen` and the Airflow DAG provision a boat.dev VM. `swfactory
+  doctor` checks the key's presence (never its value) and skips the islo chain for boat cells.
+  `agent=claude` on `boat` is refused until a model-credential path exists; run the scripted agent.
+  The workgraph execution report says `shared_workspace_serial` for every run, because nodes run in
+  one serial loop; a provider whose capabilities allow forking (boat) records it as `parallel_hint`.
+
+- Allow `registry.npmjs.org` in the work-cell egress allowlists (#2363: the islo `swfactory` gateway
+  profile, shared by every islo line, and the srt/toolset default) so a target that installs with
+  Bun can run `bun install` inside a work cell; the registry serves metadata and tarballs itself,
+  so no CDN host is needed. Docker cells have no domain allowlist and boat cells get no swfactory
+  egress policy, so neither changes. A profile bootstrapped earlier lacks the rule until
+  `deploy/islo/bootstrap.sh` is re-run (idempotent; `swfactory doctor` does not compare rules), and
+  `srt_allowed_domains` is a pinned policy setting, so a run admitted under the old default is
+  refused at its next task until re-accepted (`docs/run-recovery.md`).
+
+- Fix the Docker Compose stack (#2356): since 2.3.0 the `airflow` service repeated
+  `SWF_BACKEND_URL` and `SWF_BACKEND_TOKEN`, so `docker compose` refused
+  `deploy/docker/compose.yml` (`mapping key "SWF_BACKEND_URL" already defined`). The Docker
+  quickstart now submits through the managed backend.
+
+- Default the Docker sandbox image to `swfactory-sandbox:local`, the image
+  `deploy/docker/sandbox.Dockerfile` builds and compose, `swf stack` and CI already use. The old
+  default, `ghcr.io/zozo123/swfactory-sandbox:latest`, was never published, so it could only fail
+  with `denied`. SmolVM's image default is unchanged. `docker_image` is a pinned policy setting, so,
+  as with the egress default above, a run admitted before upgrading is refused at its next task
+  until re-accepted.
+
+- `swfactory webhook serve` binds `127.0.0.1` by default and refuses a wider `--host` without
+  `SWF_WEBHOOK_SECRET` unless `--trust-upstream` says a proxy in front verifies the GitHub signature
+  (islo's incoming webhook does). The Docker and islo entrypoints pass `--host 0.0.0.0
+  --trust-upstream`; a receiver started by hand on `0.0.0.0` with no secret now exits 2 instead of
+  accepting unsigned deliveries. `docs/islo.md` now says that the islo deploy runs legacy
+  unmanaged intake, whose receiver holds the generated Airflow admin password.
+
+- `swfactory --version` prints the installed version. `swfactory improve` outside a checkout exits
+  2 and names `--root` instead of raising a traceback.
+
+- Self-hosted work cells can no longer edit `.claude/hooks/`, `bands.yaml` or the confinement and
+  credential modules `boat.py`, `paths.py`, `webhook.py`, `cell_callback.py`,
+  `execution_binding.py`, `execution_recipe.py` and `xcom_contract.py`: `factory.toml` protects
+  them, and the control-plane gate checks them.
+
+- The minimum Rust version for building `swf` is 1.88, the version the locked dependency graph
+  already required; the documented 1.82 could not build it.
+
+- Release hardening: the `release` job's token is read-only (only `publish` writes); third-party
+  actions in `release.yml` and `supply-chain.yml` are pinned to commit SHAs; the Linux `swf`
+  binaries build on `ubuntu-24.04` instead of the moving `ubuntu-latest`; the release and the core
+  CI leg install with `uv sync --locked`, so a stale `uv.lock` fails instead of being rewritten; the
+  Docker images copy uv from `ghcr.io/astral-sh/uv:0.12.23` instead of `:latest`. With the backend
+  secrets unset, `dispatch.yml`'s autonomous triage exits 0 with a notice like `submit`, and the
+  keyed `real-demo` and `evals-islo` eval jobs are reported as skipped rather than passed.
+
+- Consolidate the repository (#2367, #2368, #2369, #2370, #2371, #2372, #2373): about 20,000 fewer
+  lines, with every `swfactory` and `swf` command, backend route and exit code kept. Delete code
+  nothing called: the Rust Jev/advisory/build-exploration island, the
   manager scaffold and operator stack (`CellOps` and `OperatorOps` fold into `BackendOps`);
   `runtime_surface.py` and the 18 modules only it kept reachable; the formal-claims,
   exploration/convergence and cognitive-harness modules; the five config YAMLs only tests read
@@ -28,31 +103,6 @@ All notable changes to this project will be documented here. The format follows
   `swfactory state autonomy --backend-url` honours `SWF_BACKEND_HTTP_HOSTS`; the experimental
   `factory.cognitive-harness` claim is retired and `factory.formal-claims` covers only the TLA+
   model.
-
-- Run the boat line on boat: a scripted run without a sandbox override no longer drops to `local`
-  when the blueprint's kind is `boat` (the only agent `boat` admits is the scripted one), so
-  `swfactory run --blueprint worldgen` and the Airflow DAG provision a boat.dev VM. The
-  workgraph execution report says `shared_workspace_serial` for every run, because nodes run in
-  one serial loop; a provider whose capabilities allow forking (boat) records it as
-  `parallel_hint`. List `boat` in the site, design and skill sandbox tables.
-
-- Allow `registry.npmjs.org` in the work-cell egress allowlists (the islo `swfactory` gateway
-  profile, shared by every islo line, and the srt/toolset default) so a target that installs with
-  Bun can run `bun install` inside a work cell; the registry serves metadata and tarballs itself,
-  so no CDN host is needed. Docker cells have no domain allowlist and boat cells get no swfactory
-  egress policy, so neither changes. A profile bootstrapped earlier lacks the rule until
-  `deploy/islo/bootstrap.sh` is re-run (idempotent; `swfactory doctor` does not compare rules), and
-  `srt_allowed_domains` is a pinned policy setting, so a run admitted under the old default is
-  refused at its next task until re-accepted (`docs/run-recovery.md`).
-
-- Add a `boat` sandbox kind: work cells on boat.dev VMs, the product sandbox provider on the
-  WorldGen side. `BOAT_API_KEY` (optional `BOAT_BASE_URL`) is read from the process environment
-  only and never enters an error or a report; the VM is created credential-free (`noEnv`),
-  clones the public target itself, and always stops and waits for the archive. Ship
-  `blueprints/worldgen.toml`, the WorldGen pilot line (`jop8281/zozo123-genworld` at `code/` on
-  `stabilize/main`); `swfactory doctor` checks the key's presence (never its value) and skips
-  the islo chain for boat cells. `agent=claude` on `boat` is refused until a model-credential
-  path exists; run the scripted agent.
 
 ## [2.4.0] - 2026-10-03
 
@@ -787,7 +837,10 @@ development snapshot that was never tagged or published.
 - Scripted keyless end-to-end replay and hermetic test suite.
 - GitHub delivery, issue dispatch, control room, maintenance bands, and webhook receiver.
 
-[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.4.0
+[2.3.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.3.0
+[2.2.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.2.0
 [2.1.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.1.0
 [2.0.1]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.0.1
 [2.0.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.0.0

@@ -7,10 +7,10 @@ Reference for the parts the README only names: how a blueprint declares a route,
 Airflow DAG does, how metrics and bands close the loop, and the decisions (and accepted risks)
 behind all of it.
 
-Validation status: the 2.0 rewrite was audited statically before tagging. The v2.0.1 workflow
-then gates publication on lint, the hermetic suite, scripted e2e demo, Airflow parity and smoke,
-and package build. Live hosted-provider runs remain deployment validation; the section explicitly
-labeled as prior 1.1 evidence records older compatibility runs.
+Validation status: the release workflow gates publication on retained candidate-readiness
+evidence for the tagged tree, lint, the hermetic suite, the scripted e2e demo, Airflow parity and
+smoke, the package build and a self-verified provenance manifest. Live hosted-provider runs remain
+deployment validation.
 
 ## Scope and authority
 
@@ -341,7 +341,9 @@ moving it is a minor release unless a DAG a user has triggered stops working, wh
 Releasing is a tag push: bump `version`, write the CHANGELOG section, tag `vX.Y.Z`, push the tag.
 `.github/workflows/release.yml` refuses a tag that does not match `pyproject.toml` or has no
 CHANGELOG section, then runs lint, the hermetic suite, the scripted demo and the DAG tests before
-`uv build` and `gh release create` with the wheel, the sdist and that CHANGELOG section as the body.
+`uv build` and `gh release create` with that CHANGELOG section as the body and the wheel, the sdist,
+the four `swf` tarballs, the SBOMs, the candidate-readiness evidence, `provenance.json` and
+`SHA256SUMS` attached.
 See [CONTRIBUTING.md](../CONTRIBUTING.md#release) for the exact commands.
 
 ## Design decisions

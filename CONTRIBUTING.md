@@ -67,7 +67,8 @@ Before opening a PR, run lint and tests relevant to your change; CI runs the ful
 
 Releasing is a tag push. `.github/workflows/release.yml` does the rest: lint, the hermetic suite,
 the scripted demo, DAG parity and smoke, `uv build`, then a GitHub Release whose body is that
-version's `CHANGELOG.md` section, with the wheel and the sdist attached.
+version's `CHANGELOG.md` section, with the wheel, the sdist, the four `swf` tarballs, the SBOMs,
+the candidate-readiness evidence, `provenance.json` and `SHA256SUMS` attached.
 
 1. Keep the versions in `pyproject.toml` and `Cargo.toml` (`workspace.package.version`)
    aligned. Run `uv lock` and `cargo check --workspace` to refresh

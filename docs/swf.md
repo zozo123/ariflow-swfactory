@@ -31,8 +31,8 @@ swf tui                                           # the same operations, interac
 
 `swf` is a single binary with no runtime dependency: no Python, no `uv`, no virtualenv. Every
 GitHub Release carries one tarball per platform, named `swf-<version>-<target>.tar.gz`, alongside a
-`SHA256SUMS` file that covers **every** asset in that release — the four tarballs and the Python
-wheel and sdist alike.
+`SHA256SUMS` file that covers every other asset in that release except `provenance.json` — the four
+tarballs, the Python wheel and sdist, the SBOMs and the candidate-readiness evidence alike.
 
 ### The short way
 
@@ -85,9 +85,10 @@ curl -fLO "$BASE/SHA256SUMS"
 shasum -a 256 --ignore-missing -c SHA256SUMS     # sha256sum -c … on Linux
 ```
 
-`SHA256SUMS` lists all six assets, so `--ignore-missing` is what lets it verify the one file you
-actually downloaded; without it the five you skipped are reported as failures and the real answer
-is lost in the noise. The line to read is `swf-<version>-<target>.tar.gz: OK`.
+`SHA256SUMS` lists every asset but itself and `provenance.json`, so `--ignore-missing` is what lets
+it verify the one file you actually downloaded; without it every file you skipped is reported as a
+failure and the real answer is lost in the noise. The line to read is
+`swf-<version>-<target>.tar.gz: OK`.
 
 **Why bother, honestly.** A digest nobody compares is decoration — publishing it is only worth the
 bytes if someone runs the check, which is why the command is here rather than left implied. What it
@@ -154,7 +155,7 @@ cargo build --release -p swf-cli # the binary alone
 install -m 0755 target/release/swf ~/.local/bin/swf
 ```
 
-The MSRV is Rust `1.82`. Add `--locked` to resolve the dependency versions CI tested rather than
+The MSRV is Rust `1.88`. Add `--locked` to resolve the dependency versions CI tested rather than
 whatever is newest today. A source build needs no checksum step for the obvious reason: you already
 have the tree it was built from.
 
@@ -215,10 +216,16 @@ appended to it — because `[api] base_url` can put Airflow behind a prefix.
 | --- | --- |
 | `swf context list \| use \| add \| show \| remove` | the environments this machine knows about |
 | `swf doctor` | is this machine able to drive a factory: one line per check, a `fix:` per failure |
+| `swf factory run [NAME] --issue <ref>… [--target R]… [--wait] \| status <run>` | run one logical factory (`submit` is its alias) / its run's status |
 | `swf submit --issue <ref>… [--blueprint N] [--target R]… [--wait]` | send governed work to Airflow |
 | `swf attention` | approvals waiting, failures, blocked deliveries, orphan sandboxes |
 | `swf runs list \| inspect <run> \| stop <run> \| unpause <dag>` | DAG runs |
 | `swf jobs list [--attention] \| inspect <job>` | mapped jobs — identity, progress, gates |
+| `swf cells list [--limit N] \| inspect <cell_id> \| history <cell_id>` | durable Factory Cells and their ownership/evidence history |
+| `swf queue list [--limit N] \| inspect <work_id>` | the admission queue: what runs, what waits, and which limit holds it |
+| `swf operations list [--limit N] \| inspect <operation_key>` | external mutations in doubt or exhausted that still owe a repair |
+| `swf fleet` | one line for the fleet: cells, queue depth and repair debt |
+| `swf compatibility` | the backend's contract versions, features and mutation readiness |
 | `swf logs <job> [--task T] [--attempt N] [--follow]` | one task attempt's log |
 | `swf gates list \| review <gate> \| approve <gate> \| reject <gate>` | one identified approval gate |
 | `swf deliveries list \| verify <delivery> [--all] [--clone]` | what was published, and whether it is true |
@@ -232,7 +239,7 @@ appended to it — because `[api] base_url` can put Airflow behind a prefix.
 Global flags apply everywhere: `--context <name>`, `--json`, `--no-color`, `--timeout <s>`,
 `-v/--verbose` (repeatable), `-y/--yes`.
 
-`--yes` is required for the five mutations that answer or destroy — `gates approve`, `gates reject`,
+`--yes` is required for the six mutations that answer or destroy — `gates approve`, `gates reject`,
 `runs stop`, `sandboxes rm`, `context remove`, `stack down` — whenever stdin is not a terminal or
 `--json` is set. `submit` and `runs unpause` deliberately do **not** confirm: they create and enable
 rather than answer or destroy, and a script that submits work should not need a flag to say it meant
@@ -657,8 +664,8 @@ the acceptance test that the two agree against one live server.
 This is the operator interface, phases B through E of a migration. **The execution engine is still
 Python on Airflow, and there is no plan to move it.** Concretely:
 
-- `swf` runs no stage. `swfactory run`, `demo`, `evals`, `webhook` and `maintain` have no `swf`
-  equivalent and are not going to get one — stage semantics live in `stages.py`
+- `swf` runs no stage. `swfactory run`, `demo`, `webhook`, `maintain` and `python -m swfactory.evals`
+  have no `swf` equivalent and are not going to get one — stage semantics live in `stages.py`
   ([design.md](design.md#design-decisions)).
 - `swf` reads blueprints; it does not compile or rewrite them, and it needs a factory checkout (or
   `SWF_BLUEPRINTS_DIR`) to read them at all. `swf doctor` warns rather than fails when it has none.
