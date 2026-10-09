@@ -10,9 +10,9 @@ Apache Airflow remains the only lifecycle scheduler. Factory Cells, epochs, poli
 boundaries, evidence, publication and promotion keep their existing authority.
 
 The implementation is deliberately smaller than the full research program in
-[non-equilibrium-factory.md](research/non-equilibrium-factory.md): it makes the phase vocabulary executable
-without claiming that Jarzynski/Crooks/Onsager or a general thermodynamic controller is production
-machinery.
+[non-equilibrium-factory.md](research/non-equilibrium-factory.md): it makes the phase vocabulary
+executable without claiming that Jarzynski/Crooks/Onsager or a general thermodynamic controller is
+production machinery.
 
 ## States
 

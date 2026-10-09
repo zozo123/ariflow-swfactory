@@ -133,8 +133,8 @@ critical/perturbation search with the witness retained.
 This is a proposed contract. An unwired Python prototype was removed; today only the TLA+ model
 below is executable.
 
-A Formal Quench binds artifact, assumptions, model, policy, and claims. Each claim fixes a statement,
-an evidence method, required/optional status, and minimum independent verifier count.
+A Formal Quench binds artifact, assumptions, model, policy, and claims. Each claim fixes a
+statement, an evidence method, required/optional status, and minimum independent verifier count.
 
 An evidence receipt binds to both the quench digest and claim digest.
 
@@ -288,9 +288,9 @@ A disposition is not a truth verdict. Keep independent uncertainty axes beside i
 
 For each claim, retain a rationale and the next action that would reduce the uncertainty. Several axes
 may remain even when the mathematical claim is machine-checkable. This prevents a proof about a clean
-abstraction from being mistaken for a proof about deployed behavior. Bind the register into the claim
-and quench digests and surface it in the certificate. Its classification supplies no evidence and
-grants no promotion authority. A required claim without an assessment remains unresolved.
+abstraction from being mistaken for a proof about deployed behavior. Bind the register into the
+claim and quench digests and surface it in the certificate. Its classification supplies no evidence
+and grants no promotion authority. A required claim without an assessment remains unresolved.
 
 ```text
 claim: stale epochs cannot mutate

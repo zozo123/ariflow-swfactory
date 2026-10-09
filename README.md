@@ -303,8 +303,9 @@ For a configured harness, keep `(harness, factory_id)` stable throughout one ses
 swf submit --harness codex --factory-id codex-session-17 --blueprint your-product --issue 42
 ```
 
-Airflow continues to own lifecycle scheduling. See the [`swfactory` skill](skills/swfactory/SKILL.md)
-and [concurrent harness methodology](docs/harness-concurrency-methodology.md).
+Airflow continues to own lifecycle scheduling. See the
+[`swfactory` skill](skills/swfactory/SKILL.md) and
+[concurrent harness methodology](docs/harness-concurrency-methodology.md).
 
 ## Status and verification
 

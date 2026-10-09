@@ -34,8 +34,9 @@ twenty control planes. More issue slices do not require more permanent services 
 
 Here, *entropy* means temporary implementation diversity and integration uncertainty. It is a useful
 engineering metaphor, not a measured thermodynamic quantity. The
-[non-equilibrium control doctrine](research/non-equilibrium-factory.md) separately requires measurable inputs,
-falsifiable behavior, and bounded authority for any physics-inspired control model.
+[non-equilibrium control doctrine](research/non-equilibrium-factory.md) separately requires
+measurable inputs, falsifiable behavior, and bounded authority for any physics-inspired control
+model.
 
 ## Search and authority glossary
 

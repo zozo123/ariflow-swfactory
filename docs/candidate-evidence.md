@@ -73,8 +73,8 @@ tree, so a dirty orchestrator checkout cannot change it:
 
 `argv` is an array, not a shell command; `cwd` must stay inside the repository; timeout, CPU and
 memory are bounded; unknown fields fail closed. Environment keys that look secret (`TOKEN`,
-`SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `API_KEY`) are refused, and a non-empty `secret_env` is refused
-too: a stage that needs a credential asks the trusted broker for a scoped lease (see
+`SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `API_KEY`) are refused, and a non-empty `secret_env`
+is refused too: a stage that needs a credential asks the trusted broker for a scoped lease (see
 [SECURITY.md](../SECURITY.md#credential-authority)). The recipe's canonical digest changes whenever
 the command, environment, timeout or resources change.
 
@@ -168,10 +168,10 @@ still be bad, but it is frozen evidence. It stays **provisional** after a runner
 cancellation, a missing output head or an output equal to its input; provisional nodes may be
 rerun, answered nodes are never rewritten. Candidate identity hashes campaign, Cell, epoch,
 strategy, input head, generation parent, candidate parent, the parent decision digest, any search
-provenance digest and depth, so the same strategy asked at another tree position is a different question.
-`plan_requests(..., parent_decision_digest=...)` binds the verified parent campaign decision into
-every child's identity. `parent_generation` (factory lineage) and `parent_candidate` (experiment
-lineage) stay separate.
+provenance digest and depth, so the same strategy asked at another tree position is a different
+question. `plan_requests(..., parent_decision_digest=...)` binds the verified parent campaign
+decision into every child's identity. `parent_generation` (factory lineage) and `parent_candidate`
+(experiment lineage) stay separate.
 
 A stored `CampaignReport` (schema 3) carries an `experiment_round` with its nodes, depth, parent
 candidate and winner:
@@ -225,10 +225,10 @@ uv run swfactory research-schedule --max-depth 3     # --json for the document
 ```
 
 ```text
-depth 0   repair  rethink  scratch
-depth 1   repair  rethink
-depth 2   repair
-depth 3   repair
+depth 0: repair rethink scratch
+depth 1: repair rethink
+depth 2: repair
+depth 3: repair
 ```
 
 The cooling schedule narrows width by one per depth to a single strategy, never exceeds

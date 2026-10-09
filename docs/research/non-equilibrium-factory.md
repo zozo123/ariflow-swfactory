@@ -40,8 +40,8 @@ model/sign-convention alarm: inspect the chosen affinities rather than pretendin
 violated by a CI system.
 
 Status: the **general many-current controller remains research only**. One bounded slice is now
-implemented experimentally: [phase-aware control](../phase-control.md) turns measurable order parameters
-into a read-only phase -> mode recommendation in Python and Rust. It does not implement
+implemented experimentally: [phase-aware control](../phase-control.md) turns measurable order
+parameters into a read-only phase -> mode recommendation in Python and Rust. It does not implement
 sigma_proxy, model mixing, Jarzynski/Crooks, Onsager response, or autonomous authority.
 
 ## 2. Max entropy is a default for uncertainty, not an excuse for randomness

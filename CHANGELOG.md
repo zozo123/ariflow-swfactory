@@ -11,28 +11,30 @@ All notable changes to this project will be documented here. The format follows
   code kept. Delete code nothing called: the Rust Jev/advisory/build-exploration island, the
   manager scaffold and operator stack (`CellOps` and `OperatorOps` fold into `BackendOps`);
   `runtime_surface.py` and the 18 modules only it kept reachable; the formal-claims,
-  exploration/convergence and cognitive-harness modules and their four config YAMLs; the
-  campaign and search drivers, harness trial selection, `security_boundary`, `worker_security`,
-  `liquid_security_runtime`, `herd.make_app`/`run_herd`, the Helm chart and
-  `scripts/swf_harness.sh` (use `swf submit --harness <h> --factory-id <id>`). Merge copies into
-  `backend_http.py`, `canonical.py`, one backend `ROUTES` table, `workgraph.waves` as the one DAG
-  validator and `scripts/lib/live_airflow.sh`. Merge docs into one candidate-evidence page, one
-  Linear intake page, a credential-authority section of `SECURITY.md` and a shorter
-  `OPERATIONS.md`. Visible changes: lifecycle evidence masks secrets as `[REDACTED]` and now also
-  catches `github_pat_`, `sk-`, `apikey_` and private-key values and `passwd`, API-key,
-  access-key and credential keys; backend `/doctor` rows list their keys in one order (`name`,
-  `ok`, `status`, `detail`, `fix`, `required`); `identity.json` hashes a non-ASCII policy as
-  UTF-8, like the accepted-input pin, so a run set up earlier with such a policy is refused on
-  resume; `swfactory state autonomy --backend-url` honours `SWF_BACKEND_HTTP_HOSTS`; the
-  experimental `factory.cognitive-harness` claim is retired and `factory.formal-claims` covers
-  only the TLA+ model.
+  exploration/convergence and cognitive-harness modules; the five config YAMLs only tests read
+  (`exploration-convergence`, `cognitive-harness`, `future-factory`, `phase-control` and
+  `rust-first-harness`); the campaign and search drivers, harness trial selection,
+  `security_boundary`, `worker_security`, `liquid_security_runtime`, `herd.make_app`/`run_herd`, the
+  Helm chart and `scripts/swf_harness.sh` (use `swf submit --harness <h> --factory-id <id>`). Merge
+  copies into `backend_http.py`, `canonical.py`, one backend `ROUTES` table, `workgraph.waves` as
+  the one DAG validator and `scripts/lib/live_airflow.sh`. Merge docs into one candidate-evidence
+  page, one Linear intake page, a credential-authority section of `SECURITY.md` and a shorter
+  `OPERATIONS.md` that keeps the runbook and links the sandbox provider contract instead of listing
+  the sandbox providers itself. Visible changes: lifecycle evidence masks secrets as `[REDACTED]`
+  and now also catches `github_pat_`, `sk-`, `apikey_` and private-key values and `passwd`, API-key,
+  access-key and credential keys; backend `/doctor` rows list their keys in one order (`name`, `ok`,
+  `status`, `detail`, `fix`, `required`); `identity.json` hashes a non-ASCII policy as UTF-8, like
+  the accepted-input pin, so a run set up earlier with such a policy is refused on resume;
+  `swfactory state autonomy --backend-url` honours `SWF_BACKEND_HTTP_HOSTS`; the experimental
+  `factory.cognitive-harness` claim is retired and `factory.formal-claims` covers only the TLA+
+  model.
 
 - Run the boat line on boat: a scripted run without a sandbox override no longer drops to `local`
   when the blueprint's kind is `boat` (the only agent `boat` admits is the scripted one), so
   `swfactory run --blueprint worldgen` and the Airflow DAG provision a boat.dev VM. The
   workgraph execution report says `shared_workspace_serial` for every run, because nodes run in
   one serial loop; a provider whose capabilities allow forking (boat) records it as
-  `parallel_hint`. List `boat` in the site, OPERATIONS, design and skill sandbox tables.
+  `parallel_hint`. List `boat` in the site, design and skill sandbox tables.
 
 - Allow `registry.npmjs.org` in the work-cell egress allowlists (the islo `swfactory` gateway
   profile, shared by every islo line, and the srt/toolset default) so a target that installs with

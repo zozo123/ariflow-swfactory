@@ -2,11 +2,13 @@
 
 Status: proposed.
 
-Today `swf` is an operator client of the Python backend, Airflow runs Python stages, and Rust holds
-the operator CLI/TUI plus the shared domain contracts; the [system map](system-map.md) records current
-ownership. An earlier Rust scaffold for this design (the `swf-domain` `factory`, `manager_protocol`
-and `worker` types and the `swf-app` `stage_runtime`) had no caller and was removed in #2367. Unless a
-line says *today*, every type, endpoint and command below is a proposal.
+Today `swf` is an operator client of the Python backend, Airflow runs Python stages, and Rust
+holds the operator CLI/TUI plus the shared domain contracts; the [system map](system-map.md)
+records current ownership. An earlier Rust scaffold for this design (the `swf-domain` `factory`,
+`manager_protocol` and `worker` types and the `swf-app` `stage_runtime`) had no caller and was
+removed in #2367. Of the `swf factory` commands below, `run` and `status` exist *today*: `run`
+delegates to the `swf submit` path, and `status` inspects one `dag/run`. Unless a line says
+*today*, every other type, endpoint and command below is a proposal.
 
 ## Product principle
 
@@ -257,7 +259,10 @@ swf factory replay RUN
 swf factory serve
 ```
 
-`swf submit` remains a compatibility alias during migration.
+*Today* `swf factory run` and `swf factory status` exist: `run` resolves NAME to the installed
+blueprint of that name and delegates to the submit path, and `status` takes the `dag/run`
+identity until FactoryRunId lookup lands. `swf submit` remains a compatibility alias for
+`swf factory run` during migration.
 
 ### Harness contract
 
@@ -279,7 +284,8 @@ The stable JSON response returns:
 - evidence/status URLs or local handles.
 
 A harness never needs to know Python package names or DAG internals. Today the same session
-identity travels as `swf submit --harness <h> --factory-id <id>`.
+identity travels as `swf factory run --harness <h> --factory-id <id>` (or its `swf submit`
+alias), and its JSON is today's submission document, not yet the fields above.
 
 ## Factory as a typed object
 
@@ -358,7 +364,8 @@ has appeared.
 - There is exactly one lifecycle scheduler: Airflow.
 - After a slice migrates, there is exactly one application authority for it: Rust.
 - The Rust CLI is the public harness entrypoint.
-- Airflow talks to Rust through a versioned protocol, never imports or the Airflow metadata DB.
+- Airflow talks to Rust through a versioned protocol, not through imports or the Airflow metadata
+  DB.
 - Python DAG code may compose tasks but cannot implement factory state machines.
 - Every external mutation stays bound to Cell + epoch + operation identity.
 - A stage receipt is evidence-bearing and replay-safe; Python cannot turn an `in_doubt` receipt

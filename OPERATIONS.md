@@ -165,9 +165,9 @@ same system by creating GitHub issues from the tools that already observe those 
 | Larger outer workflow | use the optional [Astronomer Blueprint step](docs/astronomer-blueprint.md) |
 
 Python and Airflow are pinned in `pyproject.toml`, with an upstream-main canary in CI; `swf` needs
-Rust 1.82 or newer to build and is prebuilt for macOS and Linux ([docs/swf.md](docs/swf.md#install)).
-Schema and package versions move independently: a blueprint schema `version` changes only when an
-older blueprint can no longer be read.
+Rust 1.82 or newer to build and is prebuilt for macOS and Linux
+([docs/swf.md](docs/swf.md#install)). Schema and package versions move independently: a blueprint
+schema `version` changes only when an older blueprint can no longer be read.
 
 ## Commands
 
