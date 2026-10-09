@@ -6,6 +6,8 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-10-09
+
 - Add native Linear work orders (#2362). `swfactory linear-preview <issue-uuid> --workspace-id …
   --project-id …` reads one Linear issue on a trusted controller and prints its intent digest
   without admitting anything; `swfactory linear-submit <issue-uuid> --line … --intent-digest …`
@@ -837,7 +839,8 @@ development snapshot that was never tagged or published.
 - Scripted keyless end-to-end replay and hermetic test suite.
 - GitHub delivery, issue dispatch, control room, maintenance bands, and webhook receiver.
 
-[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.5.0
 [2.4.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.4.0
 [2.3.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.3.0
 [2.2.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.2.0

@@ -48,7 +48,7 @@ fetches a binary and runs it unverified has only made the command shorter.
 
 | Variable | What it does |
 | --- | --- |
-| `SWF_VERSION=v2.1.0` | pin an exact release instead of "latest" — do this in CI, where a moving target is a reproducibility bug |
+| `SWF_VERSION=v2.5.0` | pin an exact release instead of "latest" — do this in CI, where a moving target is a reproducibility bug |
 | `SWF_INSTALL_DIR=/usr/local/bin` | install somewhere else (you supply the write permission) |
 | `SWF_BASE_URL=https://mirror.internal/swf` | fetch the assets from a mirror, for an air-gapped host |
 
@@ -75,7 +75,7 @@ script, or if you are packaging `swf` for someone else.
 Take both from the same release, and check one against the other before unpacking anything:
 
 ```sh
-VERSION=2.1.0
+VERSION=2.5.0
 TARGET=aarch64-apple-darwin
 BASE=https://github.com/zozo123/ariflow-swfactory/releases/download/v$VERSION
 

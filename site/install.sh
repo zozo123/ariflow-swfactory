@@ -15,7 +15,7 @@
 # checksum does not match.
 #
 # Knobs (all optional):
-#   SWF_VERSION       a tag such as v2.1.0. Default: the latest release. Pin it for a reproducible
+#   SWF_VERSION       a tag such as v2.5.0. Default: the latest release. Pin it for a reproducible
 #                     install — "latest" is not a version, it is a moving target.
 #   SWF_INSTALL_DIR   where the binary goes. Default: $HOME/.local/bin
 #   SWF_REPO          owner/name to install from. Default: zozo123/ariflow-swfactory

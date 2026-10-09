@@ -1,6 +1,6 @@
 [project]
 name = "swfactory"
-version = "2.4.0"
+version = "2.5.0"
 description = "Airflow-governed software atelier for commissioned changes, isolated agent work, retained evidence, and human release authority."
 readme = "README.md"
 license = "Apache-2.0"
