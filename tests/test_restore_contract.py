@@ -16,9 +16,11 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
+from backend_support import AF, TOKEN
 from typer.testing import CliRunner
 
 from swfactory.admission import Limits, Priority
@@ -129,6 +131,12 @@ class FactoryState:
         self.cells.close()
         self.kernel.close()
 
+    def __enter__(self) -> FactoryState:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
 
 @pytest.fixture
 def github() -> FakeGitHub:
@@ -218,19 +226,17 @@ def _restore_and_resume(backup_dir: Path, root: Path, *, reason: str = "drill") 
 def test_restored_snapshot_keeps_every_identity_and_receipt(tmp_path: Path, github: FakeGitHub) -> None:
     """Queued work, a committed publication, an in-doubt effect and cleanup debt all come back."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    seeded = _seed(state, github)
-    cells_before = {row["cell_id"]: (row["epoch"], row["state"]) for row in state.cells.list()}
-    queue_before = [item["work_id"] for item in state.admission.snapshot()["queued"]]
-    lease_before = state.repairs.db.execute("SELECT * FROM repair_leases").fetchall()
-    evidence_before = state.evidence.verify(str(seeded["cell_id"]))
+    with FactoryState(root) as state:
+        seeded = _seed(state, github)
+        cells_before = {row["cell_id"]: (row["epoch"], row["state"]) for row in state.cells.list()}
+        queue_before = [item["work_id"] for item in state.admission.snapshot()["queued"]]
+        lease_before = state.repairs.db.execute("SELECT * FROM repair_leases").fetchall()
+        evidence_before = state.evidence.verify(str(seeded["cell_id"]))
 
-    manifest = create_backup(root, tmp_path / "backup", actor="operator")
-    state.close()
+        manifest = create_backup(root, tmp_path / "backup", actor="operator")
     _restore_and_resume(tmp_path / "backup", root)
 
-    after = FactoryState(root)
-    try:
+    with FactoryState(root) as after:
         assert {row["cell_id"]: (row["epoch"], row["state"]) for row in after.cells.list()} == cells_before
         assert [item["work_id"] for item in after.admission.snapshot()["queued"]] == queue_before
         # The committed receipt is replayed byte for byte: identity, not a recomputation.
@@ -248,17 +254,14 @@ def test_restored_snapshot_keeps_every_identity_and_receipt(tmp_path: Path, gith
         # And the manifest agrees with the evidence that came back.
         tails = {cell["cell_id"]: cell["tail_digest"] for cell in manifest["evidence"]["cells"]}
         assert tails[str(seeded["cell_id"])] == evidence_before[1]
-    finally:
-        after.close()
 
 
 def test_a_backup_covers_every_authoritative_store(tmp_path: Path, github: FakeGitHub) -> None:
     """All five stores, or it is not a backup of this factory."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    _seed(state, github)
-    manifest = create_backup(root, tmp_path / "backup", actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        _seed(state, github)
+        manifest = create_backup(root, tmp_path / "backup", actor="operator")
     assert {store["name"] for store in manifest["stores"]} == {
         "cells",
         "operations",
@@ -276,25 +279,20 @@ def test_a_backup_covers_every_authoritative_store(tmp_path: Path, github: FakeG
 def test_copying_only_the_database_files_is_refused_as_a_backup(tmp_path: Path, github: FakeGitHub) -> None:
     """`cp state/*.sqlite3 backup/` catches WAL-resident commits mid-write and looks restorable."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    seeded = _seed(state, github)
+    with FactoryState(root) as state:
+        seeded = _seed(state, github)
 
-    hand_made = tmp_path / "partial"
-    hand_made.mkdir()
-    for path in sorted(root.rglob("*.sqlite3")):
-        target = hand_made / path.relative_to(root)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, target)
-    state.close()
+        hand_made = tmp_path / "partial"
+        hand_made.mkdir()
+        for path in sorted(root.rglob("*.sqlite3")):
+            target = hand_made / path.relative_to(root)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
 
     # The hand-made copy really did lose the committed publication, which is why it must never be
     # treated as restorable: a factory restored from it would publish that pull request again.
-    journal = OperationJournal(hand_made / "control" / "operations.sqlite3")
-    try:
-        with pytest.raises(KeyError):
-            journal.get(str(seeded["publish_ref"].key))  # type: ignore[union-attr]
-    finally:
-        journal.close()
+    with closing(OperationJournal(hand_made / "control" / "operations.sqlite3")) as journal, pytest.raises(KeyError):
+        journal.get(str(seeded["publish_ref"].key))  # type: ignore[union-attr]
 
     verification = verify_backup(hand_made)
     assert not verification.ok
@@ -306,11 +304,10 @@ def test_copying_only_the_database_files_is_refused_as_a_backup(tmp_path: Path, 
 def test_a_backup_missing_one_file_is_refused(tmp_path: Path, github: FakeGitHub) -> None:
     """Three of four stores is worse than none, because it looks restorable."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    _seed(state, github)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        _seed(state, github)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
     (backup / PAYLOAD_DIR / "control" / "repairs.sqlite3").unlink()
 
     verification = verify_backup(backup)
@@ -322,11 +319,10 @@ def test_a_backup_missing_one_file_is_refused(tmp_path: Path, github: FakeGitHub
 
 def test_an_edited_backup_is_refused(tmp_path: Path, github: FakeGitHub) -> None:
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    _seed(state, github)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        _seed(state, github)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
     db = sqlite3.connect(backup / PAYLOAD_DIR / "cells.sqlite3")
     db.execute("UPDATE cells SET state='cleaned'")
     db.commit()
@@ -355,11 +351,10 @@ def test_a_store_written_by_a_newer_binary_is_refused(tmp_path: Path) -> None:
 def test_restoring_a_newer_backup_with_an_older_binary_is_refused(tmp_path: Path, github: FakeGitHub) -> None:
     """The same refusal at the restore boundary, before a single byte is placed."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    _seed(state, github)
-    backup = tmp_path / "backup"
-    manifest = create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        _seed(state, github)
+        backup = tmp_path / "backup"
+        manifest = create_backup(root, backup, actor="operator")
 
     # A backup taken by a future binary: rewrite the manifest the way that binary would have, and
     # re-sign it, so the only thing wrong is the schema this binary can own.
@@ -385,11 +380,10 @@ def test_restoring_a_newer_backup_with_an_older_binary_is_refused(tmp_path: Path
 def test_missing_evidence_refuses_to_resume_mutations(tmp_path: Path, github: FakeGitHub) -> None:
     """A Cell whose history is gone cannot prove what it already did to the outside world."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    seeded = _seed(state, github)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        seeded = _seed(state, github)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
     restore(backup, root, actor="operator", reason="drill", replace_existing=True)
     shutil.rmtree(root / "evidence" / str(seeded["cell_id"]))
@@ -401,11 +395,10 @@ def test_missing_evidence_refuses_to_resume_mutations(tmp_path: Path, github: Fa
 def test_a_partial_state_root_refuses_readiness(tmp_path: Path, github: FakeGitHub) -> None:
     """A restored factory missing a store is a partial restore, not a fresh one."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    _seed(state, github)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        _seed(state, github)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
     restore(backup, root, actor="operator", reason="drill", replace_existing=True)
     (root / "control" / "admission.sqlite3").unlink()
@@ -431,23 +424,21 @@ def test_a_truncated_store_refuses_rather_than_recreating_its_tables(tmp_path: P
 def test_restored_snapshot_cannot_replay_a_committed_publication(tmp_path: Path, github: FakeGitHub) -> None:
     """The headline failure: an old snapshot re-driving an effect the world already has."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    cell = state.cells.activate(_identity(), "operator")
-    cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
-    state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
+    with FactoryState(root) as state:
+        cell = state.cells.activate(_identity(), "operator")
+        cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
+        state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
 
-    # The nightly backup, taken before this publication was even attempted.
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
+        # The nightly backup, taken before this publication was even attempted.
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
-    ref = OperationRef.build(cell_id, epoch, "github_publish", "pull-request")
-    state.kernel.mutate(ref, lambda: github.publish(cell_id))
-    assert github.published == [cell_id]
-    state.close()
+        ref = OperationRef.build(cell_id, epoch, "github_publish", "pull-request")
+        state.kernel.mutate(ref, lambda: github.publish(cell_id))
+        assert github.published == [cell_id]
 
     _restore_and_resume(backup, root)
-    restored = FactoryState(root)
-    try:
+    with FactoryState(root) as restored:
         # No journal row, no observation: the restored factory refuses rather than guessing that a
         # missing row means a missing pull request.
         with pytest.raises(OperationInDoubt):
@@ -463,24 +454,20 @@ def test_restored_snapshot_cannot_replay_a_committed_publication(tmp_path: Path,
         )
         assert github.published == [cell_id]
         assert adopted == {"pull_request": f"https://github.invalid/{REPO}/pull/1"}
-    finally:
-        restored.close()
 
 
 def test_mutations_are_withheld_until_the_restore_is_validated(tmp_path: Path, github: FakeGitHub) -> None:
     """Restore validation happens before mutations resume, not alongside them."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    cell = state.cells.activate(_identity(), "operator")
-    cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
-    state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        cell = state.cells.activate(_identity(), "operator")
+        cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
+        state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
     restore(backup, root, actor="operator", reason="drill", replace_existing=True)
-    restored = FactoryState(root)
-    try:
+    with FactoryState(root) as restored:
         ref = OperationRef.build(cell_id, epoch, "github_publish", "pull-request")
         with pytest.raises(MutationsWithheld, match="backup resume"):
             restored.kernel.mutate(ref, lambda: github.publish(cell_id))
@@ -489,19 +476,16 @@ def test_mutations_are_withheld_until_the_restore_is_validated(tmp_path: Path, g
 
         restored.gate.resume(actor="operator", reason="checked")
         assert status(root)["mutations_allowed"] is True
-    finally:
-        restored.close()
 
 
 def test_a_reconciled_cell_leaves_the_worklist_but_not_the_window(tmp_path: Path, github: FakeGitHub) -> None:
     """Observation is the only way out of the worklist, and the journal is what proves it."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    seeded = _seed(state, github)
-    cell_id = str(seeded["cell_id"])
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        seeded = _seed(state, github)
+        cell_id = str(seeded["cell_id"])
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
     gate = _restore_and_resume(backup, root)
     assert gate.requires_observation(cell_id) is True
@@ -510,11 +494,8 @@ def test_a_reconciled_cell_leaves_the_worklist_but_not_the_window(tmp_path: Path
     with pytest.raises(ReconciliationIncomplete, match="no recorded observation"):
         gate.mark_reconciled(cell_id=cell_id)
 
-    restored = FactoryState(root)
-    try:
+    with FactoryState(root) as restored:
         restored.journal.observe(seeded["doubt_ref"], lambda: github.observe("nothing"))  # type: ignore[arg-type]
-    finally:
-        restored.close()
     marker = gate.mark_reconciled(cell_id=cell_id)
     assert cell_id not in marker["unreconciled_cells"]
     # Off the worklist, still inside the window: the restore's remaining risk is the effects the
@@ -526,12 +507,11 @@ def test_a_reconciled_cell_leaves_the_worklist_but_not_the_window(tmp_path: Path
 def test_an_in_flight_dispatch_intent_is_carried_into_the_gate(tmp_path: Path, github: FakeGitHub) -> None:
     """#2058's outbox already models an in-doubt delivery; the restore gate reuses it."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    seeded = _seed(state, github)
-    state.admission.db.execute("UPDATE admission_dispatch SET state='inflight' WHERE work_id='submit_live'")
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        seeded = _seed(state, github)
+        state.admission.db.execute("UPDATE admission_dispatch SET state='inflight' WHERE work_id='submit_live'")
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
     marker = restore(backup, root, actor="operator", reason="drill", replace_existing=True)
     assert "submit_live" in marker["unreconciled_dispatch"]
@@ -555,13 +535,12 @@ def test_an_in_flight_dispatch_intent_is_carried_into_the_gate(tmp_path: Path, g
 def test_the_window_closes_only_on_an_operator_statement(tmp_path: Path, github: FakeGitHub) -> None:
     """Emptying the worklist is not the same fact as reviewing the interval the snapshot missed."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    cell = state.cells.activate(_identity(), "operator")
-    cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
-    state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        cell = state.cells.activate(_identity(), "operator")
+        cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
+        state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
     gate = _restore_and_resume(backup, root)
     with pytest.raises(ReconciliationIncomplete, match="still unreconciled"):
@@ -593,14 +572,13 @@ def test_the_window_closes_only_on_an_operator_statement(tmp_path: Path, github:
 def test_the_operator_drill_runs_end_to_end_through_the_cli(tmp_path: Path, github: FakeGitHub) -> None:
     """Exactly the documented sequence: create, verify, restore, status, resume, reconciled."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    seeded = _seed(state, github)
-    cell_id = str(seeded["cell_id"])
-    backup = tmp_path / "backup"
-    runner = CliRunner()
+    with FactoryState(root) as state:
+        seeded = _seed(state, github)
+        cell_id = str(seeded["cell_id"])
+        backup = tmp_path / "backup"
+        runner = CliRunner()
 
-    assert runner.invoke(app, ["backup", "create", str(backup), "--state-root", str(root)]).exit_code == 0
-    state.close()
+        assert runner.invoke(app, ["backup", "create", str(backup), "--state-root", str(root)]).exit_code == 0
     assert runner.invoke(app, ["backup", "verify", str(backup)]).exit_code == 0
 
     restored = runner.invoke(
@@ -619,11 +597,8 @@ def test_the_operator_drill_runs_end_to_end_through_the_cli(tmp_path: Path, gith
     refused = runner.invoke(app, ["backup", "reconciled", "--state-root", str(root), "--cell-id", cell_id])
     assert refused.exit_code == 1, refused.output
 
-    after = FactoryState(root)
-    try:
+    with FactoryState(root) as after:
         after.journal.observe(seeded["doubt_ref"], lambda: github.observe("nothing"))  # type: ignore[arg-type]
-    finally:
-        after.close()
     assert runner.invoke(app, ["backup", "reconciled", "--state-root", str(root), "--cell-id", cell_id]).exit_code == 0
     healthy = runner.invoke(app, ["backup", "status", "--state-root", str(root), "--json"])
     assert healthy.exit_code == 0
@@ -635,11 +610,8 @@ def test_the_operator_drill_runs_end_to_end_through_the_cli(tmp_path: Path, gith
     assert outstanding.exit_code == 1
     assert "still unreconciled" in outstanding.output
 
-    settling = FactoryState(root)
-    try:
+    with FactoryState(root) as settling:
         settling.admission.note_outcome("submit_live", error="checked Airflow", observation={"runs": 1})
-    finally:
-        settling.close()
     for remaining in RestoreGate(root).outstanding()["cells"]:
         assert (
             runner.invoke(app, ["backup", "reconciled", "--state-root", str(root), "--cell-id", remaining]).exit_code
@@ -739,11 +711,10 @@ def test_a_backup_directory_is_never_written_over(tmp_path: Path) -> None:
 def test_restoring_over_live_state_sets_it_aside_rather_than_deleting_it(tmp_path: Path, github: FakeGitHub) -> None:
     """After a bad restore the superseded tree is the only record of what the factory really did."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    _seed(state, github)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        _seed(state, github)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
     with pytest.raises(RestoreRefused, match="replace_existing"):
         restore(backup, root, actor="operator", reason="drill")
@@ -758,15 +729,13 @@ def test_the_backend_refuses_its_whole_mutation_surface_after_a_restore(tmp_path
     from swfactory.backend.service import Factory, Refused
 
     root = tmp_path / ".factory"
-    state = FactoryState(root)
-    _seed(state, github)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        _seed(state, github)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
     restore(backup, root, actor="operator", reason="drill", replace_existing=True)
 
-    factory = Factory(token="t" * 40, airflow_url="http://127.0.0.1:8080", state_root=root)
-    try:
+    with closing(Factory(token=TOKEN, airflow_url=AF, state_root=root)) as factory:
         capabilities = factory.capabilities()
         assert capabilities["mutation_ready"] is False
         assert "backup resume" in capabilities["detail"]
@@ -776,8 +745,6 @@ def test_the_backend_refuses_its_whole_mutation_surface_after_a_restore(tmp_path
 
         factory.restore_gate.resume(actor="operator", reason="checked")
         assert factory.capabilities()["mutation_ready"] is True
-    finally:
-        factory.close()
 
 
 def test_the_backend_refuses_to_open_a_state_root_it_must_not_own(tmp_path: Path) -> None:
@@ -789,7 +756,7 @@ def test_the_backend_refuses_to_open_a_state_root_it_must_not_own(tmp_path: Path
     db.execute("PRAGMA user_version=42")
     db.close()
     with pytest.raises(StoreSchemaError, match="operations"):
-        Factory(token="t" * 40, airflow_url="http://127.0.0.1:8080", state_root=root)
+        Factory(token=TOKEN, airflow_url=AF, state_root=root)
 
 
 # ------------------- acceptance box 3, continued: the effects the snapshot never recorded
@@ -821,35 +788,30 @@ def test_a_cell_first_seen_after_the_snapshot_cannot_republish(tmp_path: Path, g
     restored rows cannot name it -- which is why the window, not a worklist, decides.
     """
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    old = state.cells.activate(_identity("1000"), "operator")
-    _publish(state, github, str(old["cell_id"]), int(old["epoch"]), "pull-request")
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
+    with FactoryState(root) as state:
+        old = state.cells.activate(_identity("1000"), "operator")
+        _publish(state, github, str(old["cell_id"]), int(old["epoch"]), "pull-request")
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
-    # The hour the snapshot does not see: a new issue is admitted and its pull request is opened.
-    new = state.cells.activate(_identity("2000"), "operator")
-    _publish(state, github, str(new["cell_id"]), int(new["epoch"]), "pull-request")
-    assert github.published == [str(old["cell_id"]), str(new["cell_id"])]
-    state.close()
+        # The hour the snapshot does not see: a new issue is admitted and its pull request is opened.
+        new = state.cells.activate(_identity("2000"), "operator")
+        _publish(state, github, str(new["cell_id"]), int(new["epoch"]), "pull-request")
+        assert github.published == [str(old["cell_id"]), str(new["cell_id"])]
 
     gate = _restore_and_resume(backup, root)
     for cell_id in list(gate.outstanding()["cells"]):
-        state_after = FactoryState(root)
-        state_after.close()
+        FactoryState(root).close()
         gate.mark_reconciled(cell_id=cell_id)
     assert gate.outstanding()["cells"] == []
     assert gate.state == "reconciling"
 
-    restored = FactoryState(root)
-    try:
+    with FactoryState(root) as restored:
         again = restored.cells.activate(_identity("2000"), "operator")
         assert str(again["cell_id"]) == str(new["cell_id"]), "Cell identity is deterministic"
         assert gate.requires_observation(str(again["cell_id"])) is True
         github.calls.clear()
         adopted = _publish(restored, github, str(again["cell_id"]), int(again["epoch"]), "pull-request")
-    finally:
-        restored.close()
     assert github.calls[0].startswith("observe:"), github.calls
     assert github.published == [str(old["cell_id"]), str(new["cell_id"])]
     assert adopted == {"pull_request": f"https://github.invalid/{REPO}/pull/2"}
@@ -858,24 +820,20 @@ def test_a_cell_first_seen_after_the_snapshot_cannot_republish(tmp_path: Path, g
 def test_a_reconciled_cell_does_not_replay_an_effect_the_snapshot_never_saw(tmp_path: Path, github: FakeGitHub) -> None:
     """Reconciling the rows that came back proves nothing about the rows that did not."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    cell = state.cells.activate(_identity(), "operator")
-    cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
-    _publish(state, github, cell_id, epoch, "pull-request")
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    _publish(state, github, cell_id, epoch, "release-note")  # after the snapshot, same Cell
-    state.close()
+    with FactoryState(root) as state:
+        cell = state.cells.activate(_identity(), "operator")
+        cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
+        _publish(state, github, cell_id, epoch, "pull-request")
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
+        _publish(state, github, cell_id, epoch, "release-note")  # after the snapshot, same Cell
 
     gate = _restore_and_resume(backup, root)
     # Every restored operation is committed, so the claim is accepted -- and it covers only them.
     gate.mark_reconciled(cell_id=cell_id)
-    restored = FactoryState(root)
-    try:
+    with FactoryState(root) as restored:
         github.calls.clear()
         _publish(restored, github, cell_id, epoch, "release-note")
-    finally:
-        restored.close()
     assert github.calls[0].startswith("observe:"), github.calls
     assert github.effects == [(cell_id, "pull-request"), (cell_id, "release-note")]
 
@@ -883,16 +841,14 @@ def test_a_reconciled_cell_does_not_replay_an_effect_the_snapshot_never_saw(tmp_
 def test_a_restore_without_a_reconciler_refuses_rather_than_acting(tmp_path: Path, github: FakeGitHub) -> None:
     """While the window is open, a caller with nothing to observe with does not get to guess."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    cell = state.cells.activate(_identity("2000"), "operator")
-    cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        cell = state.cells.activate(_identity("2000"), "operator")
+        cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
     gate = _restore_and_resume(backup, root)
-    restored = FactoryState(root)
-    try:
+    with FactoryState(root) as restored:
         ref = OperationRef.build(cell_id, epoch, "github_publish", "pull-request")
         with pytest.raises(OperationInDoubt):
             restored.kernel.mutate(ref, lambda: github.publish(cell_id))
@@ -908,8 +864,6 @@ def test_a_restore_without_a_reconciler_refuses_rather_than_acting(tmp_path: Pat
         other_ref = OperationRef.build(str(other["cell_id"]), int(other["epoch"]), "github_publish", "pull-request")
         restored.kernel.mutate(other_ref, lambda: github.publish(str(other["cell_id"])))
         assert github.published == [str(other["cell_id"])]
-    finally:
-        restored.close()
 
 
 # ------------------------------ acceptance box 1, continued: state a restore must not delete
@@ -922,38 +876,34 @@ def test_run_directories_survive_a_backup_and_restore(tmp_path: Path, github: Fa
     verify clean and still delete the record of which inputs a human approved.
     """
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    seeded = _seed(state, github)
-    run = root / "run-a" / "state"
-    run.mkdir(parents=True)
-    (run / "accepted_inputs.json").write_text(json.dumps({"digest": "sha256:pinned"}), encoding="utf-8")
-    (run / "approvals.json").write_text(json.dumps({"deliver": {"digest": "sha256:pinned"}}), encoding="utf-8")
+    with FactoryState(root) as state:
+        seeded = _seed(state, github)
+        run = root / "run-a" / "state"
+        run.mkdir(parents=True)
+        (run / "accepted_inputs.json").write_text(json.dumps({"digest": "sha256:pinned"}), encoding="utf-8")
+        (run / "approvals.json").write_text(json.dumps({"deliver": {"digest": "sha256:pinned"}}), encoding="utf-8")
 
-    backup = tmp_path / "backup"
-    manifest = create_backup(root, backup, actor="operator")
-    state.close()
+        backup = tmp_path / "backup"
+        manifest = create_backup(root, backup, actor="operator")
     assert [entry["run_id"] for entry in manifest["runs"]] == ["run-a"]
     assert verify_backup(backup).ok
 
     _restore_and_resume(backup, root)
     assert json.loads((run / "accepted_inputs.json").read_text())["digest"] == "sha256:pinned"
-    assert json.loads((run / "approvals.json").read_text())["digest" if False else "deliver"]["digest"] == (
-        "sha256:pinned"
-    )
+    assert json.loads((run / "approvals.json").read_text())["deliver"]["digest"] == "sha256:pinned"
     assert str(seeded["cell_id"]) in RestoreGate(root).outstanding()["cells"]
 
 
 def test_a_tampered_run_directory_is_refused_like_any_other_state(tmp_path: Path, github: FakeGitHub) -> None:
     """Run files are covered by the manifest digests, or they are not covered at all."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    _seed(state, github)
-    run = root / "run-a" / "state"
-    run.mkdir(parents=True)
-    (run / "accepted_inputs.json").write_text(json.dumps({"digest": "sha256:pinned"}), encoding="utf-8")
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        _seed(state, github)
+        run = root / "run-a" / "state"
+        run.mkdir(parents=True)
+        (run / "accepted_inputs.json").write_text(json.dumps({"digest": "sha256:pinned"}), encoding="utf-8")
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
     edited = backup / PAYLOAD_DIR / "run-a" / "state" / "accepted_inputs.json"
     edited.write_text(json.dumps({"digest": "sha256:someone-elses"}), encoding="utf-8")
@@ -972,16 +922,15 @@ def test_a_restore_names_every_mutation_fence_it_rolled_back(tmp_path: Path, git
     about it.
     """
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    cell = state.cells.activate(_identity(), "operator")
-    cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
-    state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.cells.take_epoch(cell_id, epoch, "repair")
-    with pytest.raises(StaleEpoch):
-        state.cells.patch(cell_id, epoch, "op:stale", state="dispatching")
-    state.close()
+    with FactoryState(root) as state:
+        cell = state.cells.activate(_identity(), "operator")
+        cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
+        state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
+        state.cells.take_epoch(cell_id, epoch, "repair")
+        with pytest.raises(StaleEpoch):
+            state.cells.patch(cell_id, epoch, "op:stale", state="dispatching")
 
     marker = restore(backup, root, actor="operator", reason="drill", replace_existing=True)
     assert marker["fence_rollbacks"] == [{"cell_id": cell_id, "was": epoch + 1, "now": epoch}]
@@ -989,28 +938,24 @@ def test_a_restore_names_every_mutation_fence_it_rolled_back(tmp_path: Path, git
     report = status(root)
     assert report["restore"]["fence_rollbacks"][0]["was"] == epoch + 1
 
-    restored = FactoryState(root)
-    try:
+    with FactoryState(root) as restored:
         # The write that was fenced out before the restore is accepted after it. That is the fact
         # the marker exists to state; the operator, not the factory, is the one who can act on it.
         restored.cells.patch(cell_id, epoch, "op:stale", state="dispatching")
-    finally:
-        restored.close()
 
 
 def test_a_restored_in_flight_attempt_is_never_planned_as_a_retry(tmp_path: Path, github: FakeGitHub) -> None:
     """A snapshot taken mid-attempt cannot prove the attempt never reached the provider."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    cell = state.cells.activate(_identity(), "operator")
-    cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
-    state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
-    ref = OperationRef.build(cell_id, epoch, "github_publish", "pull-request")
-    state.journal.begin(ref)
-    state.journal.start_attempt(ref)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        cell = state.cells.activate(_identity(), "operator")
+        cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
+        state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
+        ref = OperationRef.build(cell_id, epoch, "github_publish", "pull-request")
+        state.journal.begin(ref)
+        state.journal.start_attempt(ref)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
     _restore_and_resume(backup, root)
     plan = plan_reconciliation(root)
@@ -1018,15 +963,12 @@ def test_a_restored_in_flight_attempt_is_never_planned_as_a_retry(tmp_path: Path
     assert rows[ref.key]["action"] == "observe"
     assert rows[ref.key]["reason"] == "restored_state_cannot_prove_this_attempt_never_landed"
 
-    restored = FactoryState(root)
-    try:
+    with FactoryState(root) as restored:
         # And the executing path agrees with the plan: the claim outlived its process, so the
         # operation is in doubt rather than attempted again.
         with pytest.raises(OperationInDoubt):
             restored.kernel.mutate(ref, lambda: github.publish(cell_id), reconcile=lambda: github.observe(cell_id))
         assert github.published == []
-    finally:
-        restored.close()
 
 
 # ------------------------------ acceptance box 4: the joins between the stores, not inside them
@@ -1035,9 +977,8 @@ def test_a_restored_in_flight_attempt_is_never_planned_as_a_retry(tmp_path: Path
 def test_stores_that_came_from_two_different_instants_are_refused(tmp_path: Path, github: FakeGitHub) -> None:
     """Every file can verify while the set of them is incoherent -- the restore that looks fine."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    seeded = _seed(state, github)
-    state.close()
+    with FactoryState(root) as state:
+        seeded = _seed(state, github)
     assert coherence_problems(root) == []
 
     # The journal is newer than the Cell store: an operation bound to an epoch the Cells never
@@ -1060,10 +1001,9 @@ def test_stores_that_came_from_two_different_instants_are_refused(tmp_path: Path
 def test_a_cell_effect_with_no_receipt_is_refused(tmp_path: Path, github: FakeGitHub) -> None:
     """The dangerous direction: the Cell store remembers an effect whose receipt is missing."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    seeded = _seed(state, github)
-    cell_id, epoch = str(seeded["cell_id"]), int(seeded["epoch"])
-    state.close()
+    with FactoryState(root) as state:
+        seeded = _seed(state, github)
+        cell_id, epoch = str(seeded["cell_id"]), int(seeded["epoch"])
 
     db = sqlite3.connect(root / "cells.sqlite3")
     db.execute(
@@ -1085,11 +1025,10 @@ def test_a_hand_assembled_backup_is_checked_for_the_same_joins(tmp_path: Path, g
     from swfactory.restore_contract import _digest, _hash_tree
 
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    seeded = _seed(state, github)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        seeded = _seed(state, github)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
     assert verify_backup(backup).ok
 
     db = sqlite3.connect(backup / PAYLOAD_DIR / "cells.sqlite3")
@@ -1117,11 +1056,10 @@ def test_a_hand_assembled_backup_is_checked_for_the_same_joins(tmp_path: Path, g
 def test_verifying_a_backup_does_not_write_into_it(tmp_path: Path, github: FakeGitHub) -> None:
     """A verifier that leaves -wal files behind fails the backup it just proved good."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    _seed(state, github)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        _seed(state, github)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
     before = sorted(path.name for path in (backup / PAYLOAD_DIR).rglob("*"))
     assert verify_backup(backup).ok
     assert verify_backup(backup).ok
@@ -1136,39 +1074,34 @@ def test_deleting_the_restore_marker_does_not_end_the_restore(tmp_path: Path, gi
     one that quietly resumes publishing what it cannot see.
     """
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    cell = state.cells.activate(_identity(), "operator")
-    cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
-    state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        cell = state.cells.activate(_identity(), "operator")
+        cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
+        state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
     restore(backup, root, actor="operator", reason="drill", replace_existing=True)
     shutil.rmtree(root / "restore")
     assert status(root)["mutations_allowed"] is False
     assert status(root)["observation_required"] is True
 
-    restored = FactoryState(root)
-    try:
+    with FactoryState(root) as restored:
         ref = OperationRef.build(cell_id, epoch, "github_publish", "pull-request")
         with pytest.raises(MutationsWithheld, match="does not end a restore"):
             restored.kernel.mutate(ref, lambda: github.publish(cell_id), reconcile=lambda: github.observe(cell_id))
         assert github.published == []
-    finally:
-        restored.close()
 
 
 def test_closing_the_window_clears_both_records_of_it(tmp_path: Path, github: FakeGitHub) -> None:
     """A closed restore leaves nothing behind that would refuse the next start."""
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    cell = state.cells.activate(_identity(), "operator")
-    cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
-    state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
-    backup = tmp_path / "backup"
-    create_backup(root, backup, actor="operator")
-    state.close()
+    with FactoryState(root) as state:
+        cell = state.cells.activate(_identity(), "operator")
+        cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
+        state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
+        backup = tmp_path / "backup"
+        create_backup(root, backup, actor="operator")
 
     gate = _restore_and_resume(backup, root)
     gate.mark_reconciled(cell_id=cell_id)
@@ -1176,13 +1109,10 @@ def test_closing_the_window_clears_both_records_of_it(tmp_path: Path, github: Fa
     assert RestoreGate(root).state == "clear"
     assert status(root)["mutations_allowed"] is True
 
-    restored = FactoryState(root)
-    try:
+    with FactoryState(root) as restored:
         ref = OperationRef.build(cell_id, epoch, "github_publish", "pull-request")
         restored.kernel.mutate(ref, lambda: github.publish(cell_id))
         assert github.published == [cell_id]
-    finally:
-        restored.close()
 
 
 def test_a_write_landing_while_the_stores_are_being_fenced_refuses_the_backup(
@@ -1197,28 +1127,23 @@ def test_a_write_landing_while_the_stores_are_being_fenced_refuses_the_backup(
     from swfactory import restore_contract
 
     root = tmp_path / "factory"
-    state = FactoryState(root)
-    cell = state.cells.activate(_identity(), "operator")
-    cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
-    state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
-
     real_version = restore_contract._data_version
     reads: list[int] = []
+    with FactoryState(root) as state, monkeypatch.context() as patch:
+        cell = state.cells.activate(_identity(), "operator")
+        cell_id, epoch = str(cell["cell_id"]), int(cell["epoch"])
+        state.evidence.append(cell_id=cell_id, epoch=epoch, kind="activated", payload={}, policy_digest=None)
 
-    def version_and_race(db):  # type: ignore[no-untyped-def]
-        reads.append(1)
-        value = real_version(db)
-        if len(reads) == 4:
-            # Every store's baseline is read and no lock is held yet: a live factory commits here.
-            ref = OperationRef.build(cell_id, epoch, "github_publish", "raced")
-            state.journal.execute(ref, lambda: {"pull_request": "raced"})
-        return value
+        def version_and_race(db):  # type: ignore[no-untyped-def]
+            reads.append(1)
+            value = real_version(db)
+            if len(reads) == 4:
+                # Every store's baseline is read and no lock is held yet: a live factory commits here.
+                ref = OperationRef.build(cell_id, epoch, "github_publish", "raced")
+                state.journal.execute(ref, lambda: {"pull_request": "raced"})
+            return value
 
-    monkeypatch.setattr(restore_contract, "_data_version", version_and_race)
-    try:
+        patch.setattr(restore_contract, "_data_version", version_and_race)
         with pytest.raises(BackupRefused, match="would not be one instant"):
             create_backup(root, tmp_path / "backup", actor="operator")
-    finally:
-        monkeypatch.setattr(restore_contract, "_data_version", real_version)
-        state.close()
     assert len(reads) >= 4, "the race never happened, so the test proved nothing"

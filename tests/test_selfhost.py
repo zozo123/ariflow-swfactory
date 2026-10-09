@@ -18,6 +18,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from support import git, make_repo
 
 from swfactory.agent import GUARD_PATH_DENY, guard_deny_rules
 from swfactory.blueprint import load
@@ -201,15 +202,6 @@ def _run_gate(tmp_path: Path, changed: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
 
 
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-    )
-
-
 def test_the_gate_ignores_base_drift(tmp_path: Path) -> None:
     """The gate must diff the merge-base, not the base tip.
 
@@ -220,46 +212,27 @@ def test_the_gate_ignores_base_drift(tmp_path: Path) -> None:
     branch would fail a two-dot gate. The lifted-matcher tests cannot catch this because they feed
     the matcher a changed-file list instead of running git, so this one drives real repositories.
     """
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    (repo / "factory.toml").write_text((ROOT / "factory.toml").read_text(encoding="utf-8"))
-    (repo / "untouched.py").write_text("x = 1\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    merge_base = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
-    ).stdout.strip()
+    factory_toml = (ROOT / "factory.toml").read_text(encoding="utf-8")
+    repo, merge_base = make_repo(tmp_path, {"factory.toml": factory_toml, "untouched.py": "x = 1\n"})
 
     # The pull request: one innocuous file, no protected path.
-    _git(repo, "checkout", "-q", "-b", "factory/work")
+    git(repo, "checkout", "-q", "-b", "factory/work")
     (repo / "docs_note.md").write_text("note\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "pr work")
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
-    ).stdout.strip()
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "pr work")
+    head = git(repo, "rev-parse", "HEAD")
 
     # Meanwhile the base advances, touching a PROTECTED path the branch never saw.
-    _git(repo, "checkout", "-q", "main")
+    git(repo, "checkout", "-q", "main")
     (repo / "pyproject.toml").write_text("[project]\nname='x'\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base drift into a protected path")
-    base_tip = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
-    ).stdout.strip()
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base drift into a protected path")
+    base_tip = git(repo, "rev-parse", "HEAD")
 
     assert base_tip != merge_base, "the base must have advanced for this test to mean anything"
 
     def changed(spec: str) -> list[str]:
-        out = subprocess.run(
-            ["git", "diff", "--name-only", spec],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return [line for line in out.stdout.splitlines() if line.strip()]
+        return git(repo, "diff", "--name-only", spec).splitlines()
 
     two_dot = changed(f"{base_tip}..{head}")
     three_dot = changed(f"{base_tip}...{head}")
@@ -274,29 +247,36 @@ def test_the_gate_ignores_base_drift(tmp_path: Path) -> None:
     assert '"${BASE_SHA}...${HEAD_SHA}"' in workflow, "the gate must use a three-dot diff"
 
 
-def test_the_gate_refuses_a_factory_authored_control_plane_change(tmp_path: Path) -> None:
-    done = _run_gate(tmp_path, "src/swfactory/sandbox.py\nblueprints/selfhost.toml\n")
-    assert done.returncode == 1, done.stdout + done.stderr
-    assert "src/swfactory/sandbox.py" in done.stdout
-    assert "protected by 'blueprints'" in done.stdout, "a directory prefix must match too"
-
-
-def test_the_gate_permits_ordinary_work(tmp_path: Path) -> None:
-    done = _run_gate(tmp_path, "docs/selfhost.md\nsrc/swfactory/dispatch.py\n")
-    assert done.returncode == 0, done.stdout + done.stderr
-    assert "no protected path touched" in done.stdout
-
-
-def test_budget_and_review_evidence_cannot_be_rewritten_as_ordinary_work(tmp_path: Path) -> None:
-    done = _run_gate(tmp_path, "src/swfactory/metrics.py\n")
-    assert done.returncode == 1, done.stdout + done.stderr
-    assert "protected by 'src/swfactory/metrics.py'" in done.stdout
-
-
-def test_the_gate_waives_tests_because_build_may_add_them(tmp_path: Path) -> None:
-    """``tests/`` is protected only for ``fix``, so a factory-authored diff may add tests."""
-    done = _run_gate(tmp_path, "tests/test_new_thing.py\n")
-    assert done.returncode == 0, done.stdout + done.stderr
+@pytest.mark.parametrize(
+    ("changed", "returncode", "expected"),
+    [
+        pytest.param(
+            "src/swfactory/sandbox.py\nblueprints/selfhost.toml\n",
+            1,
+            ("src/swfactory/sandbox.py", "protected by 'blueprints'"),  # a directory prefix must match too
+            id="refuses_a_factory_authored_control_plane_change",
+        ),
+        pytest.param(
+            "docs/selfhost.md\nsrc/swfactory/dispatch.py\n",
+            0,
+            ("no protected path touched",),
+            id="permits_ordinary_work",
+        ),
+        pytest.param(
+            "src/swfactory/metrics.py\n",
+            1,
+            ("protected by 'src/swfactory/metrics.py'",),
+            id="budget_and_review_evidence_cannot_be_rewritten_as_ordinary_work",
+        ),
+        # ``tests/`` is protected only for ``fix``, so a factory-authored diff may add tests.
+        pytest.param("tests/test_new_thing.py\n", 0, (), id="waives_tests_because_build_may_add_them"),
+    ],
+)
+def test_the_control_plane_gate(tmp_path: Path, changed: str, returncode: int, expected: tuple[str, ...]) -> None:
+    done = _run_gate(tmp_path, changed)
+    assert done.returncode == returncode, done.stdout + done.stderr
+    for text in expected:
+        assert text in done.stdout
 
 
 def test_the_root_contract_is_the_only_new_target_and_demo_still_works() -> None:

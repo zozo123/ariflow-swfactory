@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from support import git
 
 from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
 from swfactory.blueprint import load
@@ -23,10 +24,7 @@ RUN_ID = "t3st0001"
 
 
 @pytest.fixture(autouse=True)
-def _isolated_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "empty-gitconfig"))
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
+def _at_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(ROOT)
 
 
@@ -36,10 +34,6 @@ def _tree_digest(root: Path) -> dict[str, str]:
         if p.is_file() and not any(x in p.parts for x in (".venv", "__pycache__", ".factory")):
             out[str(p.relative_to(root))] = hashlib.sha256(p.read_bytes()).hexdigest()
     return out
-
-
-def _git(*args: str, cwd: Path) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
 
 
 @pytest.fixture(scope="module")
@@ -60,8 +54,6 @@ def run(tmp_path_factory: pytest.TempPathFactory) -> tuple[RunReport, Path, dict
         fixtures_dir="demo/scripted",
     )
     with pytest.MonkeyPatch.context() as mp:
-        mp.setenv("GIT_CONFIG_GLOBAL", str(tmp / "empty-gitconfig"))
-        mp.setenv("GIT_CONFIG_NOSYSTEM", "1")
         mp.chdir(ROOT)
         report = execute(cfg, run_dir=tmp / "run", blueprint=bp)
     return report, tmp, before
@@ -255,17 +247,17 @@ def test_bare_remote_has_branch_with_trailers(run) -> None:
     defaults = Config(issue="demo/issue.md")
     branch = f"factory/DEMO-1-{publication_key(defaults.repo, defaults.target_dir, 'DEMO-1')}"
     assert RUN_ID not in branch, "the publish ref must not depend on which run produced it"
-    heads = _git("show-ref", "--heads", cwd=remote)
+    heads = git(remote, "show-ref", "--heads")
     assert f"refs/heads/{branch}" in heads and "refs/heads/main" in heads
-    log = _git("log", "--format=%an%n%B---", f"main..{branch}", cwd=remote)
+    log = git(remote, "log", "--format=%an%n%B---", f"main..{branch}")
     commits = [c.strip() for c in log.split("---") if c.strip()]
     assert len(commits) == 3  # build, fix, deliver
     for c in commits:
         assert c.startswith("swfactory-bot\n")
         assert f"Factory-Run: {RUN_ID}" in c and "Agent: scripted" in c
-    stages = _git("log", "--format=%(trailers:key=Factory-Stage,valueonly)", f"main..{branch}", cwd=remote)
+    stages = git(remote, "log", "--format=%(trailers:key=Factory-Stage,valueonly)", f"main..{branch}")
     assert stages.split() == ["deliver", "fix", "build"]
-    files = _git("ls-tree", "-r", "--name-only", branch, cwd=remote)
+    files = git(remote, "ls-tree", "-r", "--name-only", branch)
     assert f"{ART}/metrics.json" in files and "tests/test_percent_change.py" in files
     assert ".factory/base" not in files
 

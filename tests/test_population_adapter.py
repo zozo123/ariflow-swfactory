@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from support import bound_population, lane, swarm_plan
 
 from swfactory.population_adapter import (
     HttpPopulationAdapter,
@@ -13,15 +14,9 @@ from swfactory.population_adapter import (
     PopulationProviderError,
     http_population_adapters_from_document,
 )
-from swfactory.population_manifest import PopulationManifestError, build_population_manifest
-from swfactory.provider_binding import ProviderChoiceSet, bind_population_manifest
-from swfactory.swarm_dynamics import (
-    AgentRole,
-    ComputeTier,
-    ContextPolicy,
-    PopulationLane,
-    SwarmPlan,
-)
+from swfactory.population_manifest import PopulationManifestError
+from swfactory.provider_binding import ProviderChoiceSet
+from swfactory.swarm_dynamics import AgentRole, ComputeTier
 
 
 class Response:
@@ -40,37 +35,15 @@ class Response:
 
 
 def _invocation() -> PopulationInvocation:
-    plan = SwarmPlan(
+    plan = swarm_plan(
+        lane(AgentRole.EXPLORER, ComputeTier.CHEAP, 1, temperature=1.0, axes=("provider", "model", "runtime")),
         phase="gas",
         mode="diverge",
-        lanes=(
-            PopulationLane(
-                role=AgentRole.EXPLORER,
-                compute_tier=ComputeTier.CHEAP,
-                count=1,
-                context=ContextPolicy.FRESH,
-                temperature=1.0,
-                independent_verification=False,
-                diversity_axes=("provider", "model", "runtime"),
-            ),
-        ),
-        selected_hotspots=(),
-        crystals_to_verify=(),
-        stop_new_work=False,
-        estimated_compute_units=1.0,
+        units=1.0,
         reason="adapter test",
     )
-    manifest = build_population_manifest(
-        plan,
-        search_provenance_digest="sha256:" + "a" * 64,
-    )
-    binding = bind_population_manifest(
-        manifest,
-        choices=ProviderChoiceSet(
-            provider=("model-a",),
-            model=("reasoner",),
-            runtime=("gateway",),
-        ),
+    manifest, binding = bound_population(
+        plan, ProviderChoiceSet(provider=("model-a",), model=("reasoner",), runtime=("gateway",))
     )
     return PopulationInvocation(
         task=binding.tasks[0],

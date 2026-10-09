@@ -32,10 +32,7 @@ from swfactory.herd import (
     age,
     approve_all,
     drive_once,
-    job_index,
-    parse_issues,
     snapshot_data,
-    stage_progress,
 )
 
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
@@ -202,39 +199,8 @@ def rows(app: HerdApp, table_id: str) -> list[list[str]]:
 # ---------------------------------------------------------------- pure helpers
 
 
-def test_stage_progress_picks_active_then_last_done() -> None:
-    snap = make_snapshot()
-    assert stage_progress(snap.runs[0].jobs[0].tasks) == "build_and_test"
-    assert stage_progress(snap.runs[0].jobs[1].tasks) == "approve_plan"
-    assert stage_progress(snap.runs[1].jobs[0].tasks) == "intent:failed"
-    assert stage_progress([]) == "-"
-    two_jobs = [
-        TaskState("job.setup", 0, "success"),
-        TaskState("job.spec", 0, "running"),
-        TaskState("job.setup", 1, "success"),
-        TaskState("job.approve_intent", 1, "deferred"),
-    ]
-    assert stage_progress(two_jobs) == "spec, approve_intent"
-    assert stage_progress([TaskState("fan_out", -1, "success")]) == "fan_out"
-    assert stage_progress([TaskState("job.setup", 0, "none")]) == "pending"
-    # Airflow 3.3 parks a HITL task in `awaiting_input`, not `deferred`: the frontier of a job
-    # waiting on a gate is that gate, not the stage before it (see test_control.py).
-    assert (
-        stage_progress(
-            [
-                TaskState("job.setup", 0, "success"),
-                TaskState("job.intent", 0, "success"),
-                TaskState("job.approve_intent", 0, "awaiting_input"),
-            ]
-        )
-        == "approve_intent"
-    )
-
-
-def test_parse_issues_and_age() -> None:
-    assert parse_issues(" 42, 43,,demo/issue.md ") == ["42", "43", "demo/issue.md"]
-    assert parse_issues("") == []
-    assert (job_index(0), job_index(3), job_index(-1), job_index(None)) == ("0", "3", "-", "-")
+def test_age() -> None:
+    """``stage_progress``/``parse_issues``/``job_index`` are pinned case by case by ``tests/fixtures/contract``."""
     assert age(NOW - timedelta(seconds=30), NOW) == "30s"
     assert age(NOW - timedelta(minutes=5), NOW) == "5m"
     assert age((NOW - timedelta(hours=3)).isoformat(), NOW) == "3h"

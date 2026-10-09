@@ -4,22 +4,16 @@ import json
 from pathlib import Path
 
 import pytest
+from backend_support import TOKEN
+from support import bound_population, lane, swarm_plan
 
 from swfactory.backend.service import Factory, Refused
 from swfactory.cell_runtime import identity_for_job
 from swfactory.idempotency import OperationInDoubt
 from swfactory.population_adapter import PopulationAdapterResult
-from swfactory.population_manifest import build_population_manifest
-from swfactory.provider_binding import ProviderChoiceSet, bind_population_manifest
-from swfactory.swarm_dynamics import (
-    AgentRole,
-    ComputeTier,
-    ContextPolicy,
-    PopulationLane,
-    SwarmPlan,
-)
+from swfactory.provider_binding import ProviderChoiceSet
+from swfactory.swarm_dynamics import AgentRole, ComputeTier
 
-TOKEN = "t" * 40
 POLICY = "policy:v1:" + "a" * 64
 SECRET = "provider-secret-never-persist"
 
@@ -49,39 +43,12 @@ class FakeAdapter:
 
 
 def _population():
-    plan = SwarmPlan(
-        phase="liquid",
-        mode="coordinate",
-        lanes=(
-            PopulationLane(
-                role=AgentRole.EXPLORER,
-                compute_tier=ComputeTier.CHEAP,
-                count=1,
-                context=ContextPolicy.FRESH,
-                temperature=1.0,
-                independent_verification=False,
-                diversity_axes=("provider", "model", "runtime"),
-            ),
-        ),
-        selected_hotspots=(),
-        crystals_to_verify=(),
-        stop_new_work=False,
-        estimated_compute_units=1.0,
+    plan = swarm_plan(
+        lane(AgentRole.EXPLORER, ComputeTier.CHEAP, 1, temperature=1.0, axes=("provider", "model", "runtime")),
+        units=1.0,
         reason="backend population test",
     )
-    manifest = build_population_manifest(
-        plan,
-        search_provenance_digest="sha256:" + "b" * 64,
-    )
-    binding = bind_population_manifest(
-        manifest,
-        choices=ProviderChoiceSet(
-            provider=("model-a",),
-            model=("reasoner",),
-            runtime=("backend",),
-        ),
-    )
-    return manifest, binding
+    return bound_population(plan, ProviderChoiceSet(provider=("model-a",), model=("reasoner",), runtime=("backend",)))
 
 
 def _factory(tmp_path: Path, monkeypatch, adapter: FakeAdapter) -> tuple[Factory, dict]:

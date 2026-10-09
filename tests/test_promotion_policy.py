@@ -115,26 +115,22 @@ def test_a_mandatory_leg_may_not_be_downgraded_to_advisory_in_the_same_policy() 
 # --------------------------------------------------------------------------------------------
 
 
-def test_evidence_from_a_superseded_head_blocks_promotion() -> None:
+@pytest.mark.parametrize(
+    ("live_head", "live_base", "stale"),
+    [
+        pytest.param(_sha("d"), _sha("b"), "head", id="evidence_from_a_superseded_head"),
+        pytest.param(_sha("a"), _sha("e"), "base", id="evidence_integrated_against_a_superseded_base"),
+    ],
+)
+def test_superseded_identity_blocks_promotion(live_head: str, live_base: str, stale: str) -> None:
     blockers = promotion_policy.evaluate_identity(
         recorded_head=_sha("a"),
         recorded_base=_sha("b"),
         recorded_tested=_sha("c"),
-        live_head=_sha("d"),
-        live_base=_sha("b"),
+        live_head=live_head,
+        live_base=live_base,
     )
-    assert any("head" in line for line in blockers)
-
-
-def test_evidence_integrated_against_a_superseded_base_blocks_promotion() -> None:
-    blockers = promotion_policy.evaluate_identity(
-        recorded_head=_sha("a"),
-        recorded_base=_sha("b"),
-        recorded_tested=_sha("c"),
-        live_head=_sha("a"),
-        live_base=_sha("e"),
-    )
-    assert any("base" in line for line in blockers)
+    assert any(stale in line for line in blockers)
 
 
 def test_matching_identity_does_not_block() -> None:
@@ -472,20 +468,6 @@ def test_the_drift_check_workflow_exists_and_audits_the_policy() -> None:
     assert "exit 0" not in live
 
 
-def test_live_diff_audit_rejects_a_green_unverified_token_gap(tmp_path: Path) -> None:
-    """Run 36297538879 exited 0 when the admin token was missing and was later cited as a live diff."""
-    workflows = tmp_path / ".github" / "workflows"
-    workflows.mkdir(parents=True)
-    for name in ("ci.yml", "control-plane-gate.yml", "release.yml", "promotion-policy.yml", "live-policy-audit.yml"):
-        (workflows / name).write_text((REPO / ".github/workflows" / name).read_text())
-    drift = workflows / "live-policy-audit.yml"
-    drift.write_text(drift.read_text().replace("exit 1", "exit 0", 1))
-
-    problems = promotion_policy.audit_policy(POLICY, tmp_path)
-
-    assert any("exits 0" in problem for problem in problems)
-
-
 def _promotion_repo(tmp_path: Path) -> Path:
     workflows = tmp_path / ".github" / "workflows"
     workflows.mkdir(parents=True)
@@ -494,75 +476,69 @@ def _promotion_repo(tmp_path: Path) -> Path:
     return workflows / "live-policy-audit.yml"
 
 
-def test_live_diff_audit_rejects_continue_on_error(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("rewrites", "problem"),
+    [
+        # Run 36297538879 exited 0 when the admin token was missing and was later cited as a live diff.
+        pytest.param((("exit 1", "exit 0"),), "exits 0", id="green_unverified_token_gap"),
+        pytest.param(
+            (
+                (
+                    "      - name: The policy agrees with the live repository settings\n",
+                    "      - name: The policy agrees with the live repository settings\n"
+                    "        continue-on-error: true\n",
+                ),
+            ),
+            "continue-on-error",
+            id="continue_on_error",
+        ),
+        pytest.param(
+            (
+                (
+                    "uv run python scripts/promotion_policy.py diff",
+                    "uv run python scripts/promotion_policy.py diff || true",
+                ),
+            ),
+            "suppresses the live diff status",
+            id="masked_diff_status",
+        ),
+        pytest.param(
+            (
+                ('if [ -z "${GH_TOKEN:-}" ]; then', 'if [ -n "${GH_TOKEN:-}" ]; then'),
+                ("            exit 1\n", ""),
+            ),
+            "without a live diff",
+            id="positive_token_test_that_skips_the_diff",
+        ),
+        pytest.param(
+            (
+                (
+                    'echo "::error::Reading protection requires admin scope. See docs/promotion-policy.md."\n'
+                    "            exit 1\n"
+                    "          fi\n"
+                    "          uv run python scripts/promotion_policy.py diff",
+                    'echo "::error::Reading protection requires admin scope. See docs/promotion-policy.md."\n'
+                    "          else\n"
+                    "            uv run python scripts/promotion_policy.py diff\n"
+                    "          fi",
+                ),
+            ),
+            "without a live diff",
+            id="skipping_the_diff_when_the_token_is_missing",
+        ),
+    ],
+)
+def test_live_diff_audit_rejects_a_rewritten_workflow(
+    tmp_path: Path, rewrites: tuple[tuple[str, str], ...], problem: str
+) -> None:
     drift = _promotion_repo(tmp_path)
-    original = drift.read_text()
-    rewritten = original.replace(
-        "      - name: The policy agrees with the live repository settings\n",
-        "      - name: The policy agrees with the live repository settings\n        continue-on-error: true\n",
-        1,
-    )
+    original = rewritten = drift.read_text()
+    for old, new in rewrites:
+        rewritten = rewritten.replace(old, new, 1)
     assert rewritten != original
     drift.write_text(rewritten)
 
-    problems = promotion_policy.audit_policy(POLICY, tmp_path)
-
-    assert any("continue-on-error" in problem for problem in problems)
-
-
-def test_live_diff_audit_rejects_a_masked_diff_status(tmp_path: Path) -> None:
-    drift = _promotion_repo(tmp_path)
-    original = drift.read_text()
-    rewritten = original.replace(
-        "uv run python scripts/promotion_policy.py diff",
-        "uv run python scripts/promotion_policy.py diff || true",
-        1,
-    )
-    assert rewritten != original
-    drift.write_text(rewritten)
-
-    problems = promotion_policy.audit_policy(POLICY, tmp_path)
-
-    assert any("suppresses the live diff status" in problem for problem in problems)
-
-
-def test_live_diff_audit_rejects_a_positive_token_test_that_skips_the_diff(tmp_path: Path) -> None:
-    drift = _promotion_repo(tmp_path)
-    original = drift.read_text()
-    rewritten = original.replace('if [ -z "${GH_TOKEN:-}" ]; then', 'if [ -n "${GH_TOKEN:-}" ]; then', 1)
-    rewritten = rewritten.replace("            exit 1\n", "", 1)
-    assert rewritten != original
-    drift.write_text(rewritten)
-
-    problems = promotion_policy.audit_policy(POLICY, tmp_path)
-
-    assert any("without a live diff" in problem for problem in problems)
-
-
-def test_live_diff_audit_rejects_skipping_the_diff_when_the_token_is_missing(tmp_path: Path) -> None:
-    workflows = tmp_path / ".github" / "workflows"
-    workflows.mkdir(parents=True)
-    for name in ("ci.yml", "control-plane-gate.yml", "release.yml", "promotion-policy.yml", "live-policy-audit.yml"):
-        (workflows / name).write_text((REPO / ".github/workflows" / name).read_text())
-    drift = workflows / "live-policy-audit.yml"
-    original = drift.read_text()
-    skipped = original.replace(
-        'echo "::error::Reading protection requires admin scope. See docs/promotion-policy.md."\n'
-        "            exit 1\n"
-        "          fi\n"
-        "          uv run python scripts/promotion_policy.py diff",
-        'echo "::error::Reading protection requires admin scope. See docs/promotion-policy.md."\n'
-        "          else\n"
-        "            uv run python scripts/promotion_policy.py diff\n"
-        "          fi",
-        1,
-    )
-    assert skipped != original
-    drift.write_text(skipped)
-
-    problems = promotion_policy.audit_policy(POLICY, tmp_path)
-
-    assert any("without a live diff" in problem for problem in problems)
+    assert any(problem in line for line in promotion_policy.audit_policy(POLICY, tmp_path))
 
 
 def test_the_policy_audit_agrees_with_the_checked_in_workflows() -> None:

@@ -5,10 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
+from support import git
 from typer.testing import CliRunner
 
 from swfactory.candidate_evidence import (
@@ -24,34 +24,6 @@ from swfactory.candidate_worktree import (
 from swfactory.cli import app
 from swfactory.execution_recipe import load_execution_recipe
 from swfactory.source_snapshot import create_source_snapshot
-
-IDENTITY = [
-    "-c",
-    "user.name=Evidence Test",
-    "-c",
-    "user.email=evidence@example.invalid",
-]
-
-
-def git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *IDENTITY, *args],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-
-
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    root = tmp_path / "repo"
-    root.mkdir()
-    git(root, "init", "-q", "-b", "main")
-    (root / "value.txt").write_text("base\n", encoding="utf-8")
-    git(root, "add", "value.txt")
-    git(root, "commit", "-qm", "base")
-    return root
 
 
 def reseal_manifest(path: Path) -> None:

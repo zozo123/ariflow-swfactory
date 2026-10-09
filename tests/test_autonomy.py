@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 
 import pytest
-import test_backend_service as shared
+from backend_support import REPO_SLUG
 
 from swfactory.autonomy import AutonomyStore, load_policy
 from swfactory.backend import autonomous_service as autonomous
@@ -15,18 +15,13 @@ from swfactory.config import FACTORY_ROOT
 from swfactory.models import Issue, StageError
 from swfactory.security_contract import CanonicalPolicy
 
-REPO = shared.REPO
-airflow = shared.airflow
-env = shared.env
-factory = shared.factory
-
 SHA = "a" * 40
 
 
 @pytest.fixture
 def managed(factory, monkeypatch):
     policy = load_policy()
-    job = {"repo": REPO, "issue": "101", "dir": "", "base_branch": "main"}
+    job = {"repo": REPO_SLUG, "issue": "101", "dir": "", "base_branch": "main"}
     cell = factory.cell_store.activate(identity_for_job(job), "backend:test")
     cell = factory.cell_store.patch(
         cell["cell_id"],
@@ -99,7 +94,7 @@ def test_budget_cannot_expand_from_a_signal_or_agent(cost, ceiling):
 )
 def test_issue_triage_is_policy_selected(labels, reason):
     issue = Issue(id="101", title="Repair a bug", body="Acceptance: regression passes", labels=labels)
-    assert load_policy().issue_reason(issue, REPO) == reason
+    assert load_policy().issue_reason(issue, REPO_SLUG) == reason
 
 
 def test_decisions_cannot_be_rebound_inside_an_epoch(tmp_path):
@@ -171,8 +166,8 @@ def published(managed, monkeypatch):
     receipt = {"head_revision": SHA, "pr_number": 1}
     remote = {
         "pr": {
-            "head": {"sha": SHA, "repo": {"full_name": REPO}},
-            "base": {"ref": "main", "repo": {"full_name": REPO}},
+            "head": {"sha": SHA, "repo": {"full_name": REPO_SLUG}},
+            "base": {"ref": "main", "repo": {"full_name": REPO_SLUG}},
             "state": "open",
             "draft": False,
             "merged": False,
@@ -456,7 +451,7 @@ def test_github_adapter_reads_artifacts_at_sha_and_uses_atomic_merge(monkeypatch
 
     from swfactory.scm import GitHubScm
 
-    adapter = GitHubScm(REPO, "main")
+    adapter = GitHubScm(REPO_SLUG, "main")
     calls = []
     raw = "host-owned review\n"
 
@@ -501,7 +496,7 @@ def test_approved_patch_publishes_then_merges_through_managed_mutations(approved
         def publish(self, **kwargs):
             type(self).publications += 1
             type(self).receipt = PublicationReceipt(
-                repository=REPO,
+                repository=REPO_SLUG,
                 base_revision="main",
                 head_revision=SHA,
                 content_digest=patch_content_digest(kwargs["patch"]),
@@ -514,8 +509,8 @@ def test_approved_patch_publishes_then_merges_through_managed_mutations(approved
 
     PublishingRemote.snapshot = {
         "pr": {
-            "head": {"sha": SHA, "repo": {"full_name": REPO}},
-            "base": {"ref": "main", "repo": {"full_name": REPO}},
+            "head": {"sha": SHA, "repo": {"full_name": REPO_SLUG}},
+            "base": {"ref": "main", "repo": {"full_name": REPO_SLUG}},
             "state": "open",
             "draft": False,
             "merged": False,
@@ -571,12 +566,12 @@ def test_widened_runtime_settings_are_refused_before_first_stage(mutation):
     from swfactory.blueprint import load
 
     cfg = SimpleNamespace(
-        repo=REPO, target_dir="", base_branch="main", scm="github", max_budget_usd=8, max_budget_usd_per_stage=2
+        repo=REPO_SLUG, target_dir="", base_branch="main", scm="github", max_budget_usd=8, max_budget_usd_per_stage=2
     )
     binding = {
         "managed": True,
         "policy_digest": CanonicalPolicy.for_factory_job(
-            "autonomous", {"repo": REPO, "dir": "", "base_branch": "main"}
+            "autonomous", {"repo": REPO_SLUG, "dir": "", "base_branch": "main"}
         ).digest(),
     }
     enforce_runtime_policy(cfg, load("autonomous"), binding)
@@ -615,7 +610,7 @@ def test_removed_intake_label_blocks_before_sandbox_or_agent_creation(tmp_path, 
         "cell_id": "cell_" + "a" * 24,
         "epoch": 1,
         "policy_digest": CanonicalPolicy.for_factory_job(
-            "autonomous", {"repo": REPO, "dir": "", "base_branch": "main"}
+            "autonomous", {"repo": REPO_SLUG, "dir": "", "base_branch": "main"}
         ).digest(),
     }
     scm = SimpleNamespace(fetch_issue=lambda ref: Issue(id=ref, title="Fix", body="Acceptance"))

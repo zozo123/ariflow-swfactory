@@ -4,22 +4,17 @@ import json
 import threading
 from pathlib import Path
 
+from backend_support import TOKEN
+from support import bound_population, lane, swarm_plan
+
 from swfactory.backend import Factory, make_server
 from swfactory.backend_population import BackendPopulationRunner, PopulationTaskInput
 from swfactory.cell_runtime import identity_for_job
 from swfactory.population_adapter import PopulationAdapterResult
 from swfactory.population_execution import PopulationExecutor
-from swfactory.population_manifest import build_population_manifest
-from swfactory.provider_binding import ProviderChoiceSet, bind_population_manifest
-from swfactory.swarm_dynamics import (
-    AgentRole,
-    ComputeTier,
-    ContextPolicy,
-    PopulationLane,
-    SwarmPlan,
-)
+from swfactory.provider_binding import ProviderChoiceSet
+from swfactory.swarm_dynamics import AgentRole, ComputeTier
 
-TOKEN = "b" * 40
 SECRET = "model-token-held-only-by-backend"
 POLICY = "policy:v1:" + "a" * 64
 
@@ -45,50 +40,29 @@ class Adapter:
 
 
 def _population():
-    plan = SwarmPlan(
-        phase="liquid",
-        mode="coordinate",
-        lanes=(
-            PopulationLane(
-                role=AgentRole.EXPLORER,
-                compute_tier=ComputeTier.CHEAP,
-                count=2,
-                context=ContextPolicy.FRESH,
-                temperature=0.8,
-                independent_verification=False,
-                diversity_axes=("provider", "model", "runtime", "prompt"),
-            ),
-            PopulationLane(
-                role=AgentRole.VERIFIER,
-                compute_tier=ComputeTier.DEEP,
-                count=1,
-                context=ContextPolicy.FRESH,
-                temperature=0.0,
-                independent_verification=True,
-                diversity_axes=("provider", "model", "runtime", "verifier"),
-            ),
+    plan = swarm_plan(
+        lane(
+            AgentRole.EXPLORER, ComputeTier.CHEAP, 2, temperature=0.8, axes=("provider", "model", "runtime", "prompt")
         ),
-        selected_hotspots=(),
-        crystals_to_verify=(),
-        stop_new_work=False,
-        estimated_compute_units=10.0,
+        lane(
+            AgentRole.VERIFIER,
+            ComputeTier.DEEP,
+            1,
+            temperature=0.0,
+            verifier=True,
+            axes=("provider", "model", "runtime", "verifier"),
+        ),
+        units=10.0,
         reason="managed e2e",
     )
-    manifest = build_population_manifest(
-        plan,
-        search_provenance_digest="sha256:" + "1" * 64,
+    choices = ProviderChoiceSet(
+        provider=("model-a",),
+        model=("explorer", "verifier", "critic"),
+        runtime=("backend-a", "backend-b", "backend-c"),
+        prompt=("direct", "counterfactual"),
+        verifier=("unit", "adversarial", "fresh"),
     )
-    binding = bind_population_manifest(
-        manifest,
-        choices=ProviderChoiceSet(
-            provider=("model-a",),
-            model=("explorer", "verifier", "critic"),
-            runtime=("backend-a", "backend-b", "backend-c"),
-            prompt=("direct", "counterfactual"),
-            verifier=("unit", "adversarial", "fresh"),
-        ),
-    )
-    return manifest, binding
+    return bound_population(plan, choices)
 
 
 def _bound_cell(factory: Factory) -> dict:

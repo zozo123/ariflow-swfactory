@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-import test_backend_service as shared
+from backend_support import TOKEN
 from typer.testing import CliRunner
 
 from swfactory.autonomy import AutonomyStore, record_merge_timing
@@ -16,11 +16,6 @@ from swfactory.inspection import inspect_run
 from swfactory.models import Issue
 from swfactory.state import RunState
 
-airflow = shared.airflow
-env = shared.env
-factory = shared.factory
-client = shared.client
-
 
 def test_blocked_triage_is_visible_through_authenticated_http_and_cli(client, factory, monkeypatch):
     from swfactory.scm import GitHubScm
@@ -29,7 +24,7 @@ def test_blocked_triage_is_visible_through_authenticated_http_and_cli(client, fa
     code, result = client.call("POST", "/v1/scm/triage", {"issue": "101"})
     assert code == 200 and result["state"] == "blocked"
     assert client.call("POST", "/v1/scm/autonomy-status", {}, token=None)[0] == 401
-    monkeypatch.setenv("SWF_BACKEND_TOKEN", shared.TOKEN)
+    monkeypatch.setenv("SWF_BACKEND_TOKEN", TOKEN)
     output = CliRunner().invoke(
         app, ["state", "autonomy", "--backend-url", f"http://{client.host}:{client.port}", "--json"]
     )
@@ -37,7 +32,7 @@ def test_blocked_triage_is_visible_through_authenticated_http_and_cli(client, fa
     row = json.loads(output.output)["decisions"][0]
     assert row["issue"] == "101" and row["reason"] == "required_labels_missing"
     assert "required labels" in row["next_action"] and row["recorded_at"]
-    assert shared.TOKEN not in output.output
+    assert TOKEN not in output.output
     assert not factory.cell_store.list(), "blocked triage must not admit a Cell"
     before = row["recorded_at"]
     client.call("POST", "/v1/scm/triage", {"issue": "101"})

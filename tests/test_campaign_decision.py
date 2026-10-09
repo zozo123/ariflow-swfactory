@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
+from support import git
 from typer.testing import CliRunner
 
 from swfactory.campaign_decision import (
@@ -26,34 +26,6 @@ from swfactory.cli import app
 from swfactory.evolution import CampaignReport, CandidateOutcome, Selection, Strategy, evaluation
 from swfactory.generations import Dimension
 from swfactory.source_snapshot import create_source_snapshot
-
-IDENTITY = [
-    "-c",
-    "user.name=Decision Test",
-    "-c",
-    "user.email=decision@example.invalid",
-]
-
-
-def git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *IDENTITY, *args],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-
-
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    root = tmp_path / "repo"
-    root.mkdir()
-    git(root, "init", "-q", "-b", "main")
-    (root / "value.txt").write_text("base\n", encoding="utf-8")
-    git(root, "add", "value.txt")
-    git(root, "commit", "-qm", "base")
-    return root
 
 
 def answered(

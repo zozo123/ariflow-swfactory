@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from support import git, make_repo
 
 from swfactory import agent as agent_mod
 from swfactory.agent import (
@@ -102,27 +103,6 @@ class GitSandbox:
 
     def exists(self, path: str) -> bool:
         return (Path(self.workdir) / path).exists()
-
-
-def _git(repo: Path, *args: str) -> str:
-    env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "t",
-        "GIT_AUTHOR_EMAIL": "t@t",
-        "GIT_COMMITTER_NAME": "t",
-        "GIT_COMMITTER_EMAIL": "t@t",
-    }
-    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True, env=env).stdout
-
-
-def _git_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    (repo / "hello.txt").write_text("hello\n")
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-q", "-m", "init")
-    return repo
 
 
 def _claude_cfg(**kw) -> Config:
@@ -525,18 +505,18 @@ def test_scripted_md_and_json_fixtures(tmp_path: Path) -> None:
 
 
 def test_scripted_patch_applies_to_git_repo(tmp_path: Path) -> None:
-    repo = _git_repo(tmp_path)
+    repo, _ = make_repo(tmp_path, {"hello.txt": "hello\n"})
     (repo / "hello.txt").write_text("hello\nworld\n")
     (repo / "new.py").write_text("x = 1\n")
-    _git(repo, "add", "-N", "new.py")
-    diff = _git(repo, "diff", "HEAD")
-    _git(repo, "reset", "-q", "--hard", "HEAD")
-    _git(repo, "clean", "-fdq")
+    git(repo, "add", "-N", "new.py")
+    diff = git(repo, "diff", "HEAD")
+    git(repo, "reset", "-q", "--hard", "HEAD")
+    git(repo, "clean", "-fdq")
     assert not (repo / "new.py").exists()
 
     fx = tmp_path / "fx"
     fx.mkdir()
-    (fx / "build.1.patch").write_text("# recorded by swfactory run abc\n" + diff)
+    (fx / "build.1.patch").write_text(f"# recorded by swfactory run abc\n{diff}\n")
 
     res = ScriptedAgent([fx]).run(
         GitSandbox(repo),
@@ -561,7 +541,7 @@ def test_scripted_patch_applies_to_git_repo(tmp_path: Path) -> None:
 def test_scripted_patch_failure_is_error_and_read_only_stage_is_policy_error(
     tmp_path: Path,
 ) -> None:
-    repo = _git_repo(tmp_path)
+    repo, _ = make_repo(tmp_path, {"hello.txt": "hello\n"})
     fx = tmp_path / "fx"
     fx.mkdir()
     (fx / "fix.1.patch").write_text("this is not a patch\n")

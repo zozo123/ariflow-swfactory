@@ -139,29 +139,28 @@ def test_readme_prose_that_promotes_an_experimental_sandbox_fails(document: dict
     assert findings and "sandbox.islo" in findings[0]
 
 
-def test_site_status_stronger_than_the_claim_fails(document: dict[str, Any], tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("sandbox", "status", "finding"),
+    [
+        pytest.param("docker", ">experimental<", "sandbox.docker", id="site_status_stronger_than_the_claim"),
+        # ``daytona`` is an integration seam; describing it as available needs a claim first.
+        pytest.param(
+            "daytona", ">custom backend required<", "no claim", id="site_row_claiming_availability_without_a_claim"
+        ),
+    ],
+)
+def test_a_site_row_promoted_to_built_in_fails(
+    document: dict[str, Any], tmp_path: Path, sandbox: str, status: str, finding: str
+) -> None:
     tree = _tree(tmp_path)
     page = tree / "site" / "index.html"
     text = page.read_text(encoding="utf-8")
-    row = next(line for line in text.splitlines() if 'data-sandbox="docker"' in line)
-    page.write_text(text.replace(row, row.replace(">experimental<", ">built in<")), encoding="utf-8")
+    row = next(line for line in text.splitlines() if f'data-sandbox="{sandbox}"' in line)
+    page.write_text(text.replace(row, row.replace(status, ">built in<")), encoding="utf-8")
 
     findings = public_surface_findings(document, root=tree)
 
-    assert any("sandbox.docker" in finding for finding in findings), findings
-
-
-def test_a_site_row_claiming_availability_without_a_claim_fails(document: dict[str, Any], tmp_path: Path) -> None:
-    """``daytona`` is an integration seam; describing it as available needs a claim first."""
-    tree = _tree(tmp_path)
-    page = tree / "site" / "index.html"
-    text = page.read_text(encoding="utf-8")
-    row = next(line for line in text.splitlines() if 'data-sandbox="daytona"' in line)
-    page.write_text(text.replace(row, row.replace(">custom backend required<", ">built in<")), encoding="utf-8")
-
-    findings = public_surface_findings(document, root=tree)
-
-    assert any("no claim" in finding for finding in findings), findings
+    assert any(finding in line for line in findings), findings
 
 
 def test_a_public_row_that_drops_its_claim_link_is_caught(document: dict[str, Any], tmp_path: Path) -> None:

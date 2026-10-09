@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from support import lane, swarm_plan
 from typer.testing import CliRunner
 
 from swfactory.adaptive_information import (
@@ -23,14 +24,7 @@ from swfactory.population_manifest import (
     build_population_manifest,
     summarize_population,
 )
-from swfactory.swarm_dynamics import (
-    AgentRole,
-    ComputeTier,
-    ContextPolicy,
-    PopulationLane,
-    SwarmBudget,
-    SwarmPlan,
-)
+from swfactory.swarm_dynamics import AgentRole, ComputeTier, SwarmBudget, SwarmPlan
 
 
 def _plan(
@@ -39,39 +33,13 @@ def _plan(
     verifier_count: int = 0,
     explorer_tier: ComputeTier = ComputeTier.CHEAP,
 ) -> SwarmPlan:
-    lanes = [
-        PopulationLane(
-            role=AgentRole.EXPLORER,
-            compute_tier=explorer_tier,
-            count=explorer_count,
-            context=ContextPolicy.FRESH,
-            temperature=1.0,
-            independent_verification=False,
-            diversity_axes=("model", "prompt", "runtime"),
-        )
-    ]
+    lanes = [lane(AgentRole.EXPLORER, explorer_tier, explorer_count, temperature=1.0)]
     if verifier_count:
+        axes = ("model", "runtime", "verifier")
         lanes.append(
-            PopulationLane(
-                role=AgentRole.VERIFIER,
-                compute_tier=ComputeTier.DEEP,
-                count=verifier_count,
-                context=ContextPolicy.FRESH,
-                temperature=0.0,
-                independent_verification=True,
-                diversity_axes=("model", "runtime", "verifier"),
-            )
+            lane(AgentRole.VERIFIER, ComputeTier.DEEP, verifier_count, temperature=0.0, verifier=True, axes=axes)
         )
-    return SwarmPlan(
-        phase="liquid",
-        mode="coordinate",
-        lanes=tuple(lanes),
-        selected_hotspots=(),
-        crystals_to_verify=(),
-        stop_new_work=False,
-        estimated_compute_units=float(explorer_count) + 8.0 * verifier_count,
-        reason="adaptive information test",
-    )
+    return swarm_plan(*lanes, units=float(explorer_count) + 8.0 * verifier_count, reason="adaptive information test")
 
 
 def _report(

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from support import git
 
 from swfactory.candidate_evidence import build_candidate_evidence_bundle
 from swfactory.candidate_retention import (
@@ -24,34 +24,6 @@ from swfactory.candidate_worktree import (
     remove_candidate_worktree,
 )
 from swfactory.source_snapshot import create_source_snapshot
-
-IDENTITY = [
-    "-c",
-    "user.name=Retention Test",
-    "-c",
-    "user.email=retention@example.invalid",
-]
-
-
-def git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *IDENTITY, *args],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-
-
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    root = tmp_path / "repo"
-    root.mkdir()
-    git(root, "init", "-q", "-b", "main")
-    (root / "value.txt").write_text("base\n", encoding="utf-8")
-    git(root, "add", "value.txt")
-    git(root, "commit", "-qm", "base")
-    return root
 
 
 def candidate_bundle(repo: Path, tmp_path: Path) -> tuple[Path, object]:

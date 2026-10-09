@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from support import lane, swarm_plan
 from typer.testing import CliRunner
 
 from swfactory.cli import app
@@ -12,43 +13,23 @@ from swfactory.provider_binding import (
     bind_population_manifest,
     provider_choices_from_document,
 )
-from swfactory.swarm_dynamics import (
-    AgentRole,
-    ComputeTier,
-    ContextPolicy,
-    PopulationLane,
-    SwarmPlan,
-)
+from swfactory.swarm_dynamics import AgentRole, ComputeTier
 
 
 def _manifest():
-    plan = SwarmPlan(
+    plan = swarm_plan(
+        lane(AgentRole.EXPLORER, ComputeTier.CHEAP, 3, temperature=1.1),
+        lane(
+            AgentRole.VERIFIER,
+            ComputeTier.DEEP,
+            1,
+            temperature=0.0,
+            verifier=True,
+            axes=("model", "runtime", "verifier"),
+        ),
         phase="gas",
         mode="diverge",
-        lanes=(
-            PopulationLane(
-                role=AgentRole.EXPLORER,
-                compute_tier=ComputeTier.CHEAP,
-                count=3,
-                context=ContextPolicy.FRESH,
-                temperature=1.1,
-                independent_verification=False,
-                diversity_axes=("model", "prompt", "runtime"),
-            ),
-            PopulationLane(
-                role=AgentRole.VERIFIER,
-                compute_tier=ComputeTier.DEEP,
-                count=1,
-                context=ContextPolicy.FRESH,
-                temperature=0.0,
-                independent_verification=True,
-                diversity_axes=("model", "runtime", "verifier"),
-            ),
-        ),
-        selected_hotspots=(),
-        crystals_to_verify=(),
-        stop_new_work=False,
-        estimated_compute_units=12.0,
+        units=12.0,
         reason="binding test",
     )
     return build_population_manifest(

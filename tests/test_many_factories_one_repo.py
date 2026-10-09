@@ -11,10 +11,10 @@ What two instances DO share is the repository. These tests pin that it is enough
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
+from support import git
 
 from swfactory.config import Config
 from swfactory.models import StageError
@@ -22,10 +22,6 @@ from swfactory.publication_identity import PublicationIdentity, adopts, instance
 from swfactory.scm import LocalGitScm
 
 ISSUE = "DEMO-1"
-
-
-def _git(*args: str, cwd: Path) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
 
 
 def _patch(subject: str, body: str, instance: str = "swf-instance-a") -> bytes:
@@ -49,17 +45,13 @@ def _patch(subject: str, body: str, instance: str = "swf-instance-a") -> bytes:
 @pytest.fixture
 def remote(tmp_path: Path) -> Path:
     """One bare repository, the only thing the two instances share."""
-    bare = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
-    seed = tmp_path / "seed"
-    subprocess.run(["git", "clone", "-q", str(bare), str(seed)], check=True)
+    bare, seed = tmp_path / "origin.git", tmp_path / "seed"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(bare))
+    git(tmp_path, "clone", "-q", str(bare), str(seed))
     (seed / "README.md").write_text("seed\n", encoding="utf-8")
-    for args in (
-        ["add", "-A"],
-        ["-c", "user.name=s", "-c", "user.email=s@e", "commit", "-qm", "seed"],
-        ["push", "-q", "origin", "main"],
-    ):
-        subprocess.run(["git", *args], cwd=seed, check=True)
+    git(seed, "add", "-A")
+    git(seed, "commit", "-qm", "seed")
+    git(seed, "push", "-q", "origin", "main")
     return bare
 
 
@@ -101,7 +93,7 @@ def test_the_second_instance_is_refused_by_the_lease_rather_than_overwriting(rem
         labels=["factory"],
         identity=id_a,
     )
-    landed = _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip()
+    landed = git(remote, "rev-parse", f"refs/heads/{branch}")
 
     # B observed nothing (it never fetched this ref) and now pushes over a ref that exists.
     with pytest.raises(StageError) as caught:
@@ -114,7 +106,7 @@ def test_the_second_instance_is_refused_by_the_lease_rather_than_overwriting(rem
             identity=id_b,
         )
     assert "not by this one" in str(caught.value) and "swf-instance-a" in str(caught.value)
-    assert _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip() == landed, "A's commit was overwritten"
+    assert git(remote, "rev-parse", f"refs/heads/{branch}") == landed, "A's commit was overwritten"
 
 
 def test_an_instance_adopts_the_pull_request_that_already_exists(tmp_path: Path) -> None:
@@ -173,7 +165,7 @@ def test_the_same_instance_may_still_republish_its_own_branch(remote: Path, tmp_
         labels=["factory"],
         identity=ident,
     )
-    first = _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip()
+    first = git(remote, "rev-parse", f"refs/heads/{branch}")
     scm.publish(
         branch=branch,
         patch=_patch("second", "2", instance="swf-instance-a"),
@@ -182,7 +174,7 @@ def test_the_same_instance_may_still_republish_its_own_branch(remote: Path, tmp_
         labels=["factory"],
         identity=ident,
     )
-    assert _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip() != first, "a retry must re-publish"
+    assert git(remote, "rev-parse", f"refs/heads/{branch}") != first, "a retry must re-publish"
 
 
 def test_the_remote_answers_whose_branch_it_is_across_a_restart(remote: Path, tmp_path: Path) -> None:
@@ -209,7 +201,7 @@ def test_the_remote_answers_whose_branch_it_is_across_a_restart(remote: Path, tm
         labels=["factory"],
         identity=ident,
     )
-    first = _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip()
+    first = git(remote, "rev-parse", f"refs/heads/{branch}")
 
     # A different object, a different run directory: nothing carried over but the remote.
     after = LocalGitScm(remote, tmp_path / "run-after")
@@ -221,7 +213,7 @@ def test_the_remote_answers_whose_branch_it_is_across_a_restart(remote: Path, tm
         labels=["factory"],
         identity=ident,
     )
-    assert _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip() != first, (
+    assert git(remote, "rev-parse", f"refs/heads/{branch}") != first, (
         "an instance must still recognise its own branch after a restart"
     )
 
@@ -249,7 +241,7 @@ def test_a_branch_nobody_claimed_is_not_ours_to_replace(remote: Path, tmp_path: 
         labels=["factory"],
         identity=PublicationIdentity(key=key, instance="swf-instance-a"),
     )
-    landed = _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip()
+    landed = git(remote, "rev-parse", f"refs/heads/{branch}")
 
     with pytest.raises(StageError) as caught:
         LocalGitScm(remote, tmp_path / "run-b").publish(
@@ -261,4 +253,4 @@ def test_a_branch_nobody_claimed_is_not_ours_to_replace(remote: Path, tmp_path: 
             identity=PublicationIdentity(key=key, instance="swf-instance-b"),
         )
     assert "left no Factory-Instance trailer" in str(caught.value)
-    assert _git("rev-parse", f"refs/heads/{branch}", cwd=remote).strip() == landed
+    assert git(remote, "rev-parse", f"refs/heads/{branch}") == landed

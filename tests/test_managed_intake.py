@@ -6,7 +6,7 @@ durable admission, capacity accounting or Factory Cell fencing every other intak
 the compatibility mount answered a queued order with a 429, so a caller could not tell an order
 that is durably waiting for capacity from one that was thrown away.
 
-Hermetic: the backend answers from an in-process fake, and ``FakeAirflow`` records every request
+Hermetic: the backend answers from an in-process fake, and ``AirflowRuns`` records every request
 that reaches Airflow so "no bypassing Airflow write" is an assertion rather than a hope.
 """
 
@@ -16,11 +16,13 @@ import io
 import json
 import time
 import urllib.error
+from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 import pytest
-from test_durable_dispatch import Backend, _line  # noqa: F401
+from backend_support import Backend, FakeResponse
 
 from swfactory import dispatch, webhook
 from swfactory.admission import Limits
@@ -65,19 +67,7 @@ class FakeBackend:
         document = self.box.factory.submit(body)
         # The same encoder the real transport uses, so a dataclass in the answer is not a
         # difference between this fake and `swfactory.backend.server`.
-        return _Response(json.dumps(document, default=_json_default).encode())
-
-
-class _Response(io.BytesIO):
-    def __init__(self, data: bytes, status: int = 200) -> None:
-        super().__init__(data)
-        self.status = status
-
-    def __enter__(self) -> _Response:
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()
+        return FakeResponse(json.dumps(document, default=_json_default).encode())
 
 
 def _http_error(code: int, detail: str = "no") -> urllib.error.HTTPError:
@@ -85,14 +75,9 @@ def _http_error(code: int, detail: str = "no") -> urllib.error.HTTPError:
 
 
 @pytest.fixture
-def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
-    _line(tmp_path)
-    monkeypatch.chdir(tmp_path)
-    built = Backend(tmp_path, Limits(global_active=1))
-    try:
+def box(backend) -> Iterator[Backend]:
+    with closing(backend(Limits(global_active=1))) as built:
         yield built
-    finally:
-        built.close()
 
 
 @pytest.fixture

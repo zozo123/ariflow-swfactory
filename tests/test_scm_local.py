@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from support import IDENT, git
 
 from swfactory import scm as scm_mod
 from swfactory.models import Issue, StageError
@@ -22,37 +23,23 @@ from swfactory.scm import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-IDENT = ["-c", "user.name=tester", "-c", "user.email=tester@example.com"]
-
-
-@pytest.fixture(autouse=True)
-def _isolated_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No user/system git config (signing, hooks templates, credential helpers)."""
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "empty-gitconfig"))
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
-
-
-def git(*args: str, cwd: Path, input: bytes | None = None) -> str:
-    proc = subprocess.run(["git", *IDENT, *args], cwd=cwd, input=input, capture_output=True, check=True)
-    return proc.stdout.decode()
 
 
 def make_source_repo(root: Path) -> tuple[Path, bytes]:
     """Repo with one commit on main plus a bot commit with trailers on a branch -> (repo, patch)."""
     repo = root / "work"
     repo.mkdir()
-    git("init", "-q", "-b", "main", cwd=repo)
+    git(repo, "init", "-q", "-b", "main")
     (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n")
-    git("add", ".", cwd=repo)
-    git("commit", "-q", "-m", "baseline", cwd=repo)
-    git("checkout", "-q", "-b", "factory/DEMO-1-abc12345", cwd=repo)
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "baseline")
+    git(repo, "checkout", "-q", "-b", "factory/DEMO-1-abc12345")
     (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n")
     git(
+        repo,
         "-c", "user.name=swfactory-bot", "-c", "user.email=swfactory-bot@users.noreply.github.com",
         "commit", "-q", "-a", "-m", "build: add sub",
         "--trailer", "Factory-Run=abc12345", "--trailer", "Factory-Instance=swf-test", "--trailer", "Agent=scripted",
-        cwd=repo,
     )  # fmt: skip
     patch = subprocess.run(
         ["git", "format-patch", "--stdout", "main..HEAD"], cwd=repo, capture_output=True, check=True
@@ -77,14 +64,14 @@ def test_local_publish_pushes_branch_with_trailers(tmp_path: Path, capsys) -> No
 
     remote = run_dir / "remote.git"
     assert url == f"file://{(run_dir / 'pr.md').resolve()}"
-    heads = git("show-ref", "--heads", cwd=remote)
+    heads = git(remote, "show-ref", "--heads")
     assert "refs/heads/main" in heads and "refs/heads/factory/DEMO-1-abc12345" in heads
-    msg = git("log", "-1", "--format=%an%n%B", "factory/DEMO-1-abc12345", cwd=remote)
+    msg = git(remote, "log", "-1", "--format=%an%n%B", "factory/DEMO-1-abc12345")
     assert msg.startswith("swfactory-bot\n")
     assert "Factory-Run: abc12345" in msg and "Agent: scripted" in msg
     # branch is exactly baseline + one bot commit, on the same base as the source repo
-    assert git("rev-parse", "main", cwd=remote).strip() == git("rev-parse", "main", cwd=source).strip()
-    assert git("rev-list", "--count", "factory/DEMO-1-abc12345", cwd=remote).strip() == "2"
+    assert git(remote, "rev-parse", "main") == git(source, "rev-parse", "main")
+    assert git(remote, "rev-list", "--count", "factory/DEMO-1-abc12345") == "2"
     pr = (run_dir / "pr.md").read_text()
     assert "# DEMO-1: add sub" in pr and "factory, agent-authored" in pr and "adds sub()" in pr
     assert "DEMO-1: add sub" in capsys.readouterr().out
@@ -96,7 +83,7 @@ def test_local_publish_is_idempotent_on_remote_creation(tmp_path: Path) -> None:
     scm = LocalGitScm(run_dir / "remote.git", run_dir, base_repo=source)
     scm.publish(branch="b1", patch=patch, title="t", body="b", labels=[])
     scm.publish(branch="b2", patch=patch, title="t", body="b", labels=[])  # remote already seeded
-    heads = git("show-ref", "--heads", cwd=run_dir / "remote.git")
+    heads = git(run_dir / "remote.git", "show-ref", "--heads")
     assert "refs/heads/b1" in heads and "refs/heads/b2" in heads
 
 
@@ -106,13 +93,13 @@ def test_local_publish_without_base_repo_seeds_orphan_main(tmp_path: Path) -> No
     # a patch adding a brand-new file applies cleanly on the empty seed commit
     repo, _ = make_source_repo(tmp_path)
     (repo / "new.txt").write_text("hi\n")
-    git("add", "new.txt", cwd=repo)
-    git("commit", "-q", "-m", "add new.txt", cwd=repo)
+    git(repo, "add", "new.txt")
+    git(repo, "commit", "-q", "-m", "add new.txt")
     patch = subprocess.run(["git", "format-patch", "--stdout", "-1"], cwd=repo, capture_output=True, check=True).stdout
     scm.publish(branch="feat", patch=patch, title="t", body="b", labels=["x"])
     remote = run_dir / "remote.git"
-    assert git("rev-list", "--count", "main", cwd=remote).strip() == "1"
-    assert "new.txt" in git("ls-tree", "--name-only", "feat", cwd=remote)
+    assert git(remote, "rev-list", "--count", "main") == "1"
+    assert "new.txt" in git(remote, "ls-tree", "--name-only", "feat")
 
 
 def test_local_publish_rejects_empty_patch(tmp_path: Path) -> None:
@@ -333,12 +320,12 @@ def history(tmp_path: Path) -> Path:
     """Two commits on top of ``main``; ``redo`` re-applies them with new SHAs (as ``git am`` does)."""
     repo = tmp_path / "hist"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
-    subprocess.run(["git", *IDENT, "commit", "-q", "--allow-empty", "-m", "base"], cwd=repo, check=True)
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "base")
     for name in ("one", "two"):
         (repo / name).write_text(name + "\n")
-        subprocess.run(["git", "add", name], cwd=repo, check=True)
-        subprocess.run(["git", *IDENT, "commit", "-q", "-m", name], cwd=repo, check=True)
+        git(repo, "add", name)
+        git(repo, "commit", "-q", "-m", name)
     return repo
 
 
@@ -347,7 +334,7 @@ def test_patch_content_digest_is_the_content_not_the_shas(history: Path) -> None
     content digest must survive that (same hunks -> same digest) and still tell one hunk from
     another, or it could neither adopt a retried branch nor refuse a rewritten one."""
     patch = _patch_of(history, "main~2..main")
-    subprocess.run(["git", "checkout", "-q", "-b", "redo", "main~2"], cwd=history, check=True)
+    git(history, "checkout", "-q", "-b", "redo", "main~2")
     # A different committer date is what a real retry gets; within one second git would mint the
     # very same shas and the assertion below would be vacuous.
     later = {**os.environ, "GIT_COMMITTER_DATE": "2030-01-01T00:00:00 +0000"}
@@ -441,8 +428,8 @@ def test_scm_protocol_has_no_merge() -> None:
 def _extra_commit_patch(repo: Path, msg: str = "build: add mul") -> bytes:
     """One more bot commit on the source repo's current branch; returns main..HEAD as a patch."""
     (repo / "mul.py").write_text("def mul(a, b):\n    return a * b\n")
-    git("add", "mul.py", cwd=repo)
-    git("commit", "-q", "-m", msg, "--trailer", "Factory-Instance=swf-test", cwd=repo)
+    git(repo, "add", "mul.py")
+    git(repo, "commit", "-q", "-m", msg, "--trailer", "Factory-Instance=swf-test")
     return subprocess.run(
         ["git", "format-patch", "--stdout", "main..HEAD"], cwd=repo, capture_output=True, check=True
     ).stdout
@@ -458,9 +445,9 @@ def test_local_republish_same_factory_branch_force_updates(tmp_path: Path) -> No
     patch2 = _extra_commit_patch(source)
     scm.publish(branch=branch, patch=patch2, title="t", body="b", labels=[])
     remote = run_dir / "remote.git"
-    assert git("rev-list", "--count", branch, cwd=remote).strip() == "3"
-    assert git("log", "-1", "--format=%s", branch, cwd=remote).strip() == "build: add mul"
-    assert "mul.py" in git("ls-tree", "--name-only", branch, cwd=remote)
+    assert git(remote, "rev-list", "--count", branch) == "3"
+    assert git(remote, "log", "-1", "--format=%s", branch) == "build: add mul"
+    assert "mul.py" in git(remote, "ls-tree", "--name-only", branch)
 
 
 def test_local_republish_non_factory_branch_is_rejected(tmp_path: Path) -> None:
@@ -471,7 +458,7 @@ def test_local_republish_non_factory_branch_is_rejected(tmp_path: Path) -> None:
     scm.publish(branch="topic", patch=patch1, title="t", body="b", labels=[])
     # A diverging history (not a superset of patch1) so the rejection is deterministic: within
     # one second `git am` restamps identical commits and a superset would fast-forward.
-    git("checkout", "-q", "-b", "other", "main", cwd=source)
+    git(source, "checkout", "-q", "-b", "other", "main")
     patch2 = _extra_commit_patch(source)
     with pytest.raises(StageError) as ei:
         scm.publish(branch="topic", patch=patch2, title="t", body="b", labels=[])
@@ -487,20 +474,20 @@ def test_local_seed_url_seeds_main_from_clone_url(tmp_path: Path) -> None:
     scm = LocalGitScm(run_dir / "remote.git", run_dir, seed_url=source.as_uri(), seed_ref="main")
     scm.publish(branch="factory/DEMO-1-abc12345", patch=patch, title="t", body="b", labels=[])
     remote = run_dir / "remote.git"
-    assert git("rev-parse", "main", cwd=remote).strip() == git("rev-parse", "main", cwd=source).strip()
-    assert git("rev-list", "--count", "factory/DEMO-1-abc12345", cwd=remote).strip() == "2"
-    assert "def sub" in git("show", "factory/DEMO-1-abc12345:calc.py", cwd=remote)
+    assert git(remote, "rev-parse", "main") == git(source, "rev-parse", "main")
+    assert git(remote, "rev-list", "--count", "factory/DEMO-1-abc12345") == "2"
+    assert "def sub" in git(remote, "show", "factory/DEMO-1-abc12345:calc.py")
 
 
 def test_local_seed_url_respects_seed_ref(tmp_path: Path) -> None:
     source, patch = make_source_repo(tmp_path)
-    git("branch", "release", "main", cwd=source)
+    git(source, "branch", "release", "main")
     run_dir = tmp_path / "run"
     scm = LocalGitScm(run_dir / "remote.git", run_dir, seed_url=source.as_uri(), seed_ref="release")
     scm.publish(branch="factory/x", patch=patch, title="t", body="b", labels=[])
     remote = run_dir / "remote.git"
-    assert git("show-ref", "--heads", cwd=remote).count("refs/heads/") == 2  # main + factory/x
-    assert git("rev-parse", "main", cwd=remote) == git("rev-parse", "release", cwd=source)
+    assert git(remote, "show-ref", "--heads").count("refs/heads/") == 2  # main + factory/x
+    assert git(remote, "rev-parse", "main") == git(source, "rev-parse", "release")
 
 
 def test_make_scm_local_without_base_repo_seeds_from_github_url(tmp_path: Path) -> None:
@@ -666,7 +653,7 @@ def test_git_runs_with_background_maintenance_disabled(tmp_path: Path) -> None:
     """
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    git(repo, "init", "-q")
     assert scm_mod._run(["git", "config", "--get", "gc.auto"], repo).strip() == "0"
     assert scm_mod._run(["git", "config", "--get", "maintenance.auto"], repo).strip() == "false"
 

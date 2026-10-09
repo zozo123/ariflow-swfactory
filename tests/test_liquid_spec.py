@@ -9,6 +9,9 @@ out of the product's cognitive path.
 from __future__ import annotations
 
 import copy
+import functools
+import operator
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -216,78 +219,80 @@ def test_minimal_document_is_valid_so_the_rejection_tests_isolate_one_change() -
     assert spec.domain("liquid500.cell-authority").owner == "authority"
 
 
-def test_unknown_schema_version_is_rejected() -> None:
+DROP = object()  # a ``changes`` value that deletes the key instead of setting it
+DOMAIN = ("domains", 0)
+
+
+@pytest.mark.parametrize(
+    ("changes", "match"),
+    [
+        pytest.param({("schema_version",): 2}, "unsupported liquid spec schema", id="unknown_schema_version"),
+        pytest.param(
+            {(*DOMAIN, "owner"): "platform"},
+            "owner 'platform' is not one of the canonical roles",
+            id="owner_outside_the_canonical_seven",
+        ),
+        pytest.param(
+            {("domains",): _minimal_document()["domains"] * 2, ("families", 0, "domains"): 2},
+            "duplicate domain id 'liquid500.cell-authority'",
+            id="duplicate_domain_id",
+        ),
+        pytest.param(
+            {(*DOMAIN, "runtime_anchor"): "swfactory.liquid_bundle_99"},
+            "no module 'swfactory.liquid_bundle_99'",
+            id="dangling_runtime_anchor",
+        ),
+        pytest.param(
+            {(*DOMAIN, "runtime_anchor"): "swfactory.cells:PhaseTransition"},
+            "defines no top-level 'PhaseTransition'",
+            id="dangling_attribute_on_a_real_module",
+        ),
+        pytest.param(
+            {(*DOMAIN, "invariant"): DROP}, r"domain missing fields: \['invariant'\]", id="missing_required_field"
+        ),
+        pytest.param({(*DOMAIN, "invariant"): "   "}, "invariant must be nonempty", id="empty_invariant"),
+        pytest.param({(*DOMAIN, "id"): "cell-authority"}, "must be '<family>.<slug>'", id="id_must_be_family_dot_slug"),
+        pytest.param({(*DOMAIN, "family"): "Liquid900"}, "unknown family 'Liquid900'", id="unknown_family"),
+        pytest.param(
+            {(*DOMAIN, "support"): "supported"}, "supported rows must be validated", id="support_cannot_outrun_state"
+        ),
+        pytest.param(
+            {(*DOMAIN, "state"): "validated"},
+            "must cite a capability_claim",
+            id="validated_row_must_cite_a_capability_claim",
+        ),
+        pytest.param(
+            {(*DOMAIN, "state"): "experimental", (*DOMAIN, "support"): "experimental"},
+            "require an explicit follow_up",
+            id="experimental_row_must_carry_a_follow_up",
+        ),
+        pytest.param({("concerns", 1, "id"): "C01"}, "duplicate concern id 'C01'", id="concern_ids_are_declared_once"),
+        pytest.param(
+            {("concerns", 1, "metric"): "metric1"},
+            "metric 'metric1' is already used",
+            id="concern_metrics_are_declared_once",
+        ),
+        pytest.param(
+            {("families", 0, "domains"): 50},
+            "declares 50 domains but 1 rows exist",
+            id="family_domain_count_must_match_the_rows_that_exist",
+        ),
+        pytest.param(
+            {("doctrine", "phases"): ["gas", "liquid", "crystallized"]},
+            "doctrine.phases must be",
+            id="doctrine_keeps_the_three_intuitive_phases_only",
+        ),
+    ],
+)
+def test_one_change_to_the_minimal_document_is_rejected(changes: dict[tuple[Any, ...], Any], match: str) -> None:
     document = _minimal_document()
-    document["schema_version"] = 2
-    _rejects(document, "unsupported liquid spec schema")
-
-
-def test_owner_outside_the_canonical_seven_is_rejected() -> None:
-    document = _minimal_document()
-    document["domains"][0]["owner"] = "platform"
-    _rejects(document, "owner 'platform' is not one of the canonical roles")
-
-
-def test_duplicate_domain_id_is_rejected() -> None:
-    document = _minimal_document()
-    document["domains"].append(copy.deepcopy(document["domains"][0]))
-    document["families"][0]["domains"] = 2
-    _rejects(document, "duplicate domain id 'liquid500.cell-authority'")
-
-
-def test_dangling_runtime_anchor_is_rejected() -> None:
-    document = _minimal_document()
-    document["domains"][0]["runtime_anchor"] = "swfactory.liquid_bundle_99"
-    _rejects(document, "no module 'swfactory.liquid_bundle_99'")
-
-
-def test_dangling_attribute_on_a_real_module_is_rejected() -> None:
-    document = _minimal_document()
-    document["domains"][0]["runtime_anchor"] = "swfactory.cells:PhaseTransition"
-    _rejects(document, "defines no top-level 'PhaseTransition'")
-
-
-def test_missing_required_field_is_rejected() -> None:
-    document = _minimal_document()
-    del document["domains"][0]["invariant"]
-    _rejects(document, r"domain missing fields: \['invariant'\]")
-
-
-def test_empty_invariant_is_rejected() -> None:
-    document = _minimal_document()
-    document["domains"][0]["invariant"] = "   "
-    _rejects(document, "invariant must be nonempty")
-
-
-def test_id_must_be_family_dot_slug() -> None:
-    document = _minimal_document()
-    document["domains"][0]["id"] = "cell-authority"
-    _rejects(document, "must be '<family>.<slug>'")
-
-
-def test_unknown_family_is_rejected() -> None:
-    document = _minimal_document()
-    document["domains"][0]["family"] = "Liquid900"
-    _rejects(document, "unknown family 'Liquid900'")
-
-
-def test_support_cannot_outrun_state() -> None:
-    document = _minimal_document()
-    document["domains"][0]["support"] = "supported"
-    _rejects(document, "supported rows must be validated")
-
-
-def test_validated_row_must_cite_a_capability_claim() -> None:
-    document = _minimal_document()
-    document["domains"][0]["state"] = "validated"
-    _rejects(document, "must cite a capability_claim")
-
-
-def test_experimental_row_must_carry_a_follow_up() -> None:
-    document = _minimal_document()
-    document["domains"][0]["state"] = "experimental"
-    document["domains"][0]["support"] = "experimental"
-    _rejects(document, "require an explicit follow_up")
+    for (*parents, leaf), value in changes.items():
+        target = functools.reduce(operator.getitem, parents, document)
+        if value is DROP:
+            del target[leaf]
+        else:
+            target[leaf] = value
+    _rejects(document, match)
 
 
 def test_unknown_capability_claim_is_rejected_against_the_real_inventory() -> None:
@@ -304,28 +309,6 @@ def test_row_cannot_be_supported_when_its_claim_is_not() -> None:
     document["domains"][0]["capability_claim"] = "sandbox.srt"
     with pytest.raises(LiquidSpecError, match="so this row cannot be supported"):
         validate_spec(document, claims={"sandbox.srt": {"state": "experimental", "support": "experimental"}})
-
-
-def test_concern_axis_must_be_declared_once_with_unique_ids_and_metrics() -> None:
-    document = _minimal_document()
-    document["concerns"][1]["id"] = "C01"
-    _rejects(document, "duplicate concern id 'C01'")
-
-    document = _minimal_document()
-    document["concerns"][1]["metric"] = "metric1"
-    _rejects(document, "metric 'metric1' is already used")
-
-
-def test_family_domain_count_must_match_the_rows_that_exist() -> None:
-    document = _minimal_document()
-    document["families"][0]["domains"] = 50
-    _rejects(document, "declares 50 domains but 1 rows exist")
-
-
-def test_doctrine_keeps_the_three_intuitive_phases_only() -> None:
-    document = _minimal_document()
-    document["doctrine"]["phases"] = ["gas", "liquid", "crystallized"]
-    _rejects(document, "doctrine.phases must be")
 
 
 # --------------------------------------------------------------------------------------------
@@ -345,25 +328,30 @@ def _family(document: dict, ident: str) -> dict:
     return next(row for row in document["families"] if row["id"] == ident)
 
 
-def test_a_family_area_anchor_must_resolve_like_any_other() -> None:
-    """The legacy snapshot reaches ten domains by area, and those anchors were never resolved."""
-    document = _mutated(
-        lambda d: [
-            area.update(runtime_anchor="swfactory.totally_fake_module")
-            for area in _family(d, "LegacySnapshot")["areas"]
-        ]
-    )
-    _rejects(document, "no module 'swfactory.totally_fake_module'")
-
-
-def test_a_family_cannot_claim_more_domains_than_it_carries() -> None:
-    document = _mutated(lambda d: _family(d, "LegacySnapshot").update(domains=99999))
-    _rejects(document, "declares 99999 domains but carries 10 areas")
-
-
-def test_a_liquid_family_must_carry_its_domain_rows() -> None:
-    """Zero rows used to short-circuit the count check, so a liquid family could claim any count."""
-    document = _mutated(
-        lambda d: d.__setitem__("domains", [row for row in d["domains"] if row["family"] != "Liquid400"])
-    )
-    _rejects(document, "must carry its domain rows")
+@pytest.mark.parametrize(
+    ("mutate", "match"),
+    [
+        # The legacy snapshot reaches ten domains by area, and those anchors were never resolved.
+        pytest.param(
+            lambda d: [
+                area.update(runtime_anchor="swfactory.totally_fake_module")
+                for area in _family(d, "LegacySnapshot")["areas"]
+            ],
+            "no module 'swfactory.totally_fake_module'",
+            id="a_family_area_anchor_must_resolve_like_any_other",
+        ),
+        pytest.param(
+            lambda d: _family(d, "LegacySnapshot").update(domains=99999),
+            "declares 99999 domains but carries 10 areas",
+            id="a_family_cannot_claim_more_domains_than_it_carries",
+        ),
+        # Zero rows used to short-circuit the count check, so a liquid family could claim any count.
+        pytest.param(
+            lambda d: d.__setitem__("domains", [row for row in d["domains"] if row["family"] != "Liquid400"]),
+            "must carry its domain rows",
+            id="a_liquid_family_must_carry_its_domain_rows",
+        ),
+    ],
+)
+def test_one_change_to_the_shipped_spec_is_rejected(mutate: Callable[[dict], object], match: str) -> None:
+    _rejects(_mutated(mutate), match)

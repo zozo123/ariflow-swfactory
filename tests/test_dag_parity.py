@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import importlib.util
 import json
 import os
 import shutil
@@ -19,6 +18,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
+from support import load_dag_module
 
 airflow = pytest.importorskip("airflow")
 
@@ -62,15 +62,6 @@ def _dagbag(folder: Path):
     return DagBag(dag_folder=str(folder))
 
 
-def _load_module(path: Path) -> ModuleType:
-    """Import a DAG file as a module (DagBag hands back DAGs, not the helpers around them)."""
-    spec = importlib.util.spec_from_file_location(f"swf_dag_{path.stem}", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def _shape(path: Path) -> dict:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     return {
@@ -85,7 +76,7 @@ def _shape(path: Path) -> dict:
 def _gate_is_auto(gate: dict) -> bool:
     """The generator's own resolution of ``gates[].mode``: the parity test must not keep a second
     opinion about who owns a gate (``tests/test_approval_authority.py`` pins it to swfactory's)."""
-    return _load_module(DAGS / "blueprints.py").gate_mode(gate) == "auto"
+    return load_dag_module().gate_mode(gate) == "auto"
 
 
 def _job_task_ids(shape: dict) -> list[str]:
@@ -159,7 +150,7 @@ def nightly_dag(tmp_path_factory: pytest.TempPathFactory):
 
 @pytest.fixture(scope="module")
 def blueprints_mod() -> ModuleType:
-    return _load_module(DAGS / "blueprints.py")
+    return load_dag_module()
 
 
 # ---------------------------------------------------------------- one DAG per blueprint
@@ -270,11 +261,9 @@ def test_dag_serializes(dagbag, path: Path) -> None:
 
 @pytest.mark.parametrize("path", BLUEPRINTS, ids=BLUEPRINT_IDS)
 def test_job_tasks_equal_blueprint_pipeline(dagbag, path: Path) -> None:
-    try:
-        from swfactory.blueprint import load
-        from swfactory.stages import Gate
-    except ImportError as e:  # blueprint.py / stages.py are being written concurrently
-        pytest.xfail(f"swfactory not importable yet: {e}")
+    from swfactory.blueprint import load
+    from swfactory.stages import Gate
+
     bp = load(str(path))
     dag = dagbag.dags[bp.name]
     expected = ["fan_out", "job.setup"]
@@ -356,7 +345,6 @@ def test_a_scheduled_run_is_admitted_through_the_backend_or_stops_in_fan_out(
 ) -> None:
     """#2067: an empty-conf scheduled run must leave ``fan_out`` with positive-epoch managed Cells
     for every job, or not leave it at all. Nothing downstream can run unmanaged by falling back."""
-    pytest.importorskip("swfactory")
     # liquid drains a label-selected backlog through the SCM at fan-out (#2069); stand in for the
     # SCM here so the run has two issues to admit without a network.
     import swfactory.blueprint as blueprint_mod
@@ -495,7 +483,6 @@ def test_record_task_persists_rejection_then_skips_the_line(
 ) -> None:
     from airflow.sdk.exceptions import AirflowSkipException
 
-    pytest.importorskip("swfactory")
     from swfactory.models import StageError
 
     ctx = _ctx_on(tmp_path)
@@ -536,7 +523,7 @@ def test_record_task_persists_rejection_then_skips_the_line(
 def test_run_ids_are_hex8_and_stable(blueprints_mod) -> None:
     from swfactory.config import Config
 
-    maintain_mod = _load_module(DAGS / "maintain.py")
+    maintain_mod = load_dag_module("maintain")
     airflow_run_id = "scheduled__2026-09-02T03:00:00+00:00"  # every Airflow run id ends like this
     for rid in (
         blueprints_mod.run_id_for(airflow_run_id, 0),
@@ -555,7 +542,6 @@ def test_dag_ctx_config_matches_runtime_job_config(
     """Every task rebuilds its ``Ctx`` with ``swfactory.runtime.build_ctx``, so a task runs on the
     config ``swfactory run`` would build for the same (blueprint, job, run id). The CLI half is
     ``tests/test_runtime.py::test_cli_run_derives_its_config_with_job_config``."""
-    pytest.importorskip("swfactory")
     from swfactory import runtime
     from swfactory.blueprint import load
 
