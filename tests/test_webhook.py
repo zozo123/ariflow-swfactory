@@ -481,3 +481,28 @@ def test_cli_webhook_serve_requires_airflow_credentials(monkeypatch: pytest.Monk
     result = CliRunner().invoke(app, ["webhook", "serve", "--port", "0"])
     assert result.exit_code == 2
     assert "AIRFLOW_TOKEN" in result.output
+
+
+def test_cli_webhook_serve_refuses_unsigned_deliveries_beyond_loopback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no secret, whoever reaches the port is trusted, so a wider bind must be explicit."""
+    received: dict[str, Any] = {}
+    monkeypatch.delenv("SWF_WEBHOOK_SECRET", raising=False)
+    monkeypatch.setenv("SWF_BACKEND_TOKEN", "test-token")
+    monkeypatch.setattr(webhook, "serve", lambda port, **kwargs: received.update(kwargs))
+    serve = ["webhook", "serve", "--backend-url", "http://localhost:8082", "--inbox", str(tmp_path / "in.sqlite3")]
+
+    result = CliRunner().invoke(app, [*serve, "--host", "0.0.0.0"])
+    assert result.exit_code == 2
+    assert "--trust-upstream" in result.output and not received
+
+    assert CliRunner().invoke(app, serve).exit_code == 0
+    assert received["host"] == "127.0.0.1" and received["secret"] is None
+
+    assert CliRunner().invoke(app, [*serve, "--host", "0.0.0.0", "--trust-upstream"]).exit_code == 0
+    assert received["host"] == "0.0.0.0"
+
+    monkeypatch.setenv("SWF_WEBHOOK_SECRET", SECRET)
+    assert CliRunner().invoke(app, [*serve, "--host", "0.0.0.0"]).exit_code == 0
+    assert received["secret"] == SECRET

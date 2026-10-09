@@ -16,7 +16,7 @@ import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from swfactory.canonical import file_digest, restrict_dir, restrict_file
+from swfactory.canonical import file_digest, git_output, restrict_dir, restrict_file
 
 
 class SourceSnapshotError(RuntimeError):
@@ -143,16 +143,4 @@ def _verify_existing(path: Path, expected_digest: str, expected_size: int) -> No
 
 
 def _git(repo: Path, *args: str) -> str:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-    proc = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-        env=env,
-    )
-    if proc.returncode != 0:
-        detail = proc.stderr.strip()
-        raise SourceSnapshotError(f"git {' '.join(args)} failed: {detail}")
-    return proc.stdout
+    return git_output(repo, *args, error=SourceSnapshotError)

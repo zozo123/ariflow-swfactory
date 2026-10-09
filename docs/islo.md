@@ -6,7 +6,7 @@ token.
 
 | Tier | Runs | Credentials | Egress |
 | --- | --- | --- | --- |
-| **Orchestrator** — one sandbox, `swf-orchestrator` (trusted) | Airflow 3 (`airflow standalone`, UI `:8080`), `swfactory webhook serve --port 8081 --airflow-url http://localhost:8080`, and `deliver`: `git am` of the agent's format-patch stream, push `factory/*`, `gh pr create` | gateway-injected `GH_TOKEN`; environment-injected `ISLO_API_KEY` to spawn agent VMs; **no** Anthropic key | `swfactory-orchestrator` gateway: github.com, api.github.com, releases.islo.dev, the islo API |
+| **Orchestrator** — one sandbox, `swf-orchestrator` (trusted) | Airflow 3 (`airflow standalone`, UI `:8080`), `swfactory webhook serve --port 8081 --host 0.0.0.0 --trust-upstream --airflow-url http://localhost:8080`, and `deliver`: `git am` of the agent's format-patch stream, push `factory/*`, `gh pr create` | gateway-injected `GH_TOKEN`; environment-injected `ISLO_API_KEY` to spawn agent VMs; the generated Airflow admin password the receiver logs in with; **no** Anthropic key | `swfactory-orchestrator` gateway: github.com, api.github.com, pypi.org, files.pythonhosted.org, astral.sh, releases.astral.sh, release-assets.githubusercontent.com, islo.dev, releases.islo.dev, the islo API |
 | **Agents** — one MicroVM per (issue, target), `swf-<issue>-<run>` (untrusted) | clone of the target (`--source`), `claude -p` per stage, the target's tests, bot-authored commits | gateway-injected `ANTHROPIC_API_KEY`; never a GitHub token, never `--env` | `swfactory` gateway, deny-by-default: api.anthropic.com, github.com, api.github.com, pypi.org, files.pythonhosted.org, registry.npmjs.org (the npm registry `bun install` needs), astral.sh, releases.astral.sh, release-assets.githubusercontent.com (the last two are the `uv` installer's redirect targets) |
 
 The orchestrator spawns agent VMs with the same `IsloSandbox.argv` the CLI uses (`--gateway-profile
@@ -76,9 +76,15 @@ export SWF_ISLO_SNAPSHOT=swf-golden-$(date +%Y%m%d)
 ```
 GitHub (issues, issue_comment) --HMAC--> islo incoming webhook (verifies X-Hub-Signature-256,
   idempotent on X-GitHub-Delivery) --> swf-orchestrator:8081 (swfactory webhook serve)
-  --> POST /v1/work-orders on the factory backend (:8082) --> the backend admits, binds Factory
-      Cells, and creates the run on the orchestrator's Airflow (:8080, islo share'd)
+  --> POST /api/v2/dags/<blueprint>/dagRuns on the orchestrator's Airflow (:8080, islo share'd)
 ```
+
+This is **legacy unmanaged intake** (#2068): the orchestrator runs no factory backend, so the
+receiver writes DAG runs straight to Airflow with the generated admin password, and those runs carry
+no admission record, no capacity accounting and no Factory Cell fencing. The managed boundary the
+Docker stack and `dispatch.yml` use needs `swfactory backend` running in the orchestrator and the
+receiver started with `--backend-url`; it then posts `POST /v1/work-orders` and holds only the
+backend token.
 
 `deploy.sh` clones `SWF_CONTROL_REPO` at `SWF_CONTROL_BRANCH`, creates the incoming webhook by name
 (`islo webhook incoming create --deliver-to-port 8081 --path /webhooks/github
@@ -89,16 +95,18 @@ returns. `SWF_REPO` and `SWF_BRANCH` remain aliases for older single-repository 
 
 | Event | Result |
 | --- | --- |
-| `issues.labeled` with `factory` | `POST /v1/work-orders {"line": "factory", "issues": ["<n>"]}` |
+| `issues.labeled` with `factory` | a run of DAG `factory` with `{"issues": ["<n>"]}` (managed: `POST /v1/work-orders {"line": "factory", "issues": ["<n>"]}`) |
 | `issues.labeled` with `factory:<name>` | the same against line `<name>` |
 | `issue_comment.created` `@factory run [<name>]` on an issue | the same |
 | `pull_request.*`, `factory:blocked` / `factory:rejected` (deliver's own PR labels), anything else | ignored |
 
-The receiver takes the backend bearer token from `SWF_BACKEND_TOKEN` and serves `GET /healthz`
-(what `deploy.sh` polls). It holds no Airflow credential, so it cannot create a run the backend
-never admitted. `--secret-env SWF_WEBHOOK_SECRET` enables local HMAC verification for the case
-where the receiver is exposed without islo in front; with the var unset it trusts islo's upstream
-check. `swfactory webhook route <event> <payload.json>` is the dry run. `dispatch.yml` (a GitHub
+The receiver serves `GET /healthz` (what `deploy.sh` polls). In legacy mode it holds the Airflow
+admin credential; with `--backend-url` it takes only the backend bearer token from
+`SWF_BACKEND_TOKEN` and holds no Airflow credential, so it cannot create a run the backend never
+admitted. `--secret-env SWF_WEBHOOK_SECRET` enables local HMAC verification for the case where the
+receiver is exposed without islo in front; with the var unset, `start.sh` passes `--trust-upstream`
+to rely on islo's upstream check, and the receiver refuses any other non-loopback bind.
+`swfactory webhook route <event> <payload.json>` is the dry run. `dispatch.yml` (a GitHub
 Action submitting work orders with the `SWF_BACKEND_URL` / `SWF_BACKEND_TOKEN` secrets) stays as
 the alternative trigger when the backend is reachable from GitHub instead of `:8081`.
 

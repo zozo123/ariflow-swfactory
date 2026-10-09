@@ -22,7 +22,7 @@ RUN apt-get update \
 
 RUN groupadd -g "${GID}" swf && useradd -m -u "${UID}" -g "${GID}" -s /bin/bash swf
 # uv system-wide so any uid (DockerSandbox runs as the host uid on Linux) finds it on PATH.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /uvx /usr/local/bin/
 USER swf
 ENV HOME=/home/swf \
     PATH=/home/swf/.local/bin:/usr/local/bin:/usr/bin:/bin \

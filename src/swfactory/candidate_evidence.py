@@ -16,7 +16,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -29,7 +28,7 @@ from swfactory.candidate_worktree import (
     candidate_ref,
     verify_candidate_revision,
 )
-from swfactory.canonical import atomic_json, file_digest, restrict_dir, restrict_file
+from swfactory.canonical import atomic_json, file_digest, git_output, restrict_dir, restrict_file
 from swfactory.execution_recipe import BoundExecutionRecipe, load_execution_recipe
 from swfactory.source_snapshot import SourceSnapshot, verify_source_snapshot
 
@@ -402,14 +401,4 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
 
 
 def _git_bytes(repo: Path, *args: str) -> bytes:
-    proc = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        check=False,
-        timeout=120,
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-    )
-    if proc.returncode != 0:
-        detail = proc.stderr.decode(errors="replace").strip()
-        raise CandidateEvidenceError(f"git {' '.join(args)} failed: {detail}")
-    return proc.stdout
+    return git_output(repo, *args, error=CandidateEvidenceError, text=False)

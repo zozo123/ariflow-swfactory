@@ -511,6 +511,16 @@ def test_the_key_never_enters_an_error_or_an_accepted_response(monkeypatch) -> N
         client.create(ttl_s=600)
 
 
+def test_the_bearer_key_never_travels_over_plaintext_beyond_loopback(monkeypatch) -> None:
+    calls = transport(monkeypatch)
+    for url in ("http://boat.test/api/v1", "ftp://boat.test/api/v1", "https://", "boat.test/api/v1"):
+        with pytest.raises(BoatError, match="https URL"):
+            boat_mod.HttpBoatClient(KEY, url)
+    assert boat_mod.HttpBoatClient(KEY, "http://127.0.0.1:8787/api/v1").base_url == "http://127.0.0.1:8787/api/v1"
+    assert boat_mod.HttpBoatClient(KEY, "http://localhost:8787").base_url == "http://localhost:8787"
+    assert calls == []
+
+
 def test_the_default_base_url_applies_without_an_override(monkeypatch) -> None:
     monkeypatch.setenv("BOAT_API_KEY", KEY)
     monkeypatch.delenv("BOAT_BASE_URL", raising=False)

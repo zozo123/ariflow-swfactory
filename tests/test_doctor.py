@@ -78,7 +78,7 @@ def green(**over: str | None) -> FakeRunner:
         "gh repo view zozo123/ariflow-swfactory --json name": '{"name":"ariflow-swfactory"}\n',
         "claude --version": "2.1.259 (Claude Code)\n",
         "docker info --format {{.ServerVersion}}": "29.0.0\n",
-        "docker image inspect --format {{.Id}} ghcr.io/zozo123/swfactory-sandbox:latest": "sha256:c0ffee\n",
+        "docker image inspect --format {{.Id}} swfactory-sandbox:local": "sha256:c0ffee\n",
     }
     base.update(over)
     return FakeRunner(base)
@@ -703,7 +703,7 @@ def test_smolvm_doctor_skips_probe_when_loader_fails(monkeypatch):
 
 # ------------------------------------------------- the image the run actually executes in
 
-IMAGE = "ghcr.io/zozo123/swfactory-sandbox:latest"
+IMAGE = "swfactory-sandbox:local"  # Config.docker_image's default
 INSPECT = f"docker image inspect --format {{{{.Id}}}} {IMAGE}"
 MANIFEST = f"docker manifest inspect {IMAGE}"
 
@@ -727,8 +727,8 @@ def test_an_image_only_in_the_registry_passes_as_pullable() -> None:
 
 
 def test_an_image_that_is_neither_local_nor_pullable_is_refused_with_the_build_command() -> None:
-    """The exact failure a reader hits: the published image is not world-readable, so a run dies
-    inside its first stage on the registry's bare ``denied``."""
+    """The exact failure a reader hits: no swfactory image is published, so a run with none built
+    dies inside its first stage on the registry's bare ``denied``."""
     runner = green(**{INSPECT: None, MANIFEST: None})
 
     check = doctor._check_docker_image(runner, IMAGE)

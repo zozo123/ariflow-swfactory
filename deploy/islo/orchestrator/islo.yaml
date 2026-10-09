@@ -9,7 +9,9 @@
 # to create sandboxes comes from the `swfactory-orchestrator` islo environment
 # (`islo environment create --name swfactory-orchestrator --secret ISLO_API_KEY=...`), never from
 # argv. Gateway profile `swfactory-orchestrator` must allow: github.com api.github.com
-# pypi.org files.pythonhosted.org astral.sh islo.dev releases.islo.dev (+ the islo API host).
+# pypi.org files.pythonhosted.org astral.sh releases.astral.sh release-assets.githubusercontent.com
+# islo.dev releases.islo.dev (+ the islo API host). The two redirect hosts are where the astral.sh
+# uv installer below goes; without them it gets a 403 (deploy/islo/deploy.sh carries the same list).
 #
 # Keys verified against `islo init` 0.48.1 (sandbox, image, cpu, memory_mb, disk_gb, env,
 # setup_script, sources, workdir, environment) and `islo use --help` (gateway_profile).

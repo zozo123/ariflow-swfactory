@@ -56,9 +56,9 @@ jobs:
       DRY_RUN_INPUT: ${{ github.event.inputs.dry_run }}
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with: { python-version: "3.12" }
-      - run: uv sync
+      - run: uv sync --locked
 
       - name: Recover the retained candidate manifest for the shipped commit
         id: evidence
@@ -141,6 +141,10 @@ jobs:
     needs: candidate-evidence
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Its token only reads (`gh release view`, `gh api .../commits/$tag`); the dependency install
+    # and the whole suite run here, so it must not hold the workflow's contents: write.
+    permissions:
+      contents: read
     # The gate has run by the time anything else starts, so every later job can take the version
     # it resolved instead of re-deriving it from the tag and disagreeing about the answer. `tag`
     # is resolved here too: on a manual run GITHUB_REF_NAME is a branch, so a publish step that
@@ -239,10 +243,10 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Release body:"; cat "$notes"
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with: { python-version: "3.12" }
 
-      - run: uv sync
+      - run: uv sync --locked
 
       - name: Lint and the hermetic suite
         run: |
@@ -295,8 +299,9 @@ jobs:
       VERSION: ${{ needs.release.outputs.version }}
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with: { toolchain: stable }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with: { workspaces: "." }
       - name: Emit the bash, zsh and fish completions from swf itself
         run: |
@@ -345,8 +350,10 @@ jobs:
         include:
           - { target: aarch64-apple-darwin, os: macos-14, cross_cc: false }
           - { target: x86_64-apple-darwin, os: macos-14, cross_cc: false }
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, cross_cc: false }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, cross_cc: true }
+          # Pinned, not ubuntu-latest: the Linux binaries link the runner's glibc, so the image
+          # sets the oldest glibc a released swf runs on.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-24.04, cross_cc: false }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04, cross_cc: true }
     runs-on: ${{ matrix.os }}
     env:
       VERSION: ${{ needs.release.outputs.version }}
@@ -356,9 +363,9 @@ jobs:
       # `targets:` is what installs the non-native std for this leg. Without it the two
       # cross-compiled legs (x86_64 on an arm64 macOS runner, aarch64 on x86_64 Linux) fail at
       # "can't find crate for `std`" rather than at link time.
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: "${{ matrix.target }}" }
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with: { toolchain: stable, targets: "${{ matrix.target }}" }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with: { workspaces: ".", key: "${{ matrix.target }}" }
       - uses: actions/download-artifact@v4
         with: { name: swf-completions, path: completions }
@@ -437,7 +444,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Install Syft for release SBOMs
-        uses: anchore/sbom-action/download-syft@v0
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/artifacts

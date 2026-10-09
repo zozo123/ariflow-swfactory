@@ -36,9 +36,13 @@ CONFINEMENT = (
     "src/swfactory/sandbox.py",
     "src/swfactory/smolvm_backend.py",
     "src/swfactory/sandbox_contract.py",
+    "src/swfactory/boat.py",
+    "src/swfactory/paths.py",
     "src/swfactory/stages.py",
     "src/swfactory/security_contract.py",
     "src/swfactory/backend_http.py",
+    "src/swfactory/webhook.py",
+    "src/swfactory/cell_callback.py",
 )
 
 # What governs every later run rather than this one: a cell that edits these changes the rules the
@@ -52,6 +56,8 @@ FUTURE_RUNS = (
     "AGENTS.md",
     "CLAUDE.md",
     "config/capability-inventory.json",
+    ".claude/hooks",
+    "bands.yaml",
 )
 
 

@@ -179,7 +179,7 @@
       "environment": "islo MicroVMs: one trusted orchestrator VM plus one untrusted agent VM per job; requires ISLO_API_KEY and the swfactory gateway profile described in docs/islo.md",
       "test": "ci:evals-islo in .github/workflows/evals.yml (a real claude run inside a MicroVM) plus the hermetic argv contracts in tests/test_sandbox_argv.py",
       "evidence": [
-        "CI job ci:evals-islo (workflow evals.yml; self-skips when the ISLO_API_KEY secret is unset, so a green result does not prove a MicroVM ran)",
+        "CI job ci:evals-islo (workflow evals.yml; the job is skipped, not green, when the ISLO_API_KEY secret is unset)",
         "artifact: factory-artifacts-islo"
       ],
       "follow_up": "Promote only once evals-islo runs unconditionally on main-bound candidates, joins the candidate-readiness required set, and lands its receipt in the SHA-bound readiness manifest. The credential-separation invariant additionally needs a negative test proving an agent VM cannot obtain GH_TOKEN, and kernel-level protected-path enforcement needs an IsloSandbox.set_protected.",

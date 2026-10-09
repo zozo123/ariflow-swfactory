@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+from swfactory.canonical import git_output
 
 
 class ExecutionRecipeError(RuntimeError):
@@ -204,15 +204,4 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def _git_bytes(repo: Path, *args: str) -> bytes:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-    proc = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        check=False,
-        timeout=120,
-        env=env,
-    )
-    if proc.returncode != 0:
-        detail = proc.stderr.decode(errors="replace").strip()
-        raise ExecutionRecipeError(f"git {' '.join(args)} failed: {detail}")
-    return proc.stdout
+    return git_output(repo, *args, error=ExecutionRecipeError, text=False)

@@ -72,9 +72,11 @@ jobs:
       - name: Triage through the autonomous policy
         run: |
           set -euo pipefail
+          # Every opened issue lands here, so a repository with no backend must not turn each one
+          # into a red run; like `submit`, it says so and admits nothing.
           if [ -z "$SWF_BACKEND_URL" ] || [ -z "$SWF_BACKEND_TOKEN" ]; then
-            echo "::error::Autonomous intake requires a deployed backend and SWF_BACKEND_URL / SWF_BACKEND_TOKEN. No issue was admitted."
-            exit 1
+            echo "::notice::SWF_BACKEND_URL / SWF_BACKEND_TOKEN secrets not set; autonomous intake needs a deployed backend. Issue #$ISSUE_NUMBER was not admitted."
+            exit 0
           fi
           case "$SWF_BACKEND_URL" in
             https://*) ;;

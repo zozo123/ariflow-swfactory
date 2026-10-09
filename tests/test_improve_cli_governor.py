@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import typer
 from typer.testing import CliRunner
 
 from swfactory.cli import app
@@ -22,6 +23,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _improve(*args: str):
     return CliRunner().invoke(app, ["improve", "--root", str(ROOT), *args])
+
+
+def test_outside_a_checkout_it_is_a_usage_error_not_a_traceback(tmp_path: Path) -> None:
+    result = CliRunner().invoke(app, ["improve", "--root", str(tmp_path)])
+    assert result.exit_code == 2
+    assert not isinstance(result.exception, FileNotFoundError)
+    # The rendered box wraps and colours by terminal; read the message from the exception itself.
+    raw = CliRunner().invoke(app, ["improve", "--root", str(tmp_path)], standalone_mode=False)
+    assert isinstance(raw.exception, typer.BadParameter)
+    assert "pass --root" in raw.exception.format_message()
 
 
 def test_the_default_says_nothing_about_the_queue_and_so_changes_nothing() -> None:

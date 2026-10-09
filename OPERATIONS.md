@@ -140,7 +140,8 @@ job.
 ## Daily operation
 
 1. **Send work.** Label an issue `factory:<route>`, comment `@factory run <route>`, trigger the DAG,
-   or use the CLI.
+   use the CLI, or submit one Linear issue with `swfactory linear-submit`
+   ([Linear intake](docs/native-linear-intake.md)).
 2. **Approve.** Read `intent.md` and `plan.md` in Airflow, or run `swf gates review` then
    `swf gates approve`, or `swfactory approve <dag_run_id> intent|plan`.
 3. **Watch.** Use `swf attention`, `swf tui`, `swfactory herd`, Airflow, and GitHub checks to
@@ -165,7 +166,7 @@ same system by creating GitHub issues from the tools that already observe those 
 | Larger outer workflow | use the optional [Astronomer Blueprint step](docs/astronomer-blueprint.md) |
 
 Python and Airflow are pinned in `pyproject.toml`, with an upstream-main canary in CI; `swf` needs
-Rust 1.82 or newer to build and is prebuilt for macOS and Linux
+Rust 1.88 or newer to build and is prebuilt for macOS and Linux
 ([docs/swf.md](docs/swf.md#install)). Schema and package versions move independently: a blueprint
 schema `version` changes only when an older blueprint can no longer be read.
 
@@ -181,6 +182,7 @@ schema `version` changes only when an older blueprint can no longer be read.
 | `swfactory state list / inspect` | inspect local run ownership, interrupted attempts, journal health and recorded spend |
 | `swfactory webhook serve` | route trusted GitHub events into Airflow |
 | `swfactory webhook deliveries / inspect / retry` | inspect durable dispatch receipts and recover failed submissions |
+| `swfactory linear-preview / linear-submit` | read one Linear issue on the controller, then submit its accepted text through the backend ([Linear intake](docs/native-linear-intake.md)) |
 | `swfactory metrics` | aggregate committed run evidence |
 | `swfactory maintain` | detect metric drift and sweep owned sandboxes |
 | `swf` | the same connect, submit, watch, approve, and verify operations as one native binary, plus `swf tui` ([docs/swf.md](docs/swf.md)) |
@@ -194,7 +196,7 @@ tail before recovery. See [run recovery](docs/run-recovery.md) for operation his
 inspection, concurrent attempts and budget accounting.
 
 The factory's five authoritative stores live in one state root on one host. `swfactory backup
-create|verify|restore|status|resume|reconciled` takes coordinated backups and restores them with
+create|verify|restore|status|resume|reconciled|close` takes coordinated backups and restores them with
 mutations withheld until the restore is validated and every restored Cell has observed remote
 state. See [backup, restore and upgrade](docs/backup-restore.md) for the supported deployment
 boundary, the schema/rollback rules and the operator drill. Multi-replica and Postgres operation is

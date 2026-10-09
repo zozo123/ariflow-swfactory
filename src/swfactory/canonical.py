@@ -1,4 +1,4 @@
-"""Canonical digests and owner-only writes shared by the search and evidence contracts.
+"""Canonical digests, owner-only writes and the Git runner shared by the search and evidence contracts.
 
 These digests are persisted and recomputed by verifiers, so their byte encoding is fixed. Modules
 with a different encoding (ensure_ascii, default=str, allow_nan=False, no prefix) keep their own.
@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -24,6 +25,27 @@ def require_sha256(value: str, *, field: str, error: type[Exception] = ValueErro
     raw = value.removeprefix("sha256:")
     if len(raw) != 64 or any(char not in "0123456789abcdef" for char in raw):
         raise error(f"{field} must be a canonical sha256 digest")
+
+
+def run_git(repo: Path, *args: str, text: bool = True) -> subprocess.CompletedProcess[Any]:
+    """``git -C repo args``: never prompts for a credential, bounded to 120 s, never raises on exit status."""
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=text,
+        check=False,
+        timeout=120,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    )
+
+
+def git_output(repo: Path, *args: str, error: type[Exception], text: bool = True) -> Any:
+    """``git``'s stdout (``bytes`` when ``text`` is false), or ``error`` carrying git's stderr."""
+    proc = run_git(repo, *args, text=text)
+    if proc.returncode != 0:
+        detail = proc.stderr if text else proc.stderr.decode(errors="replace")
+        raise error(f"git {' '.join(args)} failed: {detail.strip()}")
+    return proc.stdout
 
 
 def file_digest(path: Path) -> tuple[str, int]:

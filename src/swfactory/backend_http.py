@@ -7,6 +7,7 @@ not follow a redirect to another origin opens through ``no_redirect_open``.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import urllib.error
 import urllib.request
@@ -32,6 +33,14 @@ class ResponseTooLarge(ValueError):
 
 def valid_backend_token(token: str) -> bool:
     return len(token) >= MIN_BACKEND_TOKEN_CHARS and not any(c.isspace() for c in token)
+
+
+def is_loopback_host(host: str) -> bool:
+    """``localhost`` or a loopback IP literal; any other name could resolve anywhere."""
+    try:
+        return host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def no_redirect_open(request: urllib.request.Request, *, timeout: float) -> Any:
