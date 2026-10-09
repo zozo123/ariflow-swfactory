@@ -24,13 +24,11 @@ from swfactory.control import AirflowClient
 @pytest.fixture(scope="session", autouse=True)
 def _hermetic_git(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
     """No user/system git config (signing, hooks templates, credential helpers) reaches any git the
-    suite runs, its module-scoped pipeline runs and DAG subprocesses included. The identity sits at
-    global precedence, so the ``-c user.name=swfactory-bot`` that swfactory passes still wins."""
+    suite runs, its module-scoped pipeline runs and DAG subprocesses included. It carries no
+    identity, so a swfactory commit that drops its own ``-c user.name=...`` fails; the commits
+    tests make carry ``support.IDENT``."""
     config = tmp_path_factory.mktemp("git") / "gitconfig"
-    config.write_text(
-        "[user]\n\tname = t\n\temail = t@t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n",
-        encoding="utf-8",
-    )
+    config.write_text("[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n", encoding="utf-8")
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("GIT_CONFIG_GLOBAL", str(config))
         mp.setenv("GIT_CONFIG_NOSYSTEM", "1")

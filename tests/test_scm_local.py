@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from support import git
+from support import IDENT, git
 
 from swfactory import scm as scm_mod
 from swfactory.models import Issue, StageError
@@ -338,7 +338,7 @@ def test_patch_content_digest_is_the_content_not_the_shas(history: Path) -> None
     # A different committer date is what a real retry gets; within one second git would mint the
     # very same shas and the assertion below would be vacuous.
     later = {**os.environ, "GIT_COMMITTER_DATE": "2030-01-01T00:00:00 +0000"}
-    subprocess.run(["git", "am", "-q"], cwd=history, input=patch, check=True, env=later)
+    subprocess.run(["git", *IDENT, "am", "-q"], cwd=history, input=patch, check=True, env=later)
     redo = _patch_of(history, "main~2..redo")
     assert redo != patch  # different SHAs and dates on the wire ...
     assert scm_mod.patch_content_digest(redo) == scm_mod.patch_content_digest(patch)  # ... same content

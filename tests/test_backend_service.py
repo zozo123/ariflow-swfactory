@@ -418,10 +418,20 @@ def test_work_order_is_refused_while_draining(
 
     Asserted at the HTTP boundary, on both submission routes: the refusal must arrive as a 503 that
     says why, and it must arrive *before* a Factory Cell is activated or an Airflow run is created —
-    a drain that refuses after the write has already gone out has drained nothing.
+    a drain that refuses after the write has already gone out has drained nothing. Factory's own
+    submit guard would also answer 503, so it is stubbed: the compatibility refusal must come from
+    the server's fence in front of it.
     """
+    reached: list[str] = []
+
+    def compatibility(_method: str, route: str, _body: Any) -> tuple[int, Any]:
+        reached.append(route)
+        return 201, {"dag_run_id": "run"}
+
+    monkeypatch.setattr(factory, "compatibility", compatibility)
     monkeypatch.setenv("SWF_DRAIN", "true")
     status, payload = client.call("POST", path, body)
+    assert reached == []
     assert status == 503, payload
     assert "drain" in payload["detail"].lower(), payload
     assert client.airflow.requests == []

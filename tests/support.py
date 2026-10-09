@@ -18,13 +18,15 @@ from swfactory.swarm_dynamics import AgentRole, ComputeTier, ContextPolicy, Popu
 
 REPO = Path(__file__).resolve().parents[1]
 DAGS = REPO / "dags"
+IDENT = ("-c", "user.name=t", "-c", "user.email=t@t")
 
 # ---------------------------------------------------------------- git
 
 
 def git(cwd: Path, *args: str) -> str:
-    """Run git in ``cwd`` under the suite's hermetic config (``conftest.py``); stripped stdout."""
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+    """Run git in ``cwd`` under the suite's hermetic config (``conftest.py``) with the test identity
+    ``IDENT``; stripped stdout."""
+    return subprocess.run(["git", *IDENT, *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
 
 
 def make_repo(tmp_path: Path, files: dict[str, str] | None = None) -> tuple[Path, str]:
