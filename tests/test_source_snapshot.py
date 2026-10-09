@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import subprocess
 import tarfile
 from pathlib import Path
 
 import pytest
+from support import git, make_repo
 from typer.testing import CliRunner
 
 from swfactory.cli import app
@@ -16,27 +16,7 @@ from swfactory.source_snapshot import (
     verify_source_snapshot,
 )
 
-
-def _git(repo: Path, *args: str) -> str:
-    proc = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return proc.stdout.strip()
-
-
-def _repo(tmp_path: Path) -> tuple[Path, str]:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    _git(repo, "config", "user.name", "Factory Test")
-    _git(repo, "config", "user.email", "factory@example.test")
-    (repo / "tracked.txt").write_text("committed\n", encoding="utf-8")
-    _git(repo, "add", "tracked.txt")
-    _git(repo, "commit", "-q", "-m", "base")
-    return repo, _git(repo, "rev-parse", "HEAD")
+TRACKED = {"tracked.txt": "committed\n"}
 
 
 def _archive_text(path: Path, member: str) -> str:
@@ -47,7 +27,7 @@ def _archive_text(path: Path, member: str) -> str:
 
 
 def test_snapshot_contains_recorded_commit_not_dirty_worktree(tmp_path: Path) -> None:
-    repo, commit = _repo(tmp_path)
+    repo, commit = make_repo(tmp_path, TRACKED)
     (repo / "tracked.txt").write_text("dirty edit\n", encoding="utf-8")
     (repo / "untracked.txt").write_text("never committed\n", encoding="utf-8")
 
@@ -62,7 +42,7 @@ def test_snapshot_contains_recorded_commit_not_dirty_worktree(tmp_path: Path) ->
 
 
 def test_same_commit_reuses_the_same_verified_content_addressed_archive(tmp_path: Path) -> None:
-    repo, _ = _repo(tmp_path)
+    repo, _ = make_repo(tmp_path, TRACKED)
     cache = tmp_path / "snapshots"
 
     first = create_source_snapshot(repo, "HEAD", cache)
@@ -77,14 +57,14 @@ def test_same_commit_reuses_the_same_verified_content_addressed_archive(tmp_path
 
 
 def test_new_commit_gets_a_new_snapshot_identity(tmp_path: Path) -> None:
-    repo, first_commit = _repo(tmp_path)
+    repo, first_commit = make_repo(tmp_path, TRACKED)
     cache = tmp_path / "snapshots"
     first = create_source_snapshot(repo, first_commit, cache)
 
     (repo / "tracked.txt").write_text("second commit\n", encoding="utf-8")
-    _git(repo, "add", "tracked.txt")
-    _git(repo, "commit", "-q", "-m", "second")
-    second_commit = _git(repo, "rev-parse", "HEAD")
+    git(repo, "add", "tracked.txt")
+    git(repo, "commit", "-q", "-m", "second")
+    second_commit = git(repo, "rev-parse", "HEAD")
     second = create_source_snapshot(repo, second_commit, cache)
 
     assert second.commit_sha == second_commit
@@ -94,7 +74,7 @@ def test_new_commit_gets_a_new_snapshot_identity(tmp_path: Path) -> None:
 
 
 def test_invalid_revision_fails_without_retaining_partial_archive(tmp_path: Path) -> None:
-    repo, _ = _repo(tmp_path)
+    repo, _ = make_repo(tmp_path, TRACKED)
     cache = tmp_path / "snapshots"
 
     with pytest.raises(SourceSnapshotError, match="rev-parse"):
@@ -104,7 +84,7 @@ def test_invalid_revision_fails_without_retaining_partial_archive(tmp_path: Path
 
 
 def test_corrupt_content_addressed_entry_is_never_silently_reused(tmp_path: Path) -> None:
-    repo, _ = _repo(tmp_path)
+    repo, _ = make_repo(tmp_path, TRACKED)
     cache = tmp_path / "snapshots"
     snapshot = create_source_snapshot(repo, "HEAD", cache)
     path = Path(snapshot.archive_path)
@@ -115,7 +95,7 @@ def test_corrupt_content_addressed_entry_is_never_silently_reused(tmp_path: Path
 
 
 def test_verifier_detects_retained_snapshot_tampering(tmp_path: Path) -> None:
-    repo, _ = _repo(tmp_path)
+    repo, _ = make_repo(tmp_path, TRACKED)
     snapshot = create_source_snapshot(repo, "HEAD", tmp_path / "snapshots")
     Path(snapshot.archive_path).write_bytes(b"tampered")
 
@@ -125,7 +105,7 @@ def test_verifier_detects_retained_snapshot_tampering(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX permission contract")
 def test_snapshot_cache_and_archive_are_private_on_posix(tmp_path: Path) -> None:
-    repo, _ = _repo(tmp_path)
+    repo, _ = make_repo(tmp_path, TRACKED)
     cache = tmp_path / "snapshots"
 
     snapshot = create_source_snapshot(repo, "HEAD", cache)
@@ -135,7 +115,7 @@ def test_snapshot_cache_and_archive_are_private_on_posix(tmp_path: Path) -> None
 
 
 def test_revision_that_looks_like_a_git_option_is_refused(tmp_path: Path) -> None:
-    repo, _ = _repo(tmp_path)
+    repo, _ = make_repo(tmp_path, TRACKED)
 
     with pytest.raises(SourceSnapshotError, match="invalid Git revision"):
         create_source_snapshot(repo, "--help", tmp_path / "snapshots")
@@ -143,7 +123,7 @@ def test_revision_that_looks_like_a_git_option_is_refused(tmp_path: Path) -> Non
 
 @pytest.mark.skipif(__import__("os").name != "posix", reason="symlink cache attack is POSIX-specific")
 def test_symlink_at_content_address_is_refused(tmp_path: Path) -> None:
-    repo, _ = _repo(tmp_path)
+    repo, _ = make_repo(tmp_path, TRACKED)
     cache = tmp_path / "snapshots"
     first = create_source_snapshot(repo, "HEAD", cache)
     path = Path(first.archive_path)
@@ -157,7 +137,7 @@ def test_symlink_at_content_address_is_refused(tmp_path: Path) -> None:
 
 
 def test_cli_emits_a_machine_readable_verified_receipt(tmp_path: Path) -> None:
-    repo, commit = _repo(tmp_path)
+    repo, commit = make_repo(tmp_path, TRACKED)
     cache = tmp_path / "snapshots"
 
     result = CliRunner().invoke(

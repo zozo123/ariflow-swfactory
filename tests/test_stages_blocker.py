@@ -6,11 +6,11 @@ default of 3 build iterations the first review fix is ``fix.4``."""
 from __future__ import annotations
 
 import json
-import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from support import git
 
 from swfactory.agent import ScriptedAgent
 from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
@@ -26,9 +26,7 @@ BREAKS = [ROOT / "tests" / "fixtures" / "blocker_breaks", *FIXTURES]
 
 
 @pytest.fixture(autouse=True)
-def _isolated_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "empty-gitconfig"))
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+def _at_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(ROOT)
 
 
@@ -142,13 +140,7 @@ def test_rejected_gate_publishes_rejected_pr_with_durable_approval(tmp_path: Pat
     defaults = Config(issue="demo/issue.md")
     remote = tmp / "run" / "remote.git"
     branch = f"factory/DEMO-1-{publication_key(defaults.repo, defaults.target_dir, 'DEMO-1')}"
-    files = subprocess.run(
-        ["git", "ls-tree", "-r", "--name-only", branch],
-        cwd=remote,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.split()
+    files = git(remote, "ls-tree", "-r", "--name-only", branch).split()
     assert f"{ART}/approvals.json" in files and f"{ART}/metrics.json" in files
     assert f"{ART}/intent.md" in files and "tests/test_percent_change.py" not in files
     assert json.loads((tmp / "run" / "report.json").read_text())["stages"][-1]["status"] == ("blocked")

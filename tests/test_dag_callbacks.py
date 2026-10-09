@@ -6,27 +6,16 @@ a backend outage at failure time left the Factory Cell ``running`` and its admis
 
 from __future__ import annotations
 
-import importlib.util
 import socket
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from support import load_dag_module
 
 airflow = pytest.importorskip("airflow")
 
 from swfactory.cell_callback import DEBT_XCOM_KEY  # noqa: E402
 from swfactory.recovery_accounting import CallbackDebt  # noqa: E402
-
-REPO = Path(__file__).resolve().parent.parent
-
-
-def _blueprints():
-    spec = importlib.util.spec_from_file_location("swf_dag_blueprints_callbacks", REPO / "dags" / "blueprints.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 class _TI:
@@ -59,7 +48,7 @@ def test_the_failure_callback_records_the_lost_report_instead_of_swallowing_it(m
     ti = _TI([job])
     context = {"ti": ti, "dag_run": SimpleNamespace(run_id="swf__run"), "dag": SimpleNamespace(task_ids=["job.build"])}
 
-    _blueprints()._failure_callback(context)  # must not raise: Airflow's own verdict is unchanged
+    load_dag_module()._failure_callback(context)  # must not raise: Airflow's own verdict is unchanged
 
     assert ti.pushed.get(DEBT_XCOM_KEY) == [
         CallbackDebt("cell_555aa0b670e50aef10c1f7fd", 1, "swf__run", "job.build", "failed", attempt=1).__dict__
@@ -67,7 +56,7 @@ def test_the_failure_callback_records_the_lost_report_instead_of_swallowing_it(m
 
 
 def test_every_stage_task_carries_the_failure_callback() -> None:
-    module = _blueprints()
+    module = load_dag_module()
     for dag in (v for k, v in vars(module).items() if k.startswith("dag_")):
         for task in dag.tasks:
             if task.task_id.startswith("job.") and not task.task_id.startswith(("job.approve_", "job.teardown")):

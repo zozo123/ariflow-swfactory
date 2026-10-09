@@ -4,6 +4,7 @@ import time
 from dataclasses import replace
 
 import pytest
+from support import bound_population, lane, swarm_plan
 
 from swfactory.population_execution import (
     PopulationCancellation,
@@ -13,57 +14,26 @@ from swfactory.population_execution import (
     load_population_execution_report,
     write_population_execution_report,
 )
-from swfactory.population_manifest import (
-    BehaviorReceipt,
-    PopulationManifestError,
-    build_population_manifest,
-)
-from swfactory.provider_binding import ProviderChoiceSet, bind_population_manifest
-from swfactory.swarm_dynamics import (
-    AgentRole,
-    ComputeTier,
-    ContextPolicy,
-    PopulationLane,
-    SwarmPlan,
-)
-
-
-def _plan(*, verifier_count: int = 1) -> SwarmPlan:
-    return SwarmPlan(
-        phase="liquid",
-        mode="coordinate",
-        lanes=(
-            PopulationLane(
-                role=AgentRole.EXPLORER,
-                compute_tier=ComputeTier.CHEAP,
-                count=2,
-                context=ContextPolicy.FRESH,
-                temperature=1.1,
-                independent_verification=False,
-                diversity_axes=("provider", "model", "runtime", "prompt"),
-            ),
-            PopulationLane(
-                role=AgentRole.VERIFIER,
-                compute_tier=ComputeTier.DEEP,
-                count=verifier_count,
-                context=ContextPolicy.FRESH,
-                temperature=0.0,
-                independent_verification=True,
-                diversity_axes=("provider", "model", "runtime", "verifier"),
-            ),
-        ),
-        selected_hotspots=(),
-        crystals_to_verify=(),
-        stop_new_work=False,
-        estimated_compute_units=12.0,
-        reason="managed population test",
-    )
+from swfactory.population_manifest import BehaviorReceipt, PopulationManifestError
+from swfactory.provider_binding import ProviderChoiceSet
+from swfactory.swarm_dynamics import AgentRole, ComputeTier
 
 
 def _bound(*, verifier_count: int = 1, diverse: bool = True):
-    manifest = build_population_manifest(
-        _plan(verifier_count=verifier_count),
-        search_provenance_digest="sha256:" + "a" * 64,
+    plan = swarm_plan(
+        lane(
+            AgentRole.EXPLORER, ComputeTier.CHEAP, 2, temperature=1.1, axes=("provider", "model", "runtime", "prompt")
+        ),
+        lane(
+            AgentRole.VERIFIER,
+            ComputeTier.DEEP,
+            verifier_count,
+            temperature=0.0,
+            verifier=True,
+            axes=("provider", "model", "runtime", "verifier"),
+        ),
+        units=12.0,
+        reason="managed population test",
     )
     choices = ProviderChoiceSet(
         provider=("provider-a", "provider-b") if diverse else ("provider-a",),
@@ -72,8 +42,7 @@ def _bound(*, verifier_count: int = 1, diverse: bool = True):
         prompt=("direct", "counterfactual"),
         verifier=("unit", "adversarial") if diverse else ("unit",),
     )
-    binding = bind_population_manifest(manifest, choices=choices)
-    return manifest, binding
+    return bound_population(plan, choices)
 
 
 def test_population_executor_preserves_manifest_order_and_emits_telemetry() -> None:

@@ -13,28 +13,20 @@ Everything runs in a subprocess with a throwaway ``AIRFLOW_HOME`` and cwd (Airfl
 at import time, so the process must not share the parity test's interpreter), with the scripted
 agent, the local sandbox and the local git remote: no keys, no network, ~2 min.
 
-Runs only with the ``airflow`` dependency group and is marked ``slow``:
+Runs only with the ``airflow`` dependency group:
 ``uv run --group airflow pytest tests/test_dag_smoke.py``.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import os
-import subprocess
 import sys
-from pathlib import Path
 
 import pytest
+from support import DAGS, airflow_env, load_dag_module, run_checked
 
 airflow = pytest.importorskip("airflow")
 
-pytestmark = pytest.mark.slow
-
-REPO = Path(__file__).resolve().parents[1]
-DAGS = REPO / "dags"
-REPLAY_FIXTURE = REPO / "demo" / "gate-replay.json"
 ISSUE = "demo/issue.md"
 MARK_SUCCESS = r"job\.approve_.*"
 DRIVER = f"""
@@ -50,41 +42,9 @@ print("SMOKE_RESULT " + json.dumps({{"state": str(dr.state), "run_id": dr.run_id
 """
 
 
-def _env(home: Path, *, replay: bool = True) -> dict[str, str]:
-    """Clean process env: throwaway AIRFLOW_HOME, no inherited SWF_* knobs, scripted/local run."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("SWF_", "AIRFLOW"))}
-    env.update(
-        AIRFLOW_HOME=str(home),
-        AIRFLOW__CORE__DAGS_FOLDER=str(DAGS),
-        AIRFLOW__CORE__LOAD_EXAMPLES="False",
-        SWF_AGENT="scripted",
-        SWF_SANDBOX="local",
-        SWF_SCM="local",
-    )
-    if replay:
-        env["SWF_GATE_REPLAY"] = str(REPLAY_FIXTURE)
-    return env
-
-
-def _run(argv: list[str], *, cwd: Path, env: dict[str, str], timeout: int) -> str:
-    proc = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout, check=False)
-    tail = f"{proc.stdout[-4000:]}\n{proc.stderr[-4000:]}"
-    assert proc.returncode == 0, f"{argv[-2:]} rc={proc.returncode}\n{tail}"
-    return proc.stdout + proc.stderr
-
-
 def _result(log: str) -> dict:
     line = next(ln for ln in log.splitlines() if ln.startswith("SMOKE_RESULT "))
     return json.loads(line.removeprefix("SMOKE_RESULT "))
-
-
-def _run_id(dag_run_id: str, job_idx: int) -> str:
-    """``dags/blueprints.py::run_id_for`` — the DAG module itself, not a copy kept in sync."""
-    spec = importlib.util.spec_from_file_location("swf_dags_blueprints", DAGS / "blueprints.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.run_id_for(dag_run_id, job_idx)
 
 
 @pytest.fixture(scope="module")
@@ -94,13 +54,14 @@ def smoke(tmp_path_factory: pytest.TempPathFactory) -> dict:
     home.mkdir()
     cwd.mkdir()
     bare_cwd.mkdir()
-    env = _env(home)
-    _run([sys.executable, "-m", "airflow", "db", "migrate"], cwd=cwd, env=env, timeout=300)
+    env = airflow_env(home)
+    run_checked([sys.executable, "-m", "airflow", "db", "migrate"], cwd=cwd, env=env, timeout=300)
     driver = root / "driver.py"
     driver.write_text(DRIVER, encoding="utf-8")
-    log = _run([sys.executable, str(driver), str(DAGS)], cwd=cwd, env=env, timeout=900)
+    log = run_checked([sys.executable, str(driver), str(DAGS)], cwd=cwd, env=env, timeout=900)
     # The same marked-success run with the fixture withdrawn: nothing else changes.
-    bare_log = _run([sys.executable, str(driver), str(DAGS)], cwd=bare_cwd, env=_env(home, replay=False), timeout=900)
+    bare_env = airflow_env(home, replay=False)
+    bare_log = run_checked([sys.executable, str(driver), str(DAGS)], cwd=bare_cwd, env=bare_env, timeout=900)
     return {
         "cwd": cwd,
         "log": log,
@@ -121,13 +82,13 @@ def test_marking_a_gate_successful_alone_authorizes_nothing(smoke: dict) -> None
     bare = smoke["bare"]
     assert bare["state"] == "failed", bare["log"][-6000:]
     assert "a gate nobody answered is not approved" in bare["log"]
-    run_dir = bare["cwd"] / ".factory" / _run_id(bare["run_id"], 0)
+    run_dir = bare["cwd"] / ".factory" / load_dag_module().run_id_for(bare["run_id"], 0)
     assert not (run_dir / "pr.md").exists()
     assert not (run_dir / "work" / "docs" / "factory" / "DEMO-1" / "approvals.json").exists()
 
 
 def test_approvals_record_the_replay_fixture_as_its_own_authority(smoke: dict) -> None:
-    run_dir = smoke["cwd"] / ".factory" / _run_id(smoke["run_id"], 0)
+    run_dir = smoke["cwd"] / ".factory" / load_dag_module().run_id_for(smoke["run_id"], 0)
     approvals_path = run_dir / "work" / "docs" / "factory" / "DEMO-1" / "approvals.json"
     assert approvals_path.is_file(), sorted(str(p) for p in (smoke["cwd"] / ".factory").rglob("*"))
     approvals = json.loads(approvals_path.read_text(encoding="utf-8"))

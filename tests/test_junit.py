@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from swfactory.models import TestResult as JUnitResult
+from swfactory import models
 from swfactory.stages import _parse_junit
 
 FIXTURES = Path(__file__).parent / "fixtures" / "junit"
@@ -20,7 +20,7 @@ def test_node22_todo_failure_remains_failed_on_exit_zero(fixture: str, expected:
     counts = _parse_junit((FIXTURES / fixture).read_text())
 
     assert counts == expected
-    result = JUnitResult(**counts, exit_code=0)
+    result = models.TestResult(**counts, exit_code=0)
     assert result.total == sum(expected.values())
     assert result.ok is False
 
@@ -91,3 +91,11 @@ def test_junit_counts_each_case_once(report: str, expected: dict[str, int]) -> N
 def test_junit_rejects_impossible_or_ambiguous_evidence(report: str) -> None:
     with pytest.raises(ValueError):
         _parse_junit(report)
+
+
+def test_all_skipped_test_report_is_not_successful() -> None:
+    assert models.TestResult(skipped=3, exit_code=0, report_valid=True).ok is False
+
+
+def test_passing_tests_with_legitimate_skips_remain_successful() -> None:
+    assert models.TestResult(passed=2, skipped=1, exit_code=0, report_valid=True).ok is True

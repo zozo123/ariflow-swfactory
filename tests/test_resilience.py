@@ -16,12 +16,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
+from support import git
 
 from swfactory import accepted_inputs
 from swfactory.agent import POLICIES, ClaudeAgent, ScriptedAgent
@@ -79,14 +79,10 @@ PLAN_DATA = {"files": ["src/calc/core.py"], "steps": ["edit"], "tests": ["unit"]
 
 
 @pytest.fixture(autouse=True)
-def _hermetic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No developer environment leaks in: ``SWF_*`` overrides every blueprint and CLI value, and a
-    user/system git config could sign or hook the commits the real-pipeline tests make."""
+def _hermetic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No developer environment leaks in: ``SWF_*`` overrides every blueprint and CLI value."""
     for key in [k for k in os.environ if k.startswith("SWF_")]:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "empty-gitconfig"))
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
     monkeypatch.chdir(ROOT)
 
 
@@ -270,10 +266,6 @@ def write_stage_log(tmp_path: Path, *records: dict) -> None:
     (state / "stages.jsonl").write_text(
         "".join(StageResult(**r).model_dump_json() + "\n" for r in records), encoding="utf-8"
     )
-
-
-def git(*args: str, cwd: Path) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
 
 
 # ================================================================ 1. sandbox failure
@@ -843,7 +835,7 @@ def test_a_retry_of_a_rejected_run_republishes_the_same_branch_and_keeps_the_ref
     pr = (tmp_path / "run" / "pr.md").read_text()
     assert pr.startswith("# [REJECTED] DEMO-1:")
     assert "labels: factory, agent-authored, factory:rejected" in pr
-    heads = git("show-ref", "--heads", cwd=tmp_path / "run" / "remote.git")
+    heads = git(tmp_path / "run" / "remote.git", "show-ref", "--heads")
     # The publish ref is keyed on the WORK -- sha256(repo, target, issue) -- not on the run, so
     # two factory instances working one issue converge on one branch and one pull request.
     assert f"refs/heads/factory/DEMO-1-{publication_key(cfg.repo, cfg.target_dir, 'DEMO-1')}" in heads

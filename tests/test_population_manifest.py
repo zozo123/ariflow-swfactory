@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from support import lane, swarm_plan
 from typer.testing import CliRunner
 
 from swfactory.cli import app
@@ -13,44 +14,24 @@ from swfactory.population_manifest import (
     population_manifest_from_document,
     summarize_population,
 )
-from swfactory.swarm_dynamics import (
-    AgentRole,
-    ComputeTier,
-    ContextPolicy,
-    PopulationLane,
-    SwarmPlan,
-)
+from swfactory.swarm_dynamics import AgentRole, ComputeTier, ContextPolicy, SwarmPlan
 
 
 def _plan() -> SwarmPlan:
-    return SwarmPlan(
+    return swarm_plan(
+        lane(AgentRole.EXPLORER, ComputeTier.CHEAP, 2, temperature=1.2),
+        lane(
+            AgentRole.VERIFIER,
+            ComputeTier.DEEP,
+            1,
+            temperature=0.0,
+            verifier=True,
+            axes=("model", "runtime", "verifier"),
+            focus=("hotspot-a",),
+        ),
         phase="gas",
         mode="diverge",
-        lanes=(
-            PopulationLane(
-                role=AgentRole.EXPLORER,
-                compute_tier=ComputeTier.CHEAP,
-                count=2,
-                context=ContextPolicy.FRESH,
-                temperature=1.2,
-                independent_verification=False,
-                diversity_axes=("model", "prompt", "runtime"),
-            ),
-            PopulationLane(
-                role=AgentRole.VERIFIER,
-                compute_tier=ComputeTier.DEEP,
-                count=1,
-                context=ContextPolicy.FRESH,
-                temperature=0.0,
-                independent_verification=True,
-                diversity_axes=("model", "runtime", "verifier"),
-                focus_hotspots=("hotspot-a",),
-            ),
-        ),
-        selected_hotspots=(),
-        crystals_to_verify=(),
-        stop_new_work=False,
-        estimated_compute_units=8.0,
+        units=8.0,
         reason="test population",
     )
 
@@ -142,24 +123,19 @@ def test_population_receipts_must_belong_to_the_manifest() -> None:
 
 
 def test_independent_verification_cannot_inherit_context() -> None:
-    bad = SwarmPlan(
+    bad = swarm_plan(
+        lane(
+            AgentRole.VERIFIER,
+            ComputeTier.DEEP,
+            1,
+            temperature=0.0,
+            verifier=True,
+            axes=("model", "runtime"),
+            context=ContextPolicy.INHERIT,
+        ),
         phase="critical",
         mode="measure",
-        lanes=(
-            PopulationLane(
-                role=AgentRole.VERIFIER,
-                compute_tier=ComputeTier.DEEP,
-                count=1,
-                context=ContextPolicy.INHERIT,
-                temperature=0.0,
-                independent_verification=True,
-                diversity_axes=("model", "runtime"),
-            ),
-        ),
-        selected_hotspots=(),
-        crystals_to_verify=(),
-        stop_new_work=False,
-        estimated_compute_units=4.0,
+        units=4.0,
         reason="invalid verifier context",
     )
 

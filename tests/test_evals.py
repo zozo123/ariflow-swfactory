@@ -312,7 +312,6 @@ def test_load_baseline_rejects_a_non_score_file(tmp_path: Path) -> None:
 # ---------------------------------------------------------------- the real thing
 
 
-@pytest.mark.slow
 def test_two_evals_run_end_to_end_with_the_scripted_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """One clean eval and the blocked one, through the same pipeline the CLI walks (~10 s).
 
@@ -320,9 +319,6 @@ def test_two_evals_run_end_to_end_with_the_scripted_agent(tmp_path: Path, monkey
     above cannot see: the fixtures really apply, the target's suite really runs, and the blocked
     eval really ends as a ``factory:blocked`` PR.
     """
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "empty-gitconfig"))
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
     monkeypatch.chdir(ROOT)
     result = run_suite(
         SUITE,

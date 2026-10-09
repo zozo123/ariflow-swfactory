@@ -3,49 +3,26 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
+from support import git, make_repo
 
 from swfactory.execution_recipe import ExecutionRecipeError, load_execution_recipe
 
-
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+RECIPE = {
+    "schema_version": 1,
+    "argv": ["uv", "run", "pytest", "-q"],
+    "cwd": ".",
+    "timeout_s": 1800,
+    "resources": {"cpus": 4, "memory_mb": 8192},
+    "environment": {"PYTHONHASHSEED": "0"},
+    "secret_env": [],
+}
 
 
 def _repo(tmp_path: Path) -> tuple[Path, str]:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    _git(repo, "config", "user.name", "Recipe Test")
-    _git(repo, "config", "user.email", "recipe@example.test")
-    path = repo / ".swfactory"
-    path.mkdir()
-    (path / "candidate-run.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "argv": ["uv", "run", "pytest", "-q"],
-                "cwd": ".",
-                "timeout_s": 1800,
-                "resources": {"cpus": 4, "memory_mb": 8192},
-                "environment": {"PYTHONHASHSEED": "0"},
-                "secret_env": [],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "recipe")
-    return repo, _git(repo, "rev-parse", "HEAD")
+    return make_repo(tmp_path, {".swfactory/candidate-run.json": json.dumps(RECIPE) + "\n"})
 
 
 def test_recipe_is_read_from_recorded_commit_not_dirty_checkout(tmp_path: Path) -> None:
@@ -71,9 +48,9 @@ def test_recipe_digest_changes_when_committed_execution_contract_changes(tmp_pat
     document = json.loads(path.read_text(encoding="utf-8"))
     document["resources"]["cpus"] = 8
     path.write_text(json.dumps(document) + "\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "more cpu")
-    second_commit = _git(repo, "rev-parse", "HEAD")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "more cpu")
+    second_commit = git(repo, "rev-parse", "HEAD")
     second = load_execution_recipe(repo, second_commit)
 
     assert second.digest != first.digest
@@ -86,8 +63,8 @@ def test_secret_values_are_refused_from_committed_public_environment(tmp_path: P
     document = json.loads(path.read_text(encoding="utf-8"))
     document["environment"]["API_KEY"] = "do-not-commit-this"
     path.write_text(json.dumps(document) + "\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "bad secret")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "bad secret")
 
     with pytest.raises(ExecutionRecipeError, match="looks secret"):
         load_execution_recipe(repo, "HEAD")
@@ -100,8 +77,8 @@ def test_recipe_cwd_cannot_escape_repository(tmp_path: Path, cwd: str) -> None:
     document = json.loads(path.read_text(encoding="utf-8"))
     document["cwd"] = cwd
     path.write_text(json.dumps(document) + "\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "bad cwd")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "bad cwd")
 
     with pytest.raises(ExecutionRecipeError, match="escapes repository"):
         load_execution_recipe(repo, "HEAD")
@@ -113,8 +90,8 @@ def test_recipe_rejects_non_string_cwd(tmp_path: Path) -> None:
     document = json.loads(recipe_path.read_text(encoding="utf-8"))
     document["cwd"] = 123
     recipe_path.write_text(json.dumps(document), encoding="utf-8")
-    _git(repo, "add", ".swfactory/candidate-run.json")
-    _git(repo, "commit", "-q", "-m", "bad cwd type")
+    git(repo, "add", ".swfactory/candidate-run.json")
+    git(repo, "commit", "-q", "-m", "bad cwd type")
 
     with pytest.raises(ExecutionRecipeError, match="cwd must be a string"):
         load_execution_recipe(repo, "HEAD")
@@ -126,8 +103,8 @@ def test_recipe_rejects_unknown_fields_instead_of_silently_ignoring_policy(tmp_p
     document = json.loads(path.read_text(encoding="utf-8"))
     document["privileged"] = True
     path.write_text(json.dumps(document) + "\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "unknown policy")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "unknown policy")
 
     with pytest.raises(ExecutionRecipeError, match="unknown execution recipe fields"):
         load_execution_recipe(repo, "HEAD")
@@ -147,8 +124,8 @@ def test_public_recipe_rejects_secret_env_injection(tmp_path: Path) -> None:
     document = json.loads(path.read_text(encoding="utf-8"))
     document["secret_env"] = ["GH_TOKEN"]
     path.write_text(json.dumps(document) + "\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "forbidden secret injection")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "forbidden secret injection")
 
     with pytest.raises(ExecutionRecipeError, match="secret_env is retired"):
         load_execution_recipe(repo, "HEAD")

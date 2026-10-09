@@ -219,7 +219,9 @@ def test_bad_reference_is_refused_before_network(monkeypatch, issue_id):
     assert calls == []
 
 
-@pytest.mark.parametrize("raw", [b"invalid", b"\xff", b"[]", b"{}", b"a" * (MAX_RESPONSE_BYTES + 1)])
+@pytest.mark.parametrize(
+    "raw", [b"invalid", b"\xff", b"[]", b"{}", pytest.param(b"a" * (MAX_RESPONSE_BYTES + 1), id="oversized")]
+)
 def test_controller_refuses_invalid_response(monkeypatch, raw):
     transport(monkeypatch, raw=raw)
     with pytest.raises(LinearSourceError):

@@ -18,6 +18,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from support import git, make_repo
 
 from swfactory.agent import GUARD_PATH_DENY, guard_deny_rules
 from swfactory.blueprint import load
@@ -201,15 +202,6 @@ def _run_gate(tmp_path: Path, changed: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
 
 
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-    )
-
-
 def test_the_gate_ignores_base_drift(tmp_path: Path) -> None:
     """The gate must diff the merge-base, not the base tip.
 
@@ -220,46 +212,27 @@ def test_the_gate_ignores_base_drift(tmp_path: Path) -> None:
     branch would fail a two-dot gate. The lifted-matcher tests cannot catch this because they feed
     the matcher a changed-file list instead of running git, so this one drives real repositories.
     """
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    (repo / "factory.toml").write_text((ROOT / "factory.toml").read_text(encoding="utf-8"))
-    (repo / "untouched.py").write_text("x = 1\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    merge_base = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
-    ).stdout.strip()
+    factory_toml = (ROOT / "factory.toml").read_text(encoding="utf-8")
+    repo, merge_base = make_repo(tmp_path, {"factory.toml": factory_toml, "untouched.py": "x = 1\n"})
 
     # The pull request: one innocuous file, no protected path.
-    _git(repo, "checkout", "-q", "-b", "factory/work")
+    git(repo, "checkout", "-q", "-b", "factory/work")
     (repo / "docs_note.md").write_text("note\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "pr work")
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
-    ).stdout.strip()
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "pr work")
+    head = git(repo, "rev-parse", "HEAD")
 
     # Meanwhile the base advances, touching a PROTECTED path the branch never saw.
-    _git(repo, "checkout", "-q", "main")
+    git(repo, "checkout", "-q", "main")
     (repo / "pyproject.toml").write_text("[project]\nname='x'\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base drift into a protected path")
-    base_tip = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
-    ).stdout.strip()
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base drift into a protected path")
+    base_tip = git(repo, "rev-parse", "HEAD")
 
     assert base_tip != merge_base, "the base must have advanced for this test to mean anything"
 
     def changed(spec: str) -> list[str]:
-        out = subprocess.run(
-            ["git", "diff", "--name-only", spec],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return [line for line in out.stdout.splitlines() if line.strip()]
+        return git(repo, "diff", "--name-only", spec).splitlines()
 
     two_dot = changed(f"{base_tip}..{head}")
     three_dot = changed(f"{base_tip}...{head}")

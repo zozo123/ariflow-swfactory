@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from support import git
 
 from swfactory import maintain
 from swfactory.config import Config
@@ -341,17 +342,6 @@ def test_run_propose_without_agent_still_opens_issue(tmp_path: Path) -> None:
 # ---------------------------------------------------------------- metrics root (DAG side)
 
 
-def _git(cwd: Path, *args: str) -> None:
-    import subprocess
-
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@x", "-c", "commit.gpgsign=false", *args],
-        cwd=cwd,
-        check=True,
-        capture_output=True,
-    )
-
-
 def test_metrics_root_honours_env_and_requires_docs_factory(tmp_path: Path) -> None:
     checkout = tmp_path / "checkout"
     _write_metrics(checkout / "demo" / "target", "A", {"run_id": "a"})
@@ -374,12 +364,12 @@ def test_metrics_root_honours_env_and_requires_docs_factory(tmp_path: Path) -> N
 def test_metrics_root_clones_base_branch_when_env_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     origin = tmp_path / "origin"
     _write_metrics(origin / "demo" / "target", "A", {"run_id": "a"})
-    _git(origin, "init", "-q", "-b", "release")
-    _git(origin, "add", "-A")
-    _git(origin, "commit", "-q", "-m", "seed")
+    git(origin, "init", "-q", "-b", "release")
+    git(origin, "add", "-A")
+    git(origin, "commit", "-q", "-m", "seed")
     (origin / "demo" / "target" / "docs" / "factory" / "A" / "metrics.json").write_text("{}")
-    _git(origin, "checkout", "-q", "-b", "main")
-    _git(origin, "commit", "-q", "-am", "main drifts")
+    git(origin, "checkout", "-q", "-b", "main")
+    git(origin, "commit", "-q", "-am", "main drifts")
 
     seen: dict[str, str] = {}
     real_clone = maintain.clone_target

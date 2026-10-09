@@ -22,6 +22,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from support import load_dag_module
 
 from swfactory import accepted_inputs, stages
 from swfactory.approval_policy import (
@@ -367,17 +368,12 @@ def test_a_malformed_replay_fixture_fails_closed(tmp_path: Path) -> None:
 def test_dag_parse_time_and_runtime_resolve_the_same_gate_mode(spec: dict, expected: str) -> None:
     """``dags/blueprints.py`` cannot import swfactory at parse time, so it carries its own copy of
     this resolution; the two must never disagree about who owns a gate."""
-    import importlib.util
-
     # The `test` job runs without Airflow on purpose -- that is `airflow-main`'s job -- and loading
     # the DAG module imports it. Skipping keeps this honest: the assertion below still runs in every
     # environment that can actually construct a DAG.
     pytest.importorskip("airflow")
 
-    module_spec = importlib.util.spec_from_file_location("swf_dags_blueprints_mode", DAGS / "blueprints.py")
-    assert module_spec is not None and module_spec.loader is not None
-    module = importlib.util.module_from_spec(module_spec)
-    module_spec.loader.exec_module(module)
+    module = load_dag_module()
     assert declared_mode(spec) == expected
     assert module.gate_mode(spec) == expected
 
@@ -426,13 +422,8 @@ def test_record_task_refuses_a_gate_that_was_only_marked_successful(
 ) -> None:
     """``dag.test(mark_success_pattern=...)`` leaves no HITL response at all. That used to record
     actor "auto" and let the line continue."""
-    import importlib.util
-
     pytest.importorskip("airflow")
-    module_spec = importlib.util.spec_from_file_location("swf_dags_blueprints_record", DAGS / "blueprints.py")
-    assert module_spec is not None and module_spec.loader is not None
-    module = importlib.util.module_from_spec(module_spec)
-    module_spec.loader.exec_module(module)
+    module = load_dag_module()
 
     ctx = _with_artifacts(_ctx(tmp_path))
     monkeypatch.setattr(module, "_ctx", lambda name, job, run_id: ctx)
@@ -448,13 +439,8 @@ def test_record_task_refuses_a_gate_that_was_only_marked_successful(
 def test_record_task_uses_the_replay_fixture_only_for_unmanaged_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import importlib.util
-
     pytest.importorskip("airflow")
-    module_spec = importlib.util.spec_from_file_location("swf_dags_blueprints_replay", DAGS / "blueprints.py")
-    assert module_spec is not None and module_spec.loader is not None
-    module = importlib.util.module_from_spec(module_spec)
-    module_spec.loader.exec_module(module)
+    module = load_dag_module()
 
     ctx = _with_artifacts(_ctx(tmp_path, gate_replay=_fixture(tmp_path)))
     monkeypatch.setattr(module, "_ctx", lambda name, job, run_id: ctx)

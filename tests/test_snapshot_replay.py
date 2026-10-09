@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from support import git, make_repo
 from typer.testing import CliRunner
 
 from swfactory.cli import app
@@ -23,49 +23,24 @@ from swfactory.snapshot_replay import (
 )
 from swfactory.source_snapshot import create_source_snapshot
 
-
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-
-
-def _write_recipe(repo: Path, *, secret_env: list[str] | None = None) -> None:
-    recipe_dir = repo / ".swfactory"
-    recipe_dir.mkdir(exist_ok=True)
-    document = {
-        "schema_version": 1,
-        "argv": [
-            sys.executable,
-            "-c",
-            "from pathlib import Path; print(Path('value.txt').read_text().strip())",
-        ],
-        "cwd": ".",
-        "timeout_s": 30,
-        "resources": {"cpus": 1, "memory_mb": 128},
-        "environment": {"PYTHONHASHSEED": "0"},
-        "secret_env": secret_env or [],
-    }
-    (recipe_dir / "candidate-run.json").write_text(
-        json.dumps(document, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+RECIPE = {
+    "schema_version": 1,
+    "argv": [
+        sys.executable,
+        "-c",
+        "from pathlib import Path; print(Path('value.txt').read_text().strip())",
+    ],
+    "cwd": ".",
+    "timeout_s": 30,
+    "resources": {"cpus": 1, "memory_mb": 128},
+    "environment": {"PYTHONHASHSEED": "0"},
+    "secret_env": [],
+}
 
 
 def _repo(tmp_path: Path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    _git(repo, "config", "user.name", "Factory Test")
-    _git(repo, "config", "user.email", "factory@example.test")
-    (repo / "value.txt").write_text("committed\n", encoding="utf-8")
-    _write_recipe(repo)
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-q", "-m", "base")
-    commit = _git(repo, "rev-parse", "HEAD")
+    recipe_json = json.dumps(RECIPE, indent=2, sort_keys=True) + "\n"
+    repo, commit = make_repo(tmp_path, {"value.txt": "committed\n", ".swfactory/candidate-run.json": recipe_json})
     snapshot = create_source_snapshot(repo, commit, tmp_path / "snapshots")
     recipe = load_execution_recipe(repo, commit)
     return repo, snapshot, recipe
@@ -74,7 +49,6 @@ def _repo(tmp_path: Path):
 def test_replay_uses_committed_source_and_recipe_not_dirty_checkout(tmp_path: Path) -> None:
     repo, snapshot, recipe = _repo(tmp_path)
     (repo / "value.txt").write_text("dirty source\n", encoding="utf-8")
-    _write_recipe(repo)
     document = json.loads((repo / ".swfactory" / "candidate-run.json").read_text())
     document["argv"][-1] = "print('dirty recipe')"
     (repo / ".swfactory" / "candidate-run.json").write_text(json.dumps(document), encoding="utf-8")
@@ -93,8 +67,8 @@ def test_replay_uses_committed_source_and_recipe_not_dirty_checkout(tmp_path: Pa
 def test_snapshot_and_recipe_must_name_same_commit(tmp_path: Path) -> None:
     repo, snapshot, recipe = _repo(tmp_path)
     (repo / "value.txt").write_text("second\n", encoding="utf-8")
-    _git(repo, "add", "value.txt")
-    _git(repo, "commit", "-q", "-m", "second")
+    git(repo, "add", "value.txt")
+    git(repo, "commit", "-q", "-m", "second")
     second = create_source_snapshot(repo, "HEAD", tmp_path / "snapshots")
 
     with pytest.raises(SnapshotReplayError, match="execution recipe commit"):

@@ -22,31 +22,24 @@ live script answers the gates through the HITL API instead. Everything runs in a
 throwaway ``AIRFLOW_HOME`` and cwd (Airflow reads its config at import time), scripted agent,
 local sandbox, local git remote: no keys, no network, ~40 s.
 
-Runs only with the ``airflow`` dependency group and is marked ``slow``:
+Runs only with the ``airflow`` dependency group:
 ``uv run --group airflow pytest tests/test_dag_stress.py``.
 """
 
 from __future__ import annotations
 
 import functools
-import importlib.util
 import json
-import os
-import subprocess
 import sys
 import tomllib
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 import pytest
+from support import DAGS, REPO, airflow_env, git, load_dag_module, run_checked
 
 airflow = pytest.importorskip("airflow")
 
-pytestmark = pytest.mark.slow
-
-REPO = Path(__file__).resolve().parents[1]
-DAGS = REPO / "dags"
 BLUEPRINT = REPO / "blueprints" / "stress.toml"
 DAG_ID = "stress"
 ISSUES = ["demo/issue.md", "demo/issue2.md"]
@@ -139,45 +132,6 @@ def _shape() -> dict[str, Any]:
     }
 
 
-def _env(home: Path) -> dict[str, str]:
-    """Clean process env: throwaway AIRFLOW_HOME, no inherited SWF_* knobs, scripted/local run."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("SWF_", "AIRFLOW"))}
-    env.update(
-        AIRFLOW_HOME=str(home),
-        AIRFLOW__CORE__DAGS_FOLDER=str(DAGS),
-        AIRFLOW__CORE__LOAD_EXAMPLES="False",
-        SWF_AGENT="scripted",
-        SWF_SANDBOX="local",
-        SWF_SCM="local",
-        # Marking the HITL tasks successful leaves no response; only this declared fixture may
-        # stand in for one, and never for backend-managed work.
-        SWF_GATE_REPLAY=str(REPO / "demo" / "gate-replay.json"),
-    )
-    return env
-
-
-def _run(argv: list[str], *, cwd: Path, env: dict[str, str], timeout: int) -> str:
-    proc = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout, check=False)
-    tail = f"{proc.stdout[-4000:]}\n{proc.stderr[-4000:]}"
-    assert proc.returncode == 0, f"{argv[-3:]} rc={proc.returncode}\n{tail}"
-    return proc.stdout + proc.stderr
-
-
-@functools.cache
-def _blueprints_mod() -> ModuleType:
-    """``dags/blueprints.py`` as a module (importing it builds DAGs, so do it once)."""
-    spec = importlib.util.spec_from_file_location("swf_dags_blueprints", DAGS / "blueprints.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _run_id(dag_run_id: str, job_idx: int) -> str:
-    """``dags/blueprints.py::run_id_for`` — the DAG module itself, not a copy kept in sync."""
-    return str(_blueprints_mod().run_id_for(dag_run_id, job_idx))
-
-
 @functools.cache
 def _expected_jobs() -> tuple[dict[str, Any], ...]:
     from swfactory.blueprint import load
@@ -191,7 +145,7 @@ def _job_cfg(stress: dict, job_idx: int):
     from swfactory.blueprint import load
 
     bp = load(DAG_ID)
-    run_id = _run_id(stress["run_id"], job_idx)
+    run_id = load_dag_module().run_id_for(stress["run_id"], job_idx)
     return runtime.job_config(bp, _expected_jobs()[job_idx], run_id=run_id, root=stress["cwd"])
 
 
@@ -202,7 +156,7 @@ def _job_dirs(stress: dict, job_idx: int) -> tuple[Path, Path]:
 
     bp = load(DAG_ID)
     job = _expected_jobs()[job_idx]
-    run_id = _run_id(stress["run_id"], job_idx)
+    run_id = load_dag_module().run_id_for(stress["run_id"], job_idx)
     cfg = runtime.job_config(bp, job, run_id=run_id, root=stress["cwd"])
     assert cfg.target_dir == job["dir"]  # the job's target decides what its workdir was seeded from
     return runtime.job_run_dir(cfg, stress["cwd"]), Path(cfg.workdir)
@@ -223,12 +177,12 @@ def stress(tmp_path_factory: pytest.TempPathFactory) -> dict:
     # The blueprint's second target: the harness materialises it, so no byte-identical copy of
     # demo/target has to be committed to double the fan-out (see blueprints/stress.toml).
     assert seed_local_workdir(cwd / MATERIALISED_TARGET, "demo/target")
-    env = _env(home)
-    _run([sys.executable, "-m", "airflow", "db", "migrate"], cwd=cwd, env=env, timeout=300)
+    env = airflow_env(home)
+    run_checked([sys.executable, "-m", "airflow", "db", "migrate"], cwd=cwd, env=env, timeout=300)
     driver = root / "driver.py"
     driver.write_text(DRIVER, encoding="utf-8")
     argv = [sys.executable, str(driver), str(DAGS), DAG_ID, json.dumps(CONF), MARK_SUCCESS]
-    log = _run(argv, cwd=cwd, env=env, timeout=1800)
+    log = run_checked(argv, cwd=cwd, env=env, timeout=1800)
     line = next(ln for ln in log.splitlines() if ln.startswith("STRESS_RESULT "))
     return {"cwd": cwd, "log": log, **json.loads(line.removeprefix("STRESS_RESULT "))}
 
@@ -287,13 +241,7 @@ def test_each_job_publishes_its_own_pr_on_its_own_remote(stress: dict) -> None:
         pr = (run_dir / "pr.md").read_text(encoding="utf-8")
         assert pr.startswith(f"# {issue_id}: "), pr[:200]
         assert "labels: factory, agent-authored, stress" in pr  # blueprint [deliver].labels
-        refs = subprocess.run(
-            ["git", "for-each-ref", "--format=%(refname)"],
-            cwd=run_dir / "remote.git",
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.split()
+        refs = git(run_dir / "remote.git", "for-each-ref", "--format=%(refname)").split()
         # Keyed on the work, not the run dir: two instances on one issue share one ref.
         from swfactory.publication_identity import publication_key
 
