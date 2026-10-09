@@ -19,6 +19,11 @@ export SWF_BACKEND_TOKEN=...    # the backend bearer token
 uv run swfactory webhook serve
 ```
 
+The receiver binds `127.0.0.1` by default. A wider `--host` needs `SWF_WEBHOOK_SECRET`, or
+`--trust-upstream` when a proxy in front verifies the GitHub signature itself (islo's incoming
+webhook does); otherwise it refuses to start, because an unsigned delivery is trusted on the
+strength of who can reach the port.
+
 The default inbox is `.factory/webhooks/inbox.sqlite3` relative to the receiver's working
 directory. Both Docker and islo entrypoints set it to `$AIRFLOW_HOME/webhooks/inbox.sqlite3`,
 beside the persistent Airflow state.

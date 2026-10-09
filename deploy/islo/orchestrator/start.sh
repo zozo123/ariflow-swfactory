@@ -57,4 +57,7 @@ if [ -z "${AIRFLOW_TOKEN:-}" ] && [ -z "${AIRFLOW_PASSWORD:-}" ]; then
   wait_for_airflow_password "$AIRFLOW_PID"
 fi
 export AIRFLOW_URL
-exec uv run --group airflow swfactory webhook serve --port "${SWF_WEBHOOK_PORT:-8081}" --airflow-url "$AIRFLOW_URL"
+# islo delivers to :8081 from outside this VM after verifying X-Hub-Signature-256 itself, which is
+# what --trust-upstream asserts; set SWF_WEBHOOK_SECRET to verify here as well.
+exec uv run --group airflow swfactory webhook serve --port "${SWF_WEBHOOK_PORT:-8081}" \
+  --host 0.0.0.0 --trust-upstream --airflow-url "$AIRFLOW_URL"

@@ -398,7 +398,7 @@ def _ls(items: list[dict]) -> str:
     return json.dumps(items)
 
 
-ME = "yossi.eliaz@incredibuild.com"
+ME = "me@corp.com"
 
 
 def _ls(items: list[dict]) -> str:

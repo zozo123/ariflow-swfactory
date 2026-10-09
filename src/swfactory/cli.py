@@ -43,6 +43,25 @@ if TYPE_CHECKING:
 
 app = typer.Typer(help="AI-native software factory.", no_args_is_help=True, add_completion=False)
 
+
+def _print_version(requested: bool) -> None:
+    if requested:
+        from importlib.metadata import version
+
+        typer.echo(f"swfactory {version('swfactory')}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    _version: Annotated[
+        bool,
+        typer.Option("--version", callback=_print_version, is_eager=True, help="print the version and exit"),
+    ] = False,
+) -> None:
+    """AI-native software factory."""
+
+
 # What reading a JSON file into a typed document can raise (``json.JSONDecodeError`` is a ValueError).
 _JSON_INPUT = (OSError, KeyError, TypeError, ValueError)
 
@@ -345,7 +364,13 @@ def improve(
     )
 
     where = Path(root) if root else Path.cwd()
-    ledger = json.loads((where / "config" / "not-yet-wired.json").read_text())["modules"]
+    # The ledger is repository state, not package data: an installed wheel has none to read.
+    ledger_path = where / "config" / "not-yet-wired.json"
+    if not ledger_path.is_file():
+        raise typer.BadParameter(
+            f"no {ledger_path}; run inside a swfactory checkout or pass --root", param_hint="--root"
+        )
+    ledger = json.loads(ledger_path.read_text())["modules"]
     try:
         summary = improve_metrics.summarize(improve_metrics.load_all(where))
     except (OSError, ValueError):
@@ -716,11 +741,19 @@ def webhook_serve(
     secret_env: Annotated[
         str,
         typer.Option(
-            help="env var holding the GitHub webhook secret; unset var = trust islo's upstream "
-            "HMAC check and skip local verification"
+            help="env var holding the GitHub webhook secret; unset var = skip local verification, "
+            "allowed on a loopback --host or with --trust-upstream"
         ),
     ] = "SWF_WEBHOOK_SECRET",
-    host: Annotated[str, typer.Option(help="bind address")] = "0.0.0.0",
+    host: Annotated[str, typer.Option(help="bind address")] = "127.0.0.1",
+    trust_upstream: Annotated[
+        bool,
+        typer.Option(
+            "--trust-upstream",
+            help="accept unsigned deliveries on a non-loopback --host: only behind a proxy that "
+            "verifies the GitHub signature itself, such as islo's incoming webhook",
+        ),
+    ] = False,
     inbox: Annotated[
         Path, typer.Option(envvar="SWF_WEBHOOK_INBOX", help="persistent webhook SQLite database")
     ] = DEFAULT_INBOX,
@@ -755,8 +788,17 @@ def webhook_serve(
     import sqlite3
 
     from swfactory import webhook as webhook_mod
+    from swfactory.backend_http import is_loopback_host
 
+    secret = os.environ.get(secret_env) or None
     with _fail("webhook", ValueError, OSError, sqlite3.Error):
+        # An unsigned delivery is trusted on the strength of who can reach the port, so serving one
+        # beyond loopback must be a decision (--trust-upstream), never the default.
+        if secret is None and not is_loopback_host(host) and not trust_upstream:
+            raise ValueError(
+                f"refusing to accept unsigned deliveries on {host}: set {secret_env}, bind 127.0.0.1, "
+                "or pass --trust-upstream behind a proxy that verifies the GitHub signature"
+            )
         # Managed mode holds no Airflow credential at all: the only mutation this process can make
         # is a work order, so a bug here cannot become a run the backend never admitted.
         orders = None
@@ -783,7 +825,7 @@ def webhook_serve(
         port,
         airflow_url=airflow_url,
         token_provider=provider,
-        secret=os.environ.get(secret_env) or None,
+        secret=secret,
         host=host,
         inbox=queue,
         max_attempts=max_attempts,

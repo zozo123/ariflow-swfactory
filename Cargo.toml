@@ -15,7 +15,7 @@ name = "swfactory-rust"
 [workspace.package]
 version = "2.4.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/zozo123/ariflow-swfactory"
 authors = ["swfactory contributors"]

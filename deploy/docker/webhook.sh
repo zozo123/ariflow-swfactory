@@ -17,5 +17,8 @@ fi
 
 export SWF_BACKEND_URL
 uv sync --group airflow --frozen
+# The port mapping needs the container's own interface. compose.yml publishes it on the host's
+# loopback only (127.0.0.1:8081), which is the boundary --trust-upstream relies on while
+# SWF_WEBHOOK_SECRET is unset; set the secret before putting a tunnel in front of it.
 exec uv run --group airflow swfactory webhook serve --port "${SWF_WEBHOOK_PORT:-8081}" \
-  --backend-url "$SWF_BACKEND_URL"
+  --host 0.0.0.0 --trust-upstream --backend-url "$SWF_BACKEND_URL"

@@ -381,8 +381,8 @@ def _check_docker(runner: Runner) -> Check:
 
 
 def docker_image_fix(image: str) -> str:
-    """Build the image locally. The published one is not world-readable, and a run that cannot
-    pull it fails inside the first stage with the registry's own word for it, ``denied``."""
+    """Build the image locally. No swfactory image is published to a registry, and a run that cannot
+    pull one fails inside the first stage with the registry's own word for it, ``denied``."""
     return (
         "docker build -t swfactory-sandbox:local -f deploy/docker/sandbox.Dockerfile . "
         "&& export SWF_DOCKER_IMAGE=swfactory-sandbox:local"

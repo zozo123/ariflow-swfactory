@@ -52,7 +52,7 @@ import urllib.request
 from collections.abc import Callable, Mapping
 from typing import Protocol, runtime_checkable
 
-from swfactory.backend_http import no_redirect_open
+from swfactory.backend_http import is_loopback_host, no_redirect_open
 from swfactory.models import TIMEOUT_EXIT_CODE, ExecResult, RunResult, StageError
 from swfactory.paths import validate_git_ref, validate_repo
 from swfactory.sandbox import (
@@ -174,8 +174,13 @@ class HttpBoatClient:
         if not api_key or any(ch.isspace() for ch in api_key):
             raise BoatError(f"{BOAT_API_KEY_ENV} must be non-empty and free of whitespace")
         base_url = (base_url or BOAT_DEFAULT_BASE_URL).strip().rstrip("/")
-        if not base_url.startswith(("https://", "http://")):
-            raise BoatError(f"{BOAT_BASE_URL_ENV} must be an http(s) URL")
+        parsed = urllib.parse.urlsplit(base_url)
+        # The bearer key rides on every request, so plaintext is allowed only where it never
+        # leaves the host -- the rule webhook._safe_base holds the backend and Airflow tokens to.
+        if not parsed.hostname or not (
+            parsed.scheme == "https" or (parsed.scheme == "http" and is_loopback_host(parsed.hostname))
+        ):
+            raise BoatError(f"{BOAT_BASE_URL_ENV} must be an https URL (http only to loopback)")
         self._key = api_key
         self.base_url = base_url
         self.poll_s = poll_s

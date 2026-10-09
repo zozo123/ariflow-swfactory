@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from swfactory.canonical import restrict_dir
+from swfactory.canonical import restrict_dir, run_git
 
 
 class CandidateWorktreeError(RuntimeError):
@@ -275,12 +275,4 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def _git_proc(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-        env=env,
-    )
+    return run_git(repo, *args)

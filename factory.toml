@@ -95,6 +95,8 @@ protected = [
   "factory.toml",                       # a cell must not rewrite its own contract
   ".github/",                           # nor the required checks that gate its own PR
   "config/capability-inventory.json",   # support claims are a human governance decision
+  ".claude/hooks/",                     # swf_guard.py is copied into every work cell (agent.GUARD_SRC)
+  "bands.yaml",                         # the drift thresholds `maintain` judges merged runs by
   "docs/future-factory.md",             # recursive-search constitution cannot self-rewrite
   # --- what governs every FUTURE run ----------------------------------------------------------
   "blueprints/",                        # gates, limits, budgets and sandbox of every line
@@ -116,6 +118,8 @@ protected = [
   "src/swfactory/sandbox.py",           # every sandbox backend and its argv
   "src/swfactory/smolvm_backend.py",    # SmolVM confinement and host-owned recovery
   "src/swfactory/sandbox_contract.py",
+  "src/swfactory/boat.py",              # the boat sandbox backend and its BOAT_API_KEY bearer
+  "src/swfactory/paths.py",             # confined_path and the repo/ref validators the sandboxes use
   "src/swfactory/stages.py",            # canonical stage semantics
   "src/swfactory/stage_registry.py",    # managed stage dispatch, including Liquid review
   "src/swfactory/liquid_annealing.py",  # material-defect convergence and evidence semantics
@@ -131,6 +135,12 @@ protected = [
   "src/swfactory/backend_population.py",        # worker may reach providers only through backend authority
   "src/swfactory/backend/population_service.py", # paid provider effects are backend-owned and journaled
   "src/swfactory/authority.py",            # canonical mutable-resource authority map is constitutional
+  # --- credential and intake boundaries: where a token is read, sent or kept out ---------------
+  "src/swfactory/webhook.py",           # HMAC check, trusted associations, backend/Airflow bearers
+  "src/swfactory/cell_callback.py",     # Cell transitions carry SWF_BACKEND_TOKEN
+  "src/swfactory/execution_binding.py", # managed workers read SWF_BACKEND_TOKEN here
+  "src/swfactory/execution_recipe.py",  # the secret_env refusal SECURITY.md cites
+  "src/swfactory/xcom_contract.py",     # the forbidden XCom credential fields SECURITY.md cites
   # --- fix the code, not the gate --------------------------------------------------------------
   "tests/",                             # removed for build, re-added for fix by protected_for
   "tests/fixtures/contract/pyproject.toml", # uv/Turbo workspace identity; protected even during build

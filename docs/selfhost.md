@@ -49,8 +49,8 @@ uv run swfactory run --blueprint selfhost --issue demo/selfhost-issue.md \
   --agent scripted --sandbox docker --scm local
 ```
 
-`SWF_DOCKER_IMAGE` is required: the built-in default is a `ghcr.io` image that is not published,
-so without it the run fails with `registry: denied`. `--scm local` pushes the branch into a bare
+`SWF_DOCKER_IMAGE=swfactory-sandbox:local` is the default, spelled out: no swfactory image is
+published to a registry, so the run uses the one built above. `--scm local` pushes the branch into a bare
 repo under `.factory/<run_id>/remote.git` and writes `.factory/<run_id>/pr.md`, so nothing reaches
 GitHub. `--agent scripted` needs no model key.
 

@@ -24,6 +24,13 @@ def _improve(*args: str):
     return CliRunner().invoke(app, ["improve", "--root", str(ROOT), *args])
 
 
+def test_outside_a_checkout_it_is_a_usage_error_not_a_traceback(tmp_path: Path) -> None:
+    result = CliRunner().invoke(app, ["improve", "--root", str(tmp_path)])
+    assert result.exit_code == 2
+    assert "pass --root" in result.output
+    assert not isinstance(result.exception, FileNotFoundError)
+
+
 def test_the_default_says_nothing_about_the_queue_and_so_changes_nothing() -> None:
     quiet = _improve("--budget", "5")
     assert quiet.exit_code == 0, quiet.output

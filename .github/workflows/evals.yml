@@ -12,9 +12,9 @@ name: evals
 #   evals-islo  the production path: claude agent in an islo MicroVM behind the deny-by-default
 #               `swfactory` gateway, Anthropic key reaches the VM only as a phantom token; the runner
 #               is the orchestrator and holds ISLO_API_KEY only. Needs the ISLO_API_KEY secret.
-# Each KEYED job is skipped with a notice when its secret is absent (forks), never failing for
-# lack of a key; eval-suite always runs. Optional repo variable SWF_ISLO_SNAPSHOT warm-starts
-# the MicroVM (docs/islo.md snapshot).
+# Each KEYED job is skipped (reported as skipped, not as passed) with a notice when its secret is
+# absent (forks), never failing for lack of a key; eval-suite always runs. Optional repo variable
+# SWF_ISLO_SNAPSHOT warm-starts the MicroVM (docs/islo.md snapshot).
 on:
   schedule:
     - cron: "0 6 * * 1"
@@ -51,39 +51,45 @@ jobs:
             .factory/evals/*/*/run/stages.jsonl
           if-no-files-found: ignore
 
+  # A job-level `if:` cannot read `secrets`, so the keys are checked here and a keyed job without
+  # its key is SKIPPED -- never reported as a green run that ran nothing.
+  keys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ISLO_API_KEY: ${{ secrets.ISLO_API_KEY }}
+    outputs:
+      anthropic: ${{ steps.check.outputs.anthropic }}
+      islo: ${{ steps.check.outputs.islo }}
+    steps:
+      - name: Check for ANTHROPIC_API_KEY and ISLO_API_KEY
+        id: check
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then echo "anthropic=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::ANTHROPIC_API_KEY secret not set; skipping real-demo"; fi
+          if [ -n "$ISLO_API_KEY" ]; then echo "islo=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::ISLO_API_KEY secret not set; skipping evals-islo"; fi
+
   real-demo:
+    needs: keys
+    if: needs.keys.outputs.anthropic == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - name: Check for ANTHROPIC_API_KEY
-        id: gate
-        run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::notice::ANTHROPIC_API_KEY secret not set; skipping evals"
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          fi
       - uses: actions/checkout@v6
-        if: steps.gate.outputs.enabled == 'true'
       - uses: astral-sh/setup-uv@v6
-        if: steps.gate.outputs.enabled == 'true'
         with: { python-version: "3.12" }
       - name: Install bubblewrap + socat and allow unprivileged user namespaces (Ubuntu 24.04)
-        if: steps.gate.outputs.enabled == 'true'
         run: |
           sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Install Anthropic Sandbox Runtime and Claude Code
-        if: steps.gate.outputs.enabled == 'true'
         run: |
           npm i -g @anthropic-ai/sandbox-runtime@0.0.75 @anthropic-ai/claude-code
           srt --version && claude --version
       - name: Install swfactory
-        if: steps.gate.outputs.enabled == 'true'
         run: uv sync
       - name: Real factory run on demo/issue.md (claude agent under srt, local git remote)
-        if: steps.gate.outputs.enabled == 'true'
         env:
           # The demo blueprint declares both gates `mode = "human"`. #2066 stopped SWF_APPROVE=auto
           # from converting a declared human gate into an automatic one, so an unattended run has
@@ -93,7 +99,6 @@ jobs:
         run: |
           uv run swfactory run --issue demo/issue.md --agent claude --sandbox srt --scm local
       - name: Assert tests passed and deliver succeeded
-        if: steps.gate.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           report=$(find .factory -maxdepth 2 -name report.json | head -1 || true)
@@ -107,7 +112,7 @@ jobs:
           assert stages.get("deliver") == "ok", f"deliver status: {stages.get('deliver')!r}"
           PY
       - name: Upload artifact chain
-        if: steps.gate.outputs.enabled == 'true' && always()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: factory-artifacts
@@ -118,6 +123,8 @@ jobs:
           if-no-files-found: ignore
 
   evals-islo:
+    needs: keys
+    if: needs.keys.outputs.islo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -127,35 +134,20 @@ jobs:
       ANTHROPIC_API_KEY: ""
       SWF_ISLO_SNAPSHOT: ${{ vars.SWF_ISLO_SNAPSHOT }}
     steps:
-      - name: Check for ISLO_API_KEY
-        id: gate
-        run: |
-          if [ -z "$ISLO_API_KEY" ]; then
-            echo "::notice::ISLO_API_KEY secret not set; skipping evals-islo"
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          fi
       - uses: actions/checkout@v6
-        if: steps.gate.outputs.enabled == 'true'
       - uses: astral-sh/setup-uv@v6
-        if: steps.gate.outputs.enabled == 'true'
         with: { python-version: "3.12" }
       - name: Install islo CLI
-        if: steps.gate.outputs.enabled == 'true'
         run: |
           curl -fsSL https://islo.dev/install.sh | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.local/bin:$PATH"
           islo --version
       - name: Install swfactory
-        if: steps.gate.outputs.enabled == 'true'
         run: uv sync
       - name: Preflight (islo auth + tool integrations, gateway profile, environment, snapshot)
-        if: steps.gate.outputs.enabled == 'true'
         run: uv run swfactory doctor --agent claude --sandbox islo --scm local --json
       - name: Real factory run on demo/issue.md (claude agent in an islo MicroVM, local git remote)
-        if: steps.gate.outputs.enabled == 'true'
         env:
           # The demo blueprint declares both gates `mode = "human"`. #2066 stopped SWF_APPROVE=auto
           # from converting a declared human gate into an automatic one, so an unattended run has
@@ -165,7 +157,6 @@ jobs:
         run: |
           uv run swfactory run --issue demo/issue.md --agent claude --sandbox islo --scm local
       - name: Assert tests passed and deliver succeeded
-        if: steps.gate.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           report=$(find .factory -maxdepth 2 -name report.json | head -1 || true)
@@ -180,7 +171,7 @@ jobs:
           assert stages.get("deliver") == "ok", f"deliver status: {stages.get('deliver')!r}"
           PY
       - name: Upload artifact chain
-        if: steps.gate.outputs.enabled == 'true' && always()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: factory-artifacts-islo

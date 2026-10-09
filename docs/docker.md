@@ -62,7 +62,7 @@ One-shot, no Airflow — the CLI on the host with sandbox containers (needs the 
 ```bash
 uv run swfactory demo --sandbox docker                                  # scripted replay
 uv run swfactory run --issue demo/issue.md --agent claude --sandbox docker --scm local --approve prompt
-SWF_DOCKER_IMAGE=swfactory-sandbox:local uv run swfactory demo --sandbox docker   # local image, not ghcr
+SWF_DOCKER_IMAGE=my-registry/swf-sandbox:1 uv run swfactory demo --sandbox docker  # another image
 ```
 
 `.factory/<run_id>/` lands in the repo checkout on the host: `work/` is the sandbox checkout,
@@ -82,7 +82,7 @@ See [durable webhook intake](webhooks.md) for repository routing, retries and `/
 | Config field | env | default | meaning |
 |---|---|---|---|
 | `sandbox` | `SWF_SANDBOX` / `--sandbox docker` | `local` | selects `DockerSandbox` |
-| `docker_image` | `SWF_DOCKER_IMAGE` | `ghcr.io/zozo123/swfactory-sandbox:latest` | image of every sandbox container (compose sets `swfactory-sandbox:local`) |
+| `docker_image` | `SWF_DOCKER_IMAGE` | `swfactory-sandbox:local` | image of every sandbox container; build it with `deploy/docker/sandbox.Dockerfile` (no swfactory image is published) |
 | `docker_credentials` | `SWF_DOCKER_CREDENTIALS` | `env` | Only the `claude` invocation receives credentials. `env`: pass `ANTHROPIC_API_KEY` by name; `host`: bind-mount `~/.claude` + `~/.claude.json` into that agent container's `$HOME` (`/home/swf`) — **hands your Claude OAuth session to the agent container**; no key is passed. Linux only in practice: on macOS Claude Code keeps the OAuth token in the Keychain, not in `~/.claude`. |
 | `docker_network` | `SWF_DOCKER_NETWORK` | `bridge` | `--network` of every sandbox container; `none` = no egress (fine for the scripted replay, breaks `uv sync`/the agent) |
 | `docker_user` | `SWF_DOCKER_USER` | image user (`swf`, uid 1000) | `--user uid[:gid]` override, e.g. `root` when the bind-mounted workdir was created by root |

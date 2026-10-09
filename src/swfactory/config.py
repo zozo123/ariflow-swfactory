@@ -30,7 +30,9 @@ if TYPE_CHECKING:
 # sends no egress policy); registry.npmjs.org is the npm registry a Bun-installing target needs
 # (it serves metadata and tarballs itself, so no CDN host is needed).
 SRT_DEFAULT_DOMAINS = ("api.anthropic.com", "pypi.org", "files.pythonhosted.org", "registry.npmjs.org", "astral.sh")
-DOCKER_DEFAULT_IMAGE = "ghcr.io/zozo123/swfactory-sandbox:latest"
+# The image deploy/docker/sandbox.Dockerfile builds, and the one compose, `swf stack` and CI use: no
+# swfactory image is published to a registry, so a registry default could only fail with `denied`.
+DOCKER_DEFAULT_IMAGE = "swfactory-sandbox:local"
 IDENTITY_SETTINGS = frozenset({"issue", "repo", "target_dir", "base_branch", "run_id", "blueprint"})
 # Compatibility name used throughout the runtime. This is the checkout root in development and
 # the bundled asset root in an installed wheel.
@@ -111,7 +113,7 @@ class Config(BaseSettings):
     toolset_sbx_host_network_policy: Literal["unknown", "deny-all", "allow-all"] = "unknown"
     toolset_sbx_image: str = "python:3.12-slim"
     toolset_smolvm_socket: str = "/run/smolvm/api.sock"
-    toolset_smolvm_image: str = DOCKER_DEFAULT_IMAGE
+    toolset_smolvm_image: str = "ghcr.io/zozo123/swfactory-sandbox:latest"  # SmolVM pulls from a registry
     toolset_smolvm_cpus: int = Field(default=2, ge=1, le=255)
     toolset_smolvm_memory_mb: int = Field(default=2048, ge=128, le=2**32 - 1)
     toolset_workdir: str = "/workspace/repo"  # repository root inside a SandboxBackend
