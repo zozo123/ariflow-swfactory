@@ -1,5 +1,5 @@
 ---
-name: swfactory-stage
+name: swfactory
 description: Perform one inner stage of this Airflow software factory inside a Factory Cell. Use when the factory launched Claude to execute a spec, plan, build, fix, or review stage. To drive the factory from outside as a harness, use skills/swfactory/SKILL.md instead.
 ---
 
