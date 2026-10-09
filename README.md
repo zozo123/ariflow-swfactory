@@ -17,7 +17,7 @@ through the backend. Policy and authority changes remain human maintenance. See 
 [software atelier workflow](docs/software-atelier.md) for the method and its current runtime
 boundaries.
 
-[Quickstart](#quickstart) · [Flow, concepts, and finish line](docs/system-map.md) · [Software atelier](docs/software-atelier.md) · [Liquid methodology](#the-liquid-methodology) · [Physics](#physics-of-the-factory) ·
+[Quickstart](#quickstart) · [Flow, concepts, and finish line](docs/system-map.md) · [Software atelier](docs/software-atelier.md) · [Method](#method) ·
 [Future factory](docs/future-factory.md) · [Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
 [Illustrated walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Agent skills](#agent-skills)
 
@@ -79,128 +79,29 @@ replay does not prove that deployment works. Inspect policy refusals with
 `uv run swfactory state autonomy --json`; set `SWF_BACKEND_URL` and `SWF_BACKEND_TOKEN` to read
 the deployed backend, or use `--root` with its local state directory.
 
-## The Liquid methodology
+## Method
 
 > **Create entropy where exploration benefits from it; destroy entropy before promotion.**
 
-Liquid Software Factory applies the same discipline to running the product and developing the
-factory itself: explore through independent implementation lanes, compare contracts and evidence,
-then converge on one maintained implementation. **Parallelism is cheap. Authority is singular.**
+The factory runs product work and its own development the same way: explore through independent
+lanes, compare them against shared contracts and evidence, then converge on one maintained
+implementation and one exact candidate. **Parallelism is cheap. Authority is singular.**
 
-| May change or disappear | Must remain durable and authoritative |
+| Motion: may change or disappear | Matter: must remain durable and authoritative |
 | --- | --- |
 | Workers, agent sessions, sandboxes, VMs, containers | Factory Cell identity, current epoch, work order, and lifecycle binding |
 | Speculative branches, experiments, temporary adapters | Approved contracts, mutation history, evidence, and publication state |
-| Intermediate implementations and work graphs | The accepted plan revision and the final repository state |
+| Intermediate implementations, work graphs, and caches | The accepted plan revision and the final repository state |
 
-The method has six operating rules:
+A worker may spend compute; it cannot mint authority. A cache hit can save time; it cannot approve
+a gate, reconcile an ambiguous mutation, publish a PR, or promote a candidate.
 
-1. **Keep one lifecycle authority.** Airflow schedules managed work; `Plan.work` describes bounded
-   dependencies inside a stage. Agents, providers, admission controls, and GitHub Actions do not
-   become additional lifecycle schedulers.
-2. **Separate identity from compute.** A Factory Cell owns one issue × target across attempts.
-   A sandbox is a temporary execution instance; replacing it does not grant new authority.
-3. **Fence and reconcile mutations.** Bind effects to `(cell_id, epoch, operation_key)`. Reject stale
-   writers, deduplicate retries, and observe ambiguous external outcomes before replay.
-4. **Explore within limits.** Use independent lanes with clear outputs, budgets, deadlines, and
-   cancellation. Domain × concern matrices reveal gaps; retained results establish coverage.
-5. **Collapse before integration.** Compare alternatives against shared contracts, keep the canonical
-   implementation, migrate callers, and delete superseded paths. PR boundaries follow coherent changes.
-6. **Promote evidence for the exact candidate.** Validate the stabilization result, check its SHA has
-   not changed, and require an explicit merge or promotion decision.
-
-```mermaid
-flowchart TD
-    W["Work order and shared contracts"] --> A["Implementation lane A"]
-    W --> B["Implementation lane B"]
-    W --> C["Implementation lane C"]
-    A --> F["Compare contracts and evidence"]
-    B --> F
-    C --> F
-    F --> K["Keep one canonical implementation"]
-    F --> D["Migrate callers and delete duplicates"]
-    K --> S["Stabilization branch"]
-    D --> S
-    S --> G{"Candidate passes required checks?"}
-    G -->|No| F
-    G -->|Yes, SHA unchanged| P["Explicit promotion to main"]
-```
-
-This is the development method, not a claim that the default executor launches competing sandbox
-forks. The [full methodology](docs/liquid-methodology.md) defines the seven ownership roles, ten
-concerns, recovery cases, capability boundaries, evidence requirements, factory generations, and
-completion criteria. It also records the Liquid500 + Liquid400 fan-in and its verification limits.
-
-## Physics of the factory
-
-A useful way to reason about this system is as a non-equilibrium process: create many possible
-microstates while searching, then remove degrees of freedom until only one promotable state remains.
-
-| Physics lens | Factory meaning |
+| Read next | For |
 | --- | --- |
-| Matter | Durable Cell identity, accepted digests, evidence, and publication state |
-| Motion | Agents, sandboxes, worktrees, builds, tests, and task executors |
-| Entropy | The number of plausible implementation states still alive |
-| Annealing | Review and repair that remove defects and collapse alternatives |
-| Measurement | Evidence bound to the exact candidate that produced it |
-| Conservation law | A worker may spend compute; it cannot mint authority |
-| Catalyst | Caches and local task graphs can shorten the path without changing what is accepted |
-| Phase | Observable regime: gas, liquid, critical, crystal, glass, or jammed |
-| Mode | Reversible posture: diverge, coordinate, measure, anneal, verify, perturb, or drain |
-
-The phase vocabulary is now an **experimental cross-language contract**, not just prose. Python
-(`swfactory.phase_control`) and Rust (`swf_domain::phase_control`) independently classify the same
-versioned order-parameter fixture. A phase assessment has `authority=search-only`: it may recommend
-search width, isolated/forked/specialist trajectories, context handling, verification intensity and
-queue posture, but it cannot approve, publish, merge, mint credentials or promote. Run a retained
-snapshot locally with `swfactory phase-assess phase.json --json` or `swf phase phase.json --json`. See
-[phase-aware control](docs/phase-control.md).
-
-### Search posture and acceleration
-
-Phase control recommends search posture; retained observations inform later search. Neither
-supplies approval or mutation authority. Model, prompt, and reasoning style may
-vary; evidence must identify the exact candidate, inputs, policy, and procedure measured.
-
-The current managed authority and stage implementation lives in the **Python backend/application**;
-Rust supplies the operator CLI/TUI and shared domain contracts. The Rust manager is a migration
-destination, not the current execution path. See the [system map](docs/system-map.md) for ownership
-and [cognitive harness](docs/cognitive-harness.md) for the research model.
-
-Turborepo 2.11 can put uv and Cargo work into one content-addressed task
-graph. In this repository it is an **experimental accelerator inside the verification layer**, not a
-second lifecycle scheduler. Cargo now has a real repository-root workspace, and uv exposes a real workspace aggregate plus the
-shared contract-fixture member through native discovery. Native Cargo tasks execute the Rust side;
-the factory's Python verifier is an explicit root uv task because Turbo's generic native root pytest
-is intentionally repository-wide and would over-invalidate Rust-source changes.
-
-Turbo asks, "have these bytes already done this work?" The factory asks, "are these exactly the
-bytes that were approved and independently verified?" The first is a velocity optimization; the
-second is an authority boundary. A cache hit can save time. It cannot approve a gate, reconcile an
-ambiguous mutation, publish a PR, or promote a candidate.
-
-See [polyglot task graph: motion, not authority](docs/polyglot-task-graph.md) for the executable
-native graph, cache policy, authority boundary, and graduation criteria.
-
-### Recursive search and swarm dynamics
-
-The experimental next layer makes the search process itself observable and replayable.
-
-`swfactory.recursive_search` reduces campaigns into order parameters, extracts exploration-only
-search laws, retains a content-addressed artifact blackboard, classifies the current factory phase,
-and binds the resulting search provenance into descendant candidate identity.
-
-`swfactory.swarm_dynamics` then allocates a bounded heterogeneous population by **effective
-independent search**, not raw agent count. Cheap compute expands gas-like search; critical
-disagreements attract selective deep verification; a local crystal stops broad search and moves to
-exact replay plus independent red-team verification; glass perturbs with fresh context; jammed
-stops new work and drains debt.
-
-These mechanisms are intentionally marked **experimental** in the capability inventory. They may
-change search posture, population and compute allocation, but they cannot schedule Airflow, weaken
-evidence, mint credentials, approve, publish, merge or promote.
-
-The full end-state, laws and graduation path are in [Future Factory](docs/future-factory.md).
+| [Liquid methodology](docs/liquid-methodology.md) | Ownership roles, concerns, recovery cases, evidence requirements, and promotion rules |
+| [Phase control](docs/phase-control.md) | The search-only gas/liquid/critical/crystal/glass/jammed vocabulary shared by Python and Rust |
+| [Future factory](docs/future-factory.md) | The north-star end state, its laws, and what to build next |
+| [Polyglot task graph](docs/polyglot-task-graph.md) | Turbo as an accelerator inside verification, not a second scheduler |
 
 ## Architecture and lifecycle
 
@@ -399,11 +300,12 @@ npx skills add zozo123/ariflow-swfactory --skill airflow-software-factory --skil
 For a configured harness, keep `(harness, factory_id)` stable throughout one session:
 
 ```sh
-scripts/swf_harness.sh codex codex-session-17 --blueprint your-product --issue 42
+swf submit --harness codex --factory-id codex-session-17 --blueprint your-product --issue 42
 ```
 
-The wrapper submits through `swf`; Airflow continues to own lifecycle scheduling. See
-[harness setup](docs/harnesses.md) and [concurrent harness methodology](docs/harness-concurrency-methodology.md).
+Airflow continues to own lifecycle scheduling. See the
+[`swfactory` skill](skills/swfactory/SKILL.md) and
+[concurrent harness methodology](docs/harness-concurrency-methodology.md).
 
 ## Status and verification
 
@@ -414,7 +316,7 @@ contracts. Read capability claims at their demonstrated level:
 | --- | --- |
 | Local replay and scripted evals | Pipeline behavior, repair paths, policy outcomes, and retained artifacts |
 | Cell, journal, and backend tests | The specific identity, mutation, and recovery behaviors exercised |
-| Liquid bundle manifest | Declared coverage of 900 generated slices and 181 legacy ranks; not 1,081 independently proven features |
+| Liquid spec manifest | Declared coverage of 90 domains × 10 concerns = 900 slices; not 900 independently proven features |
 | Provider and live scheduler checks | Behavior of the tested environment and scenario; inspect each check's result |
 | Native workgraph forks and recursive factories | Contracts and bounded primitives exist; these are not default end-to-end production guarantees |
 
@@ -495,7 +397,7 @@ acceptance standard and explain the remaining enforcement work.
 | Operate Cells, jobs, approvals, and deliveries | [CLI/TUI](docs/swf.md), [backend API](docs/factory-backend.md) |
 | Design lifecycle and parallel work | [Lifecycle](docs/lifecycle.md), [architecture](docs/design.md) |
 | Receive work and recover interruptions | [Webhooks](docs/webhooks.md), [run recovery](docs/run-recovery.md) |
-| Evaluate behavior and control proposals | [Phase control](docs/phase-control.md), [formal correctness](docs/formal-correctness.md), [Evals](docs/evals.md), [non-equilibrium control doctrine](docs/non-equilibrium-factory.md) |
+| Evaluate behavior and control proposals | [Phase control](docs/phase-control.md), [formal correctness](docs/formal-correctness.md), [Evals](docs/evals.md) |
 | Extend or review the factory | [Contributing](CONTRIBUTING.md), [review policy](REVIEW.md), [changelog](CHANGELOG.md) |
 
 Contribute a coherent change with an explicit invariant, failure behavior, evidence, and a plan to

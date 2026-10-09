@@ -1,36 +1,16 @@
 ---
 name: swfactory
-description: Operate this Airflow software factory from Claude Code and perform inner factory stages. Use when Claude is an outer harness submitting or inspecting factory work, or when Claude is executing a spec, plan, build, fix, or review stage inside a Factory Cell.
+description: Perform one inner stage of this Airflow software factory inside a Factory Cell. Use when the factory launched Claude to execute a spec, plan, build, fix, or review stage. To drive the factory from outside as a harness, use skills/swfactory/SKILL.md instead.
 ---
 
-# Software factory
+# Software factory stage
 
-First determine which side of the factory boundary you are on.
+You are one stage of a durable Factory Cell. Treat the originator's words in
+`docs/factory/<issue>/intent.md` as the source of scope. Never invent scope, never touch files
+listed as `protected` in `factory.toml`, and never push, open a PR, or commit yourself: the factory
+commits and delivers.
 
-## Outer harness mode
-
-Use this mode when the user is driving the repository from Claude Code and wants the factory to do
-work. Submit through the governed factory; do not create a parallel lifecycle loop.
-
-1. Choose one stable factory-session id and reuse it for retries and multiple issues in this Claude
-   session.
-2. Submit with `scripts/swf_harness.sh claude <factory-id> --issue <issue> [submit args...]`.
-3. Inspect progress and evidence through normal `swf` operator commands.
-4. Answer human gates only when explicitly authorized.
-5. Leave stage scheduling to Apache Airflow and publication to the factory.
-
-Never pass backend/service credentials into stage sandboxes. Never silently drop harness/session
-identity; fail if the configured submission path cannot preserve it. Read `docs/harnesses.md` for
-examples shared with Codex, Grok, and custom harnesses.
-
-## Inner stage mode
-
-Use this mode when the factory launched you as one stage of a durable Factory Cell. Treat the
-originator's words in `docs/factory/<issue>/intent.md` as the source of scope. Never invent scope,
-never touch files listed as `protected` in `factory.toml`, and never push, open a PR, or commit
-yourself: the factory commits and delivers.
-
-### spec.md
+## spec.md
 
 Write:
 
@@ -47,7 +27,7 @@ Write:
 Map every requirement to at least one test in plan.md. Add no code and no scope beyond the intent.
 Read the repository instead of guessing. Keep the spec under one page and output only the document.
 
-### plan.md / plan.json
+## plan.md / plan.json
 
 Treat `plan.json` as the typed source (`Plan` schema) and `plan.md` as its rendering.
 
@@ -63,7 +43,7 @@ Treat `plan.json` as the typed source (`Plan` schema) and `plan.md` as its rende
 Make `files` the complete list the diff may touch. Keep `steps` ordered and one commit's worth of
 work each. Name real test functions in `tests`. List risks honestly; `[]` is acceptable.
 
-### Review
+## Review
 
 Read `REVIEW.md` at the target root and follow it literally. Run the five passes in order:
 correctness, tests, security, plan fidelity, style. Use severities blocker/major/minor/nit and obey

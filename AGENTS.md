@@ -22,7 +22,7 @@ This repository is an **Airflow-governed software atelier**:
 For an outer harness, keep one stable session identity:
 
 ```bash
-scripts/swf_harness.sh codex codex-session-17 --issue 1204
+swf submit --harness codex --factory-id codex-session-17 --issue 1204
 ```
 
 Read `factory.toml`, the relevant blueprint, tests, and docs before changing behavior. Keep the patch minimal.
@@ -42,4 +42,4 @@ uv run swfactory demo
 
 Do not call a change healthy until the required GitHub candidate-readiness fan-in is green for the exact head.
 
-Details: `README.md`, `docs/harnesses.md`, `docs/promotion-policy.md`, `docs/design.md`.
+Details: `README.md`, `skills/swfactory/SKILL.md`, `docs/promotion-policy.md`, `docs/design.md`.

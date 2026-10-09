@@ -19,7 +19,7 @@ process or remove its work cell. Cleanup is a separate, ownership-checked action
 
 ## What runs where
 
-`src/swfactory/backend.py` is the network boundary. It loads the installed Python blueprints,
+`src/swfactory/backend/` is the network boundary. It loads the installed Python blueprints,
 validates work orders and target selections, unpauses the selected line, and submits to Airflow's
 public API. It also serves delivery evidence, metrics, worker operations and saved run inspection.
 Airflow, GitHub and worker-provider credentials stay in this process or the Python execution

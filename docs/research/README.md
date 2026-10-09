@@ -4,14 +4,13 @@ Material in this directory is **not in the product path** and holds no lifecycle
 
 Nothing under docs/research/ is imported by src/swfactory/. The Liquid spec checker
 (`python -m swfactory.liquid_spec`) resolves every `runtime_anchor` in
-[`config/liquid-spec.yaml`](../../config/liquid-spec.yaml) to real code, and the research families
-in that file are recorded with `state: declared` and `support: unsupported` precisely so that
-declared exploration can never read as shipped capability.
+[`config/liquid-spec.yaml`](../../config/liquid-spec.yaml) to real code, and that file no longer
+carries the research wave families, so declared exploration cannot read as shipped capability.
 
 ## What moved here, and why
 
 The non-equilibrium / statistical-mechanics layer
-([`docs/non-equilibrium-factory.md`](../non-equilibrium-factory.md)) and the Ocean120 / Phase240 /
+([`non-equilibrium-factory.md`](non-equilibrium-factory.md)) and the Ocean120 / Phase240 /
 StatMech360 wave taxonomy. Their doctrine was already disciplined — advisory only, measurable
 variables, no lifecycle authority — but the *code* was shaped like a decider even though nothing
 called it:

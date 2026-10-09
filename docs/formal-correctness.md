@@ -128,14 +128,15 @@ The Formal Quench is an orthogonal certification operation:
 A trusted counterexample refutes a claim and can **melt the crystal**, returning the system to
 critical/perturbation search with the witness retained.
 
-## Executable Claim Certificate
+## Claim Certificate
 
-`swfactory.formal_claims` implements the first pure contract.
+This is a proposed contract. An unwired Python prototype was removed; today only the TLA+ model
+below is executable.
 
-A `FormalQuench` binds artifact, assumptions, model, policy, and claims. Each claim fixes a statement,
-an evidence method, required/optional status, and minimum independent verifier count.
+A Formal Quench binds artifact, assumptions, model, policy, and claims. Each claim fixes a
+statement, an evidence method, required/optional status, and minimum independent verifier count.
 
-An `EvidenceReceipt` binds to both the quench digest and claim digest.
+An evidence receipt binds to both the quench digest and claim digest.
 
 Receipts cannot self-declare trust. Certificate derivation receives the trusted-verifier set from
 outside the evidence object; untrusted/search receipts are retained but cannot justify or refute a
@@ -144,8 +145,8 @@ justified claim set.
 
 A trusted refutation dominates supporting receipts.
 
-The resulting `ClaimCertificate.meets_claim_policy` is **not promotion authority**. It is an
-evidence predicate that the existing authority plane may consume.
+A certificate that meets its claim policy is **not promotion authority**. It is an evidence
+predicate that the existing authority plane may consume.
 
 
 ## The certificate is a projection of a justification hypergraph
@@ -188,9 +189,9 @@ artifact + model                  |
       [publication preconditions]
 ```
 
-`swfactory.justification_graph` checks the structural contract and projects trusted support and
-refutation. It deliberately does **not** pretend to replay the semantics of TLC, Lean, a fuzzer, or
-an external system. Those verifiers produce receipts; the graph ensures they cannot drift across
+A checker for this graph verifies the structural contract and projects trusted support and
+refutation. It must **not** pretend to replay the semantics of TLC, Lean, a fuzzer, or an external
+system. Those verifiers produce receipts; the graph ensures they cannot drift across
 the frozen question or self-assert trust.
 
 The useful end-state is **justification-carrying promotion**, not a vague "proof-carrying" label:
@@ -221,8 +222,7 @@ semantic motion is epistemically justified. Therefore:
 
 > **Observed crystal is descriptive; crystallization admission is selective.**
 
-`swfactory.crystallization` keeps the decision advisory and orthogonal to authority. It separates
-three outcomes:
+The decision is advisory and orthogonal to authority. It separates three outcomes:
 
 - **keep-liquid** — do not freeze while the specification is moving, candidate entropy remains high,
   or the implementation is still changing materially;
@@ -251,8 +251,8 @@ finite transition safety -> optional/model-check/formal, depending on risk
 pure mathematical kernel -> optional/theorem, when the abstraction is the implementation
 ```
 
-The thresholds are policy, not universal constants. The default policy is conservative and
-replaceable; its output remains `search-only`.
+The thresholds are policy, not universal constants. A policy should be conservative and
+replaceable, and its output remains `search-only`.
 
 This avoids two symmetric mistakes:
 
@@ -288,9 +288,9 @@ A disposition is not a truth verdict. Keep independent uncertainty axes beside i
 
 For each claim, retain a rationale and the next action that would reduce the uncertainty. Several axes
 may remain even when the mathematical claim is machine-checkable. This prevents a proof about a clean
-abstraction from being mistaken for a proof about deployed behavior. The register is bound into claim
-and quench digests and surfaced in the certificate. Its classification supplies no evidence and grants
-no promotion authority. A required claim without an assessment remains unresolved.
+abstraction from being mistaken for a proof about deployed behavior. Bind the register into the
+claim and quench digests and surface it in the certificate. Its classification supplies no evidence
+and grants no promotion authority. A required claim without an assessment remains unresolved.
 
 ```text
 claim: stale epochs cannot mutate

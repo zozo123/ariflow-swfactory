@@ -20,7 +20,7 @@ intent is not by itself evidence that an end-to-end guarantee has been achieved.
 
 [Identity and authority](#identity-and-authority) · [Mutation and recovery](#mutation-and-recovery) ·
 [Liquid development](#liquid-development) · [CI and promotion](#ci-and-promotion) ·
-[Definition of done](#definition-of-done) · [Implementation priorities](#implementation-priorities)
+[Definition of done](#definition-of-done) · [Evidence map](#implementation-and-evidence-map)
 
 ## The core idea
 
@@ -34,8 +34,9 @@ twenty control planes. More issue slices do not require more permanent services 
 
 Here, *entropy* means temporary implementation diversity and integration uncertainty. It is a useful
 engineering metaphor, not a measured thermodynamic quantity. The
-[non-equilibrium control doctrine](non-equilibrium-factory.md) separately requires measurable inputs,
-falsifiable behavior, and bounded authority for any physics-inspired control model.
+[non-equilibrium control doctrine](research/non-equilibrium-factory.md) separately requires
+measurable inputs, falsifiable behavior, and bounded authority for any physics-inspired control
+model.
 
 ## Search and authority glossary
 
@@ -253,7 +254,7 @@ For bounded candidate campaigns, fan-out is recorded as a **stacked-bush experim
 co-equal candidates are siblings from one exact input head; a later round may descend only from
 the previous round's selected answered candidate at its recorded head. Infrastructure failures stay
 provisional, while answered revisions freeze as evidence. See
-[Candidate experiment tree](experiment-tree.md). This lineage is advisory and does not create a
+[candidate lineage](candidate-evidence.md#lineage). This lineage is advisory and does not create a
 second scheduler or promotion authority.
 
 
@@ -323,8 +324,7 @@ executor currently launches multiple candidate sandboxes for one issue.
 ## Historical fan-in and what it proves
 
 [PR #1196](https://github.com/zozo123/ariflow-swfactory/pull/1196) records the original
-`stabilize/liquid-all` fan-in. The current [Liquid manifest](../config/liquid-spec.yaml)
-checks these declared bundles and legacy ranks:
+`stabilize/liquid-all` fan-in. It declared these bundles and legacy ranks:
 
 | Wave | Coverage model | Integration units |
 | --- | --- | --- |
@@ -340,20 +340,22 @@ Reproduce the structural check from the repository root:
 uv run python -m swfactory.liquid_spec
 ```
 
-The manifest checks bundle shape, declared source counts, contiguous/non-overlapping spans, and
-configured authority names. The bundle engine validates inputs and emits `ExecutionIntent` values.
-It does not itself implement every domain effect or prove every acceptance criterion. Legacy ranks
-are positions in a snapshot, not a range of GitHub issue numbers.
+The current [Liquid manifest](../config/liquid-spec.yaml) keeps only the 90 domain rows and the ten
+legacy areas; the bundle, rank and tranche bookkeeping lives in git history. The checker validates
+the owner roles, the concern axis, each family's domain count, that every `runtime_anchor` resolves
+under `src/swfactory/`, and that every `capability_claim` exists in the capability inventory. It
+does not implement a domain effect or prove an acceptance criterion. Legacy ranks were positions in
+a snapshot, not a range of GitHub issue numbers.
 
 PR #1196 records head `0603693a99aa675eb5d10592c7a30ebfb8161fda` and merge commit
 `22c92ac7951dfe3d1c8f42103192b18b966e1daf`. These identify the historical candidate and merge;
 they are not a substitute for retained check results or a claim that current `main` passed them.
 
-Later [PR #2016](https://github.com/zozo123/ariflow-swfactory/pull/2016) records Ocean120,
-Phase240, and StatMech360: a further 720 declared slots. Their
-[Liquid spec checker](../src/swfactory/liquid_spec.py) has the same limitation:
-coverage and routing are distinct from integrated, measured runtime capability. The original 900
-is a historical wave size, not a claim about the entire current backlog or product feature count.
+Later [PR #2016](https://github.com/zozo123/ariflow-swfactory/pull/2016) recorded Ocean120,
+Phase240, and StatMech360: a further 720 declared research slots, since removed from the manifest.
+The same limitation applies: coverage and routing are distinct from integrated, measured runtime
+capability. The original 900 is a historical wave size, not a claim about the entire current
+backlog or product feature count.
 
 ## Security follows authority
 
@@ -493,22 +495,6 @@ These links are starting points for review, not blanket capability certification
 | Matrix and legacy scope | [Liquid spec](../config/liquid-spec.yaml), [checker](../src/swfactory/liquid_spec.py) | The spec resolves every `runtime_anchor` to real code, so declared coverage is falsifiable rather than asserted; `state`/`support` keep it separate from validated behavior |
 | Providers and generations | [Provider contract](../src/swfactory/sandbox_contract.py), [generations](../src/swfactory/generations.py) | Publish measured support boundaries and govern candidate promotion |
 | Operators and recovery | [Rust console](../rust/README.md), [recovery guide](run-recovery.md), [backend](factory-backend.md) | Prove cross-surface agreement and repair from durable state after interruption |
-
-## Implementation priorities
-
-The next convergence cycle should focus on a small set of measurable outcomes:
-
-1. Establish a capability-to-evidence inventory and an enforceable promotion gate.
-2. Consolidate the live mutation path around one Cell/journal/policy/evidence contract.
-3. Prove cancellation, takeover, ambiguous publication, and cleanup through integrated failure scenarios.
-4. Complete one bounded `Plan.work` execution path with deterministic combination and provider evidence.
-5. Measure useful throughput, recovery, cost, and operator effort; promote control experiments only
-   after they improve a retained baseline.
-
-[Repository improvement issue #2022](https://github.com/zozo123/ariflow-swfactory/issues/2022)
-supplies six ordered implementation bundles, dependencies, acceptance criteria, baseline validation
-findings, and deletion obligations. Use this methodology as its contract, and update the status/evidence
-map as each capability becomes demonstrable.
 
 When implementation and documentation disagree, record and repair the discrepancy. Preserve singular
 authority while resolving it; do not add another scheduler or control plane to make both descriptions true.

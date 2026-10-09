@@ -68,22 +68,10 @@ delivery fails independent verification, or the snapshot `swf` renders disagrees
 
 ## Exit codes
 
-The codes are part of the public surface, under the same semantic-versioning policy as the Python
-CLI: scripts are allowed to branch on them. With `--json`, a failure also prints one JSON document
-to stdout — `{"error": {"kind": …, "message": …, "exit_code": …, "hint": …}}` — whose `kind` maps
-one-to-one onto this table, so a consumer never has to inspect `$?`.
-
-| Code | `kind` | Meaning |
-| --- | --- | --- |
-| 0 | — | success |
-| 1 | `operational` | a check is red, a gate answer was refused by policy, verification failed |
-| 2 | `usage` | a clap parse failure, an unparseable job or gate id, a mutation without `--yes` on a non-TTY |
-| 3 | `not_found` | no such context, run, job, gate, delivery or sandbox |
-| 4 | `auth` | HTTP 401, an invalid JWT, or a credential env var that is unset |
-| 5 | `unreachable` | connect, DNS, TLS or timeout; `gh` or `islo` missing from `PATH` |
-| 6 | `conflict` | the gate was already answered, or the evidence moved under the operator |
-
-Diagnostics always go to stderr, so `swf … --json | jq` is safe in a pipeline.
+The exit codes and the `--json` error `kind` they map to are public surface, under the same
+semantic-versioning policy as the Python CLI; the table is in
+[docs/swf.md](../docs/swf.md#exit-codes). Diagnostics always go to stderr, so
+`swf … --json | jq` is safe in a pipeline.
 
 ## Conventions
 

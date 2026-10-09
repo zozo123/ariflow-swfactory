@@ -94,6 +94,20 @@ immutable problem / accepted inputs
 Airflow owns time. Rust owns durable reality. Python is the experimental cortex.
 Sandboxes are disposable executable worlds. Evidence is memory.
 
+| Part | Role in the end state |
+| --- | --- |
+| AI harness | Goals, tools, context, memory, models, and the environment in which a hypothesis becomes an executable experiment |
+| Airflow | Time and lifecycle: durable continuation, fan-out, retries, timeouts, waits, human interrupts, bounded concurrency, fan-in. It answers *when* cognition runs, never *which belief is true* |
+| Rust | The facts the mind must not hallucinate: Cell identity and epoch, capability and lease identity, exact candidate/source/recipe/policy/evidence digests, recovery and mutation contracts, deterministic convergence, and the request that an exact candidate cross into a durable effect |
+| Python | New search strategies, phase signals, model ensembles, evals, memory experiments, annealing schedules, offline learning |
+
+The Rust row is the destination: today managed state, stages and publication run in the Python
+backend. A mechanism graduates one way:
+
+```text
+idea -> Python experiment -> retained evidence -> stable contract -> Rust invariant
+```
+
 ## 1. Durable matter, disposable motion
 
 The factory deliberately separates things that may disappear from things whose identity must survive.
@@ -631,8 +645,8 @@ The capsule is stronger than a prose claim that "the tests passed".
 
 A recursive round may use one evidence-selected candidate as the parent of the next experiment.
 
-Before that decision becomes lineage, the factory rebuilds the campaign decision from immutable
-sibling evidence.
+Before that decision becomes lineage, the campaign decision is rebuilt from immutable sibling
+evidence (`swfactory campaign-decision build`) and its digest is bound into every child's identity.
 
 The next question therefore descends from a verified parent decision, not merely an in-memory
 winner pointer.
@@ -823,6 +837,19 @@ The capability inventory is the source of truth for support status.
 
 A feature existing in Python is not evidence that the production path exercises it.
 
+The search surfaces this document describes, and the claims that state their support:
+
+| Surface | Python | Rust | Claim |
+| --- | --- | --- | --- |
+| Phase control | `swfactory.phase_control` | `swf_domain::phase_control` | `factory.phase-control` |
+| Recursive search | `swfactory.recursive_search` | | `factory.recursive-search` |
+| Swarm dynamics | `swfactory.swarm_dynamics` | | `factory.swarm-dynamics` |
+| Population manifest, binding, execution | `swfactory.population_manifest`, `swfactory.provider_binding`, `swfactory.population_execution` | | `factory.population-manifest`, `factory.provider-binding`, `factory.population-execution` |
+| Adaptive information budget | `swfactory.adaptive_information` | | `factory.adaptive-information-budget` |
+
+None of them schedules Airflow, mutates GitHub, marks evidence verified or promotes a candidate.
+`factory.toml` protects every module above and this document (section 20).
+
 ## 28. Graduation path
 
 The shortest path from today's repository to the full end state is:
@@ -836,6 +863,42 @@ The shortest path from today's repository to the full end state is:
 7. shadow-run candidate controllers;
 8. graduate proven contracts from Python into Rust;
 9. keep one explicit authority boundary throughout.
+
+### What to build next
+
+The highest-value work is invariant closure, not more architectural surface.
+
+**P0: identity correctness.** Target identity, the Cell-ID contract and canonical policy bytes are
+pinned across Python and Rust by `tests/fixtures/contract/is_cell_id.json` and `policy_digest.json`
+(#2322). Extend those fixtures adversarially before expanding Rust authority.
+
+**P0: capability leases.** `swfactory.credential_lease.LeaseBinding` binds a credential to the
+factory run, DAG run, task instance, stage, sandbox, attempt, Cell, epoch, operation and policy. A
+retry is a new security event.
+
+**P0: dark-worker boundary.** Airflow workers and coding sandboxes need an executable NEVER-list: no
+ambient GitHub token, no raw publication authority, no control-plane mutation, no credential-broker
+bypass, no implicit secret injection.
+
+**P1: independent convergence verifier.** Recompute a promotion-grade result from the exact source,
+recipe and dependency/tool identity in a fresh execution environment.
+
+**P1: exception-only operator attention.** Show blocked authority transitions, in-doubt effects,
+lease debt, fence debt, verifier disagreement and human gates; let routine successful search fade.
+
+**P1: queue governor.** A self-improving factory must not drown its own human gates. Proposal
+entropy can stay high while the enrollment rate is bounded.
+
+**P2: calibrate the adaptive search budget.** The mechanism exists (section 11). Compare predicted
+information value with realized evidence gain on retained workloads, tune thresholds, and graduate
+the stable pure contract into Rust. Stop creating new search work when measured marginal
+information is below threshold and disagreement is settled, when extra lanes are behaviorally
+redundant, when the human-declared budget is exhausted, or when a cancelled population must drain
+first.
+
+**P2: failure memory.** Keep a durable map from failure signature to the strategies tried, their
+evidence, the successful repair class, and its cost and latency. Later runs use it as prior
+information, never as authority.
 
 The goal is not an autonomous system that can do anything.
 

@@ -10,9 +10,9 @@ Apache Airflow remains the only lifecycle scheduler. Factory Cells, epochs, poli
 boundaries, evidence, publication and promotion keep their existing authority.
 
 The implementation is deliberately smaller than the full research program in
-[non-equilibrium-factory.md](non-equilibrium-factory.md): it makes the phase vocabulary executable
-without claiming that Jarzynski/Crooks/Onsager or a general thermodynamic controller is production
-machinery.
+[non-equilibrium-factory.md](research/non-equilibrium-factory.md): it makes the phase vocabulary
+executable without claiming that Jarzynski/Crooks/Onsager or a general thermodynamic controller is
+production machinery.
 
 ## States
 
@@ -176,11 +176,12 @@ The phase controller is descriptive: it estimates the regime the search occupies
 decide that a candidate *should* be frozen merely because the current observation classifies as
 `crystal`.
 
-Freeze admission is a separate epistemic policy in `swfactory.crystallization`. It may recommend
-keeping the claim surface liquid when the specification is unstable or semantic change remains
-high, and may recommend measurement when evidence is incomplete or verifiers disagree. Even after
-freezing exact bytes, formalization can remain empirical or optional when the abstraction is weak
-or the environment is open-world.
+Freeze admission is a separate epistemic decision, described in
+[formal correctness](formal-correctness.md#knowing-when-not-to-crystallize-is-part-of-correctness)
+and not implemented as code. It may keep the claim surface liquid when the specification is
+unstable or semantic change remains high, and may call for measurement when evidence is incomplete
+or verifiers disagree. Even after freezing exact bytes, formalization can remain empirical or
+optional when the abstraction is weak or the environment is open-world.
 
 This separation prevents a low-entropy search state from being mistaken for a well-posed theorem.
 

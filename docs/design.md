@@ -177,7 +177,8 @@ addresses, independent retries and run history, and prevents an outer visual com
 editing away a gate or changing delivery authority. A rejected line can complete operationally
 after publishing rejection evidence, so parent-DAG success means “the line finished,” not “the
 change was approved.” See [astronomer-blueprint.md](astronomer-blueprint.md). The same boundary
-serves [dag-factory](dag-factory.md): YAML composes, the line governs, and neither can edit the other.
+serves [dag-factory](astronomer-blueprint.md#dag-factory): YAML composes, the line governs, and
+neither can edit the other.
 
 ## Metrics and bands
 
@@ -288,24 +289,6 @@ enumerate `blueprints/*.toml`. A line may pin `[sandbox] backend` and absolute `
 `SWF_TOOLSET_BACKEND` and `SWF_TOOLSET_WORKDIR` are operational overrides. The shipped toolset
 line declares `sbx` and `/workspace/repo` explicitly. It is deliberately not the
 default: `factory` stays on islo.
-
-### Prior 1.1 compatibility evidence
-
-The following checks were recorded for the 1.1 line against `apache/airflow` main built from
-source, with the `common.ai` provider overlaid from the islo backend PR branch. They are historical
-evidence and do not validate the 2.0 changes in this delivery:
-
-| what | result |
-|---|---|
-| versions | airflow **3.4.0**, task-sdk 1.4.0, providers-standard 1.18.0 from `apache/airflow` main; common-ai 0.7.0 from the islo PR branch |
-| sandbox backends resolved | `islo` → `IsloSandboxBackend`, `sbx` → `SbxSandboxBackend` (opensandbox and asciibox are separate PRs, and report themselves unavailable by name) |
-| Airflow test suite | 31 passed (`tests/test_dag_parity.py`, `tests/test_dag_smoke.py`) |
-| a real DAG run | `airflow dags test factory --mark-success-pattern 'job\.approve_.*'` → all 14 tasks, `state=success` |
-
-To re-establish compatibility evidence for the current revision, run
-`./scripts/airflow_main.sh`, point `AIRFLOW_HOME` at a scratch directory, and execute the listed
-DAG checks. Return to the supported pin with `uv sync --group airflow`.
-
 
 ## The swf binary
 

@@ -459,9 +459,11 @@ def public_surface_findings(document: dict[str, Any], *, root: Path) -> list[str
     # The prose rule follows the reader, not one file. Scanning README and the site alone left
     # "The built-in choices are `local`, `srt`, `docker`, `islo`" standing in OPERATIONS.md and
     # docs/swf.md -- the same sentence that was corrected on the site, one directory over.
+    # docs/research/ is public prose too; moving a page there must not take it out of the rule.
+    docs = root / "docs"
     prose = {
         str(path.relative_to(root)): path.read_text(encoding="utf-8")
-        for path in [root / "OPERATIONS.md", *sorted((root / "docs").glob("*.md"))]
+        for path in [root / "OPERATIONS.md", *sorted(docs.glob("*.md")), *sorted(docs.glob("research/*.md"))]
         if path.exists()
     }
     findings: list[str] = []
