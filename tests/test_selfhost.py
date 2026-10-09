@@ -36,9 +36,7 @@ CONFINEMENT = (
     "src/swfactory/smolvm_backend.py",
     "src/swfactory/sandbox_contract.py",
     "src/swfactory/stages.py",
-    "src/swfactory/security_boundary.py",
     "src/swfactory/security_contract.py",
-    "src/swfactory/worker_security.py",
     "src/swfactory/backend_http.py",
 )
 

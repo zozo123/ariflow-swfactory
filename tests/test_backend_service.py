@@ -6,7 +6,7 @@ only about what it returns.
 
 Hermetic, in the house style of ``tests/test_control.py``: the Airflow transport is an ``opener``
 answering a canned ``(method, path)`` table, ``gh``/``islo`` are fake client classes swapped into
-the service module, and no test reaches a real network or a live Airflow. The server itself is
+the route table, and no test reaches a real network or a live Airflow. The server itself is
 real: ``make_server`` on an ephemeral loopback port, driven with ``http.client``, because the
 header-level guards (bearer compare, ``Content-Length`` bounds, ``Transfer-Encoding``) only exist
 inside ``BaseHTTPRequestHandler`` and cannot be exercised by calling ``Factory`` directly.
@@ -30,9 +30,10 @@ from typing import Any
 import pytest
 
 from swfactory.backend import Factory, make_server
+from swfactory.backend import routes as routes_mod
 from swfactory.backend import scm_service as scm_mod
 from swfactory.backend import service as service_mod
-from swfactory.control import AirflowClient
+from swfactory.control import AirflowClient, GitHubClient
 from swfactory.models import StageError
 from swfactory.recovery_accounting import PublicationReceipt
 from swfactory.scm import patch_content_digest
@@ -110,19 +111,17 @@ SUBMIT_ROUTES: dict[tuple[str, str], Any] = {
 }
 
 
-class FakeGitHubClient:
-    """Stands in for ``swfactory.control.GitHubClient``, whose runner default is bound at def time."""
+class FakeGitHubClient(GitHubClient):
+    """``swfactory.control.GitHubClient`` with canned label listings; every other read runs the ``gh``
+    fixture's runner, because the real runner default is bound at def time."""
 
     prs_returned: list[dict[str, Any]] = [{"number": 7, "title": "wired", "url": "https://x/7"}]
     issues_returned: list[dict[str, Any]] = [{"number": 9, "title": "filed", "url": "https://x/9"}]
 
-    def __init__(self, repo: str, *_a: Any, **_kw: Any) -> None:
-        self.repo = repo
-
-    def prs(self, label: str = "factory", limit: int = 30) -> list[dict[str, Any]]:
+    def prs(self, label: str = "factory", limit: int = 30) -> list[dict[str, Any]]:  # type: ignore[override]
         return self.prs_returned
 
-    def issues(self, label: str = "factory", limit: int = 30) -> list[dict[str, Any]]:
+    def issues(self, label: str = "factory", limit: int = 30) -> list[dict[str, Any]]:  # type: ignore[override]
         return self.issues_returned
 
 
@@ -233,7 +232,7 @@ def client(factory: Factory, airflow: FakeAirflow) -> Iterator[Client]:
 
 @pytest.fixture
 def gh(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    """Fake every ``gh`` path: the injected clients and ``Factory._gh``'s direct ``subprocess.run``."""
+    """Fake ``gh`` behind the route table's ``GitHubClient``, recording every argv it is handed."""
     calls: list[list[str]] = []
     rows = {
         "pr list": [
@@ -254,13 +253,8 @@ def gh(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
         key = " ".join(argv[1:3])
         return subprocess.CompletedProcess(argv, 0, json.dumps(rows.get(key, [])), "")
 
-    monkeypatch.setattr(service_mod, "GitHubClient", FakeGitHubClient)
-    monkeypatch.setattr(service_mod, "IsloClient", FakeIsloClient)
-    monkeypatch.setattr(
-        service_mod,
-        "subprocess",
-        types.SimpleNamespace(run=run, SubprocessError=subprocess.SubprocessError),
-    )
+    monkeypatch.setattr(routes_mod, "GitHubClient", lambda repo: FakeGitHubClient(repo, runner=run))
+    monkeypatch.setattr(routes_mod, "IsloClient", FakeIsloClient)
     return calls
 
 
@@ -959,7 +953,7 @@ def test_scm_refuses_when_no_repo_is_configured(tmp_path: Path, env: None, scm: 
     bare = Factory(token=TOKEN, airflow_url=AF, state_root=tmp_path / "s")
     try:
         with pytest.raises(service_mod.Refused) as caught:
-            scm_mod.operation(bare, "/scm/issue", {"ref": "1"})
+            bare.operation("/scm/issue", {"ref": "1"})
         assert caught.value.status == 503
     finally:
         bare.close()
@@ -1136,9 +1130,10 @@ def test_scm_publish_retry_adopts_a_pr_in_any_lifecycle_state_when_git_content_m
 
     # The adopted receipt is now the immutable journal answer: a further replay reads it back
     # without touching GitHub at all.
+    clients = len(scm.instances)
     status, again = client.call("POST", "/v1/scm/publish", _publish_body(cell))
     assert (status, again) == (200, payload)
-    assert scm.instances[-1].observed == [] and scm.instances[-1].published == []
+    assert len(scm.instances) == clients
 
 
 @pytest.mark.parametrize("remote", ["branch_only", "absent"])

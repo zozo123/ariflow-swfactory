@@ -14,44 +14,16 @@ from typing import Any
 from swfactory.authority import ResourceKind
 from swfactory.core_capabilities import CoreMutationRequest
 from swfactory.credential_lease import LeaseBinding
-from swfactory.liquid_security_runtime import Capability, SecurityContext
+from swfactory.durable_admission import request_digest
 from swfactory.population_adapter import (
     PopulationInvocation,
     population_adapter_identity,
 )
 from swfactory.population_manifest import BehaviorReceipt, PopulationManifestError
 from swfactory.provider_binding import bound_population_task_from_document
+from swfactory.security_contract import Capability, SecurityContext
 
-from .core_service import airflow_binding, ensure_core, intent_digest
-from .service import Factory, Refused, text
-
-
-def operation(factory: Factory, path: str, body: dict[str, Any]) -> Any:
-    if path == "/population/execute":
-        return _execute(factory, body)
-    if path == "/population/artifact":
-        return _artifact(factory, body)
-    raise Refused(404, "unknown backend population operation")
-
-
-def _managed_identity(
-    factory: Factory,
-    body: dict[str, Any],
-) -> tuple[dict[str, Any], str, int, str, str]:
-    cell_id = text(body, "cell_id")
-    epoch = body.get("epoch")
-    if type(epoch) is not int or epoch < 1:
-        raise ValueError("epoch must be a positive integer")
-    policy_digest = text(body, "policy_digest")
-    operation_key = text(body, "operation_key", max_len=256)
-    cell = factory._cell(cell_id)
-    if int(cell["epoch"]) != epoch:
-        raise Refused(409, f"stale Factory Cell epoch {epoch}; current epoch is {cell['epoch']}")
-    if cell.get("policy_digest") != policy_digest:
-        raise Refused(409, "Factory Cell policy digest changed; population call is stale")
-    airflow_binding(factory, cell_id, epoch)
-    ensure_core(factory)
-    return cell, cell_id, epoch, policy_digest, operation_key
+from .service import Factory, Refused, _attempt, airflow_binding, leased, text
 
 
 def _invocation(
@@ -86,12 +58,7 @@ def _lease_binding(
     operation_key: str,
     invocation: PopulationInvocation,
 ) -> LeaseBinding:
-    try:
-        row = factory.control.operations.get(operation_key)
-        attempt = max(1, int(row.get("attempts") or 0))
-    except KeyError:
-        attempt = 1
-    airflow = airflow_binding(factory, str(cell["cell_id"]), int(cell["epoch"]))
+    airflow = airflow_binding(cell)
     sandbox_id = ":".join(
         value
         for value in (
@@ -109,7 +76,7 @@ def _lease_binding(
         ),
         stage_id="population",
         sandbox_id=sandbox_id,
-        attempt_number=attempt,
+        attempt_number=_attempt(factory, operation_key),
         cell_id=airflow.cell_id,
         epoch=airflow.epoch,
         operation_key=operation_key,
@@ -117,8 +84,9 @@ def _lease_binding(
     )
 
 
-def _execute(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
-    cell, cell_id, epoch, policy_digest, operation_key = _managed_identity(factory, body)
+def execute(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
+    cell, epoch, policy_digest, operation_key = factory.fenced(body, what="population call")
+    cell_id = str(cell["cell_id"])
     invocation = _invocation(body)
     provider = invocation.task.provider
     if provider is None:
@@ -129,7 +97,7 @@ def _execute(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
 
     adapter_digest = population_adapter_identity(adapter)
     invocation_digest = invocation.digest()
-    request_intent = intent_digest(
+    request_intent = request_digest(
         {
             "kind": "population_model_call",
             "invocation_digest": invocation_digest,
@@ -141,7 +109,7 @@ def _execute(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
     )
     tenant = factory.repo or str(cell.get("repo") or "factory")
     request = CoreMutationRequest(
-        airflow=airflow_binding(factory, cell_id, epoch),
+        airflow=airflow_binding(cell),
         security=SecurityContext(
             tenant=tenant,
             cell_id=cell_id,
@@ -162,40 +130,19 @@ def _execute(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
     )
 
     def provider_call() -> dict[str, Any]:
-        credential: str | None = None
-        handle = None
         capability = adapter.credential_capability
-        if capability is not None:
+        if capability is None:
+            result = adapter.execute(invocation, credential=None)
+        else:
             binding = _lease_binding(
                 factory,
                 cell=cell,
                 operation_key=operation_key,
                 invocation=invocation,
             )
-            factory.leases.revoke_prior_attempts(
-                binding.cell_id,
-                binding.epoch,
-                binding.attempt_number,
-            )
-            handle = factory.leases.mint(
-                binding,
-                capability=capability,
-                purpose="population-search",
-                ttl_s=900.0,
-            )
-            credential = factory.leases.redeem(
-                handle,
-                binding,
-                process_nonce=factory.lease_process_nonce,
-            )
-
-        try:
-            result = adapter.execute(invocation, credential=credential)
-            result.validate()
-        finally:
-            credential = None
-            if handle is not None:
-                factory.leases.revoke(handle.lease_id)
+            with leased(factory, binding, capability, "population-search", ttl_s=900.0) as credential:
+                result = adapter.execute(invocation, credential=credential)
+        result.validate()
 
         candidate_digest = None
         if result.output:
@@ -241,8 +188,9 @@ def _execute(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _artifact(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
-    _cell, cell_id, epoch, _policy_digest, operation_key = _managed_identity(factory, body)
+def artifact(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
+    cell, epoch, _, operation_key = factory.fenced(body, what="population call")
+    cell_id = str(cell["cell_id"])
     artifact_digest = text(body, "artifact_digest", max_len=80)
     max_chars = body.get("max_chars", 8192)
     if type(max_chars) is not int or not 1 <= max_chars <= 32_768:

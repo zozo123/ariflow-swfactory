@@ -18,8 +18,8 @@ from typing import Any
 from swfactory.authority import ResourceKind
 from swfactory.core_capabilities import CoreMutationRequest
 from swfactory.credential_lease import LeaseBinding
+from swfactory.durable_admission import request_digest
 from swfactory.idempotency import MutationOutcome
-from swfactory.liquid_security_runtime import Capability, SecurityContext
 from swfactory.models import StageError
 from swfactory.recovery_accounting import (
     Observation,
@@ -30,53 +30,34 @@ from swfactory.recovery_accounting import (
     classify_observation,
 )
 from swfactory.scm import GitHubScm, patch_content_digest
+from swfactory.security_contract import Capability, SecurityContext
 
-from .core_service import airflow_binding, ensure_core, intent_digest
-from .service import Factory, Refused, text
+from .service import Factory, Refused, _attempt, airflow_binding, leased, text
 
 MAX_PATCH_BYTES = 12 * 1024 * 1024
 _MARKER_PREFIX = "<!-- swfactory-patch-sha256:"
 _ISSUE_MARKER_PREFIX = "<!-- swfactory-operation:"
 
 
-def operation(factory: Factory, path: str, body: dict[str, Any]) -> Any:
-    if path == "/scm/autonomy-status":
-        from swfactory.autonomy_status import status
+def autonomy_status(factory: Factory, body: dict[str, Any]) -> Any:
+    from swfactory.autonomy_status import status
 
-        limit = body.get("limit", 50)
-        if type(limit) is not int:
-            raise ValueError("limit must be an integer")
-        return status(factory.state_root, limit=limit)
-    if path == "/scm/linear-source":
-        return _linear_source(factory, body)
-    if not factory.repo:
-        raise Refused(503, "SWF_REPO is not configured on the backend")
-    base_branch = text({"base": body.get("base_branch", "main")}, "base")
-    scm = GitHubScm(factory.repo, base_branch)
-    if path in {"/scm/triage", "/scm/policy-gate", "/scm/merge"}:
-        from .autonomous_service import operation as autonomous_operation
-
-        try:
-            return autonomous_operation(factory, path, body)
-        except StageError as error:
-            raise Refused(503 if error.retryable else 403, str(error)) from error
-    if path == "/scm/issue":
-        # Filesystem issue refs are a local-demo affordance. The backend holds publication and
-        # Airflow credentials, so a network caller may resolve GitHub issue numbers only.
-        ref = text(body, "ref", max_len=128).strip()
-        if not ref.isdigit():
-            raise Refused(400, "ref must be an issue number over the API; a path is local-only")
-        issue = scm.fetch_issue(ref)
-        return issue.model_dump(mode="json")
-    if path == "/scm/publish":
-        return _publish(factory, base_branch, body)
-    if path == "/scm/open-issue":
-        return _open_issue(factory, base_branch, body)
-    raise Refused(404, "unknown backend SCM operation")
+    limit = body.get("limit", 50)
+    if type(limit) is not int:
+        raise ValueError("limit must be an integer")
+    return status(factory.state_root, limit=limit)
 
 
-def _linear_source(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
-    from swfactory.durable_admission import request_digest
+def fetch_issue(factory: Factory, body: dict[str, Any], base_branch: str) -> dict[str, Any]:
+    # Filesystem issue refs are a local-demo affordance. The backend holds publication and
+    # Airflow credentials, so a network caller may resolve GitHub issue numbers only.
+    ref = text(body, "ref", max_len=128).strip()
+    if not ref.isdigit():
+        raise Refused(400, "ref must be an issue number over the API; a path is local-only")
+    return GitHubScm(factory.repo, base_branch).fetch_issue(ref).model_dump(mode="json")
+
+
+def linear_source(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
     from swfactory.linear_intake import source_issue
 
     ref = text(body, "ref", max_len=128)
@@ -88,7 +69,7 @@ def _linear_source(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
         raise Refused(409, "accepted Linear source requires the current Cell policy")
     if cell.get("issue") != ref:
         raise Refused(403, "accepted Linear source differs from this Cell's issue")
-    airflow_binding(factory, str(cell["cell_id"]), epoch)
+    airflow_binding(cell)
     record = factory.control.admission.work_order_for_cell(str(cell["cell_id"]), epoch)
     order = record.payload
     if request_digest(order) != record.request_digest:
@@ -106,39 +87,10 @@ def _linear_source(factory: Factory, body: dict[str, Any]) -> dict[str, Any]:
     return issue.model_dump(mode="json")
 
 
-def _managed_identity(
-    factory: Factory,
-    body: dict[str, Any],
-) -> tuple[dict[str, Any], SecurityContext, str, str]:
-    cell_id = text(body, "cell_id")
-    epoch = body.get("epoch")
-    if type(epoch) is not int or epoch < 1:
-        raise ValueError("epoch must be a positive integer")
-    policy_digest = text(body, "policy_digest")
-    operation_key = text(body, "operation_key", max_len=256)
-    initiating_actor = text({"actor": body.get("actor", "airflow-worker")}, "actor", max_len=128)
-    cell = factory._cell(cell_id)
-    if int(cell["epoch"]) != epoch:
-        raise Refused(409, f"stale Factory Cell epoch {epoch}; current epoch is {cell['epoch']}")
-    if cell.get("policy_digest") != policy_digest:
-        raise Refused(409, "Factory Cell policy digest changed; publication is stale")
-    airflow_binding(factory, cell_id, epoch)  # fail closed before constructing the capability
-    ensure_core(factory)
-    security = SecurityContext(
-        tenant=factory.repo,
-        cell_id=cell_id,
-        epoch=epoch,
-        role="publisher",
-        capabilities=frozenset({Capability.PUBLISH_GIT}),
-    )
-    return cell, security, operation_key, initiating_actor
-
-
 def _request(
     factory: Factory,
     *,
     cell: dict[str, Any],
-    security: SecurityContext,
     operation_key: str,
     kind: str,
     digest: str,
@@ -146,8 +98,14 @@ def _request(
     parts: tuple[str, ...],
 ) -> CoreMutationRequest:
     return CoreMutationRequest(
-        airflow=airflow_binding(factory, str(cell["cell_id"]), int(cell["epoch"])),
-        security=security,
+        airflow=airflow_binding(cell),
+        security=SecurityContext(
+            tenant=factory.repo,
+            cell_id=str(cell["cell_id"]),
+            epoch=int(cell["epoch"]),
+            role="publisher",
+            capabilities=frozenset({Capability.PUBLISH_GIT}),
+        ),
         resource=ResourceKind.GITHUB_PUBLICATION,
         capability=Capability.PUBLISH_GIT,
         actor="python-backend",
@@ -168,11 +126,6 @@ def _lease_binding(
     *,
     stage_id: str,
 ) -> LeaseBinding:
-    try:
-        operation = factory.control.operations.get(operation_key)
-        attempt = max(1, int(operation.get("attempts") or 0))
-    except KeyError:
-        attempt = 1
     run_id = str(cell.get("airflow_run_id") or "unbound-run")
     compute = cell.get("compute")
     compute = compute if isinstance(compute, dict) else {}
@@ -183,7 +136,7 @@ def _lease_binding(
         task_instance_id=f"job[{cell.get('map_index', 0)}].{stage_id}",
         stage_id=stage_id,
         sandbox_id=sandbox_id,
-        attempt_number=attempt,
+        attempt_number=_attempt(factory, operation_key),
         cell_id=str(cell["cell_id"]),
         epoch=int(cell["epoch"]),
         operation_key=operation_key,
@@ -202,38 +155,26 @@ def _with_github_lease[T](
     action: Callable[[GitHubScm], T],
 ) -> T:
     binding = _lease_binding(factory, cell, operation_key, stage_id="deliver")
-    factory.leases.revoke_prior_attempts(
-        binding.cell_id,
-        binding.epoch,
-        binding.attempt_number,
-    )
-    handle = factory.leases.mint(
-        binding,
-        capability=capability,
-        purpose=purpose,
-        ttl_s=120.0,
-    )
-    try:
-        token = factory.leases.redeem(
-            handle,
-            binding,
-            process_nonce=factory.lease_process_nonce,
-        )
+    with leased(factory, binding, capability, purpose, ttl_s=120.0) as token:
         return action(GitHubScm(factory.repo, base_branch, token=token))
-    finally:
-        factory.leases.revoke(handle.lease_id)
 
 
-def _publish(factory: Factory, base_branch: str, body: dict[str, Any]) -> dict[str, Any]:
-    cell, security, operation_key, initiating_actor = _managed_identity(factory, body)
-    branch = text(body, "branch")
-    title = text(body, "title", max_len=512)
-    pr_body = body.get("body")
-    if not isinstance(pr_body, str) or len(pr_body) > 2 * 1024 * 1024:
+def _bounded_body_and_labels(body: dict[str, Any]) -> tuple[str, list[str]]:
+    content = body.get("body")
+    if not isinstance(content, str) or len(content) > 2 * 1024 * 1024:
         raise ValueError("body must be a string of at most 2 MiB")
     labels = body.get("labels") or []
     if not isinstance(labels, list) or any(not isinstance(value, str) or len(value) > 128 for value in labels):
         raise ValueError("labels must be an array of bounded strings")
+    return content, labels
+
+
+def publish(factory: Factory, body: dict[str, Any], base_branch: str) -> dict[str, Any]:
+    initiating_actor = text(body, "actor", default="airflow-worker", max_len=128)
+    cell, _, _, operation_key = factory.fenced(body, what="publication")
+    branch = text(body, "branch")
+    title = text(body, "title", max_len=512)
+    pr_body, labels = _bounded_body_and_labels(body)
     allowed = body.get("allowed_prefixes")
     if allowed is not None and (not isinstance(allowed, list) or any(not isinstance(value, str) for value in allowed)):
         raise ValueError("allowed_prefixes must be an array of strings or null")
@@ -258,7 +199,7 @@ def _publish(factory: Factory, base_branch: str, body: dict[str, Any]) -> dict[s
     marker = f"{_MARKER_PREFIX}{patch_digest} -->"
     publish_body = pr_body.rstrip() + "\n\n" + marker + "\n"
     base_branch = str(base_branch)
-    digest = intent_digest(
+    digest = request_digest(
         {
             "kind": "github_publish",
             "repo": factory.repo,
@@ -276,7 +217,6 @@ def _publish(factory: Factory, base_branch: str, body: dict[str, Any]) -> dict[s
     request = _request(
         factory,
         cell=cell,
-        security=security,
         operation_key=operation_key,
         kind="github_publish",
         digest=digest,
@@ -321,7 +261,7 @@ def _publish(factory: Factory, base_branch: str, body: dict[str, Any]) -> dict[s
             f"{receipt.pr_state} pull request carries the intended git content",
         )
 
-    def publish() -> dict[str, Any]:
+    def create() -> dict[str, Any]:
         def apply(scoped: GitHubScm) -> dict[str, Any]:
             # Re-observe inside the write lease before mutating. Reconciliation may have happened
             # under a previous read lease; another publisher can win between those two moments.
@@ -383,7 +323,7 @@ def _publish(factory: Factory, base_branch: str, body: dict[str, Any]) -> dict[s
                 f"remote observation failed: {error}",
             )
 
-    result = factory.control.mutate_core(request, publish, reconcile=reconcile).result
+    result = factory.control.mutate_core(request, create, reconcile=reconcile).result
     if autonomous is not None:
         from .autonomous_service import remember_publication
 
@@ -396,18 +336,14 @@ def _publication_identity(repo: str, base: str, branch: str, content_digest: str
     return RemoteIdentity("github_publish", repo, f"{base}:{branch}", content_digest)
 
 
-def _open_issue(factory: Factory, base_branch: str, body: dict[str, Any]) -> dict[str, Any]:
-    cell, security, operation_key, initiating_actor = _managed_identity(factory, body)
+def open_issue(factory: Factory, body: dict[str, Any], base_branch: str) -> dict[str, Any]:
+    initiating_actor = text(body, "actor", default="airflow-worker", max_len=128)
+    cell, _, _, operation_key = factory.fenced(body, what="publication")
     if str(cell.get("issue", "")).startswith("linear_"):
         raise Refused(403, "Linear work cannot create GitHub issues; native incident projection is not implemented")
     title = text(body, "title", max_len=512)
-    issue_body = body.get("body")
-    labels = body.get("labels") or []
-    if not isinstance(issue_body, str) or len(issue_body) > 2 * 1024 * 1024:
-        raise ValueError("body must be a string of at most 2 MiB")
-    if not isinstance(labels, list) or any(not isinstance(value, str) or len(value) > 128 for value in labels):
-        raise ValueError("labels must be an array of bounded strings")
-    digest = intent_digest(
+    issue_body, labels = _bounded_body_and_labels(body)
+    digest = request_digest(
         {
             "kind": "github_issue",
             "repo": factory.repo,
@@ -422,7 +358,6 @@ def _open_issue(factory: Factory, base_branch: str, body: dict[str, Any]) -> dic
     request = _request(
         factory,
         cell=cell,
-        security=security,
         operation_key=operation_key,
         kind="github_issue",
         digest=digest,

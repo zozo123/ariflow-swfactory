@@ -8,12 +8,11 @@ identity, authority, or the manifest it was assigned.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from swfactory.canonical import json_digest as _digest
 from swfactory.population_manifest import (
     POPULATION_MANIFEST_AUTHORITY,
     PopulationManifest,
@@ -23,11 +22,6 @@ from swfactory.population_manifest import (
 
 PROVIDER_BINDING_SCHEMA_VERSION = 1
 PROVIDER_BINDING_AUTHORITY = POPULATION_MANIFEST_AUTHORITY
-
-
-def _digest(value: object) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 @dataclass(frozen=True)

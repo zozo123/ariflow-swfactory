@@ -437,7 +437,7 @@
       "support": "experimental",
       "invariant": "Only the checked-in policy may approve digest-bound artifacts and authorize same-SHA backend merges at a live Cell epoch; autonomous runs cannot change their authority.",
       "owner": "backend+airflow",
-      "runtime_entry": "swfactory.backend.autonomous_service.operation -> Airflow autonomous DAG",
+      "runtime_entry": "swfactory.backend.autonomous_service -> Airflow autonomous DAG",
       "environment": "hermetic GitHub transports and local Airflow; live deployment requires backend and provider credentials",
       "test": "tests/test_autonomy.py and tests/test_dag_parity.py",
       "evidence": [

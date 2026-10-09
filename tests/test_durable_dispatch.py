@@ -487,7 +487,7 @@ def test_cancelling_while_dispatching_keeps_the_unproven_remote_outcome(backend)
         return original(intent)
 
     def cancel_midflight(run_id: str) -> None:
-        box.factory.control.cancel_reservation(holder["work_id"], reason="operator cancelled mid-dispatch")
+        box.factory.control.admission.cancel(holder["work_id"], reason="operator cancelled mid-dispatch")
 
     box.factory._dispatch_intent = spy  # type: ignore[method-assign]
     box.airflow.post_hook = cancel_midflight

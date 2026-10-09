@@ -12,9 +12,11 @@ import json
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
@@ -35,7 +37,48 @@ from swfactory.runtime import build_ctx, ctx_for, job_config, job_run_dir
 from swfactory.scm import make_scm
 from swfactory.stages import Approver, Ctx, cli_approver, run_pipeline, setup
 
+if TYPE_CHECKING:
+    from swfactory.adaptive_information import InformationBudgetDecision
+    from swfactory.population_manifest import PopulationManifest
+
 app = typer.Typer(help="AI-native software factory.", no_args_is_help=True, add_completion=False)
+
+# What reading a JSON file into a typed document can raise (``json.JSONDecodeError`` is a ValueError).
+_JSON_INPUT = (OSError, KeyError, TypeError, ValueError)
+
+
+@contextmanager
+def _fail(prefix: str, *errors: type[Exception], code: int = 2) -> Iterator[None]:
+    """The commands' error boundary: any of ``errors`` is printed to stderr as ``<prefix>: <error>``
+    (the bare error when ``prefix`` is empty) and exits ``code``."""
+    try:
+        yield
+    except errors as error:
+        typer.echo(f"{prefix}: {error}" if prefix else str(error), err=True)
+        raise typer.Exit(code) from error
+
+
+def _echo_json(document: Any, *, sort: bool = True) -> None:
+    typer.echo(json.dumps(document, indent=2, sort_keys=sort))
+
+
+def _echo_fields(document: dict[str, Any]) -> None:
+    width = max(len(k) for k in document)
+    for name, value in document.items():
+        typer.echo(f"{name.replace('_', ' '):<{width}}  {value}")
+
+
+def _named_paths(values: list[str] | None, usage: str, duplicate: str) -> dict[str, Path]:
+    """Repeated ``NAME=PATH`` options as a mapping; ``usage`` and ``duplicate`` word the refusals."""
+    paths: dict[str, Path] = {}
+    for value in values or []:
+        name, separator, path = value.partition("=")
+        if not separator or not name.strip() or not path.strip():
+            raise ValueError(usage)
+        if name in paths:
+            raise ValueError(f"{duplicate}: {name}")
+        paths[name] = Path(path)
+    return paths
 
 
 @app.command("linear-preview")
@@ -49,12 +92,9 @@ def linear_preview_cmd(
 
     from swfactory.linear_source import LinearSource, LinearSourceError
 
-    try:
+    with _fail("linear preview", LinearSourceError):
         source = LinearSource(os.environ.get("SWF_LINEAR_API_KEY", ""), workspace_id, project_id)
         preview = source.preview(issue_id)
-    except LinearSourceError as error:
-        typer.echo(f"linear preview: {error}", err=True)
-        raise typer.Exit(2) from None
     typer.echo(json.dumps(preview.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
 
 
@@ -82,11 +122,8 @@ def linear_submit_cmd(
     except ValidationError:
         typer.echo("linear submit: invalid issue UUID, intent digest or attempt identity", err=True)
         raise typer.Exit(2) from None
-    try:
+    with _fail("linear submit", CellCallbackError, code=1):
         receipt = post("/work-orders", {"line": line, "work_source": source.model_dump()})
-    except CellCallbackError as error:
-        typer.echo(f"linear submit: {error}", err=True)
-        raise typer.Exit(1) from None
     typer.echo(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True))
 
 
@@ -95,11 +132,8 @@ def backend_serve(host: str = "127.0.0.1", port: int = 8082) -> None:
     """Serve the factory API for the Rust console; credentials come from backend environment."""
     from swfactory.backend import serve
 
-    try:
+    with _fail("backend", ValueError, OSError, code=1):
         serve(host, port)
-    except (ValueError, OSError) as error:
-        typer.echo(f"backend: {error}", err=True)
-        raise typer.Exit(1) from error
 
 
 SCRIPTED_BANNER = "SCRIPTED REPLAY — agent=scripted, no model calls"
@@ -138,11 +172,13 @@ def execute(
 
 
 def _load_blueprint(name_or_path: str) -> Blueprint:
-    try:
+    with _fail("blueprint error", OSError, ValueError):
         return blueprint_mod.load(name_or_path)
-    except (OSError, ValueError) as e:
-        typer.echo(f"blueprint error: {e}", err=True)
-        raise typer.Exit(2) from e
+
+
+def _overrides(**flags: Any) -> dict[str, Any]:
+    """The flags the user actually passed: ``None`` means not passed."""
+    return {key: value for key, value in flags.items() if value is not None}
 
 
 def _run_jobs(bp: Blueprint, issues: list[str], overrides: dict[str, Any], *, targets: list[str] | None = None) -> None:
@@ -158,30 +194,21 @@ def _run_jobs(bp: Blueprint, issues: list[str], overrides: dict[str, Any], *, ta
     if not issues and bp.trigger.backlog is not None:
         from swfactory.intake_governance import drain_line
 
-        try:
+        with _fail("backlog unavailable", StageError, code=1):
             selection = drain_line(bp)
-        except StageError as e:
-            typer.echo(f"backlog unavailable: {e}", err=True)
-            raise typer.Exit(1) from e
         for number, reason in sorted(selection.skipped.items()):
             typer.echo(f"skipped {number}: {reason}")
         issues = [str(candidate.issue) for candidate in selection.selected]
         if not issues:
             typer.echo(f"backlog {bp.trigger.backlog.label!r}: nothing eligible")
             return
-    try:
+    with _fail("config error", ValueError):
         jobs = bp.jobs({"issues": issues, **({"targets": targets} if targets else {})})
-    except ValueError as e:
-        typer.echo(f"config error: {e}", err=True)
-        raise typer.Exit(2) from e
     # Before the first job provisions anything: every job in one invocation shares the sandbox
     # provider, so one check answers for all of them. What this replaces is the provider's own
     # error several stages in, after a cell already existed.
-    try:
+    with _fail("run unavailable", StageError, code=1):
         runtime_mod._preflight(job_config(bp, jobs[0], run_id=run_id, overrides=overrides))
-    except StageError as e:
-        typer.echo(f"run unavailable: {e}", err=True)
-        raise typer.Exit(1) from e
 
     failed = False
     for job in jobs:
@@ -244,20 +271,20 @@ def run(
     _run_jobs(
         _load_blueprint(blueprint),
         issue or [],
-        {
-            "repo": repo,
-            "target_dir": target_dir,
-            "agent": agent,
-            "sandbox": sandbox,
-            "scm": scm,
-            "approve": approve,
-            "tests": tests,
-            "crabbox_provider": crabbox_provider,
-            "max_build_iterations": max_build_iterations,
-            "record_dir": record,
-            "allow_local_agent": allow_local_agent or None,
-            "run_id": run_id,
-        },
+        _overrides(
+            repo=repo,
+            target_dir=target_dir,
+            agent=agent,
+            sandbox=sandbox,
+            scm=scm,
+            approve=approve,
+            tests=tests,
+            crabbox_provider=crabbox_provider,
+            max_build_iterations=max_build_iterations,
+            record_dir=record,
+            allow_local_agent=allow_local_agent or None,
+            run_id=run_id,
+        ),
         targets=target,
     )
 
@@ -349,7 +376,7 @@ def improve(
         err=as_json or as_issues,
     )
     if as_json:
-        typer.echo(json.dumps(assessment.to_dict(), indent=2, sort_keys=True))
+        _echo_json(assessment.to_dict())
         return
     if as_issues:
         if not heat.enrol_allowed and not ack_queue:
@@ -406,11 +433,8 @@ def provenance_verify(
     """Check downloaded artifacts against the manifest published with them. Exit 1 on any mismatch."""
     from swfactory import provenance as provenance_mod
 
-    try:
+    with _fail("unreadable manifest", OSError, KeyError, ValueError):
         document = provenance_mod.load(manifest_path)
-    except (OSError, KeyError, ValueError) as error:
-        typer.echo(f"unreadable manifest: {error}", err=True)
-        raise typer.Exit(2) from error
     ok, failures = provenance_mod.verify(root, document)
     if ok:
         typer.echo(f"verified {len(document.artifacts)} artifacts against {manifest_path}")
@@ -456,21 +480,17 @@ def demo(
         ["demo/issue.md"],
         {
             **preset,
-            **{
-                k: v
-                for k, v in {
-                    "agent": agent,
-                    "sandbox": sandbox,
-                    "scm": scm,
-                    "approve": approve,
-                    "tests": tests,
-                    "crabbox_provider": crabbox_provider,
-                    "record_dir": record,
-                    "allow_local_agent": allow_local_agent or None,
-                    "run_id": run_id,
-                }.items()
-                if v is not None
-            },
+            **_overrides(
+                agent=agent,
+                sandbox=sandbox,
+                scm=scm,
+                approve=approve,
+                tests=tests,
+                crabbox_provider=crabbox_provider,
+                record_dir=record,
+                allow_local_agent=allow_local_agent or None,
+                run_id=run_id,
+            ),
         },
     )
 
@@ -547,11 +567,8 @@ def maintain(
     if sweep_ttl_s:
         from swfactory.cell_callback import CellCallbackError
 
-        try:
+        with _fail("sweep refused", CellCallbackError, code=1):
             report = maintain_mod.request_sweep(sweep_ttl_s)
-        except CellCallbackError as e:
-            typer.echo(f"sweep refused: {e}", err=True)
-            raise typer.Exit(1) from e
         for key in ("removed", "kept", "debt", "reconciled"):
             for name in report.get(key, []):
                 typer.echo(f"{key:10s} {name}")
@@ -579,17 +596,14 @@ def state_autonomy(
 
     from swfactory.autonomy_status import remote_status, status
 
-    try:
+    with _fail("autonomy status unavailable", OSError, ValueError, sqlite3.Error, code=1):
         result = (
             remote_status(backend_url, os.environ.get("SWF_BACKEND_TOKEN", ""), limit=limit)
             if backend_url and not local
             else status(root, limit=limit)
         )
-    except (OSError, ValueError, sqlite3.Error) as error:
-        typer.echo(f"autonomy status unavailable: {error}", err=True)
-        raise typer.Exit(1) from error
     if as_json:
-        typer.echo(json.dumps(result, indent=2))
+        _echo_json(result, sort=False)
         return
     typer.echo(f"Policy {result['policy_revision']} enabled={result['enabled']}")
     if not result["decisions"]:
@@ -612,11 +626,8 @@ def state_list(
     """List the most recently changed local runs, their ownership and recorded spend."""
     from swfactory.inspection import list_runs
 
-    try:
+    with _fail("saved state unavailable", OSError, ValueError):
         runs = list_runs(root, limit=limit)
-    except (OSError, ValueError) as error:
-        typer.echo(f"saved state unavailable: {error}", err=True)
-        raise typer.Exit(2) from error
     if attention:
         runs = [
             run
@@ -655,15 +666,9 @@ def state_inspect(
     """Print identity, stage evidence, operation ownership and journal health as JSON."""
     from swfactory.inspection import inspect_run
 
-    try:
+    with _fail("saved state unavailable", OSError, ValueError), _fail("", FileNotFoundError, code=3):
         details = inspect_run(root, run_id, event_limit=events)
-    except FileNotFoundError as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(3) from error
-    except (OSError, ValueError) as error:
-        typer.echo(f"saved state unavailable: {error}", err=True)
-        raise typer.Exit(2) from error
-    typer.echo(json.dumps(details, indent=2))
+    _echo_json(details, sort=False)
     if details["errors"]:
         raise typer.Exit(1)
 
@@ -686,15 +691,9 @@ def state_reaccept(
     from swfactory.paths import confined_path, validate_run_id
     from swfactory.state import RunState
 
-    try:
+    with _fail("saved state unavailable", OSError, ValueError), _fail("cannot re-accept", StageError, code=1):
         state = RunState(confined_path(Path(root).expanduser().resolve(), validate_run_id(run_id)))
         retired = accepted_inputs.reaccept(state, actor=actor, reason=reason)
-    except (OSError, ValueError) as error:
-        typer.echo(f"saved state unavailable: {error}", err=True)
-        raise typer.Exit(2) from error
-    except StageError as error:
-        typer.echo(f"cannot re-accept: {error}", err=True)
-        raise typer.Exit(1) from error
     typer.echo(f"retired {retired.digest}; the next task admits the current inputs.")
     typer.echo("Re-answer every gate: approvals given for the retired inputs no longer publish.")
 
@@ -757,7 +756,7 @@ def webhook_serve(
 
     from swfactory import webhook as webhook_mod
 
-    try:
+    with _fail("webhook", ValueError, OSError, sqlite3.Error):
         # Managed mode holds no Airflow credential at all: the only mutation this process can make
         # is a work order, so a bug here cannot become a run the backend never admitted.
         orders = None
@@ -774,9 +773,6 @@ def webhook_serve(
             queue.bind(airflow_url=webhook_mod._safe_airflow_base(airflow_url))
         else:
             queue.bind(work_order_url=orders.url)
-    except (ValueError, OSError, sqlite3.Error) as e:
-        typer.echo(f"webhook: {e}", err=True)
-        raise typer.Exit(2) from e
     if orders is None:
         typer.echo(
             "webhook: LEGACY mode -- dispatching straight to Airflow, so these runs get no managed "
@@ -803,11 +799,8 @@ def _webhook_inbox(path: Path) -> DeliveryInbox:
     if not path.expanduser().is_file():
         typer.echo(f"webhook inbox does not exist: {path}", err=True)
         raise typer.Exit(3)
-    try:
+    with _fail("webhook inbox unavailable", OSError, ValueError, sqlite3.Error, code=1):
         return DeliveryInbox(path)
-    except (OSError, ValueError, sqlite3.Error) as exc:
-        typer.echo(f"webhook inbox unavailable: {exc}", err=True)
-        raise typer.Exit(1) from exc
 
 
 @webhook_app.command("deliveries")
@@ -825,12 +818,9 @@ def webhook_deliveries(
     import sqlite3
 
     queue = _webhook_inbox(inbox)
-    try:
+    with _fail("webhook", ValueError, sqlite3.Error):
         deliveries = queue.list(state=state, limit=limit)
         summary = queue.summary()
-    except (ValueError, sqlite3.Error) as exc:
-        typer.echo(f"webhook: {exc}", err=True)
-        raise typer.Exit(2) from exc
     if as_json:
         typer.echo(json.dumps({**summary, "deliveries": [d.public() for d in deliveries]}))
         return
@@ -860,7 +850,7 @@ def webhook_inspect(
     except sqlite3.Error as exc:
         typer.echo("webhook inbox unavailable", err=True)
         raise typer.Exit(1) from exc
-    typer.echo(json.dumps(receipt.public(), indent=2))
+    _echo_json(receipt.public(), sort=False)
 
 
 @webhook_app.command("retry")
@@ -882,7 +872,7 @@ def webhook_retry(
     except sqlite3.Error as exc:
         typer.echo("webhook inbox unavailable", err=True)
         raise typer.Exit(1) from exc
-    typer.echo(json.dumps(receipt.public(), indent=2))
+    _echo_json(receipt.public(), sort=False)
 
 
 @webhook_app.command("route")
@@ -896,21 +886,15 @@ def webhook_route(
     """Dry run: print the DAG run a payload would trigger (exit 1 when it would be ignored)."""
     from swfactory import webhook as webhook_mod
 
-    try:
+    with _fail("payload error", OSError, ValueError):
         data = json.loads(payload.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        typer.echo(f"payload error: {e}", err=True)
-        raise typer.Exit(2) from e
     trigger = webhook_mod.route(event, data if isinstance(data, dict) else {})
     if trigger is None:
         typer.echo(f"{event}: ignored")
         raise typer.Exit(1)
     if repository_check:
-        try:
+        with _fail("webhook route rejected", OSError, ValueError):
             trigger = webhook_mod.repository_trigger(trigger, webhook_mod._repository(data))
-        except (OSError, ValueError) as exc:
-            typer.echo(f"webhook route rejected: {exc}", err=True)
-            raise typer.Exit(2) from exc
     typer.echo(f"POST /api/v2/dags/{trigger.dag_id}/dagRuns {json.dumps(trigger.body(), sort_keys=True)}")
 
 
@@ -925,6 +909,12 @@ app.add_typer(backup_app, name="backup")
 StateRoot = Annotated[Path, typer.Option(help="the one shared local factory state root")]
 
 
+def _require_reason(reason: str, why: str) -> None:
+    if not reason.strip():
+        typer.echo(f"--reason is required: {why}", err=True)
+        raise typer.Exit(2)
+
+
 @backup_app.command("create")
 def backup_create(
     dest: Annotated[Path, typer.Argument(help="empty directory to write this backup into")],
@@ -934,11 +924,8 @@ def backup_create(
     """Quiesce every authoritative store and write one manifest-covered backup."""
     from swfactory.restore_contract import BackupRefused, create_backup
 
-    try:
+    with _fail("backup refused", BackupRefused, OSError, ValueError, code=1):
         manifest = create_backup(state_root, dest, actor=actor)
-    except (BackupRefused, OSError, ValueError) as error:
-        typer.echo(f"backup refused: {error}", err=True)
-        raise typer.Exit(1) from error
     stores = ", ".join(f"{s['name']}@{s['schema_version']}" for s in manifest["stores"])
     typer.echo(f"{dest}: {len(manifest['files'])} files, {stores}")
     typer.echo(manifest["manifest_digest"])
@@ -972,14 +959,9 @@ def backup_restore(
     """Validate a backup, refuse an old-binary rollback, and restore with mutations withheld."""
     from swfactory.restore_contract import RestoreRefused, restore
 
-    if not reason.strip():
-        typer.echo("--reason is required: a restore is an operator decision that must be on the record", err=True)
-        raise typer.Exit(2)
-    try:
+    _require_reason(reason, "a restore is an operator decision that must be on the record")
+    with _fail("restore refused", RestoreRefused, OSError, code=1):
         marker = restore(backup_dir, state_root, actor=actor, reason=reason, replace_existing=replace_existing)
-    except (RestoreRefused, OSError) as error:
-        typer.echo(f"restore refused: {error}", err=True)
-        raise typer.Exit(1) from error
     typer.echo(f"restored into {state_root}; external effects are WITHHELD until validated.")
     typer.echo(f"cells needing reconciliation: {len(marker['unreconciled_cells'])}")
     typer.echo("next: swfactory backup status, then swfactory backup resume")
@@ -995,7 +977,7 @@ def backup_status(
 
     report = restore_status(state_root)
     if json_out:
-        typer.echo(json.dumps(report, indent=2, sort_keys=True))
+        _echo_json(report)
     else:
         for store in report["stores"]:
             typer.echo(f"{store['name']:<11} {str(store['version']):>4} / {store['expected']:<4} {store['status']}")
@@ -1033,15 +1015,10 @@ def backup_resume(
     """Allow mutations again after a restore -- each restored Cell must still observe before acting."""
     from swfactory.restore_contract import MutationsWithheld, RestoreGate, RestoreRefused
 
-    if not reason.strip():
-        typer.echo("--reason is required: resuming mutations is an operator decision", err=True)
-        raise typer.Exit(2)
+    _require_reason(reason, "resuming mutations is an operator decision")
     gate = RestoreGate(state_root)
-    try:
+    with _fail("resume refused", RestoreRefused, MutationsWithheld, code=1):
         marker = gate.resume(actor=actor, reason=reason)
-    except (RestoreRefused, MutationsWithheld) as error:
-        typer.echo(f"resume refused: {error}", err=True)
-        raise typer.Exit(1) from error
     typer.echo(f"restore gate: {marker['state']}")
     typer.echo(f"{len(marker['unreconciled_cells'])} cells must observe the remote before re-driving anything")
 
@@ -1058,11 +1035,8 @@ def backup_reconciled(
     if not cell_id and not work_id:
         typer.echo("pass --cell-id or --work-id", err=True)
         raise typer.Exit(2)
-    try:
+    with _fail("not reconciled", ReconciliationIncomplete, code=1):
         marker = RestoreGate(state_root).mark_reconciled(cell_id=cell_id, work_id=work_id)
-    except ReconciliationIncomplete as error:
-        typer.echo(f"not reconciled: {error}", err=True)
-        raise typer.Exit(1) from error
     typer.echo(f"restore gate: {marker['state']}; {len(marker['unreconciled_cells'])} cells outstanding")
     if not marker["unreconciled_cells"] and not marker["unreconciled_dispatch"]:
         typer.echo("every restored item is reconciled; close the window with `swfactory backup close`")
@@ -1085,14 +1059,9 @@ def backup_close(
     """
     from swfactory.restore_contract import ReconciliationIncomplete, RestoreGate
 
-    if not reason.strip():
-        typer.echo("--reason is required: closing the restore window is an operator decision", err=True)
-        raise typer.Exit(2)
-    try:
+    _require_reason(reason, "closing the restore window is an operator decision")
+    with _fail("window stays open", ReconciliationIncomplete, code=1):
         marker = RestoreGate(state_root).close(actor=actor, reason=reason, window_reviewed=window_reviewed)
-    except ReconciliationIncomplete as error:
-        typer.echo(f"window stays open: {error}", err=True)
-        raise typer.Exit(1) from error
     typer.echo(f"restore gate: {marker['state']}; observation before first attempt is no longer required")
 
 
@@ -1138,11 +1107,9 @@ def claim_cmd(
         "lease_s": work_claim.DEFAULT_LEASE_S,
     }
     if json_out:
-        typer.echo(json.dumps(document, indent=2))
+        _echo_json(document, sort=False)
         return
-    width = max(len(k) for k in document)
-    for name, value in document.items():
-        typer.echo(f"{name.replace('_', ' '):<{width}}  {value}")
+    _echo_fields(document)
 
 
 @app.command()
@@ -1169,7 +1136,7 @@ def doctor(
         typer.echo(f"blueprint error: {e}", err=True)
         cfg = Config(issue="doctor", blueprint=blueprint)
     else:
-        try:
+        with _fail("config error", ValueError):
             cfg = bp.config(
                 job,
                 run_id="doctor",
@@ -1180,9 +1147,6 @@ def doctor(
                 scm=scm,
                 allow_local_agent=allow_local_agent or None,
             )
-        except ValueError as e:
-            typer.echo(f"config error: {e}", err=True)
-            raise typer.Exit(2) from e
     checks = doctor_mod.run_doctor(cfg)
     typer.echo(doctor_mod.to_json(checks) if json_out else doctor_mod.table(checks))
     raise typer.Exit(doctor_mod.exit_code(checks))
@@ -1213,16 +1177,13 @@ def candidate_worktree_create(
     """Create one detached candidate checkout at the exact input commit."""
     from swfactory.candidate_worktree import CandidateWorktreeError, create_candidate_worktree
 
-    try:
+    with _fail("candidate worktree", OSError, CandidateWorktreeError):
         worktree = create_candidate_worktree(repo_path, candidate_id, input_head, root=root)
-    except (OSError, CandidateWorktreeError) as error:
-        typer.echo(f"candidate worktree: {error}", err=True)
-        raise typer.Exit(2) from error
     receipt_path = receipt or Path(worktree.path).with_suffix(".json")
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.write_text(json.dumps(worktree.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if json_out:
-        typer.echo(json.dumps(worktree.to_dict(), indent=2, sort_keys=True))
+        _echo_json(worktree.to_dict())
     else:
         typer.echo(f"{receipt_path}: {worktree.candidate_id} @ {worktree.input_head}")
         typer.echo(worktree.path)
@@ -1236,16 +1197,13 @@ def candidate_worktree_freeze(
     """Freeze a clean, committed candidate answer under its immutable factory ref."""
     from swfactory.candidate_worktree import CandidateWorktree, CandidateWorktreeError, freeze_candidate_worktree
 
-    try:
+    with _fail("candidate worktree", *_JSON_INPUT, CandidateWorktreeError):
         worktree = CandidateWorktree.from_dict(json.loads(receipt.read_text(encoding="utf-8")))
         revision = freeze_candidate_worktree(worktree)
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, CandidateWorktreeError) as error:
-        typer.echo(f"candidate worktree: {error}", err=True)
-        raise typer.Exit(2) from error
     frozen_receipt = receipt.with_suffix(".frozen.json")
     frozen_receipt.write_text(json.dumps(revision.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if json_out:
-        typer.echo(json.dumps(revision.to_dict(), indent=2, sort_keys=True))
+        _echo_json(revision.to_dict())
     else:
         typer.echo(f"{frozen_receipt}: {revision.output_head}")
         typer.echo(revision.ref)
@@ -1259,12 +1217,9 @@ def candidate_worktree_remove(
     """Remove disposable candidate files; a frozen candidate ref is retained."""
     from swfactory.candidate_worktree import CandidateWorktree, CandidateWorktreeError, remove_candidate_worktree
 
-    try:
+    with _fail("candidate worktree", *_JSON_INPUT, CandidateWorktreeError):
         worktree = CandidateWorktree.from_dict(json.loads(receipt.read_text(encoding="utf-8")))
         remove_candidate_worktree(worktree, force=force)
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, CandidateWorktreeError) as error:
-        typer.echo(f"candidate worktree: {error}", err=True)
-        raise typer.Exit(2) from error
     typer.echo(f"removed {worktree.path}; retained ref {worktree.ref} if frozen")
 
 
@@ -1291,7 +1246,7 @@ def candidate_evidence_build(
     from swfactory.candidate_worktree import CandidateRevision, CandidateWorktreeError
     from swfactory.source_snapshot import SourceSnapshot, SourceSnapshotError
 
-    try:
+    with _fail("candidate evidence", *_JSON_INPUT, CandidateEvidenceError, CandidateWorktreeError, SourceSnapshotError):
         revision_doc = json.loads(frozen_receipt.read_text(encoding="utf-8"))
         source_doc = json.loads(source_receipt.read_text(encoding="utf-8"))
         revision = CandidateRevision(
@@ -1302,33 +1257,13 @@ def candidate_evidence_build(
             schema_version=int(revision_doc.get("schema_version", 1)),
         )
         source = SourceSnapshot(**source_doc)
-        named: dict[str, Path] = {}
-        for value in artifact or []:
-            name, separator, path = value.partition("=")
-            if not separator or not name.strip() or not path.strip():
-                raise ValueError("--artifact must be NAME=PATH")
-            if name in named:
-                raise ValueError(f"duplicate artifact name: {name}")
-            named[name] = Path(path)
         bundle = build_candidate_evidence_bundle(
             repo_path,
             revision,
             source,
-            artifacts=named,
+            artifacts=_named_paths(artifact, "--artifact must be NAME=PATH", "duplicate artifact name"),
             destination=destination,
         )
-    except (
-        OSError,
-        KeyError,
-        TypeError,
-        ValueError,
-        json.JSONDecodeError,
-        CandidateEvidenceError,
-        CandidateWorktreeError,
-        SourceSnapshotError,
-    ) as error:
-        typer.echo(f"candidate evidence: {error}", err=True)
-        raise typer.Exit(2) from error
     typer.echo(f"{destination / 'manifest.json'}  {bundle.digest()}")
     typer.echo(destination / "RESULT.md")
 
@@ -1342,15 +1277,12 @@ def candidate_evidence_verify(
     """Re-hash retained evidence and re-check the immutable candidate ref."""
     from swfactory.candidate_evidence import CandidateEvidenceError, verify_candidate_evidence_bundle
 
-    try:
+    with _fail("candidate evidence", OSError, CandidateEvidenceError):
         bundle = verify_candidate_evidence_bundle(destination, repo=repo_path)
-    except (OSError, CandidateEvidenceError) as error:
-        typer.echo(f"candidate evidence: {error}", err=True)
-        raise typer.Exit(2) from error
     if json_out:
         document = bundle.canonical_dict()
         document["manifest_digest"] = bundle.digest()
-        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        _echo_json(document)
     else:
         typer.echo(f"verified {bundle.candidate_id} {bundle.output_head} {bundle.digest()}")
 
@@ -1360,18 +1292,6 @@ campaign_decision_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(campaign_decision_app, name="campaign-decision")
-
-
-def _candidate_evidence_paths(values: list[str] | None) -> dict[str, Path]:
-    paths: dict[str, Path] = {}
-    for value in values or []:
-        candidate_id, separator, path = value.partition("=")
-        if not separator or not candidate_id.strip() or not path.strip():
-            raise ValueError("--candidate-evidence must be CANDIDATE_ID=PATH")
-        if candidate_id in paths:
-            raise ValueError(f"duplicate candidate evidence: {candidate_id}")
-        paths[candidate_id] = Path(path)
-    return paths
 
 
 @campaign_decision_app.command("build")
@@ -1392,25 +1312,16 @@ def campaign_decision_build(
     )
     from swfactory.candidate_evidence import CandidateEvidenceError, verify_candidate_evidence_bundle
 
-    try:
+    with _fail("campaign decision", *_JSON_INPUT, CampaignDecisionError, CandidateEvidenceError):
         document = json.loads(report.read_text(encoding="utf-8"))
-        paths = _candidate_evidence_paths(candidate_evidence)
+        paths = _named_paths(
+            candidate_evidence, "--candidate-evidence must be CANDIDATE_ID=PATH", "duplicate candidate evidence"
+        )
         bundles = {
             candidate_id: verify_candidate_evidence_bundle(path, repo=repo_path) for candidate_id, path in paths.items()
         }
         manifest = build_campaign_decision_from_document(document, bundles)
         write_campaign_decision(destination, manifest)
-    except (
-        OSError,
-        KeyError,
-        TypeError,
-        ValueError,
-        json.JSONDecodeError,
-        CampaignDecisionError,
-        CandidateEvidenceError,
-    ) as error:
-        typer.echo(f"campaign decision: {error}", err=True)
-        raise typer.Exit(2) from error
     typer.echo(f"{destination}  {manifest.digest()}")
 
 
@@ -1428,16 +1339,15 @@ def campaign_decision_verify(
     from swfactory.campaign_decision import CampaignDecisionError, verify_campaign_decision
     from swfactory.candidate_evidence import CandidateEvidenceError
 
-    try:
-        paths = _candidate_evidence_paths(candidate_evidence)
+    with _fail("campaign decision", OSError, ValueError, CampaignDecisionError, CandidateEvidenceError):
+        paths = _named_paths(
+            candidate_evidence, "--candidate-evidence must be CANDIDATE_ID=PATH", "duplicate candidate evidence"
+        )
         manifest = verify_campaign_decision(manifest_path, paths, repo=repo_path)
-    except (OSError, ValueError, CampaignDecisionError, CandidateEvidenceError) as error:
-        typer.echo(f"campaign decision: {error}", err=True)
-        raise typer.Exit(2) from error
     if json_out:
         document = manifest.canonical_dict()
         document["manifest_digest"] = manifest.digest()
-        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        _echo_json(document)
     else:
         typer.echo(f"verified {manifest.campaign_id} {manifest.digest()}")
 
@@ -1461,7 +1371,7 @@ def phase_assess_cmd(
     if previous_phase is not None and previous_phase not in phases:
         typer.echo(f"phase assess: unknown previous phase {previous_phase!r}", err=True)
         raise typer.Exit(2)
-    try:
+    with _fail("phase assess", OSError, TypeError, ValueError):
         raw = json.loads(observation_path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("phase input must be a JSON object")
@@ -1473,13 +1383,10 @@ def phase_assess_cmd(
             observation,
             previous_phase=cast(Phase, previous_phase) if previous_phase is not None else None,
         )
-    except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
-        typer.echo(f"phase assess: {error}", err=True)
-        raise typer.Exit(2) from error
 
     document = assessment.as_dict()
     if json_out:
-        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        _echo_json(document)
         return
     recommendation = assessment.recommendation
     typer.echo(
@@ -1500,11 +1407,8 @@ def research_schedule_cmd(
     from swfactory.evolution import CampaignError
     from swfactory.research_loop import annealed_strategy_schedule
 
-    try:
+    with _fail("research schedule", CampaignError):
         schedule = annealed_strategy_schedule(max_depth, max_candidates=max_candidates)
-    except CampaignError as error:
-        typer.echo(f"research schedule: {error}", err=True)
-        raise typer.Exit(2) from error
     document = {
         "authority": "exploration-only",
         "scheduler": "airflow",
@@ -1517,10 +1421,30 @@ def research_schedule_cmd(
         ],
     }
     if json_out:
-        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        _echo_json(document)
         return
     for round_ in document["rounds"]:
         typer.echo(f"depth {round_['depth']}: {' '.join(round_['strategies'])}")
+
+
+def _population_manifest(raw: dict[str, Any], error: type[Exception], message: str) -> PopulationManifest:
+    """The manifest a research-adapt document carries under ``plan``, or ``raw`` itself."""
+    from swfactory.population_manifest import population_manifest_from_document
+
+    plan = raw.get("plan")
+    document = plan.get("population_manifest") if isinstance(plan, dict) else raw
+    if not isinstance(document, dict):
+        raise error(message)
+    return population_manifest_from_document(document)
+
+
+def _budget_line(decision: InformationBudgetDecision) -> str:
+    mode = decision.mode_override.value if decision.mode_override is not None else "hold"
+    return (
+        f"agents={decision.next_budget.max_agents}/{decision.base_budget.max_agents} "
+        f"compute={decision.next_budget.max_compute_units:.1f}/{decision.base_budget.max_compute_units:.1f} "
+        f"mode={mode}"
+    )
 
 
 @app.command("research-adapt")
@@ -1562,10 +1486,7 @@ def research_adapt_cmd(
 
     from swfactory.evolution import CampaignError
     from swfactory.population_execution import load_population_execution_report
-    from swfactory.population_manifest import (
-        population_manifest_from_document,
-        population_telemetry_from_document,
-    )
+    from swfactory.population_manifest import population_telemetry_from_document
     from swfactory.recursive_search import (
         ArtifactBlackboard,
         extract_search_laws,
@@ -1574,7 +1495,7 @@ def research_adapt_cmd(
         signal_from_document,
     )
 
-    try:
+    with _fail("research adapt", *_JSON_INPUT):
         if not reports:
             raise CampaignError("research adapt needs at least one campaign report")
         documents = []
@@ -1622,12 +1543,9 @@ def research_adapt_cmd(
             raw_previous = json.loads(previous_population_plan_path.read_text(encoding="utf-8"))
             if not isinstance(raw_previous, dict):
                 raise CampaignError("previous population plan must be a JSON object")
-            manifest_document = raw_previous
-            if isinstance(raw_previous.get("plan"), dict):
-                manifest_document = raw_previous["plan"].get("population_manifest")
-            if not isinstance(manifest_document, dict):
-                raise CampaignError("previous population plan does not contain a population_manifest object")
-            previous_population_manifest = population_manifest_from_document(manifest_document)
+            previous_population_manifest = _population_manifest(
+                raw_previous, CampaignError, "previous population plan does not contain a population_manifest object"
+            )
 
         plan = plan_adaptive_round(
             signals,
@@ -1641,9 +1559,6 @@ def research_adapt_cmd(
             previous_population_manifest=previous_population_manifest,
         )
         laws = extract_search_laws(signals)
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, CampaignError) as error:
-        typer.echo(f"research adapt: {error}", err=True)
-        raise typer.Exit(2) from error
 
     document = {
         "authority": "exploration-only",
@@ -1665,7 +1580,7 @@ def research_adapt_cmd(
         "blackboard_digest": blackboard.digest(),
     }
     if json_out:
-        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        _echo_json(document)
         return
 
     typer.echo(
@@ -1686,14 +1601,7 @@ def research_adapt_cmd(
             f"population: tasks={len(plan.population_manifest.tasks)} manifest={plan.population_manifest_digest}"
         )
     if plan.information_budget is not None:
-        decision = plan.information_budget
-        typer.echo(
-            "information-budget: "
-            f"agents={decision.next_budget.max_agents}/{decision.base_budget.max_agents} "
-            f"compute={decision.next_budget.max_compute_units:.1f}/"
-            f"{decision.base_budget.max_compute_units:.1f} "
-            f"mode={(decision.mode_override.value if decision.mode_override is not None else 'hold')}"
-        )
+        typer.echo(f"information-budget: {_budget_line(plan.information_budget)}")
     for law in laws:
         typer.echo(f"{law.kind.value}: {law.statement} ({law.confidence:.2f}, n={law.support})")
 
@@ -1722,29 +1630,20 @@ def population_budget(
         write_information_budget,
     )
     from swfactory.population_execution import load_population_execution_report
-    from swfactory.population_manifest import (
-        PopulationManifestError,
-        population_manifest_from_document,
-    )
+    from swfactory.population_manifest import PopulationManifestError
 
-    try:
+    with _fail("population budget", *_JSON_INPUT):
         raw_plan = json.loads(plan_path.read_text(encoding="utf-8"))
         if not isinstance(raw_plan, dict):
             raise PopulationManifestError("population plan must be a JSON object")
-        manifest_document = raw_plan
-        prior_max_parallel = 1
-        if isinstance(raw_plan.get("plan"), dict):
-            plan_document = raw_plan["plan"]
-            manifest_document = plan_document.get("population_manifest")
-            raw_parallel = plan_document.get("max_parallel")
-            if raw_parallel is not None:
-                if type(raw_parallel) is not int or raw_parallel < 1:
-                    raise PopulationManifestError("prior plan max_parallel must be a positive integer")
-                prior_max_parallel = raw_parallel
-        if not isinstance(manifest_document, dict):
-            raise PopulationManifestError("input does not contain a population_manifest object")
-        manifest = population_manifest_from_document(manifest_document)
-        prior_max_parallel = min(prior_max_parallel, len(manifest.tasks)) if manifest.tasks else 1
+        plan = raw_plan.get("plan")
+        raw_parallel = plan.get("max_parallel") if isinstance(plan, dict) else None
+        if raw_parallel is not None and (type(raw_parallel) is not int or raw_parallel < 1):
+            raise PopulationManifestError("prior plan max_parallel must be a positive integer")
+        manifest = _population_manifest(
+            raw_plan, PopulationManifestError, "input does not contain a population_manifest object"
+        )
+        prior_max_parallel = min(raw_parallel or 1, len(manifest.tasks)) if manifest.tasks else 1
         report = load_population_execution_report(execution_report_path)
         decision = evaluate_information_budget(
             report,
@@ -1756,32 +1655,16 @@ def population_budget(
         )
         if output_path is not None:
             write_information_budget(output_path, decision)
-    except (
-        OSError,
-        KeyError,
-        TypeError,
-        ValueError,
-        json.JSONDecodeError,
-        PopulationManifestError,
-    ) as error:
-        typer.echo(f"population budget: {error}", err=True)
-        raise typer.Exit(2) from error
 
     document = {
         **decision.canonical_dict(),
         "decision_digest": decision.digest(),
     }
     if json_out:
-        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        _echo_json(document)
         return
 
-    typer.echo(
-        f"information budget {decision.digest()}: "
-        f"agents={decision.next_budget.max_agents}/{decision.base_budget.max_agents} "
-        f"compute={decision.next_budget.max_compute_units:.1f}/"
-        f"{decision.base_budget.max_compute_units:.1f} "
-        f"mode={(decision.mode_override.value if decision.mode_override is not None else 'hold')}"
-    )
+    typer.echo(f"information budget {decision.digest()}: {_budget_line(decision)}")
     for lane in decision.lanes:
         typer.echo(
             f"lane {lane.lane_index} {lane.role.value}/{lane.compute_tier.value}: "
@@ -1805,40 +1688,23 @@ def population_bind(
 ) -> None:
     """Bind provider-neutral population tasks to deterministic allowlisted provider choices."""
 
-    from swfactory.population_manifest import (
-        PopulationManifestError,
-        population_manifest_from_document,
-    )
+    from swfactory.population_manifest import PopulationManifestError
     from swfactory.provider_binding import (
         bind_population_manifest,
         provider_choices_from_document,
     )
 
-    try:
+    with _fail("population bind", *_JSON_INPUT):
         raw_plan = json.loads(plan_path.read_text(encoding="utf-8"))
         raw_choices = json.loads(choices_path.read_text(encoding="utf-8"))
         if not isinstance(raw_plan, dict) or not isinstance(raw_choices, dict):
             raise PopulationManifestError("population plan and choices must be JSON objects")
 
-        manifest_document = raw_plan
-        if isinstance(raw_plan.get("plan"), dict):
-            manifest_document = raw_plan["plan"].get("population_manifest")
-        if not isinstance(manifest_document, dict):
-            raise PopulationManifestError("input does not contain a population_manifest object")
-
-        manifest = population_manifest_from_document(manifest_document)
+        manifest = _population_manifest(
+            raw_plan, PopulationManifestError, "input does not contain a population_manifest object"
+        )
         choices = provider_choices_from_document(raw_choices)
         bound = bind_population_manifest(manifest, choices=choices)
-    except (
-        OSError,
-        KeyError,
-        TypeError,
-        ValueError,
-        json.JSONDecodeError,
-        PopulationManifestError,
-    ) as error:
-        typer.echo(f"population bind: {error}", err=True)
-        raise typer.Exit(2) from error
 
     document = {
         "authority": bound.authority,
@@ -1848,7 +1714,7 @@ def population_bind(
         "binding": bound.canonical_dict(),
     }
     if json_out:
-        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        _echo_json(document)
         return
 
     typer.echo(f"population {manifest.digest()} -> binding {bound.digest()} tasks={len(bound.tasks)}")
@@ -1880,11 +1746,10 @@ def population_summarize(
     from swfactory.population_manifest import (
         PopulationManifestError,
         behavior_receipt_from_document,
-        population_manifest_from_document,
         summarize_population,
     )
 
-    try:
+    with _fail("population summarize", *_JSON_INPUT):
         raw_plan = json.loads(plan_path.read_text(encoding="utf-8"))
         raw_receipts = json.loads(receipts_path.read_text(encoding="utf-8"))
         if not isinstance(raw_plan, dict):
@@ -1892,13 +1757,9 @@ def population_summarize(
         if not isinstance(raw_receipts, list):
             raise PopulationManifestError("population receipts must be a JSON array")
 
-        manifest_document = raw_plan
-        if isinstance(raw_plan.get("plan"), dict):
-            manifest_document = raw_plan["plan"].get("population_manifest")
-        if not isinstance(manifest_document, dict):
-            raise PopulationManifestError("input does not contain a population_manifest object")
-
-        manifest = population_manifest_from_document(manifest_document)
+        manifest = _population_manifest(
+            raw_plan, PopulationManifestError, "input does not contain a population_manifest object"
+        )
         receipts = tuple(behavior_receipt_from_document(row) for row in raw_receipts if isinstance(row, dict))
         if len(receipts) != len(raw_receipts):
             raise PopulationManifestError("every population receipt must be a JSON object")
@@ -1907,21 +1768,11 @@ def population_summarize(
             receipts,
             require_complete=require_complete,
         )
-    except (
-        OSError,
-        KeyError,
-        TypeError,
-        ValueError,
-        json.JSONDecodeError,
-        PopulationManifestError,
-    ) as error:
-        typer.echo(f"population summarize: {error}", err=True)
-        raise typer.Exit(2) from error
 
     document = telemetry.canonical_dict()
     document["telemetry_digest"] = telemetry.digest()
     if json_out:
-        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        _echo_json(document)
         return
 
     typer.echo(
@@ -1933,14 +1784,14 @@ def population_summarize(
     typer.echo(f"telemetry={telemetry.digest()}")
 
 
+RetentionStore = Annotated[Path, typer.Option(help="factory-owned content-addressed retention store")]
+
+
 @candidate_evidence_app.command("retain")
 def candidate_evidence_retain(
     destination: Annotated[Path, typer.Argument(help="verified candidate evidence bundle directory")],
     repo_path: Annotated[Path, typer.Option("--repo", help="local Git repository")] = Path("."),
-    store: Annotated[
-        Path,
-        typer.Option(help="factory-owned content-addressed retention store"),
-    ] = Path(".factory/candidate-retention"),
+    store: RetentionStore = Path(".factory/candidate-retention"),
     ttl_hours: Annotated[
         int,
         typer.Option("--ttl-hours", min=1, help="promotion-window retention lease in hours"),
@@ -1952,18 +1803,15 @@ def candidate_evidence_retain(
 
     from swfactory.candidate_retention import CandidateRetentionError, retain_candidate_evidence
 
-    try:
+    with _fail("candidate retention", OSError, CandidateRetentionError):
         lease = retain_candidate_evidence(
             destination,
             repo=repo_path,
             store=store,
             ttl=timedelta(hours=ttl_hours),
         )
-    except (OSError, CandidateRetentionError) as error:
-        typer.echo(f"candidate retention: {error}", err=True)
-        raise typer.Exit(2) from error
     if json_out:
-        typer.echo(json.dumps(lease.to_dict(), indent=2, sort_keys=True))
+        _echo_json(lease.to_dict())
     else:
         typer.echo(f"retained sha256:{lease.digest} until {lease.expires_at}")
 
@@ -1971,62 +1819,44 @@ def candidate_evidence_retain(
 @candidate_evidence_app.command("pin")
 def candidate_evidence_pin(
     digest: Annotated[str, typer.Argument(help="candidate evidence digest, with or without sha256:")],
-    store: Annotated[
-        Path,
-        typer.Option(help="factory-owned content-addressed retention store"),
-    ] = Path(".factory/candidate-retention"),
+    store: RetentionStore = Path(".factory/candidate-retention"),
 ) -> None:
     """Prevent a retained candidate bundle from being collected after expiry."""
     from swfactory.candidate_retention import CandidateRetentionError, pin_candidate_evidence
 
     token = digest.removeprefix("sha256:")
-    try:
+    with _fail("candidate retention", OSError, CandidateRetentionError):
         lease = pin_candidate_evidence(store, token)
-    except (OSError, CandidateRetentionError) as error:
-        typer.echo(f"candidate retention: {error}", err=True)
-        raise typer.Exit(2) from error
     typer.echo(f"pinned sha256:{lease.digest}")
 
 
 @candidate_evidence_app.command("unpin")
 def candidate_evidence_unpin(
     digest: Annotated[str, typer.Argument(help="candidate evidence digest, with or without sha256:")],
-    store: Annotated[
-        Path,
-        typer.Option(help="factory-owned content-addressed retention store"),
-    ] = Path(".factory/candidate-retention"),
+    store: RetentionStore = Path(".factory/candidate-retention"),
 ) -> None:
     """Return a retained candidate bundle to ordinary promotion-window expiry."""
     from swfactory.candidate_retention import CandidateRetentionError, unpin_candidate_evidence
 
     token = digest.removeprefix("sha256:")
-    try:
+    with _fail("candidate retention", OSError, CandidateRetentionError):
         lease = unpin_candidate_evidence(store, token)
-    except (OSError, CandidateRetentionError) as error:
-        typer.echo(f"candidate retention: {error}", err=True)
-        raise typer.Exit(2) from error
     typer.echo(f"unpinned sha256:{lease.digest}; expires {lease.expires_at}")
 
 
 @candidate_evidence_app.command("gc")
 def candidate_evidence_gc(
-    store: Annotated[
-        Path,
-        typer.Option(help="factory-owned content-addressed retention store"),
-    ] = Path(".factory/candidate-retention"),
+    store: RetentionStore = Path(".factory/candidate-retention"),
     dry_run: Annotated[bool, typer.Option("--dry-run", help="report expired evidence without deleting it")] = False,
     json_out: Annotated[bool, typer.Option("--json", help="print the sweep report")] = False,
 ) -> None:
     """Sweep only expired, unpinned candidate evidence owned by the retention store."""
     from swfactory.candidate_retention import CandidateRetentionError, sweep_candidate_evidence
 
-    try:
+    with _fail("candidate retention", OSError, CandidateRetentionError):
         report = sweep_candidate_evidence(store, dry_run=dry_run)
-    except (OSError, CandidateRetentionError) as error:
-        typer.echo(f"candidate retention: {error}", err=True)
-        raise typer.Exit(2) from error
     if json_out:
-        typer.echo(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+        _echo_json(report.to_dict())
         return
     typer.echo(f"removed={len(report.removed)} retained={len(report.retained)} malformed={len(report.malformed)}")
     if report.malformed:
@@ -2048,13 +1878,10 @@ def experiment_tree_cmd(
     if json_out and mermaid:
         typer.echo("experiment tree: choose only one of --json or --mermaid", err=True)
         raise typer.Exit(2)
-    try:
+    with _fail("experiment tree", *_JSON_INPUT):
         tree = stack_rounds(load_round(path) for path in reports)
-    except (OSError, KeyError, TypeError, ValueError) as error:
-        typer.echo(f"experiment tree: {error}", err=True)
-        raise typer.Exit(2) from error
     if json_out:
-        typer.echo(json.dumps(tree.to_dict(), indent=2, sort_keys=True))
+        _echo_json(tree.to_dict())
     elif mermaid:
         typer.echo(render_mermaid(tree))
     else:
@@ -2074,19 +1901,14 @@ def source_snapshot_cmd(
     """Create and verify the immutable source archive for one recorded Git revision."""
     from swfactory.source_snapshot import SourceSnapshotError, create_source_snapshot, verify_source_snapshot
 
-    try:
+    with _fail("source snapshot", OSError, SourceSnapshotError):
         snapshot = create_source_snapshot(repo, revision, cache_root)
         verify_source_snapshot(snapshot)
-    except (OSError, SourceSnapshotError) as error:
-        typer.echo(f"source snapshot: {error}", err=True)
-        raise typer.Exit(2) from error
     document = snapshot.to_dict()
     if json_out:
-        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        _echo_json(document)
         return
-    width = max(len(key) for key in document)
-    for name, value in document.items():
-        typer.echo(f"{name.replace('_', ' '):<{width}}  {value}")
+    _echo_fields(document)
 
 
 @app.command("snapshot-replay")
@@ -2104,21 +1926,18 @@ def snapshot_replay_cmd(
     from swfactory.snapshot_replay import SnapshotReplayError, run_snapshot_recipe
     from swfactory.source_snapshot import SourceSnapshot, SourceSnapshotError
 
-    try:
-        source = SourceSnapshot(**json.loads(source_receipt.read_text(encoding="utf-8")))
-        recipe = load_execution_recipe(repo, source.commit_sha, path=recipe_path)
-        receipt = run_snapshot_recipe(source, recipe, destination)
-    except (
+    with _fail(
+        "snapshot replay",
         OSError,
         TypeError,
         ValueError,
-        json.JSONDecodeError,
         ExecutionRecipeError,
         SnapshotReplayError,
         SourceSnapshotError,
-    ) as error:
-        typer.echo(f"snapshot replay: {error}", err=True)
-        raise typer.Exit(2) from error
+    ):
+        source = SourceSnapshot(**json.loads(source_receipt.read_text(encoding="utf-8")))
+        recipe = load_execution_recipe(repo, source.commit_sha, path=recipe_path)
+        receipt = run_snapshot_recipe(source, recipe, destination)
     typer.echo(f"{destination / 'receipt.json'}  {receipt.digest}")
     typer.echo(f"exit={receipt.exit_code} timed_out={str(receipt.timed_out).lower()}")
 
@@ -2134,24 +1953,14 @@ def snapshot_replay_verify_cmd(
     from swfactory.snapshot_replay import SnapshotReplayError, verify_snapshot_run
     from swfactory.source_snapshot import SourceSnapshot, SourceSnapshotError
 
-    try:
+    with _fail("snapshot replay", OSError, TypeError, ValueError, SnapshotReplayError, SourceSnapshotError):
         source = SourceSnapshot(**json.loads(source_receipt.read_text(encoding="utf-8")))
         recipe, receipt = verify_snapshot_run(destination, snapshot=source, repo=repo)
-    except (
-        OSError,
-        TypeError,
-        ValueError,
-        json.JSONDecodeError,
-        SnapshotReplayError,
-        SourceSnapshotError,
-    ) as error:
-        typer.echo(f"snapshot replay: {error}", err=True)
-        raise typer.Exit(2) from error
     if json_out:
         document = receipt.canonical_dict()
         document["receipt_digest"] = receipt.digest
         document["execution_recipe_sha256"] = recipe.digest
-        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+        _echo_json(document)
     else:
         typer.echo(
             f"verified {receipt.commit_sha} recipe={recipe.digest} "

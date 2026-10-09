@@ -10,12 +10,13 @@ primitive: callers receive bytes that are provably tied to a recorded revision.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import subprocess
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from swfactory.canonical import file_digest, restrict_dir, restrict_file
 
 
 class SourceSnapshotError(RuntimeError):
@@ -72,7 +73,7 @@ def create_source_snapshot(repo: Path, revision: str, cache_root: Path) -> Sourc
             detail = proc.stderr.decode(errors="replace").strip()
             raise SourceSnapshotError(f"git archive failed for {commit}: {detail}")
 
-        digest, size = _digest_file(temporary)
+        digest, size = file_digest(temporary)
         destination = cache_root / f"{digest}.tar"
         cache_hit = _install_content_addressed(temporary, destination, digest, size)
         return SourceSnapshot(
@@ -92,7 +93,7 @@ def verify_source_snapshot(snapshot: SourceSnapshot) -> None:
     path = Path(snapshot.archive_path)
     if path.is_symlink() or not path.is_file():
         raise SourceSnapshotError(f"source snapshot is absent or not a regular file: {path}")
-    digest, size = _digest_file(path)
+    digest, size = file_digest(path)
     if digest != snapshot.sha256 or size != snapshot.size_bytes:
         raise SourceSnapshotError(
             "source snapshot integrity mismatch: "
@@ -104,8 +105,7 @@ def _prepare_cache_root(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     if not path.is_dir():
         raise SourceSnapshotError(f"snapshot cache root is not a directory: {path}")
-    if os.name == "posix":
-        path.chmod(0o700)
+    restrict_dir(path)
 
 
 def _install_content_addressed(
@@ -126,8 +126,7 @@ def _install_content_addressed(
     except OSError as error:
         raise SourceSnapshotError(f"could not install source snapshot: {error}") from error
 
-    if os.name == "posix":
-        destination.chmod(0o600)
+    restrict_file(destination)
     _verify_existing(destination, expected_digest, expected_size)
     return False
 
@@ -135,22 +134,12 @@ def _install_content_addressed(
 def _verify_existing(path: Path, expected_digest: str, expected_size: int) -> None:
     if path.is_symlink() or not path.is_file():
         raise SourceSnapshotError(f"content-addressed snapshot is not a regular file: {path}")
-    digest, size = _digest_file(path)
+    digest, size = file_digest(path)
     if digest != expected_digest or size != expected_size:
         raise SourceSnapshotError(
             "content-addressed snapshot collision or corruption: "
             f"{path} expected {expected_digest}/{expected_size}, observed {digest}/{size}"
         )
-
-
-def _digest_file(path: Path) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as stream:
-        while chunk := stream.read(128 * 1024):
-            digest.update(chunk)
-            size += len(chunk)
-    return digest.hexdigest(), size
 
 
 def _git(repo: Path, *args: str) -> str:

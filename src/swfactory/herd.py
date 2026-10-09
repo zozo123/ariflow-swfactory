@@ -554,7 +554,7 @@ class HerdApp(App[None]):
                 (
                     g.dag_id,
                     g.run_id,
-                    str(g.task_id).rsplit(".", 1)[-1],
+                    g.name,
                     job_index(g.map_index),
                     self.job_issue(g.dag_id, g.run_id, g.map_index),
                     (g.subject or "")[:60],
@@ -681,7 +681,7 @@ class HerdApp(App[None]):
         if gate is None:
             return
         verb = "approve" if approve else "reject"
-        name = str(gate.task_id).rsplit(".", 1)[-1]
+        name = gate.name
         question = f"{verb} {name} of {gate.dag_id}/{gate.run_id}[{gate.map_index}] as {self.info.actor}?"
         fn = self.actions.approve if approve else self.actions.reject
         self._confirm(question, f"{verb} {gate.dag_id}/{gate.run_id}[{gate.map_index}] {name}", fn, gate)
@@ -969,43 +969,6 @@ def make_clients(
     )
 
 
-def make_app(
-    *,
-    airflow_url: str,
-    repo: str,
-    owner: str | None,
-    token: str | None = None,
-    username: str | None = None,
-    password: str | None = None,
-    metrics_root: str = ".",
-    refresh_s: float = 5.0,
-    dag_ids: Sequence[str] | None = None,
-) -> HerdApp:
-    """The TUI over the real clients."""
-    clients = make_clients(
-        airflow_url=airflow_url,
-        repo=repo,
-        owner=owner,
-        token=token,
-        username=username,
-        password=password,
-        metrics_root=metrics_root,
-        dag_ids=dag_ids,
-    )
-    return HerdApp(clients.collector, clients.actions, info=clients.info, refresh_s=refresh_s)
-
-
-def run_herd(
-    collector: Collector,
-    actions: Actions,
-    *,
-    info: HerdInfo | None = None,
-    refresh_s: float = 5.0,
-) -> None:
-    """Run the TUI until the user quits."""
-    HerdApp(collector, actions, info=info, refresh_s=refresh_s).run()
-
-
 # ---------------------------------------------------------------- headless drive mode
 
 
@@ -1042,7 +1005,7 @@ def snapshot_data(snapshot: Snapshot) -> dict:
                 "dag_id": g.dag_id,
                 "run_id": g.run_id,
                 "task_id": g.task_id,
-                "gate": str(g.task_id).rsplit(".", 1)[-1],
+                "gate": g.name,
                 "map_index": g.map_index,
                 "subject": g.subject,
                 "options": list(g.options or []),
@@ -1129,7 +1092,7 @@ def approve_all(
     answer = actions.reject if reject else actions.approve
     answered = 0
     for gate in gates:
-        name = str(gate.task_id).rsplit(".", 1)[-1]
+        name = gate.name
         where = f"{gate.dag_id}/{gate.run_id}[{gate.map_index}] {name}"
         try:
             answer(gate)

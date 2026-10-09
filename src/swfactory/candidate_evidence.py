@@ -29,6 +29,7 @@ from swfactory.candidate_worktree import (
     candidate_ref,
     verify_candidate_revision,
 )
+from swfactory.canonical import atomic_json, file_digest, restrict_dir, restrict_file
 from swfactory.execution_recipe import BoundExecutionRecipe, load_execution_recipe
 from swfactory.source_snapshot import SourceSnapshot, verify_source_snapshot
 
@@ -183,7 +184,7 @@ def build_candidate_evidence_bundle(
     if destination.exists() and any(destination.iterdir()):
         raise CandidateEvidenceError(f"candidate evidence destination is not empty: {destination}")
     destination.mkdir(parents=True, exist_ok=True)
-    _restrict_dir(destination)
+    restrict_dir(destination)
 
     diff_path = destination / "candidate.diff"
     diff_bytes = _git_bytes(repo, "diff", "--binary", "--full-index", revision.input_head, revision.output_head)
@@ -193,7 +194,7 @@ def build_candidate_evidence_bundle(
     retained: list[RetainedArtifact] = []
     artifact_dir = destination / "artifacts"
     artifact_dir.mkdir(exist_ok=True)
-    _restrict_dir(artifact_dir)
+    restrict_dir(artifact_dir)
     for index, (name, source_path) in enumerate(sorted(artifacts.items())):
         if not name.strip():
             raise CandidateEvidenceError("artifact name must be nonempty")
@@ -201,7 +202,7 @@ def build_candidate_evidence_bundle(
         if raw_source.is_symlink() or not raw_source.is_file():
             raise CandidateEvidenceError(f"artifact {name!r} is absent, not regular, or a symlink: {raw_source}")
         source_path = raw_source.resolve()
-        digest, _ = _digest_file(source_path)
+        digest, _ = file_digest(source_path)
         retained_path = artifact_dir / f"{index:03d}-{digest[:16]}"
         _copy_atomic(source_path, retained_path)
         retained.append(_retained(name, retained_path, destination))
@@ -222,7 +223,7 @@ def build_candidate_evidence_bundle(
     )
     document = bundle.canonical_dict()
     document["manifest_digest"] = bundle.digest()
-    _atomic_json(destination / "manifest.json", document)
+    atomic_json(destination / "manifest.json", document)
     _atomic_bytes(destination / "RESULT.md", render_candidate_result(bundle).encode())
     verify_candidate_evidence_bundle(destination, repo=repo)
     return bundle
@@ -284,7 +285,7 @@ def verify_candidate_evidence_bundle(destination: Path, *, repo: Path | None = N
         path = destination / artifact.path
         if path.is_symlink() or not path.is_file():
             raise CandidateEvidenceError(f"retained artifact {artifact.name!r} is absent or not regular")
-        digest, size = _digest_file(path)
+        digest, size = file_digest(path)
         if digest != artifact.sha256 or size != artifact.size_bytes:
             raise CandidateEvidenceError(
                 f"retained artifact {artifact.name!r} changed: "
@@ -370,18 +371,8 @@ def render_candidate_result(bundle: CandidateEvidenceBundle) -> str:
 
 
 def _retained(name: str, path: Path, root: Path) -> RetainedArtifact:
-    digest, size = _digest_file(path)
+    digest, size = file_digest(path)
     return RetainedArtifact(name, path.relative_to(root).as_posix(), digest, size)
-
-
-def _digest_file(path: Path) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as handle:
-        while chunk := handle.read(128 * 1024):
-            digest.update(chunk)
-            size += len(chunk)
-    return digest.hexdigest(), size
 
 
 def _copy_atomic(source: Path, destination: Path) -> None:
@@ -390,9 +381,9 @@ def _copy_atomic(source: Path, destination: Path) -> None:
     temporary = Path(temporary_name)
     try:
         shutil.copyfile(source, temporary)
-        _restrict_file(temporary)
+        restrict_file(temporary)
         os.replace(temporary, destination)
-        _restrict_file(destination)
+        restrict_file(destination)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -403,15 +394,11 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
     temporary = Path(temporary_name)
     try:
         temporary.write_bytes(content)
-        _restrict_file(temporary)
+        restrict_file(temporary)
         os.replace(temporary, path)
-        _restrict_file(path)
+        restrict_file(path)
     finally:
         temporary.unlink(missing_ok=True)
-
-
-def _atomic_json(path: Path, document: Mapping[str, Any]) -> None:
-    _atomic_bytes(path, (json.dumps(dict(document), indent=2, sort_keys=True) + "\n").encode())
 
 
 def _git_bytes(repo: Path, *args: str) -> bytes:
@@ -426,13 +413,3 @@ def _git_bytes(repo: Path, *args: str) -> bytes:
         detail = proc.stderr.decode(errors="replace").strip()
         raise CandidateEvidenceError(f"git {' '.join(args)} failed: {detail}")
     return proc.stdout
-
-
-def _restrict_dir(path: Path) -> None:
-    if os.name == "posix":
-        path.chmod(0o700)
-
-
-def _restrict_file(path: Path) -> None:
-    if os.name == "posix":
-        path.chmod(0o600)

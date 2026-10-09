@@ -10,13 +10,14 @@ mint credentials, mutate Cells, or widen policy through this contract.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+from functools import partial
 from typing import Any, Literal
 
+from swfactory.canonical import json_digest as _digest
+from swfactory.canonical import require_sha256
 from swfactory.swarm_dynamics import (
     AgentRole,
     ComputeTier,
@@ -35,15 +36,7 @@ class PopulationManifestError(ValueError):
     """The provider-neutral population contract is invalid or internally inconsistent."""
 
 
-def _digest(value: object) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    return "sha256:" + hashlib.sha256(payload).hexdigest()
-
-
-def _require_digest(value: str, *, field: str) -> None:
-    raw = value.removeprefix("sha256:")
-    if len(raw) != 64 or any(char not in "0123456789abcdef" for char in raw):
-        raise PopulationManifestError(f"{field} must be a canonical sha256 digest")
+_require_digest = partial(require_sha256, error=PopulationManifestError)
 
 
 def _task_coordinate_root(

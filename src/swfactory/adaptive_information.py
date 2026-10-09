@@ -12,7 +12,6 @@ verification, approve, publish, merge, or promote.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from collections import defaultdict
@@ -22,6 +21,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from swfactory.canonical import json_digest as _digest
+from swfactory.canonical import require_sha256
 from swfactory.phase_control import ControlMode
 from swfactory.population_execution import PopulationExecutionReport
 from swfactory.population_manifest import (
@@ -34,6 +35,7 @@ from swfactory.swarm_dynamics import (
     SwarmBudget,
     effective_independent_search,
     mean_pairwise_correlation,
+    tier_cost,
 )
 
 INFORMATION_BUDGET_SCHEMA_VERSION = 1
@@ -189,9 +191,9 @@ class InformationBudgetDecision:
             raise ValueError("unsupported information-budget schema")
         if self.authority != INFORMATION_BUDGET_AUTHORITY:
             raise ValueError("information-budget decisions must remain search-only")
-        _require_sha256(self.source_manifest_digest, field="source_manifest_digest")
-        _require_sha256(self.source_execution_report_digest, field="source_execution_report_digest")
-        _require_sha256(self.policy_digest, field="policy_digest")
+        require_sha256(self.source_manifest_digest, field="source_manifest_digest")
+        require_sha256(self.source_execution_report_digest, field="source_execution_report_digest")
+        require_sha256(self.policy_digest, field="policy_digest")
         self.base_budget.validate()
         self.next_budget.validate()
         if self.next_budget.max_agents > self.base_budget.max_agents:
@@ -278,7 +280,7 @@ def budget_from_manifest(
         raise ValueError("prior max_parallel must be an integer in [1, manifest task count]")
     deep = sum(1 for task in manifest.tasks if task.compute_tier == ComputeTier.DEEP)
     exact = sum(1 for task in manifest.tasks if task.compute_tier == ComputeTier.EXACT_REPLAY)
-    compute = sum(_tier_units(task.compute_tier) for task in manifest.tasks)
+    compute = sum(tier_cost(task.compute_tier) for task in manifest.tasks)
     budget = SwarmBudget(
         max_agents=total,
         max_parallel=max_parallel,
@@ -543,7 +545,7 @@ def _lane_information(
             + 0.20 * verification_pressure
             + 0.10 * unresolved
         )
-        cost_units = _tier_units(tier)
+        cost_units = tier_cost(tier)
         value = marginal_information_value(
             correlation=correlation,
             expected_information=expected,
@@ -720,15 +722,6 @@ def _role_caps(lanes: Sequence[LaneInformation]) -> dict[AgentRole, int]:
     return dict(caps)
 
 
-def _tier_units(tier: ComputeTier) -> float:
-    return {
-        ComputeTier.CHEAP: 1.0,
-        ComputeTier.STANDARD: 2.0,
-        ComputeTier.DEEP: 8.0,
-        ComputeTier.EXACT_REPLAY: 3.0,
-    }[tier]
-
-
 def _budget_dict(budget: SwarmBudget) -> dict[str, Any]:
     budget.validate()
     return {
@@ -760,14 +753,3 @@ def _ratio(numerator: int, denominator: int) -> float:
 
 def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
-
-
-def _require_sha256(value: str, *, field: str) -> None:
-    raw = value.removeprefix("sha256:")
-    if len(raw) != 64 or any(char not in "0123456789abcdef" for char in raw):
-        raise ValueError(f"{field} must be a canonical sha256 digest")
-
-
-def _digest(value: object) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    return "sha256:" + hashlib.sha256(payload).hexdigest()

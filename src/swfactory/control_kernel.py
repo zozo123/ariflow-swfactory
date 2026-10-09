@@ -12,15 +12,15 @@ writes after binding must use ``mutate_core``.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from swfactory.admission import Limits, Priority
+from swfactory.admission import Limits
 from swfactory.cells import CellStore
-from swfactory.cleanup_receipt import CleanupReceipt, RepairLeaseStore
+from swfactory.cleanup_receipt import RepairLeaseStore
 from swfactory.core_capabilities import CoreCapabilityRuntime, CoreMutationRequest, CoreMutationResult
-from swfactory.durable_admission import AdmissionDecision, DispatchIntent, DurableAdmission, MemberSpec
+from swfactory.durable_admission import DurableAdmission
 from swfactory.idempotency import MutationOutcome, OperationJournal, OperationRef, RetryBudget
 from swfactory.restore_contract import RestoreGate
 from swfactory.trust_evidence import TrustedEvidence
@@ -57,45 +57,6 @@ class ControlKernel:
         self.operations.close()
         self.repairs.db.close()
         self.admission.close()
-
-    def submit(
-        self,
-        *,
-        work_id: str,
-        actor: str,
-        blueprint: str,
-        order: dict[str, Any],
-        members: Sequence[MemberSpec],
-        priority: Priority = Priority.NORMAL,
-    ) -> AdmissionDecision:
-        return self.admission.submit(
-            work_id=work_id,
-            actor=actor,
-            blueprint=blueprint,
-            order=order,
-            members=members,
-            priority=priority,
-        )
-
-    def claim_dispatch(self, work_id: str) -> DispatchIntent | None:
-        return self.admission.claim_dispatch(work_id)
-
-    def pending_dispatch(self, *, limit: int = 32) -> list[str]:
-        return self.admission.pending_dispatch(limit=limit)
-
-    def cancel_reservation(self, work_id: str, *, reason: str, state: str = "cancelled") -> list[str]:
-        """Close a reservation whose work order will never be delivered, and release its units."""
-        return self.admission.cancel(work_id, reason=reason, state=state)
-
-    def release_for_terminal_cell(
-        self,
-        work_id: str,
-        *,
-        cell_id: str,
-        epoch: int,
-        state: str,
-    ) -> list[str]:
-        return self.admission.complete(work_id, cell_id=cell_id, epoch=epoch, state=state)
 
     def release_cell(self, cell_id: str, *, epoch: int, state: str) -> list[str]:
         """Release every membership held against this exact cell epoch.
@@ -173,15 +134,6 @@ class ControlKernel:
             return False
         self.restore_gate.assert_mutations_allowed()
         return self.restore_gate.requires_observation(cell_id)
-
-    def inspect_core(self, cell_id: str) -> dict[str, Any]:
-        if self.core is None:
-            raise RuntimeError("canonical mutation runtime is not configured")
-        return self.core.inspect(cell_id)
-
-    def record_cleanup(self, receipt: CleanupReceipt) -> dict[str, Any]:
-        """Return the canonical receipt document; persistence belongs to operation/evidence."""
-        return receipt.to_dict()
 
     def snapshot(self, *, limit: int = 100) -> dict[str, Any]:
         unresolved = self.operations.unresolved(limit=limit)

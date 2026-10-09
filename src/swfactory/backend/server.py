@@ -26,9 +26,6 @@ from swfactory.cells import CellError
 from swfactory.control import ControlError
 from swfactory.idempotency import OperationError
 
-from .core_service import operation as core_operation
-from .population_service import operation as population_operation
-from .scm_service import operation as scm_operation
 from .service import Factory, Refused
 
 PREFIX = "/v1"
@@ -150,12 +147,6 @@ def make_server(factory: Factory, host: str = "127.0.0.1", port: int = 8082) -> 
                     status, payload = self._health()
                 elif self.path.startswith(mount + "/"):
                     status, payload = self._compatibility(body)
-                elif self.command == "POST" and self.path.startswith(PREFIX + "/scm/"):
-                    status, payload = 200, scm_operation(factory, self.path[len(PREFIX) :], body)
-                elif self.command == "POST" and self.path.startswith(PREFIX + "/population/"):
-                    status, payload = 200, population_operation(factory, self.path[len(PREFIX) :], body)
-                elif self.command == "POST" and self.path.startswith(PREFIX + "/core/"):
-                    status, payload = 200, core_operation(factory, self.path[len(PREFIX) :], body)
                 elif self.command == "POST" and self.path.startswith(PREFIX + "/"):
                     status, payload = 200, factory.operation(self.path[len(PREFIX) :], body)
                 else:

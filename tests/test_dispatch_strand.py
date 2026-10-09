@@ -481,15 +481,15 @@ def test_crash_between_cancelling_the_cells_and_closing_the_reservation(backend)
     work_id = b["submission_id"]
     assert box.admission_state(work_id) == "admitted"
 
-    real = box.factory.control.cancel_reservation
+    real = box.factory.control.admission.cancel
 
     def boom(*args, **kwargs):
         raise Crash("died after cancelling the Cells, before closing the reservation")
 
-    box.factory.control.cancel_reservation = boom  # type: ignore[method-assign]
+    box.factory.control.admission.cancel = boom  # type: ignore[method-assign]
     with pytest.raises(Crash):
         box.factory.operation("/queue/cancel", {"work_id": work_id, "reason": "operator"})
-    box.factory.control.cancel_reservation = real  # type: ignore[method-assign]
+    box.factory.control.admission.cancel = real  # type: ignore[method-assign]
 
     box.restart()
     box.factory.resume_dispatch()

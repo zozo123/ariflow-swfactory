@@ -8,7 +8,6 @@ credential, or promotion authority.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 from collections.abc import Mapping
@@ -17,6 +16,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from swfactory.canonical import json_digest as _digest
 from swfactory.models import StageError
 from swfactory.population_manifest import (
     BehaviorReceipt,
@@ -32,11 +32,6 @@ from swfactory.work_executor import Cancellation as PopulationCancellation
 
 POPULATION_EXECUTION_SCHEMA_VERSION = 1
 POPULATION_EXECUTION_AUTHORITY = "search-only"
-
-
-def _digest(value: object) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 @dataclass(frozen=True)

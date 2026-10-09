@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from swfactory.security_boundary import redact
+from swfactory.security_contract import redact
 from swfactory.store_schema import ensure_evidence_schema
 
 
@@ -198,30 +198,6 @@ class EvidenceWriter:
         self._atomic_json(path, checkpoint)
         return checkpoint
 
-    def bundle_manifest(self, cell_id: str, extra_paths: Iterable[Path] = ()) -> dict[str, Any]:
-        directory = self.root / cell_id
-        files: list[dict[str, Any]] = []
-        candidates = list(directory.glob("**/*")) if directory.exists() else []
-        candidates += list(extra_paths)
-        seen: set[str] = set()
-        for path in sorted((p for p in candidates if p.is_file()), key=lambda p: str(p)):
-            key = str(path.resolve())
-            if key in seen:
-                continue
-            seen.add(key)
-            data = path.read_bytes()
-            files.append({"path": str(path), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
-        manifest = {
-            "schema_version": 1,
-            "cell_id": cell_id,
-            "files": files,
-            "manifest_digest": hashlib.sha256(
-                json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest(),
-        }
-        self._atomic_json(directory / "bundle-manifest.json", manifest)
-        return manifest
-
     def read(self, cell_id: str) -> list[dict[str, Any]]:
         path = self._events_path(cell_id)
         if not path.is_file():
@@ -265,25 +241,3 @@ class EvidenceWriter:
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(dict(value), sort_keys=True, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, path)
-
-
-ALLOWED_METRIC_LABELS = frozenset({"repo", "blueprint", "generation", "provider", "stage", "state", "kind", "result"})
-
-
-def validate_metric_labels(labels: Mapping[str, str]) -> None:
-    forbidden = set(labels) - ALLOWED_METRIC_LABELS
-    if forbidden:
-        raise ValueError(f"high-cardinality/unknown metric labels are forbidden: {sorted(forbidden)}")
-    for key, value in labels.items():
-        lower = value.lower()
-        if key in {
-            "repo",
-            "blueprint",
-            "generation",
-            "provider",
-            "stage",
-            "state",
-            "kind",
-            "result",
-        } and ("cell_" in lower or "run_" in lower or len(value) > 128):
-            raise ValueError(f"metric label {key} appears high-cardinality")

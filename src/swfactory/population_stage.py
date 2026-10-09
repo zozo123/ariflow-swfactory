@@ -7,7 +7,6 @@ The population runtime only explores, retains evidence, and returns bounded untr
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -23,6 +22,7 @@ from swfactory.adaptive_information import (
 )
 from swfactory.backend_population import BackendPopulationRunner, PopulationTaskInput
 from swfactory.call_accounting import CallAttempt, CallLedger
+from swfactory.canonical import json_digest as _digest
 from swfactory.execution_binding import execute_managed_population
 from swfactory.population_adapter import PopulationInvocation
 from swfactory.population_execution import (
@@ -49,11 +49,6 @@ SCHEMA_VERSION = 1
 AUTHORITY = "search-only"
 DEFAULT_EXCERPT_CHARS = 4096
 DEFAULT_TOTAL_EXCERPT_CHARS = 24_576
-
-
-def _digest(value: object) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -179,14 +174,6 @@ def population_stage_spec_from_document(document: Mapping[str, Any]) -> Populati
     if expected is not None and str(expected) != spec.digest():
         raise PopulationManifestError("population stage spec digest mismatch")
     return spec
-
-
-def write_population_stage_spec(state: RunState, spec: PopulationStageSpec) -> str:
-    document = spec.canonical_dict()
-    digest = spec.digest()
-    document["spec_digest"] = digest
-    state.write_control(CONTROL_FILE, json.dumps(document, indent=2, sort_keys=True) + "\n")
-    return digest
 
 
 def load_population_stage_spec(state: RunState) -> PopulationStageSpec | None:

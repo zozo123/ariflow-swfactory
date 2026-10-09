@@ -6,15 +6,14 @@ lifecycle scheduler; these rules only answer who is allowed to mutate each durab
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 from swfactory.cells import is_cell_id
 
 
 class AuthorityViolation(RuntimeError):
-    """A mutation or snapshot violates the single-authority contract."""
+    """A mutation or the rule map violates the single-authority contract."""
 
 
 class ResourceKind(StrEnum):
@@ -84,58 +83,12 @@ def rule_for(resource: ResourceKind) -> AuthorityRule:
     raise KeyError(resource)
 
 
-def authority_manifest() -> dict[str, Any]:
-    """Return a stable machine-readable authority document."""
-    return {
-        "schema_version": 1,
-        "scheduler": "airflow",
-        "rules": [asdict(rule) for rule in _RULES],
-    }
-
-
 def validate_manifest() -> None:
     resources = [rule.resource for rule in _RULES]
     if len(resources) != len(set(resources)):
         raise AuthorityViolation("a mutable resource has more than one authority rule")
     if rule_for(ResourceKind.AIRFLOW_RUN).owner != "airflow":
         raise AuthorityViolation("Airflow must remain the lifecycle scheduling authority")
-
-
-def check_snapshot(snapshot: dict[str, list[dict[str, Any]]]) -> tuple[str, ...]:
-    """Return deterministic invariant failures for an operator snapshot.
-
-    Supported rows are intentionally generic so the checker can consume SQLite exports, backend
-    API documents, or retained evidence without becoming another persistence layer.
-    """
-    failures: list[str] = []
-    seen_operations: dict[str, tuple[str, int]] = {}
-
-    for cell in snapshot.get("cells", []):
-        cell_id = str(cell.get("cell_id", ""))
-        epoch = cell.get("epoch")
-        if not is_cell_id(cell_id):
-            failures.append(f"invalid_cell_id:{cell_id or '<missing>'}")
-        if type(epoch) is not int or epoch < 1:
-            failures.append(f"invalid_cell_epoch:{cell_id}")
-
-    for operation in snapshot.get("operations", []):
-        key = str(operation.get("operation_key", ""))
-        cell_id = str(operation.get("cell_id", ""))
-        epoch = operation.get("epoch")
-        if not key:
-            failures.append(f"missing_operation_key:{cell_id}")
-            continue
-        identity = (cell_id, epoch if type(epoch) is int else -1)
-        previous = seen_operations.setdefault(key, identity)
-        if previous != identity:
-            failures.append(f"operation_identity_conflict:{key}")
-
-    for resource in snapshot.get("resources", []):
-        state = str(resource.get("state", ""))
-        if state == "active" and resource.get("tombstoned") is True:
-            failures.append(f"zombie_resource:{resource.get('id', '<unknown>')}")
-
-    return tuple(sorted(set(failures)))
 
 
 validate_manifest()

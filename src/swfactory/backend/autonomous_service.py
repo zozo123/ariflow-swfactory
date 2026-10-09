@@ -6,11 +6,11 @@ import hashlib
 import re
 from datetime import UTC, datetime
 
-from swfactory.autonomy import LINE, AutonomyStore, gate_key, load_policy
+from swfactory.autonomy import LINE, AutonomousPolicy, AutonomyStore, gate_key, load_policy, publication_key
+from swfactory.durable_admission import request_digest
 from swfactory.idempotency import MutationOutcome
 from swfactory.models import Approval, StageError
-from swfactory.scm import patch_content_digest, patch_paths
-from swfactory.security_contract import CanonicalPolicy
+from swfactory.scm import GitHubScm, patch_content_digest, patch_paths
 
 from .service import LIVE_CELL_STATES, Factory, Refused, text
 
@@ -20,9 +20,8 @@ def store(factory: Factory) -> AutonomyStore:
 
 
 def authority(factory: Factory, body: dict):
-    from .scm_service import _managed_identity
-
-    cell, security, operation_key, actor = _managed_identity(factory, body)
+    actor = text(body, "actor", default="airflow-worker", max_len=128)
+    cell, _, _, operation_key = factory.fenced(body, what="publication")
     policy = load_policy()
     if not policy.enabled or factory.repo != policy.repository or cell.get("airflow_dag_id") != LINE:
         raise Refused(403, "Cell is outside autonomous policy")
@@ -33,34 +32,30 @@ def authority(factory: Factory, body: dict):
     job = {"repo": factory.repo, "dir": "", "base_branch": policy.base_branch, "issue": cell["issue"]}
     if identity_for_job(job).stable_id() != cell["cell_id"]:
         raise Refused(403, "autonomous target is outside policy")
-    expected = CanonicalPolicy.for_factory_job(
-        LINE, {"repo": factory.repo, "dir": "", "base_branch": policy.base_branch}
-    ).digest()
-    if cell["policy_digest"] != expected or body.get("revision") != policy.revision:
+    if cell["policy_digest"] != policy.job_policy_digest(factory.repo) or body.get("revision") != policy.revision:
         raise Refused(409, "autonomous policy revision moved; a new Cell epoch is required")
     if body.get("base_branch", policy.base_branch) != policy.base_branch:
         raise Refused(403, "autonomous base branch is outside policy")
-    return policy, cell, security, operation_key, actor
+    return policy, cell, operation_key, actor
 
 
-def operation(factory: Factory, path: str, body: dict) -> dict:
-    if path == "/scm/triage":
-        return triage(factory, body)
-    if path == "/scm/policy-gate":
-        try:
-            return approve(factory, body)
-        except (Refused, StageError) as error:
-            digest = hashlib.sha256(repr(sorted(body.items())).encode()).hexdigest()
-            store(factory).bind(f"blocked-gate:{digest}", {"state": "blocked", "reason": str(error)})
-            raise
-    if path == "/scm/merge":
-        return merge(factory, body)
-    raise Refused(404, "unknown autonomous operation")
+def _require_eligible(policy: AutonomousPolicy, scm: GitHubScm, ref: str, repo: str, verb: str) -> None:
+    """Refuse an issue the checked-in policy does not admit, naming the step it blocks."""
+    if reason := policy.issue_reason(scm.fetch_issue(ref), repo):
+        raise Refused(403, f"autonomous {verb} blocked: {reason}")
+
+
+def policy_gate(factory: Factory, body: dict) -> dict:
+    """``approve``, leaving a blocked-gate record behind every refusal."""
+    try:
+        return approve(factory, body)
+    except (Refused, StageError) as error:
+        digest = hashlib.sha256(repr(sorted(body.items())).encode()).hexdigest()
+        store(factory).bind(f"blocked-gate:{digest}", {"state": "blocked", "reason": str(error)})
+        raise
 
 
 def triage(factory: Factory, body: dict) -> dict:
-    from swfactory.scm import GitHubScm
-
     policy = load_policy()
     ref = text(body, "issue", max_len=20)
     if not ref.isdigit():
@@ -80,15 +75,11 @@ def triage(factory: Factory, body: dict) -> dict:
 
 
 def approve(factory: Factory, body: dict) -> dict:
-    from swfactory.scm import GitHubScm
-
-    policy, cell, _, _, _ = authority(factory, body)
+    policy, cell, _, _ = authority(factory, body)
     gate = body.get("gate")
     if gate not in {"intent", "plan"}:
         raise ValueError("policy gate must be intent or plan")
-    issue = GitHubScm(factory.repo, policy.base_branch).fetch_issue(str(cell["issue"]))
-    if reason := policy.issue_reason(issue, factory.repo):
-        raise Refused(403, f"autonomous triage blocked: {reason}")
+    _require_eligible(policy, GitHubScm(factory.repo, policy.base_branch), str(cell["issue"]), factory.repo, "triage")
     cost, budget = body.get("cost_usd"), body.get("budget_usd")
     if type(cost) not in (int, float) or type(budget) not in (int, float):
         raise ValueError("cost_usd and budget_usd must be numbers")
@@ -134,15 +125,13 @@ def approve(factory: Factory, body: dict) -> dict:
 
 def validate_publication(factory: Factory, body: dict, patch: bytes) -> dict | None:
     """Validate host-generated evidence against backend-owned approvals before publication."""
-    from swfactory.scm import GitHubScm
-
     cell = factory._cell(text(body, "cell_id"))
     if cell.get("airflow_dag_id") != LINE:
         return None
-    policy, cell, _, _, _ = authority(factory, body)
-    issue = GitHubScm(factory.repo, policy.base_branch).fetch_issue(str(cell["issue"]))
-    if reason := policy.issue_reason(issue, factory.repo):
-        raise Refused(403, f"autonomous publication blocked: {reason}")
+    policy, cell, _, _ = authority(factory, body)
+    _require_eligible(
+        policy, GitHubScm(factory.repo, policy.base_branch), str(cell["issue"]), factory.repo, "publication"
+    )
     evidence = body.get("autonomous_evidence")
     if not isinstance(evidence, dict):
         raise Refused(403, "autonomous publication lacks host evidence")
@@ -182,7 +171,7 @@ def validate_publication(factory: Factory, body: dict, patch: bytes) -> dict | N
         if evidence["artifact_digests"][name] != approval["artifact_sha256"]:
             raise Refused(409, "approved artifact moved before publication")
     decision = {"revision": policy.revision, "evidence": evidence, "paths": changed}
-    previous = decisions.get(f"{cell['cell_id']}:{cell['epoch']}:publication")
+    previous = decisions.get(publication_key(cell["cell_id"], cell["epoch"]))
     if previous and (
         any(previous[name] != decision[name] for name in decision)
         or previous["receipt"].get("branch") != body.get("branch")
@@ -193,15 +182,14 @@ def validate_publication(factory: Factory, body: dict, patch: bytes) -> dict | N
 
 
 def remember_publication(factory: Factory, cell: dict, decision: dict, receipt: dict) -> None:
-    store(factory).bind(f"{cell['cell_id']}:{cell['epoch']}:publication", {**decision, "receipt": receipt})
+    store(factory).bind(publication_key(cell["cell_id"], cell["epoch"]), {**decision, "receipt": receipt})
 
 
 def merge(factory: Factory, body: dict) -> dict:
-    from .core_service import intent_digest
     from .scm_service import _request, _with_github_lease
 
-    policy, cell, security, key, actor = authority(factory, body)
-    recorded = store(factory).get(f"{cell['cell_id']}:{cell['epoch']}:publication")
+    policy, cell, key, actor = authority(factory, body)
+    recorded = store(factory).get(publication_key(cell["cell_id"], cell["epoch"]))
     if not recorded or recorded["revision"] != policy.revision:
         raise Refused(403, "no policy-authorized publication exists for this Cell epoch")
     receipt = recorded["receipt"]
@@ -222,9 +210,7 @@ def merge(factory: Factory, body: dict) -> dict:
             return {"state": "merged", "sha": sha, "pr_number": number, "policy_revision": policy.revision}
         if pr.get("state") != "open" or pr.get("draft"):
             raise Refused(403, "PR is not open and ready for merge")
-        issue = scoped.fetch_issue(str(cell["issue"]))
-        if reason := policy.issue_reason(issue, factory.repo):
-            raise Refused(403, f"autonomous merge blocked: {reason}")
+        _require_eligible(policy, scoped, str(cell["issue"]), factory.repo, "merge")
         policy.check_paths(snapshot["paths"], artifact_prefix=prefix)
         if set(snapshot["paths"]) != set(recorded["paths"]):
             raise Refused(409, "PR diff moved after publication")
@@ -270,10 +256,9 @@ def merge(factory: Factory, body: dict) -> dict:
     request = _request(
         factory,
         cell=cell,
-        security=security,
         operation_key=key,
         kind="github_merge",
-        digest=intent_digest({"sha": sha, "pr": number, "revision": policy.revision, "actor": actor}),
+        digest=request_digest({"sha": sha, "pr": number, "revision": policy.revision, "actor": actor}),
         replay_safe=True,
         parts=(str(number), sha),
     )

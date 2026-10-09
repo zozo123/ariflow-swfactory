@@ -77,6 +77,14 @@ class AutonomousPolicy(BoundaryModel):
         if not 0 <= cost <= self.budget_usd or not 0 < ceiling <= self.budget_usd:
             raise StageError("policy", "autonomous budget exceeds checked-in authority")
 
+    def job_policy_digest(self, repo: str, target_dir: str = "") -> str:
+        """The Cell policy digest an autonomous job on ``repo`` must carry."""
+        from swfactory.security_contract import CanonicalPolicy
+
+        return CanonicalPolicy.for_factory_job(
+            LINE, {"repo": repo, "dir": target_dir, "base_branch": self.base_branch}
+        ).digest()
+
 
 def _matches(path: str, pattern: str) -> bool:
     return (
@@ -156,6 +164,10 @@ def gate_key(cell_id: str, epoch: int, gate: str) -> str:
     return f"{cell_id}:{epoch}:gate:{gate}"
 
 
+def publication_key(cell_id: str, epoch: int) -> str:
+    return f"{cell_id}:{epoch}:publication"
+
+
 def policy_approval(ctx, gate: str) -> Approval:
     """Ask the backend to approve current host-owned evidence, never a model's yes/no."""
     from swfactory import accepted_inputs
@@ -185,8 +197,6 @@ def enforce_runtime_policy(cfg, blueprint, binding: dict | None) -> None:
     """Refuse widened worker settings before creating a sandbox or spending on the first stage."""
     if not any(gate.mode == "policy" for gate in blueprint.gates):
         return
-    from swfactory.security_contract import CanonicalPolicy
-
     policy = load_policy()
     if blueprint.name != LINE or not binding or not binding.get("managed") or cfg.scm != "github":
         raise StageError("policy", "autonomous work requires a backend-managed line")
@@ -195,8 +205,5 @@ def enforce_runtime_policy(cfg, blueprint, binding: dict | None) -> None:
     policy.check_budget(0, cfg.max_budget_usd)
     if not 0 < cfg.max_budget_usd_per_stage <= cfg.max_budget_usd:
         raise StageError("policy", "stage budget exceeds autonomous job authority")
-    expected = CanonicalPolicy.for_factory_job(
-        LINE, {"repo": cfg.repo, "dir": cfg.target_dir, "base_branch": cfg.base_branch}
-    ).digest()
-    if binding.get("policy_digest") != expected:
+    if binding.get("policy_digest") != policy.job_policy_digest(cfg.repo, cfg.target_dir):
         raise StageError("policy", "autonomous policy moved before execution; a new epoch is required")

@@ -546,17 +546,17 @@ def test_approved_patch_publishes_then_merges_through_managed_mutations(approved
         "allowed_prefixes": [""],
         "patch_b64": base64.b64encode(patch).decode(),
     }
-    receipt = scm_service.operation(backend, "/scm/publish", publication)
+    receipt = backend.operation("/scm/publish", publication)
     assert receipt["head_revision"] == SHA
     assert PublishingRemote.publications == 1
-    assert scm_service.operation(backend, "/scm/publish", publication) == receipt
+    assert backend.operation("/scm/publish", publication) == receipt
     assert PublishingRemote.publications == 1
     with pytest.raises(ValueError, match="already sealed"):
-        scm_service.operation(backend, "/scm/publish", {**publication, "branch": "different-branch"})
+        backend.operation("/scm/publish", {**publication, "branch": "different-branch"})
     assert PublishingRemote.publications == 1
     stored = autonomous.store(backend).get(f"{cell['cell_id']}:{cell['epoch']}:publication")
     assert stored["receipt"] == receipt
-    result = scm_service.operation(backend, "/scm/merge", {**body, "operation_key": "merge-integrated"})
+    result = backend.operation("/scm/merge", {**body, "operation_key": "merge-integrated"})
     assert result["state"] == "merged"
     assert PublishingRemote.writes == [(1, SHA)]
     assert backend.control.operations.get("publish-integrated")["state"] == "committed"

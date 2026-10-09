@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from swfactory import blueprint, cell_callback, runtime
 from swfactory.admission import Limits
-from swfactory.backend import make_server, scm_service
+from swfactory.backend import make_server
 from swfactory.backend.service import Refused
 from swfactory.backend_scm import BackendScm
 from swfactory.cell_runtime import bind_jobs
@@ -218,7 +218,7 @@ def test_status_only_updates_keep_receipt_and_original_snapshot(box, monkeypatch
     second = box.factory.submit(request(changed))
     assert first == second
     assert len(box.airflow.created) == 1
-    issue = scm_service.operation(box.factory, "/scm/linear-source", source_request(box, first))
+    issue = box.factory.operation("/scm/linear-source", source_request(box, first))
     assert issue["body"] == "Original acceptance criteria.\n"
     assert issue["state"] == "open"
 
@@ -233,7 +233,7 @@ def test_intent_edit_requires_explicit_digest_and_new_epoch(box, monkeypatch):
     second = box.factory.submit(request(changed))
     assert second["submission_id"] != first["submission_id"]
     assert box.factory.cell_store.get(first["cells"][0])["epoch"] == 2
-    issue = scm_service.operation(box.factory, "/scm/linear-source", source_request(box, second))
+    issue = box.factory.operation("/scm/linear-source", source_request(box, second))
     assert issue["body"] == "Explicitly accepted new criteria"
 
 
@@ -247,7 +247,7 @@ def test_source_read_is_fenced_by_cell_epoch_policy_and_worker_blueprint(box):
         ("ref", "101"),
     ]:
         with pytest.raises(Refused):
-            scm_service.operation(box.factory, "/scm/linear-source", {**body, field: value})
+            box.factory.operation("/scm/linear-source", {**body, field: value})
     assert len(box.airflow.created) == 1
 
 
@@ -259,7 +259,7 @@ def test_source_integrity_failure_refuses_worker_read(box):
         "UPDATE admission_order SET payload_json=? WHERE work_id=?", (json.dumps(order), receipt["submission_id"])
     )
     with pytest.raises(Refused, match="integrity verification"):
-        scm_service.operation(box.factory, "/scm/linear-source", source_request(box, receipt))
+        box.factory.operation("/scm/linear-source", source_request(box, receipt))
 
 
 @pytest.mark.parametrize(
@@ -301,7 +301,7 @@ def test_linear_cell_cannot_create_a_github_issue(box):
     receipt = box.factory.submit(request())
     body = {**source_request(box, receipt), "operation_key": "attempted-bridge", "title": "bridge", "body": "bridge"}
     with pytest.raises(Refused, match="cannot create GitHub issues"):
-        scm_service.operation(box.factory, "/scm/open-issue", body)
+        box.factory.operation("/scm/open-issue", body)
 
 
 def test_native_worker_uses_backend_snapshot_after_restart_without_linear_credentials(box, monkeypatch, tmp_path):
@@ -314,9 +314,7 @@ def test_native_worker_uses_backend_snapshot_after_restart_without_linear_creden
     monkeypatch.setenv("SWF_BACKEND_URL", "https://backend.invalid")
     monkeypatch.setenv("SWF_BACKEND_TOKEN", "t" * 40)
     monkeypatch.setattr(cell_callback, "post", lambda path, body: box.factory.operation(path, body))
-    monkeypatch.setattr(
-        BackendScm, "_post", lambda self, path, body, **kw: scm_service.operation(box.factory, path, body)
-    )
+    monkeypatch.setattr(BackendScm, "_post", lambda self, path, body, **kw: box.factory.operation(path, body))
     ctx = runtime.build_ctx(
         bp,
         job,

@@ -1,8 +1,8 @@
-"""Canonical trust-zone, mutation-envelope and redaction contracts.
+"""Canonical trust-zone, capability, mutation-envelope and redaction contracts.
 
-Security metadata is data, not prose: policy digests are canonical, credentials have audiences and
-expiry, every external mutation carries the same envelope, and durable evidence uses one redaction
-vocabulary.
+Security metadata is data, not prose: policy digests are canonical, capabilities are granted per
+tenant and Cell epoch, every external mutation carries the same envelope, and durable evidence uses
+one redaction vocabulary.
 """
 
 from __future__ import annotations
@@ -11,29 +11,28 @@ import hashlib
 import json
 import math
 import re
-import time
-from collections.abc import Iterable, Mapping
-from dataclasses import asdict, dataclass, field
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
+from enum import StrEnum
 from typing import Any
 
 from swfactory.cells import is_cell_id
-from swfactory.paths import normalize_target_dir, validate_target_base_branch
+from swfactory.paths import cell_target
 
 POLICY_SCHEMA_VERSION = 1
 POLICY_DIGEST_FAMILY = f"v{POLICY_SCHEMA_VERSION}"
 POLICY_DIGEST_PREFIX = f"policy:{POLICY_DIGEST_FAMILY}:"
 POLICY_MAX_EXACT_INTEGER = (1 << 53) - 1
 MUTATION_SCHEMA_VERSION = 1
-REDACTION_SCHEMA_VERSION = 1
 REDACTED = "[REDACTED]"
 
 _SECRET_KEY = re.compile(
-    r"(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|credential|authorization)",
+    r"(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|credential|authorization|cookie)",
     re.IGNORECASE,
 )
 _TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/-]{8,}", re.IGNORECASE),
-    re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+    re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bapikey_[A-Za-z0-9]{8,}_[A-Za-z0-9_-]{32,}\b", re.IGNORECASE),
@@ -77,10 +76,7 @@ class CanonicalPolicy:
 
         line = str(line_name).strip()
         repo = str(job.get("repo", "")).strip()
-        directory = normalize_target_dir(str(job.get("dir", "")).strip(), field="job.dir") or "."
-        base_branch = validate_target_base_branch(
-            str(job.get("base_branch", "main")).strip() or "main", field="job.base_branch"
-        )
+        target = cell_target(job)
         sandbox = str(job.get("sandbox", "configured")).strip() or "configured"
         if not line:
             raise ValueError("factory policy line must be nonempty")
@@ -93,7 +89,7 @@ class CanonicalPolicy:
             metadata += (("autonomy_revision", load_policy().revision),)
         return cls(
             repo=repo,
-            target=f"{directory}@{base_branch}",
+            target=target,
             sandbox_provider=sandbox,
             metadata=metadata,
         )
@@ -130,47 +126,50 @@ class MutationEnvelope:
         return asdict(self)
 
 
-@dataclass(frozen=True)
-class CredentialGrant:
-    name: str
-    audience: str
-    purpose: str
-    expires_at: float | None = None
-    metadata: dict[str, str] = field(default_factory=dict)
-
-    def validate_for(self, audience: str, *, now: float | None = None) -> None:
-        now = time.time() if now is None else now
-        if self.audience != audience:
-            raise PermissionError(f"credential {self.name!r} is scoped to {self.audience!r}, not {audience!r}")
-        if self.expires_at is not None and self.expires_at <= now:
-            raise PermissionError(f"credential {self.name!r} has expired")
+class Capability(StrEnum):
+    READ_SOURCE = "read_source"
+    WRITE_WORKSPACE = "write_workspace"
+    READ_CACHE = "read_cache"
+    WRITE_CACHE = "write_cache"
+    USE_MODEL = "use_model"
+    PUBLISH_GIT = "publish_git"
+    READ_SECRET = "read_secret"
+    ADMIN_REPAIR = "admin_repair"
 
 
 @dataclass(frozen=True)
-class EnvironmentProof:
-    allowed_names: tuple[str, ...]
-    scrubbed_names: tuple[str, ...]
-    audience: str
-    schema_version: int = 1
+class SecurityContext:
+    tenant: str
+    cell_id: str
+    epoch: int
+    role: str
+    capabilities: frozenset[Capability]
+    secret_scopes: frozenset[str] = frozenset()
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "audience": self.audience,
-            "allowed_names": sorted(set(self.allowed_names)),
-            "scrubbed_names": sorted(set(self.scrubbed_names)),
-        }
+    def validate(self) -> None:
+        if not self.tenant.strip():
+            raise ValueError("tenant is required")
+        if not is_cell_id(self.cell_id):
+            raise ValueError("invalid cell id")
+        if self.epoch < 1:
+            raise ValueError("epoch must be positive")
 
 
-def environment_proof(
-    source: Mapping[str, str],
-    allowed_names: Iterable[str],
+def authorize(
+    context: SecurityContext,
     *,
-    audience: str,
-) -> EnvironmentProof:
-    allowed = {name for name in allowed_names if name in source}
-    scrubbed = {name for name in source if looks_secret_key(name) and name not in allowed}
-    return EnvironmentProof(tuple(sorted(allowed)), tuple(sorted(scrubbed)), audience)
+    capability: Capability,
+    tenant: str,
+    secret_scope: str | None = None,
+) -> bool:
+    context.validate()
+    if tenant != context.tenant:
+        return False
+    if capability not in context.capabilities:
+        return False
+    if capability is Capability.READ_SECRET:
+        return secret_scope is not None and secret_scope in context.secret_scopes
+    return True
 
 
 def looks_secret_key(key: str) -> bool:
@@ -197,23 +196,6 @@ def redact(value: Any, *, key: str | None = None) -> Any:
     if isinstance(value, str):
         return redact_text(value)
     return value
-
-
-def redaction_document(value: Any) -> dict[str, Any]:
-    return {
-        "schema_version": REDACTION_SCHEMA_VERSION,
-        "value": redact(value),
-    }
-
-
-def assert_publication_credentials_backend_only(
-    sandbox_environment: Mapping[str, str],
-    *,
-    publication_names: Iterable[str] = ("GH_TOKEN", "GITHUB_TOKEN"),
-) -> None:
-    leaked = sorted(name for name in publication_names if name in sandbox_environment)
-    if leaked:
-        raise PermissionError("publication credentials crossed into sandbox trust zone: " + ", ".join(leaked))
 
 
 def policy_digest_for_mapping(policy: Mapping[str, Any]) -> str:
