@@ -34,7 +34,7 @@ def test_compatibility_rejects_encoded_path_traversal(tmp_path: Path, monkeypatc
 def test_work_orders_refuse_drain_before_submit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     backend = factory(tmp_path, monkeypatch)
     monkeypatch.setattr(backend, "capabilities", lambda: {"mutation_ready": False})
-    monkeypatch.setattr(backend, "submit", lambda body: pytest.fail(f"submit reached during drain: {body}"))
+    monkeypatch.setattr(backend, "_line", lambda line: pytest.fail(f"admission reached during drain: {line}"))
     try:
         with pytest.raises(Refused, match="draining or not mutation-ready") as caught:
             backend.operation("/work-orders", {"line": "factory", "issues": ["1"]})

@@ -31,8 +31,8 @@ _SECRET_KEY = re.compile(
     re.IGNORECASE,
 )
 _TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/-]{8,}", re.IGNORECASE),
-    re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+    re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bapikey_[A-Za-z0-9]{8,}_[A-Za-z0-9_-]{32,}\b", re.IGNORECASE),

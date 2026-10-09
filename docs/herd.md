@@ -18,10 +18,8 @@ uv run swfactory herd --approve-all                      # answer every pending 
 ```
 
 `swfactory.herd.main(...)` is that whole command (TUI and headless), `make_clients(...)` builds
-the one client stack both use, `make_app(*, airflow_url, repo, owner, token=None, username=None,
-password=None, metrics_root=".", refresh_s=5.0, dag_ids=None) -> HerdApp` returns the app over the
-real clients, and `run_herd(collector, actions, *, info=None, refresh_s=5.0)` runs any
-collector/actions pair (the tests use fakes).
+the one client stack both use, and `HerdApp(collector, actions, *, info=None, refresh_s=5.0)` runs
+any collector/actions pair (the tests use fakes).
 
 ## The unit is the job, not the run
 
