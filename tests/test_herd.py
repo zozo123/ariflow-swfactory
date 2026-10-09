@@ -612,23 +612,14 @@ def test_control_actions_delegate_to_clients() -> None:
     assert islo.calls == [("remove", ("swf-42-abcd1234",), {})]
 
 
-def test_make_app_and_make_clients_share_one_stack() -> None:
+def test_the_app_and_the_headless_modes_share_one_client_stack() -> None:
     clients = herd.make_clients(airflow_url="http://af:8080", repo="o/r", owner="me", token="t", dag_ids=["factory"])
     assert clients.dag_ids == ("factory",)
     # One AirflowClient behind both seams: a headless answer and a keystroke are the same call.
     assert clients.collector.airflow is clients.actions.airflow
     assert clients.collector.islo is clients.actions.islo
 
-    app = herd.make_app(
-        airflow_url="http://af:8080",
-        repo="o/r",
-        owner="me",
-        token="t",
-        metrics_root=".",
-        refresh_s=9,
-        dag_ids=["factory"],
-    )
-    assert isinstance(app, HerdApp)
+    app = HerdApp(clients.collector, clients.actions, info=clients.info, refresh_s=9)
     assert app.refresh_s == 9
     assert app.info.actor == "Airflow token owner"
     assert app.info.dag_ids == ("factory",)

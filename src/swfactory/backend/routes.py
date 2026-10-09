@@ -44,6 +44,21 @@ def _pr_number(body: dict[str, Any]) -> int:
     return number
 
 
+def _row(
+    name: str,
+    ok: bool,
+    *,
+    detail: str | None = None,
+    fix: str | None = None,
+    required: bool = True,
+    bad: str = "fail",
+) -> dict[str, Any]:
+    """One ``/doctor`` row: ``ok`` as a bool, a lowercase ``status`` (``warn`` when not required)."""
+    status = "ok" if ok else bad if required else "warn"
+    row = {"name": name, "ok": bool(ok), "status": status, "detail": detail, "fix": fix, "required": required}
+    return {key: value for key, value in row.items() if value is not None}
+
+
 def _doctor(factory: Factory, _body: dict[str, Any]) -> list[dict[str, Any]]:
     caps = factory.capabilities()
     # Every row carries `ok` as well as `status`. The console deserializes into
@@ -53,29 +68,16 @@ def _doctor(factory: Factory, _body: dict[str, Any]) -> list[dict[str, Any]]:
     # someone runs when nothing else works; it must not be the thing that lies to them.
     # `status` is kept alongside for the Python CLI, which reads it.
     checks = [
-        {
-            "name": "factory backend",
-            "ok": True,
-            "status": "ok",
-            "detail": "Python API v1",
-            "required": True,
-        },
-        {
-            "name": "factory cells",
-            "ok": True,
-            "status": "ok",
-            "detail": f"durable CellStore schema v{SCHEMA_VERSION}",
-            "required": True,
-        },
-        {
-            "name": "mutation readiness",
-            "ok": bool(caps["mutation_ready"]),
-            "status": "ok" if caps["mutation_ready"] else "warn",
-            # A capability document rendered as text: `detail` is a string on both sides,
-            # and an object here failed to parse even once `ok` was present.
-            "detail": ", ".join(f"{k}={v}" for k, v in sorted(caps.items())),
-            "required": True,
-        },
+        _row("factory backend", True, detail="Python API v1"),
+        _row("factory cells", True, detail=f"durable CellStore schema v{SCHEMA_VERSION}"),
+        # A capability document rendered as text: `detail` is a string on both sides, and an
+        # object here failed to parse even once `ok` was present.
+        _row(
+            "mutation readiness",
+            caps["mutation_ready"],
+            detail=", ".join(f"{k}={v}" for k, v in sorted(caps.items())),
+            bad="warn",
+        ),
     ]
     # The row the console path was missing (#2050 added it to the Python doctor only): a
     # managed cell fails closed in its FIRST stage without SWF_BACKEND_URL/SWF_BACKEND_TOKEN,
@@ -91,53 +93,41 @@ def _doctor(factory: Factory, _body: dict[str, Any]) -> list[dict[str, Any]]:
     # healthy backend, which is #1217 by another route. Informational: a red row still shows
     # the operator that THIS host's copy is unwired, without claiming to know the workers'.
     checks.append(
-        {
-            "name": "managed worker callback",
-            "ok": workers.ok,
-            "status": "ok" if workers.ok else "warn",
-            "detail": workers.detail + " (as seen from the backend host's environment, which is not the workers')",
-            "fix": workers.fix,
-            "required": False,
-        }
+        _row(
+            "managed worker callback",
+            workers.ok,
+            detail=workers.detail + " (as seen from the backend host's environment, which is not the workers')",
+            fix=workers.fix,
+            required=False,
+        )
     )
     try:
         health = factory._checked_airflow("GET", "/monitor/health")
         for name in ("metadatabase", "scheduler"):
             healthy = (health.get(name) or {}).get("status") == "healthy"
-            checks.append(
-                {
-                    "name": name,
-                    "ok": healthy,
-                    "status": "ok" if healthy else "fail",
-                    "detail": "Airflow health",
-                    "required": True,
-                    "fix": "" if healthy else "restore the Airflow service",
-                }
-            )
+            fix = "" if healthy else "restore the Airflow service"
+            checks.append(_row(name, healthy, detail="Airflow health", fix=fix))
         factory._checked_airflow("GET", "/dags?limit=1")
-        checks.append({"name": "airflow auth", "ok": True, "status": "ok", "required": True})
+        checks.append(_row("airflow auth", True))
     except (Refused, ControlError, OSError):
         checks.append(
-            {
-                "name": "airflow",
-                "ok": False,
-                "status": "fail",
-                "required": True,
-                "detail": "Airflow is unavailable or authentication failed",
-                "fix": "check AIRFLOW_URL and credentials on the backend",
-            }
+            _row(
+                "airflow",
+                False,
+                detail="Airflow is unavailable or authentication failed",
+                fix="check AIRFLOW_URL and credentials on the backend",
+            )
         )
     for tool, configured in (("gh", bool(factory.repo)), ("islo", bool(factory.owner))):
         present = bool(shutil.which(tool))
         checks.append(
-            {
-                "name": tool,
-                "ok": present,
-                "status": "ok" if present else "warn",
-                "required": False,
-                "detail": f"backend tool installed={present}, configured={configured}; credentials not probed",
-                "fix": "" if present else f"install {tool} on the backend if needed",
-            }
+            _row(
+                tool,
+                present,
+                detail=f"backend tool installed={present}, configured={configured}; credentials not probed",
+                fix="" if present else f"install {tool} on the backend if needed",
+                required=False,
+            )
         )
     return checks
 

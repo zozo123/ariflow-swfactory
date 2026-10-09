@@ -31,7 +31,7 @@ from swfactory.admission import Priority
 from swfactory.backend_http import NoRedirect, valid_backend_token
 from swfactory.cell_runtime import SCHEDULE_ACTOR, identity_for_job
 from swfactory.cells import TERMINAL_STATES, CellBusy, CellStore, DuplicateOperation, StaleEpoch
-from swfactory.control import AirflowClient, ControlError
+from swfactory.control import AirflowClient, ControlError, run_path
 from swfactory.control_kernel import ControlKernel
 from swfactory.core_capabilities import AirflowBinding
 from swfactory.credential_lease import CredentialLeaseBroker, CredentialLeaseError, LeaseBinding, LeaseDenial
@@ -304,7 +304,7 @@ class Factory:
     def _credential(self, *, refresh: bool = False) -> str | None:
         with self.auth_lock:
             if refresh and not os.getenv("AIRFLOW_TOKEN"):
-                self.credentials._token = None
+                self.credentials.reset_token()
             return self.credentials.token()
 
     def airflow(self, method: str, path: str, body: dict | None) -> tuple[int, Any]:
@@ -471,15 +471,15 @@ class Factory:
             from swfactory.autonomy import load_policy
             from swfactory.scm import GitHubScm
 
+            from .autonomous_service import _require_eligible
+
             policy = load_policy()
             if line.limits.budget_usd > policy.budget_usd:
                 raise Refused(403, "line budget exceeds autonomous policy")
             for ref in issues:
                 if not ref.isdigit():
                     raise Refused(400, "autonomous intake requires numeric GitHub issues")
-                issue = GitHubScm(self.repo, policy.base_branch).fetch_issue(ref)
-                if reason := policy.issue_reason(issue, self.repo):
-                    raise Refused(403, f"autonomous triage blocked: {reason}")
+                _require_eligible(policy, GitHubScm(self.repo, policy.base_branch), ref, self.repo, "triage")
         targets = body.get("targets", [])
         if not isinstance(targets, list) or any(not isinstance(t, str) for t in targets):
             raise ValueError("targets must be an array of repository names")
@@ -691,9 +691,8 @@ class Factory:
         if not dag_id or now - last_write < self.reconcile_interval_s:
             return None
         self._observed_at[cell_id] = now
-        path = "/dags/" + urllib.parse.quote(dag_id, safe="") + "/dagRuns/" + urllib.parse.quote(run_id, safe="")
         try:
-            status, payload = self.airflow("GET", path, None)
+            status, payload = self.airflow("GET", run_path(dag_id, run_id), None)
         except Exception as error:  # noqa: BLE001 - an observation that fails proves nothing
             self.callback_debt[cell_id] = {"work_id": work_id, "run_id": run_id, "detail": str(error)[:512]}
             return UNANSWERED
@@ -753,13 +752,13 @@ class Factory:
         line_name = str(order["line"])
         actor = str(order["actor"])
         jobs = {int(job["job_idx"]): job for job in order["jobs"]}
-        path = "/dags/" + urllib.parse.quote(line_name, safe="")
+        path = run_path(line_name)
         attached = order.get("airflow_run_id")
         if attached is not None:
             # The run exists already; Airflow, not the caller, says whether it is one this order may
             # bind. Asked before any Cell is activated, so a refused attach activates nothing.
             try:
-                self._attached_run(path, str(attached))
+                self._attached_run(line_name, str(attached))
             except Refused as error:
                 # Proven by Airflow's own answer: there is no live scheduled run to bind, and there
                 # never will be for this id. Retire now rather than hold the unit through the
@@ -802,7 +801,7 @@ class Factory:
             return result
 
         def reconcile() -> MutationOutcome:
-            status, payload = self.airflow("GET", path + "/dagRuns/" + urllib.parse.quote(dag_run_id, safe=""), None)
+            status, payload = self.airflow("GET", run_path(line_name, dag_run_id), None)
             if status == 200 and isinstance(payload, dict):
                 return MutationOutcome(
                     "committed",
@@ -847,13 +846,13 @@ class Factory:
         self.control.admission.record_dispatch(intent.work_id, token=intent.lease_token, dag_run_id=run_id)
         return run_id
 
-    def _attached_run(self, path: str, run_id: str) -> dict[str, Any]:
+    def _attached_run(self, dag_id: str, run_id: str) -> dict[str, Any]:
         """The scheduled run a work order asks to attach to, as Airflow reports it right now.
 
         ``Refused`` is proof (absent, not scheduler-created, already finished); any other failure is
         an unknown Airflow state and stays retryable.
         """
-        status, payload = self.airflow("GET", path + "/dagRuns/" + urllib.parse.quote(run_id, safe=""), None)
+        status, payload = self.airflow("GET", run_path(dag_id, run_id), None)
         if status == 404:
             raise Refused(409, "scheduled Airflow run does not exist")
         if status != 200 or not isinstance(payload, dict):
@@ -1137,7 +1136,6 @@ class Factory:
         state = self.control.admission.state_of(work_id)
         run_id = str(dispatch.get("dag_run_id") or order["dag_run_id"])
         line_name = str(order["line"])
-        path = "/dags/" + urllib.parse.quote(line_name, safe="")
         document = {
             "state": "submitted" if state == "bound" else str(state),
             "submission_id": work_id,
@@ -1147,7 +1145,7 @@ class Factory:
             "jobs": len(order["jobs"]),
             "cells": [member.cell_id for member in members],
             "blueprint": {"name": line_name, "resolved": True},
-            "url": self.airflow_url + path + "/runs/" + urllib.parse.quote(run_id, safe=""),
+            "url": self.credentials.run_url(line_name, run_id),
         }
         if "work_source" in order:
             document["work_source"] = order["work_source"]
@@ -1366,7 +1364,7 @@ class Factory:
         run_id = str(cell.get("airflow_run_id") or "")
         if not dag_id or not run_id:
             return {"state": "no_remote_run"}
-        path = "/dags/" + urllib.parse.quote(dag_id, safe="") + "/dagRuns/" + urllib.parse.quote(run_id, safe="")
+        path = run_path(dag_id, run_id)
         ref = OperationRef.build(str(cell["cell_id"]), int(cell["epoch"]), "airflow_cancel", dag_id, run_id)
 
         def apply() -> dict[str, Any]:

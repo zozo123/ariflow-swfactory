@@ -215,6 +215,27 @@ def _check_islo_auth(runner: Runner) -> tuple[Check, dict | None]:
     return Check("islo auth", True, who or "authenticated"), data
 
 
+def _integration_rows(
+    names: set[str],
+    *,
+    github: bool,
+    claude: bool,
+    source: str = "",
+    skipped: str | None = None,
+) -> list[Check]:
+    """The wanted ``integration`` rows. ``skipped`` (with no ``names``) fails each with that reason."""
+    have = ", ".join(sorted(names)) or "none"
+    rows = []
+    for tool, wanted, ok in (
+        ("github", github, "github" in names),
+        ("claude", claude, bool(names & _CLAUDE_INTEGRATIONS)),
+    ):
+        if wanted:
+            detail = skipped or (f"connected ({source})" if ok else f"not connected; have: {have}")
+            rows.append(Check(f"integration {tool}", ok, detail, "" if ok else f"islo login --tool {tool}"))
+    return rows
+
+
 def _check_integrations(
     runner: Runner,
     status: dict | None,
@@ -227,37 +248,9 @@ def _check_integrations(
     if names is None:
         text, err = _try(runner, ["islo", "status"])
         if text is None:
-            missing = f"cannot read integrations: {err}"
-            checks = []
-            if github:
-                checks.append(Check("integration github", False, missing, "islo login --tool github"))
-            if claude:
-                checks.append(Check("integration claude", False, missing, "islo login --tool claude"))
-            return checks
+            return _integration_rows(set(), github=github, claude=claude, skipped=f"cannot read integrations: {err}")
         names, source = integration_names_from_text(text), "text"
-    have = ", ".join(sorted(names)) or "none"
-    gh_ok = "github" in names
-    claude_ok = bool(names & _CLAUDE_INTEGRATIONS)
-    checks = []
-    if github:
-        checks.append(
-            Check(
-                "integration github",
-                gh_ok,
-                f"connected ({source})" if gh_ok else f"not connected; have: {have}",
-                "" if gh_ok else "islo login --tool github",
-            )
-        )
-    if claude:
-        checks.append(
-            Check(
-                "integration claude",
-                claude_ok,
-                f"connected ({source})" if claude_ok else f"not connected; have: {have}",
-                "" if claude_ok else "islo login --tool claude",
-            )
-        )
-    return checks
+    return _integration_rows(names, github=github, claude=claude, source=source)
 
 
 def gateway_fix(profile: str) -> str:
@@ -306,27 +299,26 @@ def environment_fix(env: str) -> str:
     )
 
 
-def _check_environment(runner: Runner, env: str) -> Check:
-    out, err = _try(runner, ["islo", "environment", "list", "--output", "json"])
+def _check_listed(runner: Runner, argv: Sequence[str], label: str, wanted: str, fix: str) -> Check:
+    """Is ``wanted`` among the names an ``islo ... --output json`` listing prints?"""
+    out, err = _try(runner, argv)
     if out is None:
-        return Check("islo environment", False, err, environment_fix(env))
-    names = _names(_items(_json(out)))
-    if env not in names:
+        return Check(label, False, err, fix)
+    names = _names(_items(_json(out)))  # empty stdout == nothing listed
+    if wanted not in names:
         have = ", ".join(names) or "none"
-        return Check("islo environment", False, f"{env!r} not found; have: {have}", environment_fix(env))
-    return Check("islo environment", True, f"{env!r} present")
+        return Check(label, False, f"{wanted!r} not found; have: {have}", fix)
+    return Check(label, True, f"{wanted!r} present")
+
+
+def _check_environment(runner: Runner, env: str) -> Check:
+    argv = ["islo", "environment", "list", "--output", "json"]
+    return _check_listed(runner, argv, "islo environment", env, environment_fix(env))
 
 
 def _check_snapshot(runner: Runner, snapshot: str) -> Check:
     fix = "bake it: SNAPSHOT=1 deploy/islo/bootstrap.sh (docs/islo.md 'snapshot'), or unset [sandbox] snapshot"
-    out, err = _try(runner, ["islo", "snapshot", "ls", "--output", "json"])
-    if out is None:
-        return Check("islo snapshot", False, err, fix)
-    names = _names(_items(_json(out)))  # empty stdout == no snapshots
-    if snapshot not in names:
-        have = ", ".join(names) or "none"
-        return Check("islo snapshot", False, f"{snapshot!r} not found; have: {have}", fix)
-    return Check("islo snapshot", True, f"{snapshot!r} present")
+    return _check_listed(runner, ["islo", "snapshot", "ls", "--output", "json"], "islo snapshot", snapshot, fix)
 
 
 def _check_gh_auth(runner: Runner) -> Check:
@@ -583,12 +575,7 @@ def run_doctor(
     runner = runner if runner is not None else subprocess_runner
     root = Path(root) if root is not None else Path.cwd()
     env = os.environ if env is None else env
-    if toolset_loader is None:
-        from swfactory.sandbox import load_toolset_backend
-
-        toolset_loader = load_toolset_backend
-
-    checks: list[Check] = list(sandbox_checks(cfg, runner, which=which, toolset_loader=toolset_loader, env=env))
+    checks = sandbox_checks(cfg, runner, which=which, toolset_loader=toolset_loader, env=env)
 
     if cfg.scm == "github":
         checks.append(_check_gh_auth(runner))
@@ -712,9 +699,7 @@ def sandbox_checks(
         else:
             skipped = "skipped: islo CLI unavailable"
             checks.append(Check("islo auth", False, skipped, "islo login"))
-            checks.append(Check("integration github", False, skipped, "islo login --tool github"))
-            if cfg.agent == "claude":
-                checks.append(Check("integration claude", False, skipped, "islo login --tool claude"))
+            checks += _integration_rows(set(), github=True, claude=cfg.agent == "claude", skipped=skipped)
             checks += [
                 Check("gateway profile", False, skipped, gateway_fix(cfg.gateway_profile)),
                 Check("islo environment", False, skipped, environment_fix(cfg.islo_environment)),

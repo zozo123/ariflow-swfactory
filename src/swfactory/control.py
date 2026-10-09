@@ -148,6 +148,11 @@ class Gate:
     created_at: datetime | None
     options: list[str]
 
+    @property
+    def name(self) -> str:
+        """The gate's own task name: ``approve_plan`` of ``job.approve_plan``."""
+        return self.task_id.rsplit(".", 1)[-1]
+
 
 @dataclass(frozen=True)
 class PullRequest:
@@ -316,6 +321,12 @@ def _seg(value: str | int) -> str:
     return urllib.parse.quote(str(value), safe="")
 
 
+def run_path(dag_id: str, run_id: str | None = None) -> str:
+    """The ``/api/v2`` path of one DAG, or of one run of it."""
+    path = f"/dags/{_seg(dag_id)}"
+    return path if run_id is None else f"{path}/dagRuns/{_seg(run_id)}"
+
+
 # ---------------------------------------------------------------- Airflow
 
 
@@ -366,6 +377,10 @@ class AirflowClient:
                 raise ControlError(f"{TOKEN_PATH} returned no access_token")
             self._token = str(token)
         return self._token
+
+    def reset_token(self) -> None:
+        """Forget a minted token so the next :meth:`token` mints a fresh one."""
+        self._token = None
 
     def _api(
         self,
@@ -481,7 +496,7 @@ class AirflowClient:
         server hands back fewer per page than asked.
         """
         runs = self._paged(
-            f"/dags/{_seg(dag_id)}/dagRuns",
+            run_path(dag_id) + "/dagRuns",
             "dag_runs",
             query={"order_by": "-run_after"},
             want=limit,
@@ -494,7 +509,7 @@ class AirflowClient:
         Unbounded on purpose: a run's task count is ``fan_out`` x stages, so a wide run is
         several pages and a client that reads one page reports a job as never having started.
         """
-        tis = self._paged(f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}/taskInstances", "task_instances")
+        tis = self._paged(run_path(dag_id, run_id) + "/taskInstances", "task_instances")
         return [
             TaskState(
                 task_id=str(ti.get("task_id", "")),
@@ -512,8 +527,7 @@ class AirflowClient:
         """
         data = self._api(
             "GET",
-            f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}"
-            f"/taskInstances/{_seg(FAN_OUT_TASK_ID)}/xcomEntries/{XCOM_RETURN_KEY}",
+            run_path(dag_id, run_id) + f"/taskInstances/{_seg(FAN_OUT_TASK_ID)}/xcomEntries/{XCOM_RETURN_KEY}",
             query={"map_index": -1},
         )
         value = (data or {}).get("value")
@@ -553,10 +567,7 @@ class AirflowClient:
         choice = GATE_APPROVE if approve else GATE_REJECT
         if gate.options and choice not in gate.options:
             raise ValueError(f"gate {gate.task_id} offers {gate.options}, not {choice!r}")
-        path = (
-            f"/dags/{_seg(gate.dag_id)}/dagRuns/{_seg(gate.run_id)}"
-            f"/taskInstances/{_seg(gate.task_id)}/{gate.map_index}/hitlDetails"
-        )
+        path = run_path(gate.dag_id, gate.run_id) + f"/taskInstances/{_seg(gate.task_id)}/{gate.map_index}/hitlDetails"
         return self._api("PATCH", path, body={"chosen_options": [choice], "params_input": {}})
 
     def trigger(self, dag_id: str, issues: Sequence[str]) -> str:
@@ -566,7 +577,7 @@ class AirflowClient:
             raise ValueError("trigger needs at least one issue")
         data = self._api(
             "POST",
-            f"/dags/{_seg(dag_id)}/dagRuns",
+            run_path(dag_id) + "/dagRuns",
             body={"logical_date": None, "conf": {"issues": refs}},
         )
         run_id = (data or {}).get("dag_run_id") or (data or {}).get("run_id")
@@ -576,7 +587,7 @@ class AirflowClient:
 
     def stop_run(self, dag_id: str, run_id: str) -> dict:
         """Mark a run failed (``PATCH dagRuns/{run_id} {"state": "failed"}``)."""
-        return self._api("PATCH", f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}", body={"state": "failed"})
+        return self._api("PATCH", run_path(dag_id, run_id), body={"state": "failed"})
 
     # -- links
 
