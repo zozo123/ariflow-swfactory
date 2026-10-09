@@ -10,9 +10,9 @@ annealer at all, and that a refusal lands on enrolment WITHOUT taking the assess
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
+import typer
 from typer.testing import CliRunner
 
 from swfactory.cli import app
@@ -28,10 +28,11 @@ def _improve(*args: str):
 def test_outside_a_checkout_it_is_a_usage_error_not_a_traceback(tmp_path: Path) -> None:
     result = CliRunner().invoke(app, ["improve", "--root", str(tmp_path)])
     assert result.exit_code == 2
-    # Typer renders the error in a rich box that wraps at the terminal width and may colour it.
-    text = " ".join(re.sub(r"\x1b\[[0-9;]*m|[\u2500-\u257f]", " ", result.output).split())
-    assert "pass --root" in text
     assert not isinstance(result.exception, FileNotFoundError)
+    # The rendered box wraps and colours by terminal; read the message from the exception itself.
+    raw = CliRunner().invoke(app, ["improve", "--root", str(tmp_path)], standalone_mode=False)
+    assert isinstance(raw.exception, typer.BadParameter)
+    assert "pass --root" in raw.exception.format_message()
 
 
 def test_the_default_says_nothing_about_the_queue_and_so_changes_nothing() -> None:
