@@ -36,6 +36,7 @@ from urllib.parse import quote
 from swfactory import blueprint as blueprint_mod
 from swfactory.backend_http import MIN_BACKEND_TOKEN_CHARS, valid_backend_token
 from swfactory.config import FACTORY_ROOT, Config, TargetContract
+from swfactory.models import StageError
 from swfactory.sandbox import SRT_NPM_PACKAGE
 
 Runner = Callable[[Sequence[str]], str]
@@ -631,6 +632,7 @@ PROVIDER_CHECKS = frozenset(
         "srt",
         "docker daemon",
         "docker image",
+        "external agent",
         "toolset backend",
         "boat api key",
     }
@@ -720,6 +722,15 @@ def sandbox_checks(
         checks.append(_check_boat(env))
     else:
         checks.append(Check("local sandbox", True, "no external sandbox provider"))
+    if cfg.agent == "external":
+        from swfactory.external_agent import profile_document
+
+        try:
+            binding = profile_document(cfg)
+            profile = binding["manifest"]
+            checks.append(Check("external agent", True, f"{profile['id']} {profile['version']}: manifest validated"))
+        except (OSError, ValueError, StageError) as error:
+            checks.append(Check("external agent", False, str(error), fix="verify SWF_AGENT_PROFILE on the worker"))
     return checks
 
 

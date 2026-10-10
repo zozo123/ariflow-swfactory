@@ -1,8 +1,9 @@
 """Agent seam: who does a stage's work inside the sandbox.
 
-Two implementations share one contract (``Agent``): ``ClaudeAgent`` runs ``claude -p`` in the
+Implementations share one contract (``Agent``): ``ClaudeAgent`` runs ``claude -p`` in the
 sandbox and reads its JSON envelope back; ``ScriptedAgent`` replays recorded fixtures so the
-whole pipeline is testable without a model. Per-stage tool ``Policy``, native deny rules, and
+whole pipeline is testable without a model; ``ExternalAgent`` calls an operator-owned executable.
+Per-stage tool ``Policy``, native deny rules, and
 ``install_guard`` make write stages deterministic-safe; enforcement, not the prompt, is the gate.
 """
 
@@ -95,13 +96,23 @@ POLICIES: dict[str, Policy] = {
 # ---------------------------------------------------------------- protocol
 
 
+@dataclass(frozen=True)
+class Invocation:
+    """Host-owned identity and writable roots for one durable, reserved call."""
+
+    call_id: str
+    accepted_inputs_digest: str | None = None
+    writable_paths: tuple[str, ...] = ()
+
+
 @runtime_checkable
 class Agent(Protocol):
     """Does one stage's work in ``sb`` and returns a typed result.
 
     Contract: (1) never raises on model/policy errors — they surface as ``is_error``/``subtype``;
-    ``StageError(kind="sandbox")`` only when the output cannot be read back. (2) Writes the raw
-    result envelope (minus prose) to ``<artifacts_dir>/agent/<stage>.<iteration>.json``.
+    ``StageError`` reports boundary or configuration failures. (2) Native implementations write
+    the raw result envelope (minus prose) to the sandbox artifact path; external candidates return
+    it in ``AgentResult.raw_envelope`` for the host to retain after the process stops.
     (3) When ``policy.writes``, edits are left uncommitted in ``sb.workdir``; the stage commits.
     """
 
@@ -119,6 +130,7 @@ class Agent(Protocol):
         cfg: Config,
         issue_id: str,
         protected: Sequence[str] = (),
+        invocation: Invocation | None = None,
     ) -> AgentResult: ...
 
 
@@ -236,6 +248,7 @@ class ClaudeAgent:
         cfg: Config,
         issue_id: str,
         protected: Sequence[str] = (),
+        invocation: Invocation | None = None,
     ) -> AgentResult:
         """Write the prompt, guard the checkout if needed, run claude, parse the envelope."""
         prompt_path = _stage_io(sb, issue_id, stage, iteration, prompt)
@@ -414,6 +427,7 @@ class ScriptedAgent:
         cfg: Config,
         issue_id: str,
         protected: Sequence[str] = (),
+        invocation: Invocation | None = None,
     ) -> AgentResult:
         """Replay the fixture for (stage, iteration); cost and turns are always zero."""
         path = self.fixture(stage, iteration)
@@ -485,4 +499,8 @@ def make_agent(cfg: Config) -> Agent:
     """Pick the agent for ``cfg.agent``."""
     if cfg.agent == "claude":
         return ClaudeAgent()
+    if cfg.agent == "external":
+        from swfactory.external_agent import ExternalAgent
+
+        return ExternalAgent(cfg)
     return ScriptedAgent([Path(cfg.fixtures_dir)])

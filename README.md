@@ -247,6 +247,8 @@ centralized publication.
 
 ## Execution and trust boundaries
 
+Connect an independently installed stage harness through the [external agent contract](docs/external-agents.md).
+
 Coding agents receive stage-specific tools and protected-path rules. Trusted Python code runs the
 product's verification commands, validates patches, scans for secrets, and publishes. Coding
 sandboxes receive no GitHub publishing credential. In backend-managed runs, GitHub publication

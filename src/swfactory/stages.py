@@ -45,7 +45,7 @@ from pydantic import BaseModel, ValidationError
 
 from swfactory import accepted_inputs
 from swfactory import metrics as metrics_mod
-from swfactory.agent import POLICIES, Agent, Policy, render_prompt
+from swfactory.agent import POLICIES, Agent, Invocation, Policy, render_prompt
 from swfactory.approval_policy import GateMode, check_recorded, replay_approval
 from swfactory.blueprint import CANONICAL_ORDER, Blueprint, ReviewSpec
 from swfactory.call_accounting import CallLedger
@@ -271,7 +271,14 @@ def _persisted(ctx: Ctx) -> list[StageResult]:
 
 def persisted_cost(ctx: Ctx) -> float:
     """What the stage log says this run spent: the sum of every record's ``cost_usd``."""
+    if ctx.cfg.agent == "external":
+        return _observed_cost(ctx)
     return sum(record.cost_usd for record in _persisted(ctx))
+
+
+def _observed_cost(ctx: Ctx) -> float:
+    ledger = CallLedger(ctx.state)
+    return (ledger.floor_usd() or 0.0) + sum(record.settled_usd or 0.0 for record in ledger.records())
 
 
 def _artifact_sha256(ctx: Ctx, path: str) -> str:
@@ -327,7 +334,11 @@ def _timed(fn: Stage) -> Stage:
         # Seed before taking the delta. On a fresh Airflow task, seeding inside the first agent
         # call would otherwise attribute every earlier task's cost to this stage a second time.
         seed_budget(ctx, refresh=True)
-        t0, spent0 = time.monotonic(), ctx.spent_usd
+
+        def observed() -> float:
+            return _observed_cost(ctx) if ctx.cfg.agent == "external" else ctx.spent_usd
+
+        t0, spent0 = time.monotonic(), observed()
         try:
             result = fn(ctx)
         except Exception as error:
@@ -335,13 +346,13 @@ def _timed(fn: Stage) -> Stage:
                 stage=fn.__name__,
                 status="failed",
                 duration_s=round(time.monotonic() - t0, 3),
-                cost_usd=round(max(ctx.spent_usd - spent0, 0.0), 6),
+                cost_usd=round(max(observed() - spent0, 0.0), 6),
                 error=str(error)[:2000],
             )
             _append_stage(ctx, failed)
             raise
         result.duration_s = round(time.monotonic() - t0, 3)
-        result.cost_usd = round(ctx.spent_usd - spent0, 6)
+        result.cost_usd = round(max(observed() - spent0, 0.0), 6)
         _append_stage(ctx, result)
         return result
 
@@ -438,23 +449,54 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
     granted = min(ctx.cfg.max_budget_usd_per_stage, remaining)
     call_cfg = ctx.cfg.model_copy(update={"max_budget_usd_per_stage": granted})
     protected = protected_for(_contract(ctx), stage)
+    policy = _policy(ctx, stage)
+    external = ctx.agent.kind == "external"
+    if external:
+        if ctx.blueprint and any(gate.mode == "policy" for gate in ctx.blueprint.gates):
+            raise StageError("policy", "external agents are not qualified for autonomous policy gates")
+        # Qualification and immutable binding are checked before reserving money or launching.
+        from swfactory.external_agent import ExternalAgent
+
+        if not isinstance(ctx.agent, ExternalAgent):
+            raise StageError("policy", "external execution requires the factory's qualified launcher")
+        ctx.agent.validate_binding()
+        ctx.agent.validate_call(policy, stage)
+        admitted = accepted_inputs.stored(ctx.state)
+        if admitted is not None and admitted.policy_sha256 != accepted_inputs.policy_sha256(ctx.cfg, ctx.blueprint):
+            raise StageError("policy", "external execution policy differs from accepted inputs; open a new epoch")
     if hasattr(ctx.sb, "set_protected"):
         ctx.sb.set_protected(protected)
     # Reserve BEFORE the provider can be paid. Everything after this line may be lost to a kill;
     # this row is what makes the next process account for a call it never saw answer.
     ledger = CallLedger(ctx.state)
+    if (
+        external
+        and ctx.agent.profile.budget_mode == "hard_cap"
+        and any(record.stage == stage and record.iteration == iteration for record in ledger.unreconciled())
+    ):
+        raise StageError("policy", "external paid attempt is unresolved; observe and reconcile it before retrying")
     attempt = ledger.reserve(stage=stage, iteration=iteration, reserved_usd=granted)
+    invocation_args = {}
+    if external:
+        contract = _contract(ctx)
+        writable = (contract.source, contract.tests_dir) if stage == "build" else (contract.source,)
+        invocation_args["invocation"] = Invocation(
+            call_id=attempt.call_id,
+            accepted_inputs_digest=accepted_inputs.digest_of(ctx.state),
+            writable_paths=writable if policy.writes else (),
+        )
     try:
         res = ctx.agent.run(
             ctx.sb,
             stage=stage,
             iteration=iteration,
             prompt=prompt,
-            policy=_policy(ctx, stage),
+            policy=policy,
             schema=schema,
             cfg=call_cfg,
             issue_id=ctx.issue.id,
             protected=protected,
+            **invocation_args,
         )
     except BaseException as error:
         # A timeout or a dead cell says nothing about the provider's ledger. The request left, so
@@ -469,27 +511,46 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         # the stage log kept the run pinned at the reservation -- forever. Money that reconciliation
         # cannot return is not a reservation, it is a fine.
         raise
-    # Settle before any further sandbox I/O: a failed envelope download must not erase spend.
-    ledger.settle(
-        attempt,
-        cost_usd=res.cost_usd,
-        receipt={
-            "session_id": res.session_id,
-            "num_turns": res.num_turns,
-            "duration_ms": res.duration_ms,
-            "subtype": res.subtype,
-            "is_error": res.is_error,
-            "agent": res.agent,
-        },
-    )
-    ctx.spent_usd += res.cost_usd
+    receipt = {
+        "session_id": res.session_id,
+        "num_turns": res.num_turns,
+        "duration_ms": res.duration_ms,
+        "subtype": res.subtype,
+        "is_error": res.is_error,
+        "agent": res.agent,
+    }
+    # Candidate output cannot author billing. Paid external calls retain their full reservation
+    # until an operator supplies a trusted provider observation through the existing reconciler.
+    if res.cost_usd is None:
+        ledger.mark_unknown(attempt, "external usage requires a trusted provider observation")
+    else:
+        ledger.settle(attempt, cost_usd=res.cost_usd, receipt=receipt)
+        ctx.spent_usd += res.cost_usd
     if ctx.spent_usd > ctx.cfg.max_budget_usd:
         raise StageError(
             "policy",
             f"run budget exceeded: {ctx.spent_usd:.2f} > {ctx.cfg.max_budget_usd:.2f} USD after {stage}.{iteration}",
         )
     envelope = f"{ctx.art}/agent/{stage}.{iteration}.json"
-    if ctx.sb.exists(envelope):
+    if external:
+        host_receipt = {
+            "schema_version": 1,
+            "authority": "factory",
+            "call_id": attempt.call_id,
+            "accepted_inputs_digest": accepted_inputs.digest_of(ctx.state),
+            "profile": ctx.agent.binding,
+            "profile_id": ctx.agent.binding["manifest"]["id"],
+            "stage": stage,
+            "iteration": iteration,
+            **res.model_dump(mode="json", exclude={"text", "data"}),
+            "candidate": {k: v for k, v in (res.raw_envelope or {}).items() if k != "text"},
+        }
+        content = json.dumps(host_receipt, sort_keys=True, indent=2) + "\n"
+        receipt_id = hashlib.sha256(attempt.call_id.encode()).hexdigest()
+        ctx.state.write_control(f"external-agent/{receipt_id}.json", content)
+        ctx.state.write_artifact(envelope, content)
+        ctx.sb.write(envelope, content)
+    elif ctx.sb.exists(envelope):
         ctx.state.write_artifact(envelope, ctx.sb.read(envelope))
     if res.is_error:
         raise StageError("agent", f"{stage}.{iteration} failed: {res.subtype}: {res.text[-800:]}")
@@ -561,8 +622,9 @@ def commit(ctx: Ctx, *, stage: str, msg: str, paths: Sequence[str] | None = None
         # either side, and the answer survives a restart because it was never in memory.
         f"--trailer {q(f'Factory-Instance={ctx.instance}')} "
         f"--trailer {q(f'Agent={ctx.agent.kind}')} "
-        f"--trailer {q('Co-Authored-By: Claude <noreply@anthropic.com>')}"
     )
+    if ctx.agent.kind != "external":
+        cmd += f"--trailer {q('Co-Authored-By: Claude <noreply@anthropic.com>')}"
     _sh(ctx, cmd)
     sha = _workspace_head(ctx)
     _record_workspace_head(ctx, sha)
@@ -1266,6 +1328,8 @@ def pr_body(
         for s in stages
     ]
     parts.append("## Stages\n" + _md_table(["stage", "status", "duration s", "cost usd", "numbers"], stage_rows))
+    if ctx.agent.kind == "external" and (unknown := unreconciled_spend(ctx)):
+        parts.append(f"Observed charges: ${persisted_cost(ctx):.4f}; unresolved reserved spend: ${unknown:.4f}.")
     pinned = accepted_inputs.stored(ctx.state)
     parts.append(
         "## Provenance\n"
@@ -1400,6 +1464,8 @@ def deliver(ctx: Ctx) -> StageResult:
         raise StageError("policy", f"delivery lacks completed stage evidence: {missing}")
     rv, data, blockers = _validated_review(ctx, required, completed)
     denied = denied_tool_calls(ctx)
+    if ctx.agent.kind == "external" and ctx.blueprint and any(gate.mode == "policy" for gate in ctx.blueprint.gates):
+        raise StageError("policy", "external agents are not qualified for autonomous publication")
     metrics_mod.write_run_metrics(
         ctx,
         stages,
@@ -1562,6 +1628,7 @@ def build_report(ctx: Ctx, approvals: list[Approval]) -> RunReport:
         pr_url=pr_url,
         tests_passed=metrics_mod.tests_passed(stages),
         total_cost_usd=round(persisted_cost(ctx), 6),
+        unreconciled_cost_usd=round(unreconciled_spend(ctx), 6),
     )
 
 

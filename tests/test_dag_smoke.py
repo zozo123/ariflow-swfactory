@@ -10,8 +10,9 @@ instead of delivering. ``swfactory.approval_policy`` refuses the fixture outrigh
 backend-managed cells, so this path cannot authorize managed production work.
 
 Everything runs in a subprocess with a throwaway ``AIRFLOW_HOME`` and cwd (Airflow reads its config
-at import time, so the process must not share the parity test's interpreter), with the scripted
-agent, the local sandbox and the local git remote: no keys, no network, ~2 min.
+at import time, so the process must not share the parity test's interpreter), parameterized over
+the scripted agent and an independently executable no-charge external fixture, with the local
+sandbox and local git remote: no keys, no network.
 
 Runs only with the ``airflow`` dependency group:
 ``uv run --group airflow pytest tests/test_dag_smoke.py``.
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 import pytest
 from support import DAGS, airflow_env, load_dag_module, run_checked
@@ -47,22 +49,43 @@ def _result(log: str) -> dict:
     return json.loads(line.removeprefix("SMOKE_RESULT "))
 
 
-@pytest.fixture(scope="module")
-def smoke(tmp_path_factory: pytest.TempPathFactory) -> dict:
-    root = tmp_path_factory.mktemp("smoke")
+@pytest.fixture(scope="module", params=["scripted", "external"])
+def smoke(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest) -> dict:
+    agent = request.param
+    root = tmp_path_factory.mktemp(f"smoke-{agent}")
     home, cwd, bare_cwd = root / "airflow_home", root / "cwd", root / "cwd_no_fixture"
     home.mkdir()
     cwd.mkdir()
     bare_cwd.mkdir()
     env = airflow_env(home)
+    if agent == "external":
+        profile = root / "profile.json"
+        executable = Path(__file__).resolve().parent / "fixtures" / "external_agent" / "fixture.py"
+        profile.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "id": "external-fixture",
+                    "version": "1",
+                    "argv": [str(executable)],
+                    "model": "fixture",
+                    "credential_env": [],
+                    "budget_mode": "no_charge",
+                    "enforces_usd_limit": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+        env.update(SWF_AGENT="external", SWF_AGENT_PROFILE=str(profile), SWF_ALLOW_LOCAL_AGENT="1")
     run_checked([sys.executable, "-m", "airflow", "db", "migrate"], cwd=cwd, env=env, timeout=300)
     driver = root / "driver.py"
     driver.write_text(DRIVER, encoding="utf-8")
     log = run_checked([sys.executable, str(driver), str(DAGS)], cwd=cwd, env=env, timeout=900)
     # The same marked-success run with the fixture withdrawn: nothing else changes.
-    bare_env = airflow_env(home, replay=False)
+    bare_env = {key: value for key, value in env.items() if key != "SWF_GATE_REPLAY"}
     bare_log = run_checked([sys.executable, str(driver), str(DAGS)], cwd=bare_cwd, env=bare_env, timeout=900)
     return {
+        "agent": agent,
         "cwd": cwd,
         "log": log,
         **_result(log),
@@ -101,5 +124,5 @@ def test_approvals_record_the_replay_fixture_as_its_own_authority(smoke: dict) -
     assert all(len(a["artifact_sha256"]) == 64 for a in approvals)
     assert (run_dir / "pr.md").is_file()  # deliver published to the local bare remote
     metrics = json.loads((run_dir / "work" / "docs" / "factory" / "DEMO-1" / "metrics.json").read_text("utf-8"))
-    assert metrics["agent"] == "scripted" and metrics["tests_passed"] is True
+    assert metrics["agent"] == smoke["agent"] and metrics["tests_passed"] is True
     assert metrics["approvers"] == ["replay:scripted-replay"] * 2

@@ -31,9 +31,13 @@ import importlib
 import json
 import os
 import posixpath
+import re
 import secrets
+import selectors
 import shlex
 import shutil
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -63,6 +67,20 @@ from swfactory.state import RunState
 _CONTROL_TIMEOUT_S = 300
 # Bound for creating a remote cell and cloning the target into it (`islo use`, `git clone`).
 _PROVISION_TIMEOUT_S = 1200
+EXTERNAL_STDOUT_MAX_BYTES = 1024 * 1024
+EXTERNAL_STDERR_MAX_BYTES = 128 * 1024
+EXTERNAL_SCRATCH = "/tmp/swf-external"
+_EXTERNAL_CALL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$")
+_EXTERNAL_PROTECTED = (
+    ".git",
+    ".factory",
+    ".claude",
+    ".github",
+    "docs/factory",
+    "factory.toml",
+    "REVIEW.md",
+    "bands.yaml",
+)
 
 # srt: npm package used when no `srt` binary is on PATH, and the settings file location.
 SRT_NPM_PACKAGE = "@anthropic-ai/sandbox-runtime"
@@ -356,6 +374,172 @@ def _as_text(data: str | bytes | None) -> str:
     return data
 
 
+def _external_arguments(argv: Sequence[str], call_id: str, timeout_s: int) -> list[str]:
+    if not argv or any(not isinstance(arg, str) or not arg or any(c in arg for c in "\0\n\r") for arg in argv):
+        raise StageError("policy", "external executable arguments must be nonempty strings without control characters")
+    if not _EXTERNAL_CALL_RE.fullmatch(call_id):
+        raise StageError("policy", "external call id is invalid")
+    if type(timeout_s) is not int or timeout_s < 1:
+        raise StageError("policy", "external timeout must be a positive integer")
+    return list(argv)
+
+
+def _external_credentials(names: Sequence[str]) -> dict[str, str]:
+    """A profile's explicit provider names, never an ambient host environment or service token."""
+    for name in names:
+        if (
+            not re.fullmatch(r"[A-Z][A-Z0-9_]*", name)
+            or name.startswith(("SWF_", "AIRFLOW", "GH_", "GITHUB_", "DOCKER_", "ISLO_"))
+            or name in CELL_ENV_ALLOWLIST
+        ):
+            raise StageError("policy", f"external provider credential name is not permitted: {name}")
+    return {name: os.environ[name] for name in names if name in os.environ}
+
+
+def _stop_external_group(proc: subprocess.Popen) -> None:
+    """Reap the owned launcher and stop its ordinary descendants, including after a clean exit.
+
+    Local execution is a development escape hatch: a deliberately detached session is not a
+    process-group member. Docker's separate container cleanup covers that case in confined runs.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        proc.wait()
+        return
+    until = time.monotonic() + 0.25
+    while time.monotonic() < until:
+        proc.poll()
+        time.sleep(0.01)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # Darwin can report EPERM for a group whose only members have exited and been reaped.
+        # A live owned launcher still makes this a cleanup failure.
+        if sys.platform != "darwin" or proc.poll() is None:
+            raise
+    proc.wait(timeout=2)
+
+
+def _run_external_subprocess(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout_s: int) -> RunResult:
+    """Drain both pipes with fixed byte ceilings; a truncated candidate is never returned."""
+    if os.name != "posix":
+        raise StageError("sandbox", "external process-group supervision requires a POSIX worker")
+    started = time.monotonic()
+    deadline = started + timeout_s
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    limits = {"stdout": EXTERNAL_STDOUT_MAX_BYTES, "stderr": EXTERNAL_STDERR_MAX_BYTES}
+    timed_out = False
+    proc = subprocess.Popen(
+        list(argv),
+        cwd=cwd,
+        env=dict(env),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        with selectors.DefaultSelector() as streams:
+            for name in output:
+                pipe = getattr(proc, name)
+                os.set_blocking(pipe.fileno(), False)
+                streams.register(pipe, selectors.EVENT_READ, name)
+            while streams.get_map() or proc.poll() is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                for key, _ in streams.select(min(remaining, 0.05)):
+                    chunk = os.read(key.fileobj.fileno(), 64 * 1024)
+                    if not chunk:
+                        streams.unregister(key.fileobj)
+                        continue
+                    name = key.data
+                    if len(output[name]) + len(chunk) > limits[name]:
+                        raise StageError("sandbox", f"external {name} exceeds the {limits[name]} byte output limit")
+                    output[name].extend(chunk)
+    finally:
+        _stop_external_group(proc)
+        for name in output:
+            getattr(proc, name).close()
+    try:
+        stdout = output["stdout"].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise StageError("sandbox", "external stdout is not valid UTF-8") from error
+    return RunResult(
+        TIMEOUT_EXIT_CODE if timed_out else proc.returncode,
+        stdout,
+        output["stderr"].decode("utf-8", errors="replace"),
+        time.monotonic() - started,
+        timed_out,
+    )
+
+
+def _external_path(root: Path, value: str) -> Path:
+    """A literal in-tree path with no symlink component or ambiguous mount syntax."""
+    try:
+        relative = normalize_relative_path(value, field="external workspace path")
+    except ValueError as error:
+        raise StageError("policy", str(error)) from error
+    if any(char in relative for char in ":,*?["):
+        raise StageError("policy", f"external workspace path must be literal: {value}")
+    path = root
+    for part in Path(relative).parts:
+        path /= part
+        if path.is_symlink():
+            raise StageError("policy", f"external workspace path contains a symlink: {value}")
+    if not path.resolve().is_relative_to(root):
+        raise StageError("policy", f"external workspace path escapes the checkout: {value}")
+    return path
+
+
+def _external_write_mounts(root: Path, writes: Sequence[str], protected: Sequence[str]) -> list[str]:
+    """Permit existing roots only; freeze protected descendants at an unrenameable mountpoint."""
+    roots = [_external_path(root, value) for value in dict.fromkeys(writes)]
+    roots = [path for path in roots if not any(path != other and path.is_relative_to(other) for other in roots)]
+    for path in roots:
+        if not path.is_dir():
+            raise StageError("policy", f"external writable root must be an existing directory: {path}")
+        # Existing hardlinks could alias a protected inode through a writable name. New links
+        # cannot cross the distinct read-only bind mounts; reject pre-existing aliases as well.
+        for entry in path.rglob("*"):
+            if entry.is_symlink() or (stat.S_ISREG(entry.stat().st_mode) and entry.stat().st_nlink > 1):
+                raise StageError("policy", f"external writable root contains a symlink or hardlink: {entry}")
+    read_only: list[Path] = []
+    for glob in dict.fromkeys((*_EXTERNAL_PROTECTED, *protected)):
+        try:
+            normalized = normalize_relative_path(glob.rstrip("/"), field="external protected path")
+        except ValueError as error:
+            raise StageError("policy", str(error)) from error
+        prefix = _literal_prefix(normalized)
+        if not prefix:
+            if roots:
+                raise StageError("policy", f"external writes cannot safely enforce protected glob: {glob}")
+            continue
+        path = _external_path(root, prefix)
+        for writable in roots:
+            if writable.is_relative_to(path):
+                raise StageError("policy", f"external writable root overlaps protected path: {glob}")
+            if path.is_relative_to(writable) and not path.exists():
+                raise StageError("policy", f"external protected path is missing inside writable root: {glob}")
+            if path.is_relative_to(writable):
+                # A protected leaf mount alone does not stop renaming its writable ancestor
+                # and replacing the leaf. Freeze the first child below the writable root;
+                # that child is now a mountpoint and cannot be renamed or removed.
+                read_only.append(writable / path.relative_to(writable).parts[0])
+        if path.exists():
+            read_only.append(path)
+    mounts = ["-v", f"{root}:{root}:ro"]
+    for path in sorted(set(roots), key=lambda item: (len(item.parts), str(item))):
+        mounts += ["-v", f"{path}:{path}:rw"]
+    for path in sorted(set(read_only), key=lambda item: (len(item.parts), str(item))):
+        mounts += ["-v", f"{path}:{path}:ro"]
+    return mounts
+
+
 def _credential_env(pass_env: Sequence[str]) -> dict[str, str]:
     """Allow-listed cell env plus the one local-development model credential we still support.
 
@@ -401,6 +585,42 @@ class LocalSandbox:
     def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
         """Run only the model process, with the backend's agent credential scope."""
         return self._launch(cmd, cwd=None, agent=True, timeout_s=timeout_s)
+
+    def run_external(
+        self,
+        argv: Sequence[str],
+        *,
+        request: str,
+        call_id: str,
+        writes: Sequence[str],
+        protected: Sequence[str],
+        timeout_s: int,
+        credential_env: Sequence[str],
+    ) -> RunResult:
+        """Development-only executable harness; Config must explicitly authorize this escape.
+
+        The temporary request is separate from the checkout, and ordinary child processes are
+        supervised. This host directory does not enforce filesystem or detached-session isolation.
+        Confined subclasses must implement their own boundary instead of inheriting this launcher.
+        """
+        if type(self) is not LocalSandbox:
+            raise StageError("policy", f"external execution is not qualified for {type(self).__name__}")
+        args = _external_arguments(argv, call_id, timeout_s)
+        credentials = _external_credentials(credential_env)
+        del writes, protected  # local development deliberately makes no confinement claim
+        with tempfile.TemporaryDirectory(prefix="swf-external-") as temporary:
+            scratch = Path(temporary)
+            request_path = scratch / "request.json"
+            request_path.write_text(request, encoding="utf-8")
+            request_path.chmod(0o444)
+            home = scratch / "home"
+            home.mkdir()
+            env = {key: value for key, value in cell_env(os.environ).items() if not key.startswith("DOCKER_")}
+            env.update(credentials)
+            env.update(HOME=str(home), XDG_CACHE_HOME=str(home / ".cache"), TMPDIR=str(scratch))
+            return _run_external_subprocess(
+                [*args, "--request", str(request_path)], cwd=self.root, env=env, timeout_s=timeout_s
+            )
 
     def _launch(self, cmd: str, *, cwd: str | None, agent: bool, timeout_s: int) -> RunResult:
         """``bash`` on the host without login profiles restoring credentials after the scrub. ``agent``
@@ -690,6 +910,215 @@ class DockerSandbox(_ConfinedHost):
                 if k in os.environ:
                     argv += ["-e", k]
         return [*argv, self.image, "bash", "-lc", cmd]
+
+    def run_external(
+        self,
+        argv: Sequence[str],
+        *,
+        request: str,
+        call_id: str,
+        writes: Sequence[str],
+        protected: Sequence[str],
+        timeout_s: int,
+        credential_env: Sequence[str],
+    ) -> RunResult:
+        """Launch one confined attempt and confirm its complete container teardown before return."""
+        if self.state is None:
+            raise StageError("policy", "external Docker execution requires host-owned run state")
+        args = _external_arguments(argv, call_id, timeout_s)
+        credentials = _external_credentials(credential_env)
+        if any(char in str(self.root) for char in ":,\n\r"):
+            raise StageError("policy", "external checkout path cannot be represented safely as a Docker mount")
+        mounts = _external_write_mounts(self.root, writes, protected)
+        # The run lock is held by the caller. A killed worker may have left a Docker
+        # execution editing this same checkout; prove it has ended before another launch.
+        self._reap_external()
+        call_hash = hashlib.sha256(call_id.encode()).hexdigest()[:16]
+        name = f"{self.identity.stable_name}-ext-{call_hash}-{secrets.token_hex(3)}"
+        labels = {**self.identity.labels, "swfactory.external": "true", "swfactory.external-call": call_hash}
+        if self.state is not None:
+            self.state.append_json(
+                "external-processes.jsonl",
+                {"call_id": call_id, "container": name, "labels": labels, "event": "intent", "at": time.time()},
+            )
+        with tempfile.TemporaryDirectory(prefix="swf-external-") as temporary:
+            scratch = Path(temporary) / "scratch"
+            scratch.mkdir(mode=0o777)
+            scratch.chmod(0o777)  # mounted guest uid may differ; its host parent remains private
+            request_path = scratch / "request.json"
+            request_path.write_text(request, encoding="utf-8")
+            request_path.chmod(0o444)
+            (scratch / "home").mkdir(mode=0o777)
+            (scratch / "home").chmod(0o777)
+            command = [
+                "docker",
+                "run",
+                "--init",
+                "--name",
+                name,
+                "--read-only",
+                "--cap-drop=ALL",
+                "--security-opt=no-new-privileges",
+                "--pids-limit",
+                "256",
+                "--tmpfs",
+                "/tmp:rw,nosuid,nodev,size=128m",
+            ]
+            for key, value in labels.items():
+                command += ["--label", f"{key}={value}"]
+            command += [
+                *mounts,
+                "-v",
+                f"{scratch}:{EXTERNAL_SCRATCH}:rw",
+                "-v",
+                f"{request_path}:{EXTERNAL_SCRATCH}/request.json:ro",
+                "-w",
+                self.workdir,
+                "--network",
+                self.network,
+                "-e",
+                f"HOME={EXTERNAL_SCRATCH}/home",
+                "-e",
+                f"XDG_CACHE_HOME={EXTERNAL_SCRATCH}/home/.cache",
+                "-e",
+                f"TMPDIR={EXTERNAL_SCRATCH}",
+            ]
+            if self.user:
+                command += ["--user", self.user]
+            for key, value in DOCKER_GIT_ENV:
+                command += ["-e", f"{key}={value}"]
+            for key in credentials:
+                command += ["-e", key]
+            command += [self.image, *args, "--request", f"{EXTERNAL_SCRATCH}/request.json"]
+            env = cell_env(os.environ)
+            env.update(credentials)
+            result = None
+            try:
+                result = _run_external_subprocess(command, cwd=self.root, env=env, timeout_s=timeout_s)
+                return result
+            finally:
+                # External runs intentionally omit --rm: successful execution leaves an observable
+                # resource, so exact removal and absence can be recorded even for detached workers.
+                self._cleanup_external(name, call_id, labels, uncertain_if_absent=True)
+
+    def _reap_external(self) -> None:
+        """Fence interrupted creation and remove only this run's stale external containers."""
+        fleet = DockerContainers()
+        labels = {**self.identity.labels, "swfactory.external": "true"}
+
+        def owned(row: Mapping[str, Any]) -> bool:
+            observation = ResourceObservation(row["id"], row["labels"], row["running"])
+            return (
+                authorize_cleanup(self.identity, observation, current_epoch=self.identity.epoch, active=False)
+                == CleanupDecision.REMOVE
+                and row["labels"].get("swfactory.external") == "true"
+            )
+
+        try:
+            records = self.state.read_jsonl("external-processes.jsonl") if self.state is not None else []
+            pending: dict[str, dict[str, Any]] = {}
+            for record in records:
+                if not isinstance(record, dict) or not isinstance(record.get("labels"), dict):
+                    raise RuntimeError("external process journal contains an invalid record")
+                if any(record["labels"].get(key) != value for key, value in labels.items()):
+                    continue
+                if record.get("event") == "intent":
+                    pending[record["container"]] = record
+                elif record.get("event") == "cleaned":
+                    pending.pop(record["container"], None)
+            for row in fleet.containers(labels):
+                if not owned(row):
+                    continue
+                call_hash = row["labels"].get("swfactory.external-call", "")
+                if not re.fullmatch(r"[0-9a-f]{16}", call_hash) or not row["id"] or not row["name"]:
+                    raise RuntimeError("stale external container has an incomplete attempt identity")
+                prior = pending.get(row["name"])
+                call_id = prior["call_id"] if prior else "recovered." + call_hash
+                self._cleanup_external(row["name"], call_id, row["labels"], uncertain_if_absent=True)
+                pending.pop(row["name"], None)
+            if any(owned(row) for row in fleet.containers(labels)):
+                raise RuntimeError("stale external execution remains after cleanup")
+            if pending:
+                # An empty daemon snapshot cannot attest that an interrupted create will
+                # never finish later. Recovery requires positive observation and teardown.
+                raise RuntimeError("previous external creation has no observed terminal cleanup")
+        except Exception as error:
+            receipt = self._receipt(self.identity.stable_name, "ambiguous", time.time(), detail=str(error))
+            self._record([receipt])
+            if self.state is not None:
+                self.state.append_json("external-cleanup.jsonl", receipt)
+            raise StageError(
+                "sandbox", f"previous external execution is unresolved: {error}", retryable=True
+            ) from error
+
+    def _cleanup_external(
+        self, name: str, call_id: str, labels: Mapping[str, str], *, uncertain_if_absent: bool
+    ) -> None:
+        fleet = DockerContainers()
+        requested_at = time.time()
+        receipts: list[dict[str, Any]] = []
+
+        def record(resource: str, status: CleanupStatus, detail: str = "") -> None:
+            receipt = self._receipt(resource, status, requested_at, detail=detail)
+            receipts[:] = [entry for entry in receipts if entry["resource_id"] != resource]
+            receipts.append(receipt)
+            self._record(receipts)
+            if self.state is not None:
+                self.state.append_json("external-cleanup.jsonl", receipt)
+                self.state.write_control(
+                    "external-cleanup-" + hashlib.sha256(call_id.encode()).hexdigest()[:16] + ".json",
+                    json.dumps(receipts, indent=2, sort_keys=True) + "\n",
+                )
+
+        def observe() -> list[dict[str, Any]]:
+            rows = fleet.containers(labels)
+            matches = []
+            for row in rows:
+                if row["name"] != name:
+                    continue
+                observation = ResourceObservation(row["id"], row["labels"], row["running"])
+                decision = authorize_cleanup(
+                    self.identity, observation, current_epoch=self.identity.epoch, active=False
+                )
+                if (
+                    decision != CleanupDecision.REMOVE
+                    or row["labels"].get("swfactory.external") != "true"
+                    or row["labels"].get("swfactory.external-call") != labels.get("swfactory.external-call")
+                    or not row["id"]
+                ):
+                    raise RuntimeError("external container identity does not match the owned attempt")
+                matches.append(row)
+            return matches
+
+        try:
+            rows = observe()
+            if not rows:
+                if uncertain_if_absent:
+                    raise RuntimeError("external container creation/cleanup was not observed")
+                record(name, "already_absent")
+                self._external_cleaned(name, call_id, labels)
+                return
+            debt = CleanupDebt()
+            for row in rows:
+                debt.record(row["id"], self.identity)
+                record(row["id"], "ambiguous", "external container removal pending")
+                fleet.remove(row["id"])
+            if observe():
+                raise RuntimeError("external container remains after removal")
+            for row in rows:
+                debt.settle(row["id"], self.identity)
+                record(row["id"], "converged")
+            self._external_cleaned(name, call_id, labels)
+        except Exception as error:
+            record(name, "ambiguous", str(error))
+            raise StageError("sandbox", f"external attempt cleanup is unknown: {error}", retryable=True) from error
+
+    def _external_cleaned(self, name: str, call_id: str, labels: Mapping[str, str]) -> None:
+        if self.state is not None:
+            self.state.append_json(
+                "external-processes.jsonl",
+                {"call_id": call_id, "container": name, "labels": dict(labels), "event": "cleaned", "at": time.time()},
+            )
 
     def close(self) -> None:
         """Reclaim the containers this identity labelled, and record what happened.

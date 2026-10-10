@@ -215,6 +215,95 @@ def test_a_failed_call_is_charged_at_what_the_provider_billed(tmp_path: Path) ->
     assert seed_budget(ctx_on(tmp_path, MemSandbox(), max_budget_usd=8.0)) == 0.42
 
 
+def test_external_success_with_unknown_usage_keeps_reservation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from swfactory.external_agent import ExternalAgent
+
+    profile = tmp_path / "profile.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "qualified",
+                "version": "1",
+                "argv": ["/opt/agent-wrapper"],
+                "model": "model",
+                "credential_env": [],
+                "budget_mode": "hard_cap",
+                "enforces_usd_limit": True,
+            }
+        )
+    )
+    cfg = Config(
+        issue="x",
+        agent="external",
+        agent_profile=str(profile),
+        sandbox="docker",
+        docker_image="example/agent@sha256:" + "a" * 64,
+    )
+    external = ExternalAgent(cfg)
+    seen = []
+
+    def answer(self, sb, **kw):
+        seen.append(kw["invocation"].call_id)
+        return AgentResult(agent="external", text="candidate", cost_usd=None)
+
+    monkeypatch.setattr(ExternalAgent, "run", answer)
+    ctx = ctx_on(tmp_path, MemSandbox(), external)
+    ctx.cfg = cfg
+    _agent(ctx, "spec", 1, "prompt", None)
+    ledger = CallLedger(ctx.state)
+    assert ledger.charged_usd() == 2.0 and ledger.unreconciled_usd() == 2.0
+    assert rows(tmp_path / "run")[-1]["state"] == "in_doubt"
+    assert rows(tmp_path / "run")[-1]["call_id"] == seen[0]
+    # An infrastructure retry must resolve the old paid attempt before buying another session.
+    with pytest.raises(StageError, match="observe and reconcile"):
+        _agent(ctx, "spec", 1, "prompt", None)
+    assert len(seen) == 1 and ledger.unreconciled_usd() == 2.0
+    from swfactory.stages import build_report, persisted_cost
+
+    assert persisted_cost(ctx) == 0.0
+    from types import SimpleNamespace
+
+    ctx.scm = SimpleNamespace(kind="local")
+    report = build_report(ctx, [])
+    assert report.total_cost_usd == 0.0 and report.unreconciled_cost_usd == 2.0
+    assert "unreconciled reservation usd" in report.table()
+
+
+def test_external_launcher_is_bound_to_admitted_policy_before_reservation(tmp_path: Path) -> None:
+    from swfactory import accepted_inputs
+    from swfactory.external_agent import ExternalAgent
+
+    path = tmp_path / "profile.json"
+    document = {
+        "schema_version": 1,
+        "id": "qualified",
+        "version": "1",
+        "argv": ["/opt/wrapper"],
+        "model": "first",
+        "credential_env": [],
+        "budget_mode": "hard_cap",
+        "enforces_usd_limit": True,
+    }
+    path.write_text(json.dumps(document))
+    cfg = Config(
+        issue="x",
+        agent="external",
+        agent_profile=str(path),
+        sandbox="docker",
+        docker_image="example/agent@sha256:" + "a" * 64,
+    )
+    ctx = ctx_on(tmp_path, MemSandbox(), ExternalAgent(cfg))
+    ctx.cfg = cfg
+    accepted_inputs.admit(ctx.state, accepted_inputs.snapshot(cfg, None, ctx.issue))
+    document["model"] = "second"
+    path.write_text(json.dumps(document))
+    ctx.agent = ExternalAgent(cfg)  # constructor sees the new manifest; admission did not approve it
+    with pytest.raises(StageError, match="differs from accepted inputs"):
+        _agent(ctx, "spec", 1, "prompt", None)
+    assert rows(tmp_path / "run") == []
+
+
 # ================================================================ 3. unknown spend
 
 

@@ -13,7 +13,7 @@ from swfactory.workgraph import waves
 
 Severity = Literal["blocker", "major", "minor", "nit"]
 IssueState = Literal["open", "closed"]
-AgentKind = Literal["claude", "scripted"]
+AgentKind = Literal["claude", "scripted", "external"]
 # Mirrored by the Rust ``SandboxKind`` enum (swf-domain blueprint.rs).
 SandboxKind = Literal["local", "islo", "srt", "docker", "toolset", "boat"]
 AgentRole = Literal[
@@ -238,7 +238,8 @@ class AgentResult(BoundaryModel):
     agent: AgentKind
     text: str = ""
     data: dict | None = None  # structured output when a schema was requested
-    cost_usd: float = Field(default=0.0, ge=0)
+    raw_envelope: dict | None = Field(default=None, exclude=True)  # candidate diagnostics, never authority
+    cost_usd: float | None = Field(default=0.0, ge=0)  # None keeps the durable call reservation unresolved
     num_turns: int = Field(default=0, ge=0)
     duration_ms: int = Field(default=0, ge=0)
     session_id: str | None = None
@@ -300,6 +301,7 @@ class RunReport(BoundaryModel):
     pr_url: str | None = None
     tests_passed: bool = False
     total_cost_usd: float = Field(default=0.0, ge=0)
+    unreconciled_cost_usd: float = Field(default=0.0, ge=0)
 
     @field_validator("run_id")
     @classmethod
@@ -325,6 +327,8 @@ class RunReport(BoundaryModel):
         for s in self.stages:
             if s.numbers:
                 rows.append((f"  {s.stage}", ", ".join(f"{k}={v:g}" for k, v in s.numbers.items())))
+        if self.unreconciled_cost_usd:
+            rows.append(("unreconciled reservation usd", f"{self.unreconciled_cost_usd:.4f}"))
         width = max(len(k) for k, _ in rows)
         return "\n".join(f"{k.ljust(width)}  {v}" for k, v in rows)
 
