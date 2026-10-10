@@ -972,7 +972,14 @@ class DockerSandbox(_ConfinedHost):
         if self.state is not None:
             self.state.append_json(
                 "external-processes.jsonl",
-                {"call_id": call_id, "container": name, "labels": labels, "event": "intent", "at": time.time()},
+                {
+                    "call_id": call_id,
+                    "container": name,
+                    "labels": labels,
+                    "event": "intent",
+                    "container_id_required": True,
+                    "at": time.time(),
+                },
             )
         with tempfile.TemporaryDirectory(prefix="swf-external-") as temporary:
             scratch = Path(temporary) / "scratch"
@@ -1089,6 +1096,7 @@ class DockerSandbox(_ConfinedHost):
                     labels,
                     uncertain_if_absent=not refused,
                     expected_id=container_id,
+                    require_observed_id=True,
                     require_unstarted=refused,
                 )
                 if refused and created is not None:
@@ -1204,6 +1212,7 @@ class DockerSandbox(_ConfinedHost):
                     row["labels"],
                     uncertain_if_absent=True,
                     expected_id=prior.get("container_id") if prior else None,
+                    require_observed_id=bool(prior and prior.get("container_id_required")),
                 )
                 pending.pop(row["name"], None)
             if any(owned(row) for row in fleet.containers(labels)):
@@ -1229,6 +1238,7 @@ class DockerSandbox(_ConfinedHost):
         *,
         uncertain_if_absent: bool,
         expected_id: str | None = None,
+        require_observed_id: bool = False,
         require_unstarted: bool = False,
     ) -> None:
         fleet = DockerContainers()
@@ -1262,6 +1272,7 @@ class DockerSandbox(_ConfinedHost):
                     or row["labels"].get("swfactory.external") != "true"
                     or row["labels"].get("swfactory.external-call") != labels.get("swfactory.external-call")
                     or not row["id"]
+                    or (require_observed_id and expected_id is None)
                     or (expected_id is not None and row["id"] != expected_id)
                     or (require_unstarted and row["running"])
                 ):

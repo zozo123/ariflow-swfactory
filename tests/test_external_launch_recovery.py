@@ -322,7 +322,7 @@ def test_recovery_cannot_remove_a_substituted_container_with_the_same_owned_name
 
 def test_cleanup_failure_cannot_write_no_start_proof(tmp_path, monkeypatch):
     ctx = context(tmp_path)
-    fleet = Fleet(monkeypatch, create=DAEMON_REJECTION, register_failure=True)
+    fleet = Fleet(monkeypatch)
     fleet.fail_remove = True
     with pytest.raises(StageError, match="cleanup|removal"):
         _agent(ctx, "spec", 1, "prompt", None)
@@ -333,17 +333,30 @@ def test_cleanup_failure_cannot_write_no_start_proof(tmp_path, monkeypatch):
     assert not fleet.removed
 
 
-def test_definite_refusal_removes_an_owned_stopped_container_before_releasing(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "create",
+    [
+        RunResult(1, "", "Error response from daemon: Conflict. The container name is already in use\n", 0.01),
+        RunResult(1, "", "connection interrupted while creating the container\n", 0.01),
+    ],
+    ids=["daemon-name-conflict", "ambiguous-transport"],
+)
+def test_create_failure_cannot_remove_a_stopped_container_without_an_observed_cid(tmp_path, monkeypatch, create):
     ctx = context(tmp_path)
-    fleet = Fleet(monkeypatch, create=DAEMON_REJECTION, register_failure=True)
+    fleet = Fleet(monkeypatch, create=create, register_failure=True)
     with pytest.raises(StageError):
         _agent(ctx, "spec", 1, "prompt", None)
     ledger = CallLedger(ctx.state)
     (attempt,) = ledger.records()
-    assert ledger.charged_usd() == 0 and attempt.settled_usd == 0
-    assert fleet.removed == [CID] and not fleet.rows
+    assert ledger.charged_usd() == ledger.unreconciled_usd() == 2
+    assert not fleet.removed and len(fleet.rows) == 1
     assert [command[1] for command in fleet.commands] == ["create"]
-    assert ctx.sb.external_no_start_observation(attempt.call_id).status == "definitely_absent"
+    assert ctx.sb.external_no_start_observation(attempt.call_id) is None
+    with pytest.raises(StageError):
+        _agent(ctx, "spec", 1, "retry", None)
+    assert not fleet.removed and len(fleet.rows) == 1
+    assert [command[1] for command in fleet.commands] == ["create"]
+    assert len(ledger.records()) == 1 and ledger.unreconciled_usd() == 2
 
 
 def test_running_container_contradicts_a_create_refusal_and_keeps_money_held(tmp_path, monkeypatch):

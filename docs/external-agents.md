@@ -135,7 +135,9 @@ reconciles that reservation to zero, including after a worker restart. This rece
 host control state; candidate stdout and error messages cannot provide it.
 
 Creation timeouts, interrupted clients, transport errors, contradictory container observations,
-and unconfirmed cleanup remain unresolved. Once a start was attempted, its usage remains unknown
+and unconfirmed cleanup remain unresolved. A container observed without an acknowledged creation
+ID is preserved and fences recovery, even when its name and labels match the attempted launch.
+Once a start was attempted, its usage remains unknown
 even if the client fails immediately. Preinstall the digest-pinned image; external calls do not
 pull images during creation. Docker's [create command](https://docs.docker.com/reference/cli/docker/container/create/)
 prepares a container without executing its command.
