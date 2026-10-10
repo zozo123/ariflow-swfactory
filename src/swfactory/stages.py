@@ -70,7 +70,7 @@ from swfactory.models import (
     TestResult,
 )
 from swfactory.publication_identity import PublicationIdentity, publication_key, this_instance
-from swfactory.sandbox import SRT_RUNTIME_PROTECTED, LocalSandbox, Sandbox, SrtSandbox
+from swfactory.sandbox import SRT_RUNTIME_PROTECTED, DockerSandbox, LocalSandbox, Sandbox, SrtSandbox
 from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
 from swfactory.state import JournalCorruption, RunBusyError, RunState
 
@@ -403,7 +403,10 @@ def seed_budget(ctx: Ctx, *, refresh: bool = False) -> float:
         ctx.spent_usd += _persisted_spend(ctx)
         ctx.budget_seeded = True
     elif refresh:
-        ctx.spent_usd = max(ctx.spent_usd, _persisted_spend(ctx))
+        persisted = _persisted_spend(ctx)
+        # Every external charge is journalled. A trusted no-start reconciliation can
+        # return funds even when this same context previously cached the reservation.
+        ctx.spent_usd = persisted if ctx.cfg.agent == "external" else max(ctx.spent_usd, persisted)
     return ctx.spent_usd
 
 
@@ -436,6 +439,14 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
     """Run the agent for one stage call, enforcing the run-level budget and surfacing errors.
     Under srt the kernel ``denyWrite`` set follows the stage (``protected_for``): ``fix`` calls
     lose write access to the tests dir that ``build`` needed, matching the ``Edit(...)`` rules."""
+    if ctx.cfg.agent == "external" and isinstance(ctx.sb, DockerSandbox):
+        # A worker may have died after persisting a no-start proof but before reconciling the
+        # ledger. Observe it before the ceiling check so a full reservation cannot hide recovery.
+        recovering = CallLedger(ctx.state)
+        for record in recovering.unreconciled():
+            observation = ctx.sb.external_no_start_observation(record.call_id)
+            if observation is not None:
+                recovering.reconcile(record.call_id, observation)
     # Refresh, not seed: a call that died in THIS process left its reservation in the ledger and
     # nothing in `ctx.spent_usd`, so the cached counter would under-count until a restart.
     seed_budget(ctx, refresh=True)
@@ -507,7 +518,15 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         # A timeout or a dead cell says nothing about the provider's ledger. The request left, so
         # the reservation stands as unknown spend until an observation resolves it; releasing it
         # here would let the run buy the same money twice.
-        ledger.mark_unknown(attempt, error)
+        observation = (
+            ctx.sb.external_no_start_observation(attempt.call_id)
+            if external and isinstance(ctx.sb, DockerSandbox)
+            else None
+        )
+        if observation is not None:
+            ledger.reconcile(attempt.call_id, observation)
+        else:
+            ledger.mark_unknown(attempt, error)
         # Deliberately NOT `ctx.spent_usd += granted`. The ledger already carries the reservation as
         # unknown spend at full value, and `seed_budget(refresh=True)` at the top of the next call
         # reads it back. Adding it here as well pushed the phantom amount into the stage log via the

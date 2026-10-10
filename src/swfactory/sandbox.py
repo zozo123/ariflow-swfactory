@@ -51,7 +51,7 @@ from urllib.parse import urlsplit
 from swfactory.cells import CellIdentity
 from swfactory.cleanup_receipt import CleanupReceipt, CleanupStatus
 from swfactory.config import Config
-from swfactory.idempotency import OperationRef
+from swfactory.idempotency import MutationOutcome, OperationRef
 from swfactory.models import TIMEOUT_EXIT_CODE, RunResult, StageError
 from swfactory.paths import confined_path, confined_posix_path, normalize_relative_path
 from swfactory.sandbox_governance import (
@@ -972,7 +972,14 @@ class DockerSandbox(_ConfinedHost):
         if self.state is not None:
             self.state.append_json(
                 "external-processes.jsonl",
-                {"call_id": call_id, "container": name, "labels": labels, "event": "intent", "at": time.time()},
+                {
+                    "call_id": call_id,
+                    "container": name,
+                    "labels": labels,
+                    "event": "intent",
+                    "container_id_required": True,
+                    "at": time.time(),
+                },
             )
         with tempfile.TemporaryDirectory(prefix="swf-external-") as temporary:
             scratch = Path(temporary) / "scratch"
@@ -985,7 +992,10 @@ class DockerSandbox(_ConfinedHost):
             (scratch / "home").chmod(0o777)
             command = [
                 "docker",
-                "run",
+                "create",
+                "--pull=never",
+                "--restart=no",
+                "--no-healthcheck",
                 "--init",
                 "--name",
                 name,
@@ -1025,14 +1035,131 @@ class DockerSandbox(_ConfinedHost):
             command += [self.image, *args, "--request", f"{EXTERNAL_SCRATCH}/request.json"]
             env = cell_env(os.environ)
             env.update(credentials)
-            result = None
+            container_id = None
+            refused = False
+            created = None
             try:
-                result = _run_external_subprocess(command, cwd=self.root, env=env, timeout_s=timeout_s)
-                return result
+                # Create never executes the harness. Its stdout is an identity, not candidate
+                # output, and an acknowledged daemon refusal can prove that no start was sent.
+                created = _run_external_subprocess(command, cwd=self.root, env=env, timeout_s=_CONTROL_TIMEOUT_S)
+                if not created.ok:
+                    refused = (
+                        not created.timed_out
+                        and created.exit_code > 0
+                        and not created.stdout.strip()
+                        and created.stderr.strip().startswith("Error response from daemon:")
+                    )
+                    raise StageError("sandbox", "external container creation failed before start", retryable=True)
+                container_id = created.stdout.strip()
+                if not re.fullmatch(r"[a-f0-9]{64}", container_id):
+                    container_id = None
+                    raise StageError("sandbox", "external container creation returned an invalid identity")
+                self.state.append_json(
+                    "external-processes.jsonl",
+                    {
+                        "call_id": call_id,
+                        "container": name,
+                        "container_id": container_id,
+                        "labels": labels,
+                        "event": "created",
+                        "at": time.time(),
+                    },
+                )
+                rows = DockerContainers().containers(labels)
+                matching = [row for row in rows if row["name"] == name]
+                if len(matching) != 1 or (
+                    matching[0]["id"] != container_id
+                    or matching[0]["running"]
+                    or any(matching[0]["labels"].get(key) != value for key, value in labels.items())
+                ):
+                    raise StageError("sandbox", "external created container identity is not confirmed")
+                # Fsync this before the only operation that may incur provider charges. Once a
+                # start was attempted, even a failed client exit or empty output stays unknown.
+                self.state.append_json(
+                    "external-processes.jsonl",
+                    {
+                        "call_id": call_id,
+                        "container": name,
+                        "container_id": container_id,
+                        "labels": labels,
+                        "event": "start_intent",
+                        "at": time.time(),
+                    },
+                )
+                return _run_external_subprocess(
+                    ["docker", "start", "--attach", container_id], cwd=self.root, env=env, timeout_s=timeout_s
+                )
             finally:
-                # External runs intentionally omit --rm: successful execution leaves an observable
-                # resource, so exact removal and absence can be recorded even for detached workers.
-                self._cleanup_external(name, call_id, labels, uncertain_if_absent=True)
+                self._cleanup_external(
+                    name,
+                    call_id,
+                    labels,
+                    uncertain_if_absent=not refused,
+                    expected_id=container_id,
+                    require_observed_id=True,
+                    require_unstarted=refused,
+                )
+                if refused and created is not None:
+                    self.state.write_control(
+                        "external-not-started/" + hashlib.sha256(call_id.encode()).hexdigest() + ".json",
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "status": "not_started",
+                                "phase": "create",
+                                "call_id": call_id,
+                                "container": name,
+                                "labels": labels,
+                                "image": self.image,
+                                "exit_code": created.exit_code,
+                            },
+                            sort_keys=True,
+                        )
+                        + "\n",
+                    )
+
+    def external_no_start_observation(self, call_id: str) -> MutationOutcome | None:
+        """Read factory-owned proof of a refused creation, never a candidate billing claim."""
+        if self.state is None:
+            return None
+        path = "external-not-started/" + hashlib.sha256(call_id.encode()).hexdigest() + ".json"
+        if not self.state.has_control(path):
+            return None
+        expected_labels = {
+            **self.identity.labels,
+            "swfactory.external": "true",
+            "swfactory.external-call": hashlib.sha256(call_id.encode()).hexdigest()[:16],
+        }
+        try:
+            proof = json.loads(self.state.read_control(path))
+            if (
+                not isinstance(proof, dict)
+                or proof.get("schema_version") != 1
+                or proof.get("status") != "not_started"
+                or proof.get("phase") != "create"
+                or proof.get("call_id") != call_id
+                or proof.get("labels") != expected_labels
+                or not isinstance(proof.get("container"), str)
+                or type(proof.get("exit_code")) is not int
+                or proof["exit_code"] <= 0
+            ):
+                raise ValueError("invalid call-bound no-start proof")
+            records = [
+                row for row in self.state.read_jsonl("external-processes.jsonl") if row.get("call_id") == call_id
+            ]
+            if (
+                not records
+                or any(row.get("event") == "start_intent" for row in records)
+                or records[-1].get("event") != "cleaned"
+                or any(
+                    row.get("labels") != expected_labels or row.get("container") != proof["container"]
+                    for row in records
+                )
+            ):
+                raise ValueError("no-start proof lacks matching terminal cleanup")
+        except (OSError, ValueError, TypeError, AttributeError) as error:
+            raise StageError("policy", "external no-start observation is invalid") from error
+        return MutationOutcome("definitely_absent", evidence=proof, detail="factory observed refusal before any start")
 
     def _reap_external(self) -> None:
         """Fence interrupted creation and remove only this run's stale external containers."""
@@ -1057,6 +1184,18 @@ class DockerSandbox(_ConfinedHost):
                     continue
                 if record.get("event") == "intent":
                     pending[record["container"]] = record
+                elif record.get("event") in {"created", "start_intent"}:
+                    prior = pending.get(record["container"])
+                    container_id = record.get("container_id")
+                    if (
+                        prior is None
+                        or prior.get("call_id") != record.get("call_id")
+                        or not isinstance(container_id, str)
+                        or not re.fullmatch(r"[a-f0-9]{64}", container_id)
+                        or prior.get("container_id", container_id) != container_id
+                    ):
+                        raise RuntimeError("external process journal has an invalid container identity")
+                    pending[record["container"]] = {**prior, "container_id": container_id}
                 elif record.get("event") == "cleaned":
                     pending.pop(record["container"], None)
             for row in fleet.containers(labels):
@@ -1067,7 +1206,14 @@ class DockerSandbox(_ConfinedHost):
                     raise RuntimeError("stale external container has an incomplete attempt identity")
                 prior = pending.get(row["name"])
                 call_id = prior["call_id"] if prior else "recovered." + call_hash
-                self._cleanup_external(row["name"], call_id, row["labels"], uncertain_if_absent=True)
+                self._cleanup_external(
+                    row["name"],
+                    call_id,
+                    row["labels"],
+                    uncertain_if_absent=True,
+                    expected_id=prior.get("container_id") if prior else None,
+                    require_observed_id=bool(prior and prior.get("container_id_required")),
+                )
                 pending.pop(row["name"], None)
             if any(owned(row) for row in fleet.containers(labels)):
                 raise RuntimeError("stale external execution remains after cleanup")
@@ -1085,7 +1231,15 @@ class DockerSandbox(_ConfinedHost):
             ) from error
 
     def _cleanup_external(
-        self, name: str, call_id: str, labels: Mapping[str, str], *, uncertain_if_absent: bool
+        self,
+        name: str,
+        call_id: str,
+        labels: Mapping[str, str],
+        *,
+        uncertain_if_absent: bool,
+        expected_id: str | None = None,
+        require_observed_id: bool = False,
+        require_unstarted: bool = False,
     ) -> None:
         fleet = DockerContainers()
         requested_at = time.time()
@@ -1118,6 +1272,9 @@ class DockerSandbox(_ConfinedHost):
                     or row["labels"].get("swfactory.external") != "true"
                     or row["labels"].get("swfactory.external-call") != labels.get("swfactory.external-call")
                     or not row["id"]
+                    or (require_observed_id and expected_id is None)
+                    or (expected_id is not None and row["id"] != expected_id)
+                    or (require_unstarted and row["running"])
                 ):
                     raise RuntimeError("external container identity does not match the owned attempt")
                 matches.append(row)
@@ -1226,7 +1383,7 @@ class DockerContainers:
     def containers(self, labels: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
         """``docker ps -a`` narrowed to ``swfactory.owned=true`` plus ``labels``, as
         ``{id, name, labels, running}`` rows."""
-        argv = ["docker", "ps", "-a"]
+        argv = ["docker", "ps", "-a", "--no-trunc"]
         for key, value in {"swfactory.owned": "true", **(labels or {})}.items():
             argv += ["--filter", f"label={key}={value}"]
         res = _run_subprocess(

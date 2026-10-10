@@ -1,0 +1,32 @@
+# Optional external stage harness. Use compose-external-agent.sh to validate the operator
+# directory and image before merging this file with compose.yml. The base stack remains native.
+services:
+  airflow:
+    environment:
+      SWF_AGENT: external
+      SWF_SANDBOX: docker
+      SWF_AGENT_PROFILE: /opt/swfactory-external-profiles/profile.json
+      SWF_DOCKER_IMAGE: ${SWF_EXTERNAL_IMAGE:?Set SWF_EXTERNAL_IMAGE to a qualified image@sha256 digest}
+      SWF_DOCKER_CREDENTIALS: env
+      # Explicit model-provider names only. The stage launcher passes just the names selected
+      # by profile.json. These additions apply to neither backend nor webhook services.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      PRIME_API_KEY: ${PRIME_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      TOGETHER_API_KEY: ${TOGETHER_API_KEY:-}
+      FIREWORKS_API_KEY: ${FIREWORKS_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+    volumes:
+      - type: bind
+        source: ${SWF_EXTERNAL_PROFILE_DIR:?Set SWF_EXTERNAL_PROFILE_DIR to an existing absolute operator directory}
+        target: /opt/swfactory-external-profiles
+        read_only: true
+        bind:
+          create_host_path: false

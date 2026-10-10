@@ -19,6 +19,8 @@ from swfactory.sandbox import DockerSandbox, LocalSandbox, SrtSandbox
 from swfactory.sandbox_governance import SandboxIdentity
 from swfactory.state import RunState
 
+_NEW_ID = "a" * 64
+
 
 def _run(sb, argv, **overrides):
     options = dict(
@@ -90,13 +92,22 @@ def _mock_launch(monkeypatch, fleet, *, result=None, register=True, assertions=N
     monkeypatch.setattr(sandbox_mod, "DockerContainers", lambda: fleet)
 
     def launch(argv, **kwargs):
-        fleet.events.append(("launch",))
-        captured.update(argv=list(argv), **kwargs)
-        if assertions:
-            assertions(captured)
-        if register:
-            labels = dict(value.split("=", 1) for flag, value in zip(argv, argv[1:], strict=False) if flag == "--label")
-            fleet.rows.append(dict(id="new", name=argv[argv.index("--name") + 1], running=True, labels=labels))
+        if argv[:2] == ["docker", "create"]:
+            fleet.events.append(("launch",))
+            captured.update(argv=list(argv), **kwargs)
+            if assertions:
+                assertions(captured)
+            if register:
+                labels = dict(
+                    value.split("=", 1) for flag, value in zip(argv, argv[1:], strict=False) if flag == "--label"
+                )
+                fleet.rows.append(dict(id=_NEW_ID, name=argv[argv.index("--name") + 1], running=False, labels=labels))
+            return RunResult(0, _NEW_ID + "\n", "", 0.01, False)
+        assert argv == ["docker", "start", "--attach", _NEW_ID]
+        fleet.events.append(("start",))
+        for row in fleet.rows:
+            if row["id"] == _NEW_ID:
+                row["running"] = True
         return result or RunResult(0, "{}\n", "", 0.01, False)
 
     monkeypatch.setattr(sandbox_mod, "_run_external_subprocess", launch)
@@ -225,9 +236,14 @@ def test_docker_minimal_mounts_request_and_separate_provider_env(tmp_path, monke
         protected=("src/private/authority.py",),
         credential_env=("OPENAI_API_KEY",),
     ).ok
-    assert fleet.removed == ["new"] and not fleet.rows
+    assert fleet.removed == [_NEW_ID] and not fleet.rows
     assert [receipt["status"] for receipt in sb.receipts] == ["converged"]
-    assert [entry["event"] for entry in sb.state.read_jsonl("external-processes.jsonl")] == ["intent", "cleaned"]
+    assert [entry["event"] for entry in sb.state.read_jsonl("external-processes.jsonl")] == [
+        "intent",
+        "created",
+        "start_intent",
+        "cleaned",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -277,7 +293,7 @@ def test_docker_timeout_removes_exact_container_and_keeps_foreign_runs(tmp_path,
     fleet.rows.extend([foreign, legacy])
     _mock_launch(monkeypatch, fleet, result=RunResult(124, "", "", 1, True))
     result = _run(sb, ["/trusted/adapter"])
-    assert result.timed_out and fleet.removed == ["new"] and fleet.rows == [foreign, legacy]
+    assert result.timed_out and fleet.removed == [_NEW_ID] and fleet.rows == [foreign, legacy]
 
 
 @pytest.mark.parametrize("failure", ["remove", "observe", "absent"])
@@ -305,7 +321,7 @@ def test_docker_reaps_previous_call_before_new_launch(tmp_path, monkeypatch):
     )
     _mock_launch(monkeypatch, fleet)
     assert _run(sb, ["/trusted/adapter"]).ok
-    assert fleet.removed == ["old", "new"]
+    assert fleet.removed == ["old", _NEW_ID]
     assert fleet.events.index(("remove", "old")) < fleet.events.index(("launch",))
     assert not fleet.rows
 
