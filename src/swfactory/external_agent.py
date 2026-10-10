@@ -165,6 +165,7 @@ def profile_document(cfg: Config) -> dict[str, Any]:
     profile, path = _profile(cfg)
     manifest = profile.model_dump(mode="json")
     executable_sha256 = None
+    argument_files_sha256: dict[str, str] = {}
     docker_image = None
     checkout = Path(cfg.workdir)
     _outside_checkout(path, checkout, label="profile")
@@ -175,6 +176,15 @@ def profile_document(cfg: Config) -> dict[str, Any]:
             if not executable.is_file() or not os.access(executable, os.X_OK):
                 raise ValueError("argv[0] must be an executable file")
             executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
+            # Pin interpreter scripts and file arguments as well as argv[0]. Otherwise
+            # changing wrapper.py behind a stable Python executable bypasses admission.
+            for argument in profile.argv[1:]:
+                argument_path = Path(argument)
+                if argument_path.is_absolute() and argument_path.is_file():
+                    _outside_checkout(argument_path, checkout, label="argument file")
+                    argument_files_sha256[str(argument_path.resolve())] = hashlib.sha256(
+                        argument_path.read_bytes()
+                    ).hexdigest()
         except (OSError, ValueError) as error:
             raise StageError("policy", f"invalid external executable: {error}") from error
     elif cfg.sandbox == "docker":
@@ -187,6 +197,7 @@ def profile_document(cfg: Config) -> dict[str, Any]:
         "manifest": manifest,
         "manifest_sha256": hashlib.sha256(_canonical(manifest).encode()).hexdigest(),
         "executable_sha256": executable_sha256,
+        "argument_files_sha256": argument_files_sha256,
         "docker_image": docker_image,
     }
 
@@ -243,6 +254,27 @@ class ExternalAgent:
         if policy.model is not None and policy.model != self.profile.model:
             raise StageError("policy", "external model override differs from the admitted profile model")
 
+    def validate_execution(
+        self, sb: Sandbox, policy: Policy, writable_paths: Sequence[str], protected: Sequence[str]
+    ) -> None:
+        """Refuse known launch/configuration failures before reserving provider money."""
+        checkout = Path(sb.workdir)
+        _outside_checkout(Path(self.profile.argv[0]), checkout, label="executable")
+        _outside_checkout(Path(self._cfg.agent_profile or ""), checkout, label="profile")
+        for argument in self._binding["argument_files_sha256"]:
+            _outside_checkout(Path(argument), checkout, label="argument file")
+        if self._cfg.record_dir:
+            raise StageError("policy", "external fixture recording is not supported")
+        if not policy.writes and writable_paths:
+            raise StageError("policy", "a read-only external call cannot receive writable paths")
+        sb.preflight_external(
+            self.profile.argv,
+            writes=writable_paths,
+            protected=protected,
+            timeout_s=policy.timeout_s,
+            credential_env=self.profile.credential_env,
+        )
+
     def run(
         self,
         sb: Sandbox,
@@ -261,12 +293,9 @@ class ExternalAgent:
         self.validate_call(policy, stage)
         if invocation is None or not invocation.call_id:
             raise StageError("policy", "external execution requires a host-owned call identity")
-        _outside_checkout(Path(self.profile.argv[0]), Path(sb.workdir), label="executable")
-        _outside_checkout(Path(cfg.agent_profile or ""), Path(sb.workdir), label="profile")
+        self.validate_execution(sb, policy, invocation.writable_paths, protected)
         if cfg.record_dir:
             raise StageError("policy", "external fixture recording is not supported")
-        if not policy.writes and invocation.writable_paths:
-            raise StageError("policy", "a read-only external call cannot receive writable paths")
         request = {
             "schema_version": 1,
             "call_id": invocation.call_id,

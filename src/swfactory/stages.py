@@ -451,6 +451,8 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
     protected = protected_for(_contract(ctx), stage)
     policy = _policy(ctx, stage)
     external = ctx.agent.kind == "external"
+    writable: tuple[str, ...] = ()
+    admitted_digest = None
     if external:
         if ctx.blueprint and any(gate.mode == "policy" for gate in ctx.blueprint.gates):
             raise StageError("policy", "external agents are not qualified for autonomous policy gates")
@@ -464,6 +466,11 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         admitted = accepted_inputs.stored(ctx.state)
         if admitted is not None and admitted.policy_sha256 != accepted_inputs.policy_sha256(ctx.cfg, ctx.blueprint):
             raise StageError("policy", "external execution policy differs from accepted inputs; open a new epoch")
+        contract = _contract(ctx)
+        if policy.writes:
+            writable = (contract.source, contract.tests_dir) if stage == "build" else (contract.source,)
+        ctx.agent.validate_execution(ctx.sb, policy, writable, protected)
+        admitted_digest = accepted_inputs.digest_of(ctx.state)
     if hasattr(ctx.sb, "set_protected"):
         ctx.sb.set_protected(protected)
     # Reserve BEFORE the provider can be paid. Everything after this line may be lost to a kill;
@@ -478,12 +485,10 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
     attempt = ledger.reserve(stage=stage, iteration=iteration, reserved_usd=granted)
     invocation_args = {}
     if external:
-        contract = _contract(ctx)
-        writable = (contract.source, contract.tests_dir) if stage == "build" else (contract.source,)
         invocation_args["invocation"] = Invocation(
             call_id=attempt.call_id,
-            accepted_inputs_digest=accepted_inputs.digest_of(ctx.state),
-            writable_paths=writable if policy.writes else (),
+            accepted_inputs_digest=admitted_digest,
+            writable_paths=writable,
         )
     try:
         res = ctx.agent.run(

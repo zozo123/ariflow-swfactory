@@ -183,6 +183,8 @@ class Config(BaseSettings):
     @model_validator(mode="after")
     def _trust_boundary(self) -> Config:
         if self.agent == "external":
+            if self.record_dir:
+                raise ValueError("external fixture recording is not supported")
             if not self.agent_profile:
                 raise ValueError("agent=external requires SWF_AGENT_PROFILE (an operator-owned manifest)")
             if self.sandbox == "local":

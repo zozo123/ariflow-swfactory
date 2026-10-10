@@ -52,6 +52,9 @@ class MemSandbox:
     def run_agent(self, cmd: str, *, timeout_s: int = 1800) -> RunResult:
         return self.run(cmd, timeout_s=timeout_s)
 
+    def preflight_external(self, argv: Any, **kw: Any) -> list[str]:
+        return []
+
     def read(self, path: str) -> str:
         if path == self.unreadable:
             raise OSError("the cell died while the envelope was being read back")
@@ -302,6 +305,71 @@ def test_external_launcher_is_bound_to_admitted_policy_before_reservation(tmp_pa
     with pytest.raises(StageError, match="differs from accepted inputs"):
         _agent(ctx, "spec", 1, "prompt", None)
     assert rows(tmp_path / "run") == []
+
+
+@pytest.mark.parametrize("refusal", ["missing_tests", "missing_protected", "symlink", "recording", "stale_cleanup"])
+def test_external_known_launch_refusals_reserve_no_money(tmp_path: Path, monkeypatch, refusal: str) -> None:
+    from swfactory import sandbox as sandbox_mod
+    from swfactory.external_agent import ExternalAgent
+    from swfactory.sandbox import DockerSandbox
+    from swfactory.sandbox_governance import SandboxIdentity
+
+    checkout = tmp_path / "checkout"
+    (checkout / "src").mkdir(parents=True)
+    (checkout / "tests").mkdir()
+    contract = FACTORY_TOML
+    if refusal == "missing_tests":
+        (checkout / "tests").rmdir()
+    elif refusal == "missing_protected":
+        contract += 'protected = ["src/authority.py"]\n'
+    elif refusal == "symlink":
+        (checkout / "src/alias").symlink_to(checkout / "factory.toml")
+    (checkout / "factory.toml").write_text(contract)
+    path = tmp_path / "profile.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "qualified",
+                "version": "1",
+                "argv": ["/opt/wrapper"],
+                "model": "fixture",
+                "credential_env": [],
+                "budget_mode": "hard_cap",
+                "enforces_usd_limit": True,
+            }
+        )
+    )
+    cfg = Config(
+        issue="x",
+        agent="external",
+        agent_profile=str(path),
+        sandbox="docker",
+        workdir=str(checkout),
+        docker_image="example/agent@sha256:" + "a" * 64,
+    )
+    if refusal == "recording":
+        cfg = cfg.model_copy(update={"record_dir": str(tmp_path / "recordings")})
+    ctx = ctx_on(tmp_path, MemSandbox(), ExternalAgent(cfg))
+    ctx.cfg = cfg
+    ctx.sb = DockerSandbox(
+        checkout,
+        image=cfg.docker_image,
+        identity=SandboxIdentity("docker", "cell", 1, "run"),
+        state=ctx.state,
+    )
+    monkeypatch.setattr(sandbox_mod, "_run_external_subprocess", lambda *args, **kw: pytest.fail("provider launched"))
+
+    def reap():
+        if refusal == "stale_cleanup":
+            raise StageError("policy", "previous external creation is ambiguous")
+        pytest.fail("Docker launch attempted")
+
+    monkeypatch.setattr(ctx.sb, "_reap_external", reap)
+    with pytest.raises(StageError, match="existing directory|missing inside|symlink|fixture recording|ambiguous"):
+        _agent(ctx, "build", 1, "prompt", None)
+    assert rows(tmp_path / "run") == []
+    assert CallLedger(ctx.state).unreconciled_usd() == 0
 
 
 # ================================================================ 3. unknown spend

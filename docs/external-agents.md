@@ -21,6 +21,10 @@ binds the profile manifest, executable identity, selected model, and execution c
 the accepted inputs. Changing that binding requires a new admission rather than silently resuming
 an earlier run.
 
+Local admission also hashes absolute file arguments, including an interpreter's wrapper script,
+and requires those files outside the candidate checkout. Docker execution pins these files through
+the image digest. Configuration and enforceability checks run before a provider budget is reserved.
+
 The no-charge subprocess used by the tests has this manifest:
 
 ```json

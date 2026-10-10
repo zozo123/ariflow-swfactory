@@ -31,6 +31,9 @@ class ExternalSandbox:
         self.calls.append({"argv": argv, **kwargs})
         return self.response
 
+    def preflight_external(self, argv: tuple[str, ...], **kwargs: Any) -> list[str]:
+        return []
+
 
 def _profile(tmp_path: Path, **changes: Any) -> tuple[Path, Path]:
     executable = tmp_path / "trusted-wrapper"
@@ -219,6 +222,36 @@ def test_binding_is_canonical_and_defensively_copied(tmp_path: Path) -> None:
     assert agent.binding["manifest"]["argv"][0] != "/different"
 
 
+def test_interpreter_argument_file_is_pinned_before_execution(tmp_path: Path) -> None:
+    script = tmp_path / "wrapper.py"
+    script.write_text("print('first')\n")
+    path, executable = _profile(tmp_path)
+    document = json.loads(path.read_text())
+    document["argv"] = [str(executable), str(script)]
+    path.write_text(json.dumps(document))
+    cfg = _cfg(tmp_path, path)
+    agent = ExternalAgent(cfg)
+    assert len(agent.binding["argument_files_sha256"][str(script.resolve())]) == 64
+    sb = ExternalSandbox(Path(cfg.workdir), RunResult(0, _candidate(), "", 0))
+    script.write_text("print('changed')\n")
+    with pytest.raises(StageError, match="binding changed"):
+        _run(agent, cfg, sb)
+    assert not sb.calls
+
+
+def test_local_argument_file_cannot_come_from_candidate_checkout(tmp_path: Path) -> None:
+    checkout = tmp_path / "candidate"
+    checkout.mkdir()
+    script = checkout / "wrapper.py"
+    script.write_text("print('candidate-controlled')\n")
+    path, executable = _profile(tmp_path)
+    document = json.loads(path.read_text())
+    document["argv"] = [str(executable), str(script)]
+    path.write_text(json.dumps(document))
+    with pytest.raises(StageError, match="argument file must be outside"):
+        ExternalAgent(_cfg(tmp_path, path))
+
+
 @pytest.mark.parametrize("inside", ["profile", "executable"])
 def test_local_operator_inputs_must_be_outside_checkout(tmp_path: Path, inside: str) -> None:
     candidate = tmp_path / "candidate"
@@ -335,6 +368,7 @@ def test_policy_and_call_identity_are_checked_before_launch(tmp_path: Path) -> N
         ({"sandbox": "toolset"}, "currently require sandbox=docker"),
         ({"sandbox": "boat"}, "currently require sandbox=docker"),
         ({"sandbox": "local", "allow_local_agent": False}, "requires --allow-local-agent"),
+        ({"record_dir": str(Path("/tmp/recordings"))}, "fixture recording is not supported"),
         ({"sandbox": "docker", "docker_image": "image:latest"}, "digest-pinned"),
         (
             {

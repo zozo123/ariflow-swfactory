@@ -586,6 +586,22 @@ class LocalSandbox:
         """Run only the model process, with the backend's agent credential scope."""
         return self._launch(cmd, cwd=None, agent=True, timeout_s=timeout_s)
 
+    def preflight_external(
+        self,
+        argv: Sequence[str],
+        *,
+        writes: Sequence[str],
+        protected: Sequence[str],
+        timeout_s: int,
+        credential_env: Sequence[str],
+    ) -> list[str]:
+        """Validate the development launcher without executing any provider process."""
+        if type(self) is not LocalSandbox:
+            raise StageError("policy", f"external execution is not qualified for {type(self).__name__}")
+        _external_arguments(argv, "preflight", timeout_s)
+        _external_credentials(credential_env)
+        return []  # local development deliberately makes no confinement claim
+
     def run_external(
         self,
         argv: Sequence[str],
@@ -603,11 +619,11 @@ class LocalSandbox:
         supervised. This host directory does not enforce filesystem or detached-session isolation.
         Confined subclasses must implement their own boundary instead of inheriting this launcher.
         """
-        if type(self) is not LocalSandbox:
-            raise StageError("policy", f"external execution is not qualified for {type(self).__name__}")
+        self.preflight_external(
+            argv, writes=writes, protected=protected, timeout_s=timeout_s, credential_env=credential_env
+        )
         args = _external_arguments(argv, call_id, timeout_s)
         credentials = _external_credentials(credential_env)
-        del writes, protected  # local development deliberately makes no confinement claim
         with tempfile.TemporaryDirectory(prefix="swf-external-") as temporary:
             scratch = Path(temporary)
             request_path = scratch / "request.json"
@@ -911,6 +927,28 @@ class DockerSandbox(_ConfinedHost):
                     argv += ["-e", k]
         return [*argv, self.image, "bash", "-lc", cmd]
 
+    def preflight_external(
+        self,
+        argv: Sequence[str],
+        *,
+        writes: Sequence[str],
+        protected: Sequence[str],
+        timeout_s: int,
+        credential_env: Sequence[str],
+    ) -> list[str]:
+        """Prove the requested mounts are enforceable before reserving provider money."""
+        if self.state is None:
+            raise StageError("policy", "external Docker execution requires host-owned run state")
+        _external_arguments(argv, "preflight", timeout_s)
+        _external_credentials(credential_env)
+        if any(char in str(self.root) for char in ":,\n\r"):
+            raise StageError("policy", "external checkout path cannot be represented safely as a Docker mount")
+        mounts = _external_write_mounts(self.root, writes, protected)
+        # Cleanup admission cannot launch a provider. Refuse any prior ambiguous
+        # creation before reserving another paid attempt on this checkout.
+        self._reap_external()
+        return mounts
+
     def run_external(
         self,
         argv: Sequence[str],
@@ -923,16 +961,11 @@ class DockerSandbox(_ConfinedHost):
         credential_env: Sequence[str],
     ) -> RunResult:
         """Launch one confined attempt and confirm its complete container teardown before return."""
-        if self.state is None:
-            raise StageError("policy", "external Docker execution requires host-owned run state")
+        mounts = self.preflight_external(
+            argv, writes=writes, protected=protected, timeout_s=timeout_s, credential_env=credential_env
+        )
         args = _external_arguments(argv, call_id, timeout_s)
         credentials = _external_credentials(credential_env)
-        if any(char in str(self.root) for char in ":,\n\r"):
-            raise StageError("policy", "external checkout path cannot be represented safely as a Docker mount")
-        mounts = _external_write_mounts(self.root, writes, protected)
-        # The run lock is held by the caller. A killed worker may have left a Docker
-        # execution editing this same checkout; prove it has ended before another launch.
-        self._reap_external()
         call_hash = hashlib.sha256(call_id.encode()).hexdigest()[:16]
         name = f"{self.identity.stable_name}-ext-{call_hash}-{secrets.token_hex(3)}"
         labels = {**self.identity.labels, "swfactory.external": "true", "swfactory.external-call": call_hash}
