@@ -12,6 +12,11 @@ their versions. For Docker execution, use a digest-pinned image containing the e
 profile's absolute path. This initial boundary supports Docker and explicitly enabled local
 development execution; other sandbox adapters are refused.
 
+For the local Airflow stack, use the optional [external-agent deployment overlay](docker.md#external-stage-agent-overlay).
+It mounts the operator profile read-only in the worker and supplies supported provider keys only
+to that worker. Install the qualified image first with `docker pull image@sha256:<digest>`;
+external container creation uses `--pull=never`.
+
 ## Operator profile
 
 Set `SWF_AGENT=external` and `SWF_AGENT_PROFILE=/absolute/path/to/profile.json`, or pass
@@ -122,6 +127,18 @@ Do not automatically launch a new paid session after an ambiguous result. Inspec
 identity and provider outcome, reconcile observed usage or definite non-submission, then resume
 under the existing [recovery procedure](run-recovery.md). Model output and a wrapper's success
 status are not billing observations.
+
+Docker external calls create a stopped container, confirm its identity, and persist a start intent
+before attaching execution. A confirmed daemon refusal during creation can therefore prove no
+harness started. After observed cleanup, the factory records a call-bound no-start receipt and
+reconciles that reservation to zero, including after a worker restart. This receipt lives in
+host control state; candidate stdout and error messages cannot provide it.
+
+Creation timeouts, interrupted clients, transport errors, contradictory container observations,
+and unconfirmed cleanup remain unresolved. Once a start was attempted, its usage remains unknown
+even if the client fails immediately. Preinstall the digest-pinned image; external calls do not
+pull images during creation. Docker's [create command](https://docs.docker.com/reference/cli/docker/container/create/)
+prepares a container without executing its command.
 
 ## Prime Agent boundary
 

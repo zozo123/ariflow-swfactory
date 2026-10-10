@@ -77,6 +77,55 @@ dispatches in the background. `down -v` also deletes these receipts. Inspect the
 `docker compose -f deploy/docker/compose.yml exec webhook uv run swfactory webhook deliveries`.
 See [durable webhook intake](webhooks.md) for repository routing, retries and `/readyz`.
 
+## External stage agent overlay
+
+An independently installed harness uses the optional `compose.external-agent.yml` overlay.
+Build the wrapper and its private runtime dependencies into a qualified sandbox image, with the
+wrapper executable outside the checkout, for example `/opt/harness/wrapper`. The same image must
+contain the tools needed to set up and test the target. Select that image by its registry digest;
+the factory does not install a vendor runtime into Airflow or download a wrapper into a work cell.
+
+Keep `profile.json` in a dedicated absolute directory owned by the operator, outside the
+factory's `.factory/` candidate directories. The launcher requires an existing readable,
+operator-owned regular file; it refuses a symlink. The directory is mounted read-only only in
+Airflow, at `/opt/swfactory-external-profiles`, and is never mounted into stage containers.
+The profile's `argv` names the executable baked into the sandbox image. Follow the strict
+[external profile contract](external-agents.md) when writing this file, including an explicit
+model, provider credential names, and a qualified budget mode.
+
+From the repo root, after installing the image and creating the operator profile:
+
+```bash
+export SWF_EXTERNAL_PROFILE_DIR=/absolute/operator/swfactory-profiles
+export SWF_EXTERNAL_IMAGE='registry.example/qualified-harness@sha256:<64-lowercase-hex-digest>'
+# Replace the directory and image digest with the installed operator configuration.
+docker pull "$SWF_EXTERNAL_IMAGE"
+# Export only the model-provider key(s) the profile declares, through your secret manager.
+# SWF_BACKEND_TOKEN is still required for the managed stack, as described above.
+
+deploy/docker/compose-external-agent.sh config --quiet
+deploy/docker/compose-external-agent.sh up -d
+# Use the same launcher for exec, logs, stop, and down, for example:
+deploy/docker/compose-external-agent.sh exec airflow uv run swfactory doctor
+```
+
+The launcher validates the absolute profile directory and digest before composing
+`deploy/docker/compose.yml` with the overlay. `config --quiet` validates without displaying
+rendered environment values. The overlay selects `external`, `docker`, and credential mode `env`;
+using only the base Compose file retains its scripted/Claude defaults.
+
+The overlay adds explicit supported provider key names only to the Airflow worker, including
+`OPENAI_API_KEY`, `PRIME_API_KEY`, and `ANTHROPIC_API_KEY`. It adds no provider keys to the backend
+or webhook service. The stage launcher forwards only the names selected by `credential_env` in
+the admitted profile; setup, tests, Git, and lifecycle containers receive none of those keys.
+Backend and SCM credentials remain on the control plane.
+
+Paid wrappers must actually enforce their granted USD cap; `enforces_usd_limit=true` is an
+operator qualification assertion. A successful paid response still holds its reservation until
+a trusted observer reconciles provider usage. This deployment wiring adds neither a paid-usage
+observer nor maintenance diagnosis support: the `maintain` agent path remains Claude-specific.
+The overlay does not qualify Prime or another vendor runtime merely by launching its executable.
+
 ## Knobs (`SWF_*` env or CLI flags; env wins over the blueprint)
 
 | Config field | env | default | meaning |
