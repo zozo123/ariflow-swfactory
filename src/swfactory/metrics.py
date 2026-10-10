@@ -93,6 +93,10 @@ def write_run_metrics(
         "inputs_digest": pinned.digest if pinned is not None else None,
         "policy_sha256": pinned.policy_sha256 if pinned is not None else None,
     }
+    if ctx.agent.kind == "external":
+        from swfactory.call_accounting import CallLedger
+
+        data["unreconciled_cost_usd"] = round(CallLedger(ctx.state).unreconciled_usd(), 6)
     ctx.write_artifact(f"{ctx.art}/metrics.json", json.dumps(data, indent=2) + "\n")
     return data
 

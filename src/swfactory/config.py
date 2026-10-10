@@ -79,7 +79,8 @@ class Config(BaseSettings):
 
     # -- execution: which implementation of each seam runs
     sandbox: SandboxKind = "local"
-    agent: Literal["claude", "scripted"] = "scripted"
+    agent: Literal["claude", "scripted", "external"] = "scripted"
+    agent_profile: str | None = None  # operator-owned external wrapper manifest; never a work-order command
     scm: Literal["local", "github"] = "local"
     approve: Literal["auto", "prompt"] = "prompt"
     tests: Literal["sandbox", "crabbox"] = "sandbox"  # where the test command executes
@@ -134,6 +135,13 @@ class Config(BaseSettings):
     record_dir: str | None = None  # dump real agent outputs as fixtures
     allow_local_agent: bool = False  # DEV ESCAPE HATCH: run the real agent outside islo
 
+    @field_validator("agent_profile")
+    @classmethod
+    def _agent_profile_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_absolute_posix_path(value, field="agent_profile")
+
     @field_validator("repo")
     @classmethod
     def _repo(cls, value: str) -> str:
@@ -174,6 +182,21 @@ class Config(BaseSettings):
 
     @model_validator(mode="after")
     def _trust_boundary(self) -> Config:
+        if self.agent == "external":
+            if self.record_dir:
+                raise ValueError("external fixture recording is not supported")
+            if not self.agent_profile:
+                raise ValueError("agent=external requires SWF_AGENT_PROFILE (an operator-owned manifest)")
+            if self.sandbox == "local":
+                if not self.allow_local_agent:
+                    raise ValueError("external local execution requires --allow-local-agent for development")
+            elif self.sandbox == "docker":
+                if not re.fullmatch(r".+@sha256:[a-f0-9]{64}", self.docker_image):
+                    raise ValueError("external docker execution requires a digest-pinned SWF_DOCKER_IMAGE")
+                if self.docker_credentials != "env":
+                    raise ValueError("external agents cannot mount host login credentials")
+            else:
+                raise ValueError("external agents currently require sandbox=docker (or explicit local development)")
         if self.agent == "claude" and self.sandbox == "local" and not self.allow_local_agent:
             raise ValueError(
                 "agent=claude requires sandbox=islo, srt, docker or toolset "

@@ -112,6 +112,7 @@ OPERATIONAL_SETTINGS: frozenset[str] = frozenset(
         "record_dir",  # where a worker dumps agent output for later fixture authoring
         "sandbox_owner",  # the worker identity allowed to sweep its own sandboxes
         "gate_replay",  # path only; the answers it contains are policy (see policy_document)
+        "agent_profile",  # path only; external wrapper content and execution binding are pinned below
     }
 )
 
@@ -320,7 +321,7 @@ def policy_document(cfg: Config, blueprint: Blueprint | None) -> dict[str, Any]:
     (``metrics.policy_sha256``), and they are also carried as their own snapshot field so a refusal
     can name the file -- the same shape ``blueprint``/``blueprint_sha256`` already has.
     """
-    return {
+    document = {
         "schema_version": SCHEMA_VERSION,
         "config": {name: getattr(cfg, name) for name in POLICY_SETTINGS},
         "gate_replay_sha256": _replay_digest(cfg.gate_replay),
@@ -333,6 +334,11 @@ def policy_document(cfg: Config, blueprint: Blueprint | None) -> dict[str, Any]:
         # "pinned by their own evidence"; nothing pinned them.
         "agent_policies": agent_policy_document(),
     }
+    if cfg.agent == "external":
+        from swfactory.external_agent import profile_document
+
+        document["external_agent"] = profile_document(cfg)
+    return document
 
 
 def policy_sha256(cfg: Config, blueprint: Blueprint | None) -> str:

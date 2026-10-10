@@ -36,6 +36,47 @@ LOCAL = {"agent": "scripted", "sandbox": "local", "scm": "local", "approve": "au
 RUN_ID = "p1nn0001"
 CELL_ID = "cell_" + "b" * 24
 
+
+def test_external_profile_content_and_executable_are_pinned(tmp_path: Path) -> None:
+    from swfactory.config import Config
+    from swfactory.state import RunState
+
+    wrapper = tmp_path / "wrapper"
+    wrapper.write_text("#!/bin/sh\nexit 0\n")
+    wrapper.chmod(0o700)
+    profile = tmp_path / "profile.json"
+    manifest = {
+        "schema_version": 1,
+        "id": "fixture",
+        "version": "1",
+        "argv": [str(wrapper)],
+        "model": "fixture",
+        "credential_env": [],
+        "budget_mode": "no_charge",
+        "enforces_usd_limit": False,
+    }
+    profile.write_text(json.dumps(manifest))
+    cfg = Config(issue="x", agent="external", agent_profile=str(profile), allow_local_agent=True)
+    issue = Issue(id="X", title="t", body="b")
+    state = RunState(tmp_path / "run")
+    pinned = accepted_inputs.snapshot(cfg, None, issue)
+    accepted_inputs.admit(state, pinned)
+
+    # Worker paths and JSON whitespace can differ; the executable and effective manifest cannot.
+    copy = tmp_path / "mirror.json"
+    copy.write_text(json.dumps(manifest, indent=2))
+    relocated = cfg.model_copy(update={"agent_profile": str(copy)})
+    assert accepted_inputs.snapshot(relocated, None, issue).digest == pinned.digest
+    manifest["model"] = "different-model"
+    profile.write_text(json.dumps(manifest))
+    with pytest.raises(StageError, match="effective policy"):
+        accepted_inputs.admit(state, accepted_inputs.snapshot(cfg, None, issue))
+    profile.write_text(copy.read_text())
+    wrapper.write_text("#!/bin/sh\necho changed\n")
+    with pytest.raises(StageError, match="effective policy"):
+        accepted_inputs.admit(state, accepted_inputs.snapshot(cfg, None, issue))
+
+
 ISSUE_V1 = """---
 id: DEMO-1
 title: Add percent_change(old, new) to calc
