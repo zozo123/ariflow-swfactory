@@ -231,6 +231,75 @@ def test_no_start_recovery_releases_a_reservation_cached_in_the_same_context(tmp
     assert ctx.spent_usd == 0, "the resolved reservation cannot remain cached as observed spend"
 
 
+def interrupted_attempt(ctx, fleet):
+    ledger = CallLedger(ctx.state)
+    attempt = ledger.reserve(stage="spec", iteration=1, reserved_usd=2.0)
+    ledger.mark_unknown(attempt, "worker died after Docker start")
+    labels = {
+        **ctx.sb.identity.labels,
+        "swfactory.external": "true",
+        "swfactory.external-call": hashlib.sha256(attempt.call_id.encode()).hexdigest()[:16],
+    }
+    identity = {"call_id": attempt.call_id, "container": "interrupted-external", "labels": labels}
+    ctx.state.append_json("external-processes.jsonl", {**identity, "event": "intent", "container_id_required": True})
+    for event in ("created", "start_intent"):
+        ctx.state.append_json("external-processes.jsonl", {**identity, "event": event, "container_id": CID})
+    fleet.rows.append({"id": CID, "name": identity["container"], "labels": labels, "running": True})
+    return attempt
+
+
+def test_a_fully_held_budget_still_recovers_execution_before_refusing_a_new_paid_call(tmp_path, monkeypatch):
+    ctx = context(tmp_path, max_budget_usd=2.0)
+    fleet = Fleet(monkeypatch)
+    attempt = interrupted_attempt(ctx, fleet)
+    with pytest.raises(StageError, match="run budget exhausted"):
+        _agent(ctx, "spec", 1, "retry", None)
+    assert fleet.removed == [CID] and not fleet.rows and not fleet.commands
+    records = ctx.state.read_jsonl("external-processes.jsonl")
+    assert records[-1]["event"] == "cleaned" and records[-1]["call_id"] == attempt.call_id
+    ledger = CallLedger(ctx.state)
+    assert len(ledger.records()) == 1 and ledger.charged_usd() == ledger.unreconciled_usd() == 2
+    assert ctx.sb.external_no_start_observation(attempt.call_id) is None
+
+
+def test_close_records_external_call_cleanup_before_generic_owned_removal(tmp_path, monkeypatch):
+    ctx = context(tmp_path, max_budget_usd=2.0)
+    fleet = Fleet(monkeypatch)
+    attempt = interrupted_attempt(ctx, fleet)
+    fleet.rows.append(
+        {"id": "legacy", "name": "native-command", "labels": dict(ctx.sb.identity.labels), "running": True}
+    )
+    ctx.sb.close()
+    assert fleet.removed == [CID, "legacy"] and not fleet.rows and not fleet.commands
+    records = ctx.state.read_jsonl("external-processes.jsonl")
+    assert records[-1]["event"] == "cleaned" and records[-1]["call_id"] == attempt.call_id
+    proof_path = "external-cleanup-" + hashlib.sha256(attempt.call_id.encode()).hexdigest()[:16] + ".json"
+    (receipt,) = json.loads(ctx.state.read_control(proof_path))
+    assert receipt["resource_id"] == CID and receipt["status"] == "converged"
+    assert CallLedger(ctx.state).unreconciled_usd() == 2
+    assert ctx.sb.external_no_start_observation(attempt.call_id) is None
+
+
+@pytest.mark.parametrize("uncertainty", ["absent", "substituted", "unacknowledged"])
+def test_close_cannot_bypass_ambiguous_external_recovery_with_generic_removal(tmp_path, monkeypatch, uncertainty):
+    ctx = context(tmp_path)
+    fleet = Fleet(monkeypatch)
+    attempt = interrupted_attempt(ctx, fleet)
+    if uncertainty == "absent":
+        fleet.rows.clear()
+    elif uncertainty == "substituted":
+        fleet.rows[0]["id"] = OTHER_CID
+    else:
+        (intent, *_) = ctx.state.read_jsonl("external-processes.jsonl")
+        ctx.state.write_control("external-processes.jsonl", json.dumps(intent) + "\n")
+    with pytest.raises(StageError, match="unresolved"):
+        ctx.sb.close()
+    assert not fleet.removed and not fleet.commands
+    assert ctx.state.read_jsonl("external-processes.jsonl")[-1]["event"] != "cleaned"
+    assert CallLedger(ctx.state).unreconciled_usd() == 2
+    assert ctx.sb.external_no_start_observation(attempt.call_id) is None
+
+
 @pytest.mark.parametrize(
     "create",
     [

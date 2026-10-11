@@ -113,8 +113,10 @@ operator correlate a vendor session with the factory's durable call ledger.
 Candidate-provided cost or usage is never trusted. The response schema forbids those fields.
 Every invocation reserves its granted ceiling in the existing host call ledger before the
 executable starts. The no-charge fixture settles to zero. For a paid profile, even a successful
-response leaves usage unknown and the reservation charged until trusted provider evidence is
-reconciled through the existing `CallLedger.reconcile` observation path. This can exhaust the
+response leaves usage unknown and the reservation charged until an operator imports final
+billing evidence with `state reconcile-call`, through the existing `CallLedger.reconcile` path.
+The [paid-call recovery procedure](run-recovery.md#reconcile-a-paid-external-call) shows the
+strict observation format and required teardown proof. This can exhaust the
 run budget while output exists; it is intentional. Timeouts, malformed responses, and dead
 workers likewise cannot release potentially spent money.
 
