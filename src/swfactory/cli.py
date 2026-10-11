@@ -603,7 +603,7 @@ def maintain(
 
 # ---------------------------------------------------------------- local host-owned evidence
 
-state_app = typer.Typer(help="Inspect saved host run evidence without reconnecting to sandboxes.", no_args_is_help=True)
+state_app = typer.Typer(help="Inspect and reconcile host run evidence without reconnecting.", no_args_is_help=True)
 app.add_typer(state_app, name="state")
 
 
@@ -723,6 +723,48 @@ def state_reaccept(
         retired = accepted_inputs.reaccept(state, actor=actor, reason=reason)
     typer.echo(f"retired {retired.digest}; the next task admits the current inputs.")
     typer.echo("Re-answer every gate: approvals given for the retired inputs no longer publish.")
+
+
+@state_app.command("calls")
+def state_calls(
+    run_id: Annotated[str, typer.Argument(help="saved factory run ID")],
+    root: Annotated[Path, typer.Option(help="directory containing saved run directories")] = Path(".factory"),
+) -> None:
+    """Print saved call identities, reservations and observations as JSON without launching work."""
+    from swfactory.call_observations import ReconciliationRefused, list_calls
+    from swfactory.state import RunBusyError
+
+    with (
+        _fail("calls unavailable", OSError, ValueError, StageError, ReconciliationRefused, RunBusyError, code=1),
+        _fail("", FileNotFoundError, code=3),
+    ):
+        document = list_calls(root, run_id)
+    _echo_json(document)
+
+
+@state_app.command("reconcile-call")
+def state_reconcile_call(
+    run_id: Annotated[str, typer.Argument(help="saved factory run ID")],
+    call_id: Annotated[str, typer.Argument(help="host-owned call ID from state calls")],
+    observation: Annotated[Path, typer.Option(help="trusted provider observation JSON file")],
+    actor: Annotated[str, typer.Option(help="operator attesting this observation's authority")],
+    reason: Annotated[str, typer.Option(help="why this observation settles the saved call")],
+    root: Annotated[Path, typer.Option(help="directory containing saved run directories")] = Path(".factory"),
+) -> None:
+    """Reconcile saved provider usage on an identified operator's explicit attestation."""
+    from swfactory.call_observations import ReconciliationRefused, reconcile_call
+    from swfactory.state import RunBusyError
+
+    with (
+        _fail(
+            "call reconciliation refused", OSError, ValueError, StageError, ReconciliationRefused, RunBusyError, code=1
+        ),
+        _fail("", FileNotFoundError, code=3),
+    ):
+        if not actor.strip() or not reason.strip():
+            raise ValueError("actor and reason must be nonblank")
+        document = reconcile_call(root, run_id, call_id, observation=observation, actor=actor, reason=reason)
+    _echo_json(document)
 
 
 # ---------------------------------------------------------------- webhook (orchestrator on islo)

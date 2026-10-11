@@ -1230,6 +1230,11 @@ class DockerSandbox(_ConfinedHost):
                 "sandbox", f"previous external execution is unresolved: {error}", retryable=True
             ) from error
 
+    def recover_external(self) -> None:
+        """Reclaim recorded attempts before budget admission, without launching or settling money."""
+        if self.state is not None and self.state.has_control("external-processes.jsonl"):
+            self._reap_external()
+
     def _cleanup_external(
         self,
         name: str,
@@ -1321,6 +1326,10 @@ class DockerSandbox(_ConfinedHost):
         control state (``cleanup.json``); a container left behind is still labelled, so the
         backend's sweep (``maintain.sweep_containers``) finds it once its Cell is over.
         """
+        # External resources must retain their call-bound terminal evidence. A generic
+        # removal would make the next recovery see an absent, unresolved creation forever.
+        # Refuse teardown when exact recovery is unresolved; Airflow must not mark it cleaned.
+        self.recover_external()
         fleet = DockerContainers()
         requested_at = time.time()
         try:
@@ -1336,6 +1345,11 @@ class DockerSandbox(_ConfinedHost):
             if decision != CleanupDecision.REMOVE:
                 print(f"sandbox: refusing to remove container {row['id']}: {decision} (labels {row['labels']})")
                 continue
+            if row["labels"].get("swfactory.external") == "true":
+                self._record(
+                    [self._receipt(row["id"], "ambiguous", requested_at, detail="external call cleanup is unrecorded")]
+                )
+                raise StageError("sandbox", "external call lacks observed terminal cleanup", retryable=True)
             debt.record(row["id"], self.identity)
             try:
                 fleet.remove(row["id"])

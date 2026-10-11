@@ -166,6 +166,71 @@ The accounting is based on returned model costs and persisted stage results. A h
 before either is recorded can still leave unknown spend; `recorded_cost_usd` deliberately does
 not claim otherwise. Model-reported costs can overshoot a requested cap, which remains a failure.
 
+## Reconcile a paid external call
+
+Paid external harnesses keep their whole granted reservation charged until billing is observed.
+Inspect identities and outstanding amounts without constructing an agent or reconnecting to Docker:
+
+```sh
+uv run swfactory state calls <run-id> --root /path/to/.factory
+```
+
+Before importing a final bill, let the normal Airflow retry or teardown recover the exact owned
+Docker container. Cleanup runs even when the budget is exhausted; it does not launch another
+harness or release money. A free host lock or a candidate's successful output cannot establish
+that remote execution ended. Missing, contradictory or foreign Docker identity stays unresolved.
+
+Obtain the final aggregate charge (including any subprocess or subagent requests) from the
+provider for this exact call. Write an operator-owned JSON file outside both the checkout and
+factory state. Copy `call_id`, `accepted_inputs_digest` and `profile_binding_sha256` from `state
+calls`; use the original call binding even if the run has since reaccepted different inputs.
+For example, replace all placeholders in:
+
+```json
+{
+  "schema_version": 1,
+  "run_id": "<run-id>",
+  "call_id": "<call_id from state calls>",
+  "accepted_inputs_digest": "inputs:<64 hexadecimal characters>",
+  "profile_binding_sha256": "<64 hexadecimal characters>",
+  "provider": "<provider>",
+  "account_id": "<billing account>",
+  "request_id": "<request or aggregate identifier>",
+  "evidence_reference": "<final invoice or usage export reference>",
+  "observed_at": "2026-10-11T12:00:00Z",
+  "status": "committed",
+  "final": true,
+  "cost_usd": 0.37
+}
+```
+
+`observed_at` must include a timezone and be at or after factory-observed terminal Docker
+cleanup. Import it with an explicit actor and reason:
+
+```sh
+uv run swfactory state reconcile-call <run-id> '<call-id>' \
+  --root /path/to/.factory --observation /operator/final-bill.json \
+  --actor alice --reason "Verified final aggregate provider bill after Docker cleanup"
+```
+
+This is a human billing attestation: the CLI neither contacts the provider nor certifies that
+the references prove the charge. Do not import candidate files or inferred zero usage. A
+`definitely_absent` observation needs `final=true`, no `cost_usd`, and provider proof that no
+request was submitted. An `ambiguous` observation uses `final=false`, no `cost_usd`, and retains
+the full reservation; it can be recorded before cleanup but cannot authorize another attempt.
+
+The importer holds the run's existing ownership lock, archives the exact observation hash and
+operator provenance in host control state, then applies the existing ledger transition. Identical
+settled evidence is an idempotent replay; a different settlement is refused. A real bill above
+the grant is charged in full, so it may prevent further work. Resume only through the existing
+Airflow lifecycle after settlement and other gates allow it.
+
+New calls save their admitted profile binding in `state/external-calls/` before launching.
+Calls without that descriptor, including legacy calls or an interruption between reservation
+and descriptor persistence, remain charged and cannot be inferred through this importer. Local
+development execution also lacks the required Docker teardown proof. This recovery path does
+not qualify a paid harness's hard USD cap or grant autonomous approval authority.
+
 ## Deployment boundary
 
 The worker processes for a run must see the same trusted state directory on a filesystem with

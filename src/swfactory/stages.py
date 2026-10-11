@@ -440,6 +440,9 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
     Under srt the kernel ``denyWrite`` set follows the stage (``protected_for``): ``fix`` calls
     lose write access to the tests dir that ``build`` needed, matching the ``Edit(...)`` rules."""
     if ctx.cfg.agent == "external" and isinstance(ctx.sb, DockerSandbox):
+        # Reclaim an interrupted paid process even when its held grant exhausts the run.
+        # Cleanup proves execution stopped; it does not release unknown provider usage.
+        ctx.sb.recover_external()
         # A worker may have died after persisting a no-start proof but before reconciling the
         # ledger. Observe it before the ceiling check so a full reservation cannot hide recovery.
         recovering = CallLedger(ctx.state)
@@ -502,6 +505,36 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
             writable_paths=writable,
         )
     try:
+        if external:
+            binding = ctx.agent.binding
+            binding_json = json.dumps(
+                binding, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+            )
+            descriptor = {
+                "schema_version": 1,
+                "authority": "factory",
+                "run_id": ctx.cfg.run_id,
+                "call_id": attempt.call_id,
+                "accepted_inputs_digest": admitted_digest,
+                "profile": binding,
+                "profile_binding_sha256": hashlib.sha256(binding_json.encode()).hexdigest(),
+                "stage": stage,
+                "iteration": iteration,
+                "reserved_usd": granted,
+                "sandbox": ctx.sb.name,
+                "workdir": str(Path(ctx.sb.workdir).resolve()),
+                "sandbox_labels": dict(ctx.sb.identity.labels) if isinstance(ctx.sb, DockerSandbox) else {},
+                "created_at": datetime.now(UTC).isoformat(timespec="milliseconds"),
+            }
+            descriptor_path = "external-calls/" + hashlib.sha256(attempt.call_id.encode()).hexdigest() + ".json"
+            descriptor_content = json.dumps(descriptor, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n"
+            if ctx.state.has_control(descriptor_path):
+                if ctx.state.read_control(descriptor_path) != descriptor_content:
+                    raise StageError("policy", "external call descriptor is immutable and differs from this attempt")
+            else:
+                # The host descriptor survives a killed launcher before any result receipt
+                # exists. It never enters agent-writable checkout or artifact state.
+                ctx.state.write_control(descriptor_path, descriptor_content)
         res = ctx.agent.run(
             ctx.sb,
             stage=stage,

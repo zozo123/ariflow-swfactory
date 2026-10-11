@@ -121,6 +121,7 @@ protected = [
   "src/swfactory/boat.py",              # the boat sandbox backend and its BOAT_API_KEY bearer
   "src/swfactory/paths.py",             # confined_path and the repo/ref validators the sandboxes use
   "src/swfactory/stages.py",            # canonical stage semantics
+  "src/swfactory/call_observations.py", # operator billing authority cannot be candidate-edited
   "src/swfactory/stage_registry.py",    # managed stage dispatch, including Liquid review
   "src/swfactory/liquid_annealing.py",  # material-defect convergence and evidence semantics
   "src/swfactory/phase_control.py",       # factory-wide phase/mode contract is human-maintained
