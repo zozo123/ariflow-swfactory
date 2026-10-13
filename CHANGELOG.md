@@ -6,6 +6,12 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Add experimental `swfactory campaign-fusion build/verify`: compose two to four
+  retained sibling candidates into an exact patch proposal with contributor lineage
+  and deduplicated diagnostic observations. Refuse overlapping edits, protected paths
+  and changed evidence. Proposals remain search-only and require fresh product
+  verification; campaign selection, Airflow scheduling and publication are unchanged.
+
 ## [2.5.0] - 2026-10-09
 
 - Add native Linear work orders (#2362). `swfactory linear-preview <issue-uuid> --workspace-id …

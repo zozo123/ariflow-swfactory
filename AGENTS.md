@@ -16,6 +16,8 @@ This repository is an **Airflow-governed software atelier**:
 - Never place service/GitHub credentials in a stage sandbox.
 - Control-plane/protected paths are human-maintained. Missing, failed, skipped, or cancelled required evidence means **fail closed**.
 - Fix code, not the gate: do not weaken tests, policy, evidence, or protection to make CI green.
+- `campaign-fusion` produces search-only patch proposals. Integrity verification does not
+  establish passing product checks; composed bytes require fresh verification and review.
 
 ## Work
 

@@ -380,6 +380,11 @@ uv run --group airflow python -m swfactory.evals
 Rust contributors also run the workspace's formatting, clippy, test, and release-build checks;
 see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Rust workspace](rust/README.md).
 
+For complementary partial repairs, the experimental
+[candidate fusion command](docs/campaign-fusion.md) composes retained sibling patches
+and preserves diagnostic observations. The resulting artifact requires fresh product
+verification and review before delivery.
+
 [CI](.github/workflows/ci.yml) gives internal fan-out PRs the fast Python gate and main-targeted
 PRs the integration matrix. The pinned live-gate, SRT, Docker, and upstream sandbox-toolset jobs
 currently use `continue-on-error`; the separate [eval workflow](.github/workflows/evals.yml) is
