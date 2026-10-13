@@ -13,6 +13,7 @@ from swfactory.campaign_decision import (
     CampaignDecisionManifest,
     DecisionCandidate,
     DecisionSelection,
+    write_campaign_decision,
 )
 from swfactory.cli import app
 from swfactory.speculative_shadow import (
@@ -248,7 +249,7 @@ def test_writes_digest_bound_advisory_report(tmp_path: Path) -> None:
 def test_cli_refuses_missing_bound_candidate_evidence(tmp_path: Path) -> None:
     decision = campaign()
     source = tmp_path / "decision.json"
-    source.write_text(json.dumps(decision.canonical_dict()), encoding="utf-8")
+    write_campaign_decision(source, decision)
     observations_path = tmp_path / "observations.json"
     write_shadow_observations(observations_path, observations(decision, observation("repair")))
     destination = tmp_path / "advisory.json"
@@ -259,4 +260,53 @@ def test_cli_refuses_missing_bound_candidate_evidence(tmp_path: Path) -> None:
 
     assert result.exit_code == 2
     assert "campaign shadow:" in result.output
+    assert "candidate evidence membership mismatch" in result.output
     assert not destination.exists()
+
+
+
+def test_cli_writes_advisory_comparison_only_after_evidence_validation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from swfactory import campaign_decision
+
+    decision = campaign()
+    decision_path = tmp_path / "decision.json"
+    write_campaign_decision(decision_path, decision)
+    observations_path = tmp_path / "observations.json"
+    write_shadow_observations(
+        observations_path,
+        observations(decision, observation("repair", "failed"), observation("rethink", "passed")),
+    )
+    destination = tmp_path / "advisory.json"
+    calls: list[dict[str, Path]] = []
+
+    def checked(path: Path, evidence_paths: dict[str, Path], *, repo: Path):
+        assert path == decision_path
+        assert repo == Path(".")
+        calls.append(evidence_paths)
+        return decision
+
+    monkeypatch.setattr(campaign_decision, "verify_campaign_decision", checked)
+    result = CliRunner().invoke(
+        app,
+        [
+            "campaign-shadow",
+            "compare",
+            str(decision_path),
+            str(observations_path),
+            str(destination),
+            "--candidate-evidence",
+            "repair=/tmp/repair",
+            "--candidate-evidence",
+            "rethink=/tmp/rethink",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [{"repair": Path("/tmp/repair"), "rethink": Path("/tmp/rethink")}]
+    document = json.loads(destination.read_text(encoding="utf-8"))
+    assert document["suggested_candidate"] == "rethink"
+    assert document["authority"] == "advisory-only"
+    assert json.loads(result.stdout)["report_digest"] == document["report_digest"]
