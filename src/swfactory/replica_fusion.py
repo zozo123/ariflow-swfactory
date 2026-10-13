@@ -209,6 +209,22 @@ class FusionExperiment:
             ):
                 raise StageError("policy", f"fusion candidate escaped approved file scope: {path}")
 
+    def retain(self, child: stages.Ctx, identity: str, head: str) -> None:
+        # Concurrent fetches otherwise contend for FETCH_HEAD. Retain every
+        # verified continuation under a create-only ref, including failed checks,
+        # so GC cannot erase the evidence needed by a second round or retry.
+        with self.lock:
+            _git(
+                self.pool,
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "--no-write-fetch-head",
+                str(Path(child.sb.workdir).resolve()),
+                head,
+            )
+            _git(self.pool, "update-ref", candidate_ref(identity), head, "0" * 40)
+
     def attempt(
         self, round_number: int, role: str, base: str, failures: str, evidence: str, starting_patch: bytes | None = None
     ) -> dict[str, Any]:
@@ -267,7 +283,7 @@ class FusionExperiment:
                 self.scope(child, base, head)
                 row["head"] = head
                 row["verification"] = self.verify(child, identity)
-                _git(self.pool, "fetch", "--quiet", "--no-tags", str(Path(child.sb.workdir).resolve()), head)
+                self.retain(child, identity, head)
             else:
                 stages._ensure_clean(child, "fusion diagnostic", allow_artifacts=True)
                 stages._assert_workspace_head(child, "fusion diagnostic")
@@ -397,7 +413,7 @@ class FusionExperiment:
                 "cost_usd": 0.0,
                 "verification": self.verify(child, identity),
             }
-            _git(self.pool, "fetch", "--quiet", "--no-tags", str(Path(child.sb.workdir).resolve()), head)
+            self.retain(child, identity, head)
             self.progress["attempts"][identity] = row
             self.save()
             return row
