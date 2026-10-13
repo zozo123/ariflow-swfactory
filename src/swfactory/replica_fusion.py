@@ -200,12 +200,12 @@ class FusionExperiment:
         self.ctx.state.write_control(f"fusion-verification/{identity}.json", json.dumps(receipt, sort_keys=True) + "\n")
         return receipt
 
-    def scope(self, child: stages.Ctx, base: str, head: str) -> None:
+    def scope(self, child: stages.Ctx, base: str, head: str, stage: str = "build") -> None:
         if head == base:
             return
         for path, _, _ in _changes(Path(child.sb.workdir), base, head):
             if path not in self.plan.files or _is_protected(
-                path, (*FIXED_PROTECTED, *protected_for(self.contract, "build"))
+                path, (*FIXED_PROTECTED, *protected_for(self.contract, stage))
             ):
                 raise StageError("policy", f"fusion candidate escaped approved file scope: {path}")
 
@@ -244,7 +244,9 @@ class FusionExperiment:
             if starting_patch:
                 child.sb.write(".factory/fusion.patch.b64", base64.b64encode(starting_patch).decode())
                 stages._sh(child, "base64 -d .factory/fusion.patch.b64 | git apply --index")
-            stage = "build" if role in {"repair-a", "repair-b", "synthesis"} else "review"
+            stage = (
+                ("build" if round_number == 1 else "fix") if role in {"repair-a", "repair-b", "synthesis"} else "review"
+            )
             policy = dataclasses.replace(
                 stages._policy(child, stage),
                 timeout_s=self.spec.timeout_s,
@@ -281,7 +283,7 @@ class FusionExperiment:
             )
             if policy.writes:
                 head = stages.commit(child, stage="fusion", msg=f"fusion {identity}")
-                self.scope(child, base, head)
+                self.scope(child, base, head, stage)
                 row["head"] = head
                 row["verification"] = self.verify(child, identity)
                 self.retain(child, identity, head)
@@ -404,7 +406,7 @@ class FusionExperiment:
             child.sb.write(".factory/fusion.patch.b64", base64.b64encode(patch).decode())
             stages._sh(child, "base64 -d .factory/fusion.patch.b64 | git apply --index")
             head = stages.commit(child, stage="fusion", msg=f"fusion {identity}")
-            self.scope(child, base, head)
+            self.scope(child, base, head, "build" if number == 1 else "fix")
             row = {
                 "identity": identity,
                 "role": "composition",

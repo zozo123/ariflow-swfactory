@@ -245,3 +245,23 @@ def test_cancellation_during_preparation_stops_calls_and_settles_known_zero_usag
     assert not ctx.agent.calls
     assert not stages.CallLedger(ctx.state).unreconciled()
     assert stages.CallLedger(ctx.state).charged_usd() == 0
+
+
+def test_second_round_cannot_weaken_the_test_gate(tmp_path):
+    agent = ExperimentalAgent(second_round=True, broken_synthesis=True)
+    original = agent.run
+
+    def run(sb, **kwargs):
+        result = original(sb, **kwargs)
+        if kwargs["iteration"] >= 20 and kwargs["prompt"].splitlines()[0].endswith("repair-a"):
+            assert kwargs["stage"] == "fix"
+            sb.write("tests/test_obligations.py", "def test_skip_requirements():\n    assert True\n")
+        return result
+
+    agent.run = run
+    ctx = context(tmp_path, agent)
+    with pytest.raises(StageError, match="bounded rounds"):
+        work_stage.build_and_test(ctx)
+    progress = json.loads(ctx.state.read_control(CONTROL))
+    assert "file scope" in progress["attempts"]["round-2-repair-a"]["error"]
+    assert "assert left.correct" in (Path(ctx.sb.workdir) / "tests/test_obligations.py").read_text()
