@@ -43,7 +43,7 @@ NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$"
 # TOML top-level tables the schema knows; anything else is a typo, not an extension point.
 _SECTIONS = frozenset(
     ("blueprint", "trigger", "targets", "stages", "gates", "limits", "policy", "review")
-    + ("sandbox", "deliver", "work_source")
+    + ("sandbox", "deliver", "work_source", "fusion")
 )
 # ``blueprints/<name>.toml`` file names that map to a different ``blueprint.name``.
 _FILE_ALIASES = {DEFAULT_BLUEPRINT: "default"}
@@ -240,6 +240,27 @@ class Trigger(BaseModel):
         return self.max_active_runs or (1 if self.kind == "cron" else 16)
 
 
+class FusionSpec(BaseModel):
+    """An opt-in bounded experiment within the existing build stage."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    max_rounds: int = Field(default=2, ge=1, le=2)
+    max_parallel: int = Field(default=4, ge=1, le=4)
+    max_cost_usd: float = Field(default=2.0, gt=0)
+    timeout_s: int = Field(default=600, ge=1, le=1800)
+    models: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("models")
+    @classmethod
+    def _models(cls, models: dict[str, str]) -> dict[str, str]:
+        if set(models) - {"repair-a", "repair-b", "diagnostic", "challenger", "synthesis"}:
+            raise ValueError("fusion models must name one of the five bounded roles")
+        if any(not value.strip() for value in models.values()):
+            raise ValueError("fusion model names must not be blank")
+        return models
+
+
 class Blueprint(BaseModel):
     """A validated ``blueprints/<name>.toml``."""
 
@@ -258,12 +279,15 @@ class Blueprint(BaseModel):
     sandbox: SandboxSpec = Field(default_factory=SandboxSpec)
     labels: list[str] = Field(default_factory=lambda: ["factory", "agent-authored"])
     work_source: LinearWorkSource | None = None
+    fusion: FusionSpec | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         document = handler(self)
         if self.work_source is None:
             document.pop("work_source", None)
+        if self.fusion is None:
+            document.pop("fusion", None)
         return document
 
     # ------------------------------------------------------------ validation
@@ -280,6 +304,10 @@ class Blueprint(BaseModel):
         self.schedule_limits()  # a naive origin or a non-positive bound refuses to load, not to run
         if self.limits.budget_usd_per_stage > self.limits.budget_usd:
             raise ValueError("limits.budget_usd_per_stage must not exceed limits.budget_usd")
+        if self.fusion is not None and (
+            "build_and_test" not in self.order or self.fusion.max_cost_usd > self.limits.budget_usd
+        ):
+            raise ValueError("fusion requires a build stage and must fit the job budget")
         if self.sandbox.ttl_s <= self.gate_timeout_h * 3600:
             raise ValueError(
                 f"sandbox.ttl_s ({self.sandbox.ttl_s}) must exceed the longest gate timeout ({self.gate_timeout_h} h)"
@@ -499,7 +527,7 @@ def _flatten(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(blueprint, dict):
         raise ValueError("[blueprint] must be a table")
     out: dict[str, Any] = dict(blueprint)
-    for key in ("trigger", "targets", "gates", "limits", "policy", "review", "sandbox", "work_source"):
+    for key in ("trigger", "targets", "gates", "limits", "policy", "review", "sandbox", "work_source", "fusion"):
         if key in data:
             out[key] = data[key]
     stages = data.get("stages", {})

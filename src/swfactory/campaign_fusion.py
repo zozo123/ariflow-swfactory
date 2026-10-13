@@ -221,12 +221,16 @@ def _proposal(
         index = Path(scratch) / "index"
         _git(repo, "read-tree", base, index=index)
         entries = b"".join(
-            f"{mode} {object_id}\t{path}".encode("utf-8") + b"\0" for path, (mode, object_id) in sorted(edits.items())
+            f"{mode} {object_id}\t{path}".encode() + b"\0" for path, (mode, object_id) in sorted(edits.items())
         )
         _git(repo, "update-index", "-z", "--index-info", index=index, data=entries)
         tree = _git(repo, "write-tree", index=index).decode().strip()
     patch = _git(
         repo,
+        "-c",
+        "core.quotePath=true",
+        "-c",
+        "diff.suppressBlankEmpty=false",
         "diff",
         "--no-ext-diff",
         "--no-textconv",
@@ -237,6 +241,10 @@ def _proposal(
         "--dst-prefix=b/",
         "--diff-algorithm=myers",
         "--no-indent-heuristic",
+        "--unified=3",
+        "--inter-hunk-context=0",
+        "-O",
+        os.devnull,
         "--binary",
         "--full-index",
         base,

@@ -1,0 +1,14 @@
+diff --git a/src/calc/__init__.py b/src/calc/__init__.py
+index d78b989aacae7efb19ad643fb90795c70f6db617..9f032fac771bb1bc673d36dbd28bd341072a2dee 100644
+--- a/src/calc/__init__.py
++++ b/src/calc/__init__.py
+@@ -1,5 +1,5 @@
+ """calc: tiny finance helpers (demo target for the software factory)."""
+-
++
+-from calc.core import compound, simple_interest
++from calc.core import compound, percent_change, simple_interest
+-
++
+-__all__ = ["compound", "simple_interest"]
++__all__ = ["compound", "percent_change", "simple_interest"]

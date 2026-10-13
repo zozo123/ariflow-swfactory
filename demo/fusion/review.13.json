@@ -1,0 +1,5 @@
+{
+  "observations": [
+    "The new function must be exported, reject zero old values, and use (new - old) / old."
+  ]
+}

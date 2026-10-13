@@ -188,8 +188,9 @@ def evaluate_shadow_campaign(
         sorted(
             (
                 candidate_id,
-                by_id[candidate_id].result if candidate_id in by_id else
-                ("missing" if candidate.answered else candidate.state),
+                by_id[candidate_id].result
+                if candidate_id in by_id
+                else ("missing" if candidate.answered else candidate.state),
             )
             for candidate_id, candidate in candidates.items()
         )

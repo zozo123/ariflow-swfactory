@@ -401,4 +401,20 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
 
 
 def _git_bytes(repo: Path, *args: str) -> bytes:
+    if args and args[0] == "diff":
+        args = (
+            "-c",
+            "core.quotePath=true",
+            "-c",
+            "diff.suppressBlankEmpty=false",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--unified=3",
+            "--inter-hunk-context=0",
+            "-O",
+            os.devnull,
+            *args[1:],
+        )
     return git_output(repo, *args, error=CandidateEvidenceError, text=False)

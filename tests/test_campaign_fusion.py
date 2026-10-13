@@ -68,7 +68,7 @@ def siblings(
         )
         candidates.append(
             DecisionCandidate(
-                candidate_id, "repair", "ok", base, revision.output_head, revision.ref, bundle.digest(), (), 1, 1
+                candidate_id, "repair", "ok", base, revision.output_head, revision.ref, bundle.digest(), (), 1.0, 1.0
             )
         )
         remove_candidate_worktree(worktree)
@@ -264,3 +264,14 @@ def test_cli_build_and_integrity_verify_explain_fresh_verification_requirement(t
     verified = runner.invoke(app, ["campaign-fusion", "verify", str(decision_path), str(destination), *common])
     assert verified.exit_code == 0, verified.output
     assert "program verification still required" in verified.output
+
+
+def test_proposal_survives_operator_diff_format_changes(tmp_path: Path) -> None:
+    repo, _, decision_path, evidence = siblings(tmp_path)
+    destination = tmp_path / "fusion"
+    manifest = build_fusion_proposal(repo, decision_path, evidence, list(evidence), destination)
+    git(repo, "config", "diff.context", "0")
+    git(repo, "config", "diff.interHunkContext", "100")
+    git(repo, "config", "core.quotePath", "false")
+    git(repo, "config", "diff.suppressBlankEmpty", "true")
+    assert verify_fusion_proposal(repo, decision_path, evidence, destination) == manifest

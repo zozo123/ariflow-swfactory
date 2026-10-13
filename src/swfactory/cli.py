@@ -486,6 +486,9 @@ def demo(
     record: Annotated[str | None, typer.Option()] = None,
     allow_local_agent: Annotated[bool, typer.Option()] = False,
     run_id: Annotated[str | None, typer.Option()] = None,
+    fusion: Annotated[
+        bool, typer.Option(help="four-role, keyless replica-fusion replay with independent candidate checks")
+    ] = False,
 ) -> None:
     """Run the default line on demo/issue.md: scripted replay by default, the real path with
     --real."""
@@ -502,11 +505,17 @@ def demo(
             "gate_replay": str(SCRIPTED_REPLAY_FIXTURE),
         }
     )
+    bp = _load_blueprint(blueprint_mod.DEFAULT_BLUEPRINT)
+    if fusion:
+        from swfactory.blueprint import FusionSpec
+
+        bp = bp.model_copy(update={"fusion": FusionSpec()})
     _run_jobs(
-        _load_blueprint(blueprint_mod.DEFAULT_BLUEPRINT),
+        bp,
         ["demo/issue.md"],
         {
             **preset,
+            **({"fixtures_dir": "demo/fusion"} if fusion else {}),
             **_overrides(
                 agent=agent,
                 sandbox=sandbox,

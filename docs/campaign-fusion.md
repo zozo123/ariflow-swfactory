@@ -5,10 +5,81 @@ repair satisfies the complete product contract. `swfactory campaign-fusion`
 combines their disjoint regular-file changes into one new patch proposal while
 retaining the exact contributing revisions and diagnostic observations.
 
-This is an experimental controller-side search primitive. It does not run agents
-or tests, create worktrees, commit, update refs, change campaign selection, approve,
-publish, or promote. Airflow remains the lifecycle scheduler. A proposal always
-records `authority = "search-only"` and `verification = "required"`.
+The proposal commands are experimental controller-side search primitives. They do
+not run agents or tests, create worktrees, commit, update refs, change campaign
+selection, approve, publish, or promote. Airflow remains the lifecycle scheduler.
+A proposal always records `authority = "search-only"` and `verification = "required"`.
+
+## Execute the complete bounded workflow
+
+```sh
+uv run swfactory demo --fusion
+```
+
+This keyless scripted replay runs the normal intent and plan gates, four distinct
+checkpoint checkouts, independent candidate checks, composition, verification,
+review and local delivery. One repair adds the implementation and requirement
+tests; another adds the export. Both fail separately, while their composition
+passes all seven target tests. The demo is mechanism evidence, not a claim that
+scripted fixtures establish model performance or production-provider readiness.
+
+A trusted installed blueprint opts into the managed build runtime with:
+
+```toml
+[fusion]
+max_rounds = 2
+max_parallel = 4
+max_cost_usd = 2.0
+timeout_s = 600
+
+[fusion.models]
+repair-a = "claude-sonnet-4-5"
+repair-b = "claude-sonnet-4-5"
+```
+
+Omit `[fusion]` to retain the ordinary build path. Unknown fields and roles are
+refused. Model overrides are optional and do not imply statistically independent
+errors. Fusion parameters, approved plan and prompt content are bound to accepted
+inputs and a host-owned retry pin.
+
+The runtime currently supports scripted local replay and native Claude on the
+existing SRT/Docker boundaries. Local execution remains test-only. Remote islo,
+toolset and boat checkpoint transport and external harness execution fail closed
+before model spending; native memory forks are not claimed. Checkpoints carry
+source history, while each worker prepares locked dependencies separately.
+
+Each round runs two repair strategies, one diagnostic and one challenger. Workers
+leave edits uncommitted; the controller validates approved file scope, freezes
+source revisions and invokes the pinned contract's lint and test commands. Tests
+must produce fresh valid nonempty JUnit evidence. Diagnostic observations stay
+untrusted. Passing siblings are retained as fallbacks. Disjoint composition is
+tried first; overlaps or failing composition invoke one bounded semantic synthesis
+attempt using candidate diffs, observations and controller-observed failures.
+Every resulting program is checked afresh. If all programs fail, one retained
+continuation and its counterexamples guide the second and final round.
+
+The controller reserves the whole campaign before launch, limits individual
+model calls to shares of that reservation, and permits at most ten model calls
+and nine verifier invocations. Child Docker attempt identities are distinct.
+Credentials are projected through the existing sandbox boundary, never copied
+from Git configuration or carried in source checkpoints. Workers are drained and
+their disposable checkouts removed before adoption. A host-owned
+`fusion-cancelled` control file stops new work and adoption; running calls drain
+under their timeouts. Managed runs recheck the backend Cell epoch and policy.
+
+Completed attempts replay from receipts. An interrupted attempt is in doubt and
+requires reconciliation rather than a blind paid retry. On success, the
+controller adopts the selected patch into the governed workspace, requires its
+tree to equal the checked candidate, and runs final product verification there.
+Existing review, repair, evidence publication and authorized merge follow normally.
+No search result grants delivery authority.
+
+The delivery evidence includes `replica-fusion-report.json`: pinned inputs,
+round lineage, all attempt outcomes, exact source/recipe-bound check receipts,
+counterexamples, winning artifact, final verification, cost and fusion-only status.
+The Git pool and candidate bundles remain in host-owned run storage. A fusion-only
+win means the composed/synthesized candidate passed while both individual repair
+candidates had completed failing checks; missing checks never count as failures.
 
 ## Build from retained sibling evidence
 
@@ -115,8 +186,6 @@ candidate and run the required product verification and review on those exact
 bytes. Contributor test results never transfer to the composed program. Review
 repairs require fresh verification too. Missing required evidence remains a refusal.
 
-This first increment deliberately does not wire fusion into the default managed
-build stage, execute a model synthesizer or start a second repair round. Those
-integrations need their own budget reservations, journalled attempts, cancellation
-and epoch checks. The artifact contract provides a concrete starting point without
-changing the existing scheduling or publication boundary.
+The standalone proposal commands remain useful independently of the managed
+runtime. They never activate a blueprint or inherit the runtime's acceptance
+receipts. A proposal's integrity check still cannot replace product verification.

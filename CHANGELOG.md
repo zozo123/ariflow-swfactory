@@ -11,6 +11,13 @@ All notable changes to this project will be documented here. The format follows
   and deduplicated diagnostic observations. Refuse overlapping edits, protected paths
   and changed evidence. Proposals remain search-only and require fresh product
   verification; campaign selection, Airflow scheduling and publication are unchanged.
+- Add opt-in `[fusion]` managed build execution: four distinct checkpoint checkouts,
+  diagnostic observations, trusted candidate checks, deterministic composition or
+  semantic synthesis, a passing fallback and at most two counterexample-guided rounds.
+  Reserve campaign spending before fan-out and retain exact verification/lineage
+  receipts. `swfactory demo --fusion` exercises a fusion-only win through review and
+  local delivery. Native Claude uses SRT/Docker; local replay is scripted and remote
+  checkpoint/external-harness combinations remain refused.
 
 ## [2.5.0] - 2026-10-09
 
