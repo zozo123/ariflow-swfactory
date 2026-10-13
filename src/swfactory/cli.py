@@ -1438,6 +1438,51 @@ def campaign_decision_verify(
         typer.echo(f"verified {manifest.campaign_id} {manifest.digest()}")
 
 
+campaign_shadow_app = typer.Typer(
+    help="Compare speculative verifier observations without changing campaign selection or release authority.",
+    no_args_is_help=True,
+)
+app.add_typer(campaign_shadow_app, name="campaign-shadow")
+
+
+@campaign_shadow_app.command("compare")
+def campaign_shadow_compare(
+    decision_path: Annotated[Path, typer.Argument(help="retained campaign decision manifest")],
+    observations_path: Annotated[Path, typer.Argument(help="digest-bound shadow verifier observations")],
+    destination: Annotated[Path, typer.Argument(help="output advisory comparison JSON")],
+    repo_path: Annotated[Path, typer.Option("--repo", help="local Git repository")] = Path("."),
+    candidate_evidence: Annotated[
+        list[str] | None,
+        typer.Option("--candidate-evidence", help="CANDIDATE_ID=BUNDLE_DIR; required for every answered candidate"),
+    ] = None,
+    json_out: Annotated[bool, typer.Option("--json", help="print the advisory report")] = False,
+) -> None:
+    """Verify all candidate bundles before comparing untrusted shadow observations."""
+    from swfactory.campaign_decision import CampaignDecisionError, verify_campaign_decision
+    from swfactory.candidate_evidence import CandidateEvidenceError
+    from swfactory.speculative_shadow import (
+        ShadowCampaignError,
+        evaluate_shadow_campaign,
+        load_shadow_observations,
+        write_shadow_report,
+    )
+
+    with _fail("campaign shadow", *_JSON_INPUT, CampaignDecisionError, CandidateEvidenceError, ShadowCampaignError):
+        paths = _named_paths(
+            candidate_evidence, "--candidate-evidence must be CANDIDATE_ID=PATH", "duplicate candidate evidence"
+        )
+        decision = verify_campaign_decision(decision_path, paths, repo=repo_path)
+        observations = load_shadow_observations(observations_path)
+        report = evaluate_shadow_campaign(decision, observations)
+        write_shadow_report(destination, report)
+    if json_out:
+        document = report.canonical_dict()
+        document["report_digest"] = report.digest()
+        _echo_json(document)
+    else:
+        typer.echo(f"{destination}  {report.digest()}  (advisory only)")
+
+
 @app.command("phase-assess")
 def phase_assess_cmd(
     observation_path: Annotated[Path, typer.Argument(help="JSON file containing phase order parameters")],
