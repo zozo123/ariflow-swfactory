@@ -226,3 +226,22 @@ def test_stale_backend_cell_epoch_refuses_before_spending_or_launch(tmp_path, mo
         work_stage.build_and_test(ctx)
     assert not ctx.agent.calls
     assert not ctx.state.has_control("replica-fusion-budget.json")
+
+
+def test_cancellation_during_preparation_stops_calls_and_settles_known_zero_usage(tmp_path, monkeypatch):
+    from swfactory.replica_fusion import FusionExperiment
+
+    ctx = context(tmp_path, ExperimentalAgent())
+    original = FusionExperiment.workspace
+
+    def workspace(self, *args):
+        child = original(self, *args)
+        ctx.state.write_control("fusion-cancelled", "true")
+        return child
+
+    monkeypatch.setattr(FusionExperiment, "workspace", workspace)
+    with pytest.raises(StageError, match="cancelled"):
+        work_stage.build_and_test(ctx)
+    assert not ctx.agent.calls
+    assert not stages.CallLedger(ctx.state).unreconciled()
+    assert stages.CallLedger(ctx.state).charged_usd() == 0

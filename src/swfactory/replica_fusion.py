@@ -271,6 +271,7 @@ class FusionExperiment:
                     return original.run(sb, **{**kwargs, "policy": policy})
 
             child.agent = BoundAgent()
+            self.fence()  # Dependency preparation may have outlived a cancellation or epoch change.
             result = stages._agent(
                 child,
                 stage,
@@ -587,5 +588,13 @@ def execute_fusion_stage(ctx: stages.Ctx) -> StageResult:
         return experiment.adopt(winner)
     except BaseException as error:
         if ledger.record(attempt.call_id).settled_usd is None:
-            ledger.mark_unknown(attempt, error)
+            rows = experiment.progress["attempts"].values()
+            if any(row["state"] == "in-flight" or row.get("usage_unknown") for row in rows):
+                ledger.mark_unknown(attempt, error)
+            else:
+                ledger.settle(
+                    attempt,
+                    cost_usd=sum(row.get("cost_usd", 0.0) for row in rows),
+                    receipt={"fusion_pin": experiment.pin, "outcome": "failed-with-known-usage"},
+                )
         raise
