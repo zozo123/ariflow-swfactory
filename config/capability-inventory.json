@@ -447,6 +447,27 @@
         "autonomous issue-to-merge"
       ],
       "follow_up": "Validate an eligible documentation issue through a deployed backend, Airflow, real GitHub checks, and real SHA-fenced merge."
+    },
+    {
+      "id": "factory.replica-fusion",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Within one Airflow-owned build task, bounded isolated-checkout experiments retain lineage and counterexamples; adoption requires exact candidate-tree identity and fresh product verification, with review and publication retaining their existing authority.",
+      "owner": "search+evidence",
+      "runtime_entry": "swfactory.work_stage.build_and_test -> swfactory.replica_fusion.execute_fusion_stage",
+      "environment": "keyless scripted local replay; native Claude adapters use existing SRT/Docker confinement; remote checkpoint transport and external harness execution are refused",
+      "test": "tests/test_replica_fusion.py and tests/test_campaign_fusion.py; ci:test-core fusion demo step",
+      "evidence": [
+        "tests/test_replica_fusion.py",
+        "tests/test_campaign_fusion.py",
+        "docs/campaign-fusion.md"
+      ],
+      "public_surface": [
+        "replica fusion",
+        "campaign-fusion",
+        "counterexample-guided synthesis"
+      ],
+      "follow_up": "Validate native confined providers in managed deployments and compare held-out tasks against single-agent and best-of-four runs with matched total budgets; scripted fixed-pool success is mechanism evidence only."
     }
   ]
 }

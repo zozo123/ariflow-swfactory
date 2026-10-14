@@ -141,9 +141,7 @@ def test_missing_verification_causes_explicit_abstention() -> None:
 
 def test_cancelled_campaign_cannot_claim_shadow_winner() -> None:
     decision = campaign(cancelled=True)
-    report = evaluate_shadow_campaign(
-        decision, observations(decision, observation("repair"), observation("rethink"))
-    )
+    report = evaluate_shadow_campaign(decision, observations(decision, observation("repair"), observation("rethink")))
     assert report.cancelled is True
     assert report.suggested_candidate is None
     assert report.agrees_with_existing is None
@@ -158,9 +156,7 @@ def test_failed_candidate_is_retained_but_must_not_claim_verifier_result() -> No
     assert report.suggested_candidate == "repair"
 
     with pytest.raises(ShadowCampaignError, match="provisional candidate"):
-        evaluate_shadow_campaign(
-            decision, observations(decision, observation("repair"), observation("rethink"))
-        )
+        evaluate_shadow_campaign(decision, observations(decision, observation("repair"), observation("rethink")))
 
 
 def test_no_reported_passes_does_not_select_a_winner() -> None:
@@ -233,9 +229,7 @@ def test_tampered_observations_are_detected(tmp_path: Path) -> None:
 
 def test_writes_digest_bound_advisory_report(tmp_path: Path) -> None:
     decision = campaign()
-    report = evaluate_shadow_campaign(
-        decision, observations(decision, observation("repair"), observation("rethink"))
-    )
+    report = evaluate_shadow_campaign(decision, observations(decision, observation("repair"), observation("rethink")))
     destination = tmp_path / "report.json"
 
     write_shadow_report(destination, report)
@@ -262,7 +256,6 @@ def test_cli_refuses_missing_bound_candidate_evidence(tmp_path: Path) -> None:
     assert "campaign shadow:" in result.output
     assert "candidate evidence membership mismatch" in result.output
     assert not destination.exists()
-
 
 
 def test_cli_writes_advisory_comparison_only_after_evidence_validation(

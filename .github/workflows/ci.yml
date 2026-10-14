@@ -24,6 +24,8 @@ jobs:
       - run: uv run python -m swfactory.capability_inventory
       - name: e2e demo (scripted agent, local runner, local git remote)
         run: uv run swfactory demo
+      - name: e2e replica fusion (partial repairs, exact verification, review, local delivery)
+        run: uv run swfactory demo --fusion
 
   # The scripted eval suite is part of final fan-in, not a best-effort side workflow. It is
   # hermetic and keyless, so there is no reason to omit it from candidate acceptance.

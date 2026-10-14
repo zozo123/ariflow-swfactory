@@ -359,6 +359,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `factory.adaptive-information-budget` | `experimental` | `swfactory.adaptive_information; swfactory population-budget; swfactory.recursive_search.plan_adaptive_round; managed population stage retention` | tests/test_adaptive_information.py and tests/test_recursive_search.py |
 | `factory.formal-claims` | `experimental` | `formal/authority/AuthorityKernel.tla` | formal/authority/AuthorityKernel.tla (TLC model; not run in CI) |
 | `autonomous.issue-to-merge` | `experimental` | `swfactory.backend.autonomous_service -> Airflow autonomous DAG` | tests/test_autonomy.py and tests/test_dag_parity.py |
+| `factory.replica-fusion` | `experimental` | `swfactory.work_stage.build_and_test -> swfactory.replica_fusion.execute_fusion_stage` | tests/test_replica_fusion.py and tests/test_campaign_fusion.py; ci:test-core fusion demo step |
 
 <!-- capability-inventory:end -->
 
@@ -379,6 +380,12 @@ uv run --group airflow python -m swfactory.evals
 
 Rust contributors also run the workspace's formatting, clippy, test, and release-build checks;
 see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Rust workspace](rust/README.md).
+
+For complementary partial repairs, the experimental
+[candidate fusion workflow](docs/campaign-fusion.md) runs bounded repair and diagnostic
+experiments, composes or synthesizes their contributions, checks the resulting program,
+and retains a passing fallback. Run `uv run swfactory demo --fusion` for the keyless
+end-to-end replay; trusted blueprints opt into the managed runtime with `[fusion]`.
 
 [CI](.github/workflows/ci.yml) gives internal fan-out PRs the fast Python gate and main-targeted
 PRs the integration matrix. The pinned live-gate, SRT, Docker, and upstream sandbox-toolset jobs

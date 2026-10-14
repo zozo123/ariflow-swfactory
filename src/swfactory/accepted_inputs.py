@@ -125,7 +125,7 @@ STAGE_PROMPTS: dict[str, tuple[str, ...]] = {
     "intent": (),  # deterministic front-matter over the issue body; no agent call
     "spec": ("spec",),
     "plan": ("plan",),
-    "build_and_test": ("build", "fix", "build_node"),  # iteration 1 builds; later ones fix; workgraph nodes
+    "build_and_test": ("build", "fix", "build_node", "fusion"),
     "review": ("review", "fix"),  # a blocker round re-enters the fix template
     "deliver": (),  # PR body and receipt are code
 }

@@ -449,6 +449,10 @@ def _load_plan(ctx: stages.Ctx) -> Plan | None:
 @stages._resumable
 def build_and_test(ctx: stages.Ctx) -> StageResult:
     """Airflow-managed build stage with real ``Plan.work`` semantics and legacy fallback."""
+    if ctx.blueprint is not None and ctx.blueprint.fusion is not None:
+        from swfactory.replica_fusion import execute_fusion_stage
+
+        return execute_fusion_stage(ctx)
     spec_text = stages._read_or(ctx, f"{ctx.art}/spec.md")
     plan_text = ctx.read_artifact(f"{ctx.art}/plan.md")
     plan = _load_plan(ctx)

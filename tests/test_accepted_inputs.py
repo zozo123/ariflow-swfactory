@@ -588,9 +588,12 @@ def _rendered_in(module: object) -> dict[str, set[str]]:
 def test_a_stage_cannot_render_a_template_the_epoch_does_not_pin() -> None:
     """The drift guard. Adding a ``render_prompt`` call to a stage body without extending
     ``STAGE_PROMPTS`` would put a live instruction back outside the digest -- #2098 again."""
-    from swfactory import work_stage
+    from swfactory import replica_fusion, work_stage
 
-    rendered = {name: _rendered_in(mod) for name, mod in (("stages", stages), ("work_stage", work_stage))}
+    rendered = {
+        name: _rendered_in(mod)
+        for name, mod in (("stages", stages), ("work_stage", work_stage), ("replica_fusion", replica_fusion))
+    }
     assert rendered["stages"], "no render_prompt call site found: the derivation broke, not the code"
 
     pinned = set().union(*accepted_inputs.STAGE_PROMPTS.values())
@@ -607,7 +610,8 @@ def test_a_stage_cannot_render_a_template_the_epoch_does_not_pin() -> None:
     for stage, names in rendered["stages"].items():
         if stage in accepted_inputs.STAGE_PROMPTS:
             declared = set(accepted_inputs.STAGE_PROMPTS[stage])
-            expected = names | (workgraph if stage == "build_and_test" else set())
+            fusion = set().union(*rendered["replica_fusion"].values())
+            expected = names | (workgraph | fusion if stage == "build_and_test" else set())
             assert expected == declared, f"{stage} renders {sorted(expected)} but the epoch pins {sorted(declared)}"
 
 

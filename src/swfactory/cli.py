@@ -486,6 +486,9 @@ def demo(
     record: Annotated[str | None, typer.Option()] = None,
     allow_local_agent: Annotated[bool, typer.Option()] = False,
     run_id: Annotated[str | None, typer.Option()] = None,
+    fusion: Annotated[
+        bool, typer.Option(help="four-role, keyless replica-fusion replay with independent candidate checks")
+    ] = False,
 ) -> None:
     """Run the default line on demo/issue.md: scripted replay by default, the real path with
     --real."""
@@ -502,11 +505,17 @@ def demo(
             "gate_replay": str(SCRIPTED_REPLAY_FIXTURE),
         }
     )
+    bp = _load_blueprint(blueprint_mod.DEFAULT_BLUEPRINT)
+    if fusion:
+        from swfactory.blueprint import FusionSpec
+
+        bp = bp.model_copy(update={"fusion": FusionSpec()})
     _run_jobs(
-        _load_blueprint(blueprint_mod.DEFAULT_BLUEPRINT),
+        bp,
         ["demo/issue.md"],
         {
             **preset,
+            **({"fixtures_dir": "demo/fusion"} if fusion else {}),
             **_overrides(
                 agent=agent,
                 sandbox=sandbox,
@@ -1436,6 +1445,73 @@ def campaign_decision_verify(
         _echo_json(document)
     else:
         typer.echo(f"verified {manifest.campaign_id} {manifest.digest()}")
+
+
+campaign_fusion_app = typer.Typer(
+    help="Compose retained sibling patches into an evidence-bound proposal requiring fresh verification.",
+    no_args_is_help=True,
+)
+app.add_typer(campaign_fusion_app, name="campaign-fusion")
+
+
+@campaign_fusion_app.command("build")
+def campaign_fusion_build(
+    decision_path: Annotated[Path, typer.Argument(help="retained campaign decision manifest")],
+    destination: Annotated[Path, typer.Argument(help="new directory for the fusion patch and manifest")],
+    include: Annotated[list[str], typer.Option("--include", help="candidate ID; select two to four siblings")],
+    repo_path: Annotated[Path, typer.Option("--repo", help="local Git repository")] = Path("."),
+    candidate_evidence: Annotated[
+        list[str] | None,
+        typer.Option("--candidate-evidence", help="CANDIDATE_ID=BUNDLE_DIR; required for every answered sibling"),
+    ] = None,
+    observations: Annotated[Path | None, typer.Option(help="campaign-bound untrusted diagnostic observations")] = None,
+) -> None:
+    """Compose disjoint regular-file changes without committing, approving or running candidate code."""
+    from swfactory.campaign_decision import CampaignDecisionError
+    from swfactory.campaign_fusion import CampaignFusionError, build_fusion_proposal
+    from swfactory.candidate_evidence import CandidateEvidenceError
+    from swfactory.canonical import json_digest
+
+    with _fail("campaign fusion", *_JSON_INPUT, CampaignDecisionError, CandidateEvidenceError, CampaignFusionError):
+        paths = _named_paths(
+            candidate_evidence, "--candidate-evidence must be CANDIDATE_ID=PATH", "duplicate candidate evidence"
+        )
+        manifest = build_fusion_proposal(
+            repo_path, decision_path, paths, include, destination, observations_path=observations
+        )
+    typer.echo(f"{destination / 'manifest.json'}  {json_digest(manifest)}")
+    typer.echo(f"{destination / 'candidate.diff'}  (search proposal; fresh verification required)")
+
+
+@campaign_fusion_app.command("verify")
+def campaign_fusion_verify(
+    decision_path: Annotated[Path, typer.Argument(help="original retained campaign decision manifest")],
+    destination: Annotated[Path, typer.Argument(help="fusion proposal directory")],
+    repo_path: Annotated[Path, typer.Option("--repo", help="local Git repository")] = Path("."),
+    candidate_evidence: Annotated[
+        list[str] | None,
+        typer.Option("--candidate-evidence", help="CANDIDATE_ID=BUNDLE_DIR; required for every answered sibling"),
+    ] = None,
+    observations: Annotated[
+        Path | None, typer.Option(help="original diagnostic observations, if supplied at build")
+    ] = None,
+    json_out: Annotated[bool, typer.Option("--json", help="print the reconstructed proposal manifest")] = False,
+) -> None:
+    """Reconstruct artifact integrity and lineage; does not establish passing tests or promotion eligibility."""
+    from swfactory.campaign_decision import CampaignDecisionError
+    from swfactory.campaign_fusion import CampaignFusionError, verify_fusion_proposal
+    from swfactory.candidate_evidence import CandidateEvidenceError
+    from swfactory.canonical import json_digest
+
+    with _fail("campaign fusion", *_JSON_INPUT, CampaignDecisionError, CandidateEvidenceError, CampaignFusionError):
+        paths = _named_paths(
+            candidate_evidence, "--candidate-evidence must be CANDIDATE_ID=PATH", "duplicate candidate evidence"
+        )
+        manifest = verify_fusion_proposal(repo_path, decision_path, paths, destination, observations_path=observations)
+    if json_out:
+        _echo_json({**manifest, "manifest_digest": json_digest(manifest)})
+    else:
+        typer.echo(f"integrity verified {json_digest(manifest)}; program verification still required")
 
 
 campaign_shadow_app = typer.Typer(
