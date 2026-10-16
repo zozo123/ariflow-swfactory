@@ -341,7 +341,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `mutation.github` | `supported` | `swfactory.core_capabilities.CoreCapabilityRuntime.execute_external via ControlKernel` | tests/test_core_capabilities.py (fenced, replayed and evidenced execute_external) |
 | `recovery.external-effects` | `supported` | `swfactory.idempotency.OperationJournal and swfactory.operation_recovery` | tests/test_recovery_acceptance.py |
 | `workgraph.serial` | `supported` | `swfactory.work_stage.build_and_test (the Airflow build task dags/blueprints.py selects) -> bounded Plan.work execution` | tests/test_workgraph_stage_execution.py |
-| `workgraph.provider-fork` | `experimental` | `swfactory.work_executor.WorkExecutor and swfactory.execution_binding` | tests/test_work_executor.py (parallel fan-out, conflict, crash and cancellation scenarios) |
+| `workgraph.provider-fork` | `experimental` | `swfactory.work_stage.build_and_test -> swfactory.fork_wave.run_wave (WorkExecutor fan-out/fan-in over swfactory.boat.BoatSandbox forks; opt-in limits.max_parallel_forks)` | tests/test_fork_wave_e2e.py (fork wave end to end over the measured boat lifecycle: fan-out, node-id-ordered fan-in, halt on failure, scope conflict, stale snapshot, crash recovery; opt-in live boat.dev run) plus tests/test_work_executor.py |
 | `sandbox.local-scripted` | `test_only` | `swfactory demo` | ci:test-core mandatory leg (its e2e demo step) plus tests/test_stages_scripted.py |
 | `sandbox.srt` | `experimental` | `swfactory.sandbox.SrtSandbox` | ci:srt-smoke plus the SrtSandbox argv contracts in tests/test_sandbox_argv.py |
 | `sandbox.docker` | `experimental` | `swfactory.sandbox Docker path` | ci:docker-smoke |

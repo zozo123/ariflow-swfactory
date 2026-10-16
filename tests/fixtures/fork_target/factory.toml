@@ -1,0 +1,11 @@
+# The product a fork-wave run builds in tests/test_fork_wave_e2e.py, hermetically and on boat.dev.
+# Its verification is the merged result: three sibling files written in three forked cells and an
+# index written afterwards, in the parent, from what fanned in.
+[commands]
+test = "sh check.sh"
+
+[paths]
+source = "src"
+tests = "tests"
+junit = ".factory/junit.xml"
+protected = ["factory.toml", "check.sh"]

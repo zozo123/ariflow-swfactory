@@ -132,5 +132,6 @@ at the wave's exact Git SHA, finish dependency setup, and park at the branch-rea
 launching agents or injecting their credentials. Keep checkouts on guest-owned disks. Record
 Cell/epoch/node/attempt/parent/child/input SHA outside the guest; bind cancellation to actual VM
 termination. Merge patches in stable order, reverify the combined candidate, then prepare the
-next wave from that new SHA. The current `WorkExecutor` callback does not directly cancel an
-in-flight runner; enabling `fork=True` alone would not implement this contract.
+next wave from that new SHA. Enabling `fork=True` alone would not implement this contract: the
+adapter must also implement `swfactory.fork_wave.ForkableSandbox` (park, fork with a recorded id,
+reclaim by idempotency key, halt, reap, resume), as `BoatSandbox` does.

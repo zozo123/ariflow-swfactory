@@ -125,6 +125,7 @@ class Limits(BaseModel):
     budget_usd: float = Field(default=8.0, gt=0)  # per JOB, not per DAG run
     stage_timeout_h: int = Field(default=3, ge=1)
     max_parallel_jobs: int = Field(default=4, ge=1)
+    max_parallel_forks: int = Field(default=1, ge=1, le=16)  # forked cells per Plan.work wave
 
 
 class PolicyOverride(BaseModel):
@@ -495,6 +496,7 @@ class Blueprint(BaseModel):
             "max_budget_usd": self.limits.budget_usd,
             "stage_timeout_h": self.limits.stage_timeout_h,
             "max_parallel_jobs": self.limits.max_parallel_jobs,
+            "max_parallel_forks": self.limits.max_parallel_forks,
             "gate_timeout_h": self.gate_timeout_h,
         }
         values.update({k: v for k, v in overrides.items() if v is not None})

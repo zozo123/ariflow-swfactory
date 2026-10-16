@@ -243,6 +243,9 @@ pub struct Limits {
     pub stage_timeout_h: u32,
     /// `max_active_tis_per_dagrun`, i.e. concurrent sandboxes.
     pub max_parallel_jobs: u32,
+    /// Forked child cells one parallel-safe `Plan.work` wave may run at once; 1 keeps every node
+    /// in the shared workspace (`swfactory.fork_wave`).
+    pub max_parallel_forks: u32,
 }
 
 impl Default for Limits {
@@ -255,6 +258,7 @@ impl Default for Limits {
             budget_usd: 8.0,
             stage_timeout_h: 3,
             max_parallel_jobs: 4,
+            max_parallel_forks: 1,
         }
     }
 }
@@ -692,6 +696,11 @@ impl Blueprint {
         if l.max_parallel_jobs < 1 {
             return Err(BlueprintError::invalid(
                 "limits.max_parallel_jobs must be >= 1",
+            ));
+        }
+        if !(1..=16).contains(&l.max_parallel_forks) {
+            return Err(BlueprintError::invalid(
+                "limits.max_parallel_forks must be in [1, 16]",
             ));
         }
         if !(l.budget_usd_per_stage.is_finite() && l.budget_usd.is_finite()) {
@@ -1220,6 +1229,23 @@ order = ["intent", "deliver"]
             err(&text),
             "limits.budget_usd_per_stage must not exceed limits.budget_usd"
         );
+    }
+
+    #[test]
+    fn fork_fan_out_is_opt_in_and_bounded_like_the_python_limits() {
+        let bp = match parse(MINIMAL) {
+            Ok(bp) => bp,
+            Err(e) => panic!("{e}"),
+        };
+        assert_eq!(bp.limits.max_parallel_forks, 1);
+        let text = |n: u32| format!("{MINIMAL}\n[limits]\nmax_parallel_forks = {n}\n");
+        assert!(parse(&text(4)).is_ok());
+        for bad in [0, 17] {
+            assert_eq!(
+                err(&text(bad)),
+                "limits.max_parallel_forks must be in [1, 16]"
+            );
+        }
     }
 
     #[test]

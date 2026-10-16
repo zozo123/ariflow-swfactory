@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # A synthetic key: only ever a value in memory, never something a real account answers to.
 KEY = "boat_synthetic_key_do_not_print"
 REPO = "jop8281/zozo123-genworld"
-WORKDIR = "/workspace/zozo123-genworld/code"
+WORKDIR = "/home/user/workspace/zozo123-genworld/code"
 
 
 def _cfg(**kw: object) -> Config:
@@ -142,9 +142,9 @@ def test_ensure_creates_a_small_vm_clones_the_target_and_persists_the_id(tmp_pat
     assert client.created == [{"machine_type": "small", "ttl_s": 10_800}]
     assert client.waited_ready == ["boat-1"]
     commands = _commands(client)
-    assert "mkdir -p /workspace/zozo123-genworld" in commands
+    assert "mkdir -p /home/user/workspace/zozo123-genworld" in commands
     assert f"git clone --depth 1 --branch stabilize/main https://github.com/{REPO}.git zozo123-genworld" in commands
-    assert "test -d /workspace/zozo123-genworld/code" in commands
+    assert "test -d /home/user/workspace/zozo123-genworld/code" in commands
     assert sandbox.workdir == WORKDIR
     assert json.loads(RunState(tmp_path).read_control(BOAT_STATE_FILE)) == {"sandbox_id": "boat-1"}
 
@@ -527,3 +527,132 @@ def test_the_default_base_url_applies_without_an_override(monkeypatch) -> None:
     client = boat_client_from_env()
     assert client.base_url == boat_mod.BOAT_DEFAULT_BASE_URL
     assert KEY not in repr(client)
+
+
+# ---------------------------------------------------------------- fork and resume (forkable cell)
+
+
+def test_fork_carries_an_idempotency_key_noenv_and_an_explicit_child_lease(monkeypatch) -> None:
+    """Shape read off @boatdev/sdk 1.9.9 ``ForkRequest`` and observed live: a 202 whose ``id`` is the
+    child. The fork does not inherit the parent's TTL, so the lease is always sent."""
+    payloads = {
+        ("POST", "/sandboxes/sb-1/fork"): {"ok": True, "type": "sandbox.forking", "id": "sb-2", "status": "forking"},
+    }
+    client, calls = _client(monkeypatch, payloads)
+    assert client.fork("sb-1", ttl_s=3600, idempotency_key="swf-fork-abc") == "sb-2"
+    (request, _) = calls[0]
+    assert request.full_url == "https://boat.test/api/v1/sandboxes/sb-1/fork"
+    assert request.get_header("Idempotency-key") == "swf-fork-abc"
+    assert request.get_header("Authorization") == f"Bearer {KEY}"
+    assert json.loads(request.data) == {"noEnv": True, "ttlSeconds": 3600}
+
+
+def test_a_fork_answering_no_child_or_the_parent_itself_is_refused(monkeypatch) -> None:
+    for answer in ({"ok": True, "type": "sandbox.forking"}, {"ok": True, "type": "sandbox.forking", "id": "sb-1"}):
+        client, _ = _client(monkeypatch, {("POST", "/sandboxes/sb-1/fork"): answer})
+        with pytest.raises(BoatError, match="fork returned"):
+            client.fork("sb-1", ttl_s=60, idempotency_key="k")
+
+
+def test_fork_refuses_a_bad_key_or_lease_before_the_network(monkeypatch) -> None:
+    calls = transport(monkeypatch)
+    client = boat_mod.HttpBoatClient(KEY, "https://boat.test/api/v1")
+    with pytest.raises(BoatError, match="idempotency key"):
+        client.fork("sb-1", ttl_s=60, idempotency_key="has space")
+    with pytest.raises(BoatError, match="positive integer"):
+        client.fork("sb-1", ttl_s=0, idempotency_key="k")
+    assert calls == []
+
+
+def test_a_running_parent_answers_409_and_resume_of_a_live_sandbox_is_a_no_op(monkeypatch) -> None:
+    def conflict() -> urllib.error.HTTPError:
+        return urllib.error.HTTPError("https://boat.test", 409, "conflict", {}, io.BytesIO(b"{}"))
+
+    client, _ = _client(monkeypatch, {("POST", "/sandboxes/sb-1/fork"): conflict()})
+    with pytest.raises(BoatError) as error:
+        client.fork("sb-1", ttl_s=60, idempotency_key="k")
+    assert error.value.status == 409 and not error.value.retryable
+
+    payloads = {
+        ("POST", "/sandboxes/sb-1/resume"): conflict(),
+        ("GET", "/sandboxes/sb-1"): {"sandbox": {"id": "sb-1", "state": "ready"}},
+    }
+    client, calls = _client(monkeypatch, payloads)
+    client.resume("sb-1")
+    assert json.loads(calls[0][0].data) == {"noEnv": True}
+
+    payloads[("POST", "/sandboxes/sb-1/resume")] = conflict()
+    payloads[("GET", "/sandboxes/sb-1")] = {"sandbox": {"id": "sb-1", "state": "archived"}}
+    client, _ = _client(monkeypatch, payloads)
+    with pytest.raises(BoatError, match="HTTP 409"):
+        client.resume("sb-1")
+
+
+class ForkingBoatClient(FakeBoatClient):
+    def __init__(self, **kw: object) -> None:
+        super().__init__(**kw)  # type: ignore[arg-type]
+        self.forked: list[tuple[str, int, str]] = []
+        self.resumed: list[str] = []
+        self.fork_status: int | None = None
+        self.ready_error: Exception | None = None
+
+    def fork(self, sandbox_id: str, *, ttl_s: int, idempotency_key: str) -> str:
+        if self.fork_status is not None:
+            raise BoatError(f"boat.dev fork failed with HTTP {self.fork_status}", status=self.fork_status)
+        self.forked.append((sandbox_id, ttl_s, idempotency_key))
+        return f"{sandbox_id}-child-{len(self.forked)}"
+
+    def resume(self, sandbox_id: str) -> None:
+        self.resumed.append(sandbox_id)
+
+    def wait_ready(self, sandbox_id: str) -> None:
+        if self.ready_error is not None and "child" in sandbox_id:
+            raise self.ready_error
+        super().wait_ready(sandbox_id)
+
+
+def test_the_cell_parks_by_stopping_records_the_child_before_waiting_and_resumes(tmp_path: Path) -> None:
+    client, sandbox = _cell(tmp_path, ForkingBoatClient())
+    sandbox.ensure()
+    parent = sandbox.sandbox_id
+
+    assert sandbox.fork_parent() == parent
+    assert client.stopped == [parent] and client.waited_stopped == [parent]
+    recorded: list[str] = []
+    child = sandbox.fork_child(key="swf-fork-1", ttl_s=900, record=recorded.append)
+
+    assert recorded == [f"{parent}-child-1"] and child.sandbox_id == recorded[0]
+    assert client.forked == [(parent, 900, "swf-fork-1")]
+    assert child.workdir == sandbox.workdir and child.state is None  # its handle is the wave's
+    sandbox.resume_parent()
+    assert client.resumed == [parent]
+
+
+def test_a_child_that_never_becomes_ready_is_stopped_before_the_error_propagates(tmp_path: Path) -> None:
+    client, sandbox = _cell(tmp_path, ForkingBoatClient())
+    sandbox.ensure()
+    client.ready_error = BoatError("boat sandbox entered state error")
+    recorded: list[str] = []
+
+    with pytest.raises(BoatError, match="entered state error"):
+        sandbox.fork_child(key="k", ttl_s=60, record=recorded.append)
+
+    assert recorded and client.stopped == recorded
+
+
+def test_reclaim_reads_a_409_as_no_fork_pending(tmp_path: Path) -> None:
+    client, sandbox = _cell(tmp_path, ForkingBoatClient())
+    sandbox.ensure()
+    assert sandbox.reclaim_fork(key="k", ttl_s=60) == f"{sandbox.sandbox_id}-child-1"
+    client.fork_status = 409
+    assert sandbox.reclaim_fork(key="k", ttl_s=60) is None
+    client.fork_status = 503
+    with pytest.raises(BoatError, match="503"):
+        sandbox.reclaim_fork(key="k", ttl_s=60)
+
+
+def test_a_cell_with_no_recorded_sandbox_never_creates_one_to_fork(tmp_path: Path) -> None:
+    client, sandbox = _cell(tmp_path, ForkingBoatClient())
+    with pytest.raises(BoatError, match="needs a provisioned sandbox"):
+        sandbox.fork_parent()
+    assert client.created == []

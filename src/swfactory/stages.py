@@ -658,6 +658,18 @@ def commit(ctx: Ctx, *, stage: str, msg: str, paths: Sequence[str] | None = None
     """Commit everything under the target dir as the bot with provenance trailers (``.factory``
     is excluded by setup). Returns the HEAD sha; a no-op when there is nothing to commit."""
     _assert_workspace_head(ctx, f"{stage} commit")
+    sha = commit_unfenced(ctx, stage=stage, msg=msg, paths=paths)
+    _record_workspace_head(ctx, sha)
+    return sha
+
+
+def commit_unfenced(ctx: Ctx, *, stage: str, msg: str, paths: Sequence[str] | None = None) -> str:
+    """``commit`` without the run's workspace-head fence, for a cell whose HEAD is not that head.
+
+    A fork child (``swfactory.fork_wave``) is the one caller: its checkout starts at the parent's
+    checkpoint and is fenced against that, and recording its HEAD as the run's would move the
+    parent's fence to a commit the parent does not have.
+    """
     if paths:
         _sh(ctx, "git add -A -- " + " ".join(shlex.quote(path) for path in paths))
     else:
@@ -665,9 +677,7 @@ def commit(ctx: Ctx, *, stage: str, msg: str, paths: Sequence[str] | None = None
         # Intent, gates and agent receipts are committed once by deliver, after the review stream.
         _sh(ctx, f"git reset -q -- {shlex.quote(ctx.art)}")
     if ctx.sb.run("git diff --cached --quiet").ok:
-        sha = _workspace_head(ctx)
-        _record_workspace_head(ctx, sha)
-        return sha
+        return _workspace_head(ctx)
     q = shlex.quote
     cmd = (
         f"{_GIT_BOT} -c commit.gpgsign=false "
@@ -683,9 +693,7 @@ def commit(ctx: Ctx, *, stage: str, msg: str, paths: Sequence[str] | None = None
     if ctx.agent.kind != "external":
         cmd += f"--trailer {q('Co-Authored-By: Claude <noreply@anthropic.com>')}"
     _sh(ctx, cmd)
-    sha = _workspace_head(ctx)
-    _record_workspace_head(ctx, sha)
-    return sha
+    return _workspace_head(ctx)
 
 
 def run_tests(ctx: Ctx) -> tuple[TestResult, str]:

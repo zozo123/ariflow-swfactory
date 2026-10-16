@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
 import shlex
 import time
 from typing import Any
 
-from swfactory import stages
+from swfactory import fork_wave, stages
 from swfactory.models import BuildSummary, Plan, PlanTask, StageError, StageResult, TestResult
 from swfactory.workgraph import conflict_set, waves
 
@@ -44,6 +45,9 @@ def _load_progress(ctx: stages.Ctx, plan: Plan, current_head: str) -> dict[str, 
             "nodes": [],
             "repairs": [],
             "verified": None,
+            "fork_wave": None,
+            "fork_waves": [],
+            "wave_decisions": [],
         }
     try:
         progress = json.loads(ctx.state.read_control(_PROGRESS))
@@ -54,6 +58,12 @@ def _load_progress(ctx: stages.Ctx, plan: Plan, current_head: str) -> dict[str, 
     if progress.get("plan_digest") != expected:
         raise StageError("policy", "workgraph progress belongs to a different plan")
     progress.setdefault("repairs", [])
+    progress.setdefault("fork_waves", [])
+    progress.setdefault("wave_decisions", [])
+    if progress.setdefault("fork_wave", None) is not None:
+        # `fork_wave.recover` settles an in-flight wave before the journal is opened; one still
+        # here means its children were never confirmed stopped.
+        raise StageError("policy", "workgraph progress holds an unrecovered fork wave")
     if not isinstance(progress.get("nodes"), list) or not isinstance(progress["repairs"], list):
         raise StageError("policy", "workgraph progress receipts are invalid")
     input_head = progress.get("input_head")
@@ -267,6 +277,7 @@ def _settle(ctx: stages.Ctx, progress: dict[str, Any], plan: Plan, after: str) -
             "declared_files": list(node.files),
             "changed_files": list(changed),
             "parallel_safe_hint": node.parallel_safe,
+            **({"fork": attempt["fork"]} if attempt.get("fork") else {}),
         }
         progress["nodes"].append(receipt)
     else:
@@ -278,6 +289,61 @@ def _settle(ctx: stages.Ctx, progress: dict[str, Any], plan: Plan, after: str) -
     return receipt
 
 
+def _fork_merge(ctx: stages.Ctx, plan: Plan, progress: dict[str, Any], *, layer: int) -> fork_wave.Merge:
+    """Fan one forked child's patch into the parent through the same journal a serial node uses.
+
+    The attempt row is durable before the patch is applied, so a death between apply and receipt
+    is settled by `_open_progress` exactly like a serial node's commit. The applied result is then
+    held to the child's own bytes: the same paths, modes and blob ids, or the merge is refused.
+    """
+
+    def merge(node: PlanTask, harvest: fork_wave.Harvest, target_head: str) -> str:
+        q = shlex.quote
+        before = stages._assert_workspace_head(ctx, f"fork fan-in {node.id}")
+        if before != target_head:
+            raise StageError("policy", f"fork fan-in {node.id}: parent is at {before}, expected {target_head}")
+        progress["attempt"] = {
+            "kind": "node",
+            "id": node.id,
+            "agent_call": harvest.agent_call,
+            "input_head": before,
+            "started_at": time.time(),
+            "layer": layer,
+            "fork": harvest.lineage(progress["fork_wave"]["parent"], progress["fork_wave"]["checkpoint"]),
+        }
+        _store_progress(ctx, progress)
+        try:
+            if harvest.touched:
+                patch_rel = f"{fork_wave.PATCH_DIR}/{node.id}.patch"
+                ctx.sb.write(patch_rel, harvest.patch)
+                top = stages._sh(ctx, "git rev-parse --show-toplevel").strip()
+                patch_abs = posixpath.join(ctx.sb.workdir, patch_rel)
+                stages._sh(ctx, f"git -C {q(top)} apply --index --whitespace=nowarn {q(patch_abs)}")
+            after = stages.commit(ctx, stage=f"work:{node.id}", msg=harvest.message)
+            applied = stages._sh(ctx, f"git diff --raw --no-abbrev --relative {q(before)}..{q(after)} -- .")
+            if applied != harvest.raw_diff:
+                raise StageError(
+                    "policy",
+                    f"fork fan-in {node.id}: the merged bytes differ from child {harvest.child}'s output",
+                )
+        except BaseException:
+            _abandon(ctx, progress, before)
+            raise
+        return _settle(ctx, progress, plan, after)["output_head"]
+
+    return merge
+
+
+def _decide(
+    ctx: stages.Ctx, progress: dict[str, Any], layer: int, pending: list[PlanTask], provider_forks: bool
+) -> bool:
+    fork, reason = fork_wave.fork_decision(ctx, pending, provider_forks=provider_forks)
+    decision = {"layer": layer, "nodes": [node.id for node in pending], "fork": fork, "reason": reason}
+    progress["wave_decisions"] = [row for row in progress["wave_decisions"] if row.get("layer") != layer] + [decision]
+    _store_progress(ctx, progress)
+    return fork
+
+
 def _execute_nodes(
     ctx: stages.Ctx,
     plan: Plan,
@@ -285,6 +351,8 @@ def _execute_nodes(
     plan_text: str,
     progress: dict[str, Any],
     population_guidance: str = "",
+    *,
+    provider_forks: bool = False,
 ) -> None:
     completed = {
         str(row["node_id"]): row
@@ -292,12 +360,27 @@ def _execute_nodes(
         if isinstance(row, dict) and row.get("state") == "ok" and row.get("node_id")
     }
     for wave in waves(plan.work):
-        for node in sorted(wave.nodes, key=lambda item: item.id):
-            if node.id in completed:
-                continue
+        pending = [node for node in sorted(wave.nodes, key=lambda item: item.id) if node.id not in completed]
+        for node in pending:
             missing = sorted(dep for dep in node.depends_on if dep not in completed)
             if missing:
                 raise StageError("policy", f"Plan.work node {node.id!r} has incomplete dependencies: {missing}")
+        if pending and _decide(ctx, progress, wave.index, pending, provider_forks):
+            fork_wave.run_wave(
+                ctx,
+                pending,
+                progress,
+                layer=wave.index,
+                checkpoint=stages._assert_workspace_head(ctx, f"fork wave {wave.index}"),
+                prompts={
+                    node.id: _node_prompt(ctx, plan_text, spec_text, node, population_guidance) for node in pending
+                },
+                store=lambda: _store_progress(ctx, progress),
+                merge=_fork_merge(ctx, plan, progress, layer=wave.index),
+            )
+            completed.update({str(row["node_id"]): row for row in progress["nodes"] if row.get("node_id")})
+            continue
+        for node in pending:
             after = _attempt(
                 ctx,
                 progress,
@@ -313,45 +396,74 @@ def _execute_nodes(
             completed[node.id] = _settle(ctx, progress, plan, after)
 
 
-def execution_decision(ctx: stages.Ctx, plan: Plan) -> dict[str, Any]:
-    """Why this run fanned out, or did not, from the configured provider's capability facts.
-
-    These three fields were literals: ``mode``, ``parallel: False`` and a sentence about fork being
-    experimental. A literal cannot be wrong, which is the problem -- it said the same thing whatever
-    the provider could do, and `swfactory.execution_binding`, the module the capability inventory
-    names as the runtime entry for parallel workgraph, had no caller anywhere in the repository.
+def _configured_document(ctx: stages.Ctx) -> tuple[str, Any]:
+    """The configured sandbox's capability document (or ``None``), keyed as the contract keys it.
 
     Only the configured sandbox is offered. `select_provider` would otherwise answer with whichever
-    provider happens to satisfy the requirement, and a report naming a provider the run is not using
-    is worse than no report. A capability-layer failure is recorded as the reason and never raises:
-    this decides how to describe the run, never whether it may proceed.
-
-    ``_execute_nodes`` is one serial loop in one workspace; this stage has no fan-out yet. So the
-    run is always reported serial, and a provider whose capabilities would allow fork parallelism
-    (boat) says so as ``parallel_hint``, never as what ran.
+    provider happens to satisfy a requirement, and a report naming a provider the run is not using
+    is worse than no report. Toolset documents are keyed by the backend they wrap (``toolset:sbx``),
+    because the capability answer belongs to that backend and not to the adapter in front of it.
     """
-    from swfactory.execution_binding import choose_execution
     from swfactory.sandbox_contract import provider_documents, toolset_document
 
-    serial = {"mode": "shared_workspace_serial", "parallel": False}
-    # Toolset documents are keyed by the backend they wrap (``toolset:sbx``), because the capability
-    # answer belongs to that backend and not to the adapter in front of it.
     name = f"toolset:{ctx.cfg.toolset_backend}" if ctx.cfg.sandbox == "toolset" else ctx.cfg.sandbox
+    documents = {document.provider: document for document in provider_documents()}
+    document = documents.get(name) or (
+        toolset_document(ctx.cfg.toolset_backend) if ctx.cfg.sandbox == "toolset" else None
+    )
+    return name, document
+
+
+def provider_can_fork(ctx: stages.Ctx) -> bool:
+    """Whether the configured provider's capability document claims ``fork``; never raises."""
     try:
-        documents = {document.provider: document for document in provider_documents()}
-        document = documents.get(name) or (
-            toolset_document(ctx.cfg.toolset_backend) if ctx.cfg.sandbox == "toolset" else None
-        )
+        _, document = _configured_document(ctx)
+    except Exception:  # noqa: BLE001 - no capability answer is no fork
+        return False
+    return bool(document is not None and document.capabilities.fork)
+
+
+def execution_decision(ctx: stages.Ctx, plan: Plan, fork_waves: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """How this run executed its nodes, and why, from capability facts and what actually ran.
+
+    These fields were once literals: ``mode``, ``parallel: False`` and a sentence about fork being
+    experimental. A literal cannot be wrong, which is the problem -- it said the same thing whatever
+    the provider could do. So the provider's capability answer is reported as ``parallel_hint``,
+    and ``parallel`` is true only when a retained fork-wave receipt shows siblings really fanned
+    out and back in (``fork_waves``). A capability-layer failure is recorded as the reason and never
+    raises: this decides how to describe the run, never whether it may proceed.
+    """
+    from swfactory.execution_binding import choose_execution
+
+    forked = [wave for wave in fork_waves or () if wave.get("parallel") and wave.get("merges")]
+    actual: dict[str, Any] = (
+        {
+            "mode": "fork_wave_parallel",
+            "parallel": True,
+            "parallel_nodes": sum(len(wave["merges"]) for wave in forked),
+        }
+        if forked
+        else {"mode": "shared_workspace_serial", "parallel": False, "parallel_nodes": 0}
+    )
+    name = ctx.cfg.sandbox
+    try:
+        name, document = _configured_document(ctx)
         if document is None:
-            return {**serial, "provider": name, "reason": "provider publishes no capability document"}
+            return {**actual, "provider": name, "reason": "provider publishes no capability document"}
         provider, decision = choose_execution(plan.work, (document,), preferred=(ctx.cfg.sandbox,))
     except Exception as error:  # noqa: BLE001 - a capability answer is evidence, never a gate.
-        return {**serial, "provider": name, "reason": str(error)[:400]}
+        return {**actual, "provider": name, "reason": str(error)[:400]}
+    if forked:
+        reason = "forked_parallel_safe_waves"
+    elif decision.parallel:
+        reason = "max_parallel_forks_is_1" if ctx.cfg.max_parallel_forks < 2 else "no_wave_qualified_for_fork"
+    else:
+        reason = decision.reason
     return {
-        **serial,
+        **actual,
         "parallel_hint": decision.parallel,
         "provider": decision.provider,
-        "reason": "serial_executor_no_fan_out" if decision.parallel else decision.reason,
+        "reason": reason,
         "required_capabilities": list(decision.required_capabilities),
         "provider_digest": provider.digest(),
     }
@@ -372,7 +484,7 @@ def _verify(
     report = {
         "schema_version": 1,
         "scheduler": "airflow",
-        **execution_decision(ctx, plan),
+        **execution_decision(ctx, plan, progress["fork_waves"]),
         "input_head": progress["input_head"],
         "final_head": progress["head"],
         "plan_digest": progress["plan_digest"],
@@ -381,6 +493,8 @@ def _verify(
         "nodes": [by_id[node.id] for node in plan.work],
         "repairs": progress["repairs"],
         "verified": progress["verified"],
+        "wave_decisions": progress["wave_decisions"],
+        "fork_waves": progress["fork_waves"],
     }
     ctx.write_artifact(f"{ctx.art}/workgraph-execution.json", json.dumps(report, indent=2, sort_keys=True) + "\n")
     return tests, output
@@ -468,8 +582,16 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
         )
 
     conflicts = [{"left": left, "right": right, "files": list(files)} for left, right, files in conflict_set(plan.work)]
+    # A fork wave a dead process left in flight has children to reap and a parked parent to bring
+    # back; nothing can fence the workspace until it is settled.
+    fork_wave.recover(ctx)
     progress = _open_progress(ctx, plan)
-    _execute_nodes(ctx, plan, spec_text, plan_text, progress, population_guidance)
+    _execute_nodes(
+        ctx, plan, spec_text, plan_text, progress, population_guidance, provider_forks=provider_can_fork(ctx)
+    )
+    # Children charged the run ledger on their own context copies; this context's view must catch up
+    # before `_timed` takes the stage's cost delta.
+    stages.seed_budget(ctx, refresh=True)
 
     def outcome(tests: TestResult) -> StageResult:
         return StageResult(
@@ -479,7 +601,7 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
                 **population_numbers,
                 "work_nodes": float(len(plan.work)),
                 "work_conflicts": float(len(conflicts)),
-                "parallel_nodes": 0.0,
+                "parallel_nodes": float(execution_decision(ctx, plan, progress["fork_waves"])["parallel_nodes"]),
                 "repair_iterations": float(len(progress["repairs"])),
                 "first_pass_ci": float(not progress["repairs"]),
                 **stages._test_numbers(tests),

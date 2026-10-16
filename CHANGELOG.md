@@ -6,6 +6,18 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Add experimental fork waves (`swfactory.fork_wave`): with `[limits] max_parallel_forks` above 1
+  on a forkable provider, a parallel-safe `Plan.work` wave runs as one forked boat.dev child per
+  node. The parent is parked at the checkpoint, each child proves its HEAD before an agent runs,
+  `WorkExecutor` refuses stale, undeclared, protected or overlapping writes before any merge, and
+  patches fan in by node id, each checked blob-for-blob against its child. A node failure halts its
+  live siblings; every child is reaped, and a retried task reaps journalled orphans (by idempotency
+  key when the id was lost) before it touches the parent. Verification still runs on the merged
+  head. The default stays serial. `tests/test_fork_wave_e2e.py` runs the scenario over boat's
+  measured lifecycle and, with `SWF_TEST_LIVE_BOAT=1`, on boat.dev.
+- Fix boat work cells provisioning into `/workspace`, which a boat VM user cannot create; the
+  checkout now lives under `/home/user/workspace`. Add the boat `fork` and `resume` calls.
+
 - Add experimental `swfactory campaign-fusion build/verify`: compose two to four
   retained sibling candidates into an exact patch proposal with contributor lineage
   and deduplicated diagnostic observations. Refuse overlapping edits, protected paths

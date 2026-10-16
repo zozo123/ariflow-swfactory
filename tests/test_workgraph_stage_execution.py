@@ -502,7 +502,7 @@ def _plan_with_two_independent_nodes() -> Plan:
 
 
 def _decision_ctx(sandbox: str, backend: str = "sbx") -> SimpleNamespace:
-    return SimpleNamespace(cfg=SimpleNamespace(sandbox=sandbox, toolset_backend=backend))
+    return SimpleNamespace(cfg=SimpleNamespace(sandbox=sandbox, toolset_backend=backend, max_parallel_forks=1))
 
 
 def test_the_report_states_why_this_provider_could_not_fan_out() -> None:
@@ -525,9 +525,9 @@ def test_a_provider_that_claims_no_filesystem_isolation_says_so() -> None:
 
 def test_a_fork_capable_provider_flips_the_hint_not_what_ran(monkeypatch: pytest.MonkeyPatch) -> None:
     """The point of reading capabilities instead of hardcoding the answer: nothing in this module
-    changes when a provider learns to fork. But ``_execute_nodes`` is serial, so the capability is a
-    hint until the stage itself fans out -- the report never claims a parallel run that did not
-    happen."""
+    changes when a provider learns to fork. The capability is still only a hint -- ``parallel`` is
+    true only when a retained fork-wave receipt shows siblings really fanned out and back in, and
+    with ``max_parallel_forks = 1`` (the default) none ever does."""
     original = _contract.provider_documents
     monkeypatch.setattr(_contract, "provider_documents", lambda **_: original(islo_fork=True))
 
@@ -536,7 +536,7 @@ def test_a_fork_capable_provider_flips_the_hint_not_what_ran(monkeypatch: pytest
     assert decision["parallel_hint"] is True
     assert decision["parallel"] is False
     assert decision["mode"] == "shared_workspace_serial"
-    assert decision["reason"] == "serial_executor_no_fan_out"
+    assert decision["reason"] == "max_parallel_forks_is_1"
 
 
 def test_a_toolset_answer_belongs_to_the_backend_it_wraps() -> None:
@@ -588,8 +588,8 @@ def test_boat_does_not_claim_the_one_thing_that_was_not_exercised() -> None:
 
 
 def test_boat_fork_is_reported_as_a_hint_while_its_nodes_run_serially(tmp_path: Path) -> None:
-    """`sandbox = "boat"` is reachable since the WorldGen line, and `BoatSandbox` has no fork: a boat
-    run's report must say serial, and carry the provider's fork capability only as a hint."""
+    """`sandbox = "boat"` with the default ``max_parallel_forks = 1``: a boat run's report must say
+    serial, and carry the provider's fork capability only as a hint. Fan-out is opt-in."""
     plan = _plan_with_two_independent_nodes()
 
     serial = execution_decision(_decision_ctx("docker"), plan)
@@ -598,7 +598,7 @@ def test_boat_fork_is_reported_as_a_hint_while_its_nodes_run_serially(tmp_path: 
     assert serial["parallel"] is False and serial["reason"] == "serial_fallback_missing_fork"
     assert serial["parallel_hint"] is False
     assert hinted["parallel"] is False and hinted["mode"] == "shared_workspace_serial"
-    assert hinted["parallel_hint"] is True and hinted["reason"] == "serial_executor_no_fan_out"
+    assert hinted["parallel_hint"] is True and hinted["reason"] == "max_parallel_forks_is_1"
 
     sandbox = GitSandbox()
     agent = NodeAgent(sandbox, {"a": ["a.py"], "b": ["b.py"]})

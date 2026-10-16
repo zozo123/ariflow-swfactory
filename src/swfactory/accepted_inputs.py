@@ -82,6 +82,7 @@ POLICY_SETTINGS: tuple[str, ...] = (
     "gate_timeout_h",
     "stage_timeout_h",
     "max_parallel_jobs",
+    "max_parallel_forks",  # concurrent forked cells and paid agent calls inside one build wave
     "gateway_profile",
     "islo_environment",
     "sandbox_ttl_s",
