@@ -13,6 +13,12 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 
+class ForkRefused(Exception):
+    """A provider definitively refused a fresh fork (a rate limit, a missing snapshot): nothing was
+    created under that key, so there is nothing to reap. Raised only for a first request -- a
+    refused *retry* of a lost request says nothing about what the lost one created."""
+
+
 @dataclass(frozen=True)
 class SandboxCapabilities:
     create: bool = True

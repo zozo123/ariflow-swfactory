@@ -434,3 +434,33 @@ def test_candidate_with_stale_input_head_is_refused_before_merge() -> None:
     assert report.cancelled
     assert report.final_head == HEAD
     assert [(row.kind, row.left) for row in report.conflicts] == [("stale_base", "a")]
+
+
+def test_a_main_thread_interrupt_cancels_queued_nodes_instead_of_joining_them(monkeypatch) -> None:
+    """An Airflow timeout or signal lands in the thread that waits on ``as_completed``. Leaving the
+    pool joins every runner, so without cancelling first, queued nodes would start -- for a fork
+    wave, new forks and new spend -- after the stage was already told to stop."""
+    import swfactory.work_executor as executor_mod
+
+    started: list[str] = []
+    release = threading.Event()
+
+    def run(request: NodeRequest) -> NodeResult:
+        started.append(request.node.id)
+        release.wait(5)
+        return _runner()(request)
+
+    def interrupted(futures):
+        release.set()
+        raise KeyboardInterrupt
+        yield  # pragma: no cover - makes this a generator like the real one
+
+    monkeypatch.setattr(executor_mod, "as_completed", interrupted)
+    cancellation = Cancellation()
+    nodes = tuple(WorkNode(id=node_id, files=(f"{node_id}.py",), parallel_safe=True) for node_id in "abc")
+
+    with pytest.raises(KeyboardInterrupt):
+        _execute(WorkExecutor(run, _merger, ExecutorPolicy(max_parallel=2)), nodes, cancellation=cancellation)
+
+    assert cancellation.cancelled
+    assert "c" not in started  # queued behind max_parallel=2, cancelled before it could start

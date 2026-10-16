@@ -123,13 +123,23 @@ How each rule a native-fork executor must satisfy is held:
 5. **No false agreement.** Siblings do different work from one shared parent; receipts name the
    shared `fork_parent`, and nothing counts siblings as independent evidence.
 6. **Deterministic merge.** `WorkExecutor` classifies stale bases, undeclared or protected writes
-   and sibling overlap before any merge. Patches are applied in node-id order, and each applied
-   result must reproduce the child's paths, modes and blob ids, or the merge is refused.
+   and sibling overlap before any merge (diffs use `--no-renames`, so a rename cannot hide the
+   deletion it implies). Patches are applied in node-id order, and each applied result must
+   reproduce the child's paths, modes and blob ids, or the merge is refused -- also when the
+   commit is settled after a crash.
 7. **Complete verification.** Nothing is verified in a child; the stage's test and repair loop
    runs on the merged head, then review runs as for any other change.
-8. **Teardown.** Each child is reaped in its runner's `finally`; a failed node halts its live
-   siblings at the provider; a retried task reaps every journalled child (one whose id was lost
-   is found again by its idempotency key) and unparks the parent before anything else runs.
+8. **Teardown.** Each child is reaped in its runner's `finally`; a failed node, a timeout or a
+   signal halts live siblings at the provider and keeps queued ones from starting; a retried task
+   and the teardown task both reap every journalled child before anything else. A child whose
+   fork answer was lost is found again by its idempotency key, and until it is, the parent stays
+   parked (a running parent could fork anew from a periodic snapshot) and the wave is recorded as
+   teardown debt; past its lease plus a grace period the provider has stopped it.
+
+A provider's definite refusal to fork -- boat answers `429 rate_limited` once an account spends
+its hourly sandbox starts, and a k-node wave costs k + 1 starts -- creates nothing. When every
+failure in a wave is such a refusal, the wave runs serially in the parent and `wave_decisions`
+records `provider_refused_fork`: fork costs a wave its parallelism, never its correctness.
 
 `tests/test_fork_wave_e2e.py` drives the real setup and build stages over boat's measured
 lifecycle, and runs the same scenario on boat.dev with `SWF_TEST_LIVE_BOAT=1`. Support stays

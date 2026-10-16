@@ -1342,8 +1342,17 @@ def record_approval(ctx: Ctx, approval: Approval) -> None:
 
 @_owned
 def teardown(ctx: Ctx) -> None:
-    """Cleanup must not terminate a work cell currently owned by another task attempt."""
-    ctx.sb.close()
+    """Cleanup must not terminate a work cell currently owned by another task attempt.
+
+    Fork children first: a build task that died mid-wave is not necessarily retried, and its
+    journalled children would otherwise bill until their lease. The parent closes either way.
+    """
+    from swfactory import fork_wave  # fork_wave builds on this module
+
+    try:
+        fork_wave.teardown(ctx)
+    finally:
+        ctx.sb.close()
 
 
 def _md_table(headers: list[str], rows: list[list[str]]) -> str:

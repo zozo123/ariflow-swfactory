@@ -65,6 +65,7 @@ class HostBoatClient:
         self.forks: list[dict[str, Any]] = []
         self.resumes: list[str] = []
         self.stale_snapshot = False
+        self.refuse_forks: int | None = None  # answer every fork with this 4xx, as a start-rate limit does
         self.lock = threading.Lock()
 
     def _new(self, *, origin: Path | None = None, parent: str | None = None) -> str:
@@ -104,7 +105,12 @@ class HostBoatClient:
         vm = self._vm(sandbox_id)
         if vm["state"] != "ready":
             raise BoatError("boat.dev exec failed with HTTP 409", status=409)
-        where = self._host(sandbox_id, cwd) if cwd and cwd.startswith(VM_ROOT) else str(vm["dir"])
+        # boat: "Path must resolve under /home/user or /tmp" and "cwd must be an existing directory".
+        if cwd is not None and not (cwd == VM_ROOT or cwd.startswith(f"{VM_ROOT}/")):
+            raise BoatError("boat.dev exec failed with HTTP 400", status=400)
+        where = self._host(sandbox_id, cwd) if cwd else str(vm["dir"])
+        if not Path(where).is_dir():
+            raise BoatError("boat.dev exec failed with HTTP 400", status=400)
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "HOME": str(vm["dir"]),
@@ -151,6 +157,8 @@ class HostBoatClient:
             raise BoatError(f"boat sandbox {sandbox_id} is still running")
 
     def fork(self, sandbox_id: str, *, ttl_s: int, idempotency_key: str) -> str:
+        if self.refuse_forks is not None:
+            raise BoatError(f"boat.dev fork failed with HTTP {self.refuse_forks}", status=self.refuse_forks)
         with self.lock:
             if idempotency_key in self.idempotent:
                 return self.idempotent[idempotency_key]
@@ -185,10 +193,18 @@ class ForkAgent:
 
     kind = "scripted"
 
-    def __init__(self, *, fail: str | None = None, stray: str | None = None, timeout_s: float = 60.0) -> None:
+    def __init__(
+        self,
+        *,
+        fail: str | None = None,
+        stray: str | None = None,
+        rename: str | None = None,
+        timeout_s: float = 60.0,
+    ) -> None:
         self.barrier = threading.Barrier(len(SIBLINGS), timeout=timeout_s)
         self.fail = fail
         self.stray = stray
+        self.rename = rename
         self.calls: list[tuple[str, int, str | None]] = []
         self.lock = threading.Lock()
 
@@ -202,6 +218,8 @@ class ForkAgent:
                 return AgentResult(agent="scripted", is_error=True, subtype="error", text=f"{node} broke")
             if self.fail is not None:
                 _until_halted(sb)  # a real agent is a process in the VM; halting the VM is what stops it
+            if self.rename == node:  # "creates" its file by moving one nobody declared
+                sb.run(f"git mv src/README src/{node}.txt")
             sb.write(f"src/{node}.txt", f"written by {node} in a forked cell\n")
             if self.stray == node:
                 sb.write("src/stray.txt", "outside the declared scope\n")
@@ -367,8 +385,9 @@ def test_a_parallel_safe_wave_forks_runs_at_once_fans_in_by_id_and_verifies_the_
     assert client.resumes == [parent]  # parked once, for the one forked wave
     assert all(client.state(child) == "archived" for child in client.children())
     assert client.state(parent) == "ready"
-    # Each child's own lease is the stage timeout: never the 48 h parent default, never unbounded.
-    assert {row["ttl_s"] for row in client.forks} == {ctx.cfg.stage_timeout_h * 3600}
+    # Each child's lease is what is left of the stage: never the 48 h parent default, never unbounded.
+    stage_s = ctx.cfg.stage_timeout_h * 3600
+    assert all(stage_s - 600 < row["ttl_s"] <= stage_s for row in client.forks)
     assert len({row["key"] for row in client.forks}) == 3
     assert _progress(ctx)["fork_wave"] is None
 
@@ -398,6 +417,30 @@ def test_a_budget_that_cannot_pay_every_sibling_at_once_stays_serial(tmp_path: P
 
     assert _report(ctx)["wave_decisions"][0]["reason"] == "budget_cannot_cover_siblings"
     assert client.forks == []
+
+
+def test_a_provider_that_refuses_every_fork_costs_the_wave_its_parallelism_not_its_run(tmp_path: Path) -> None:
+    """Observed live: boat answers ``429 rate_limited`` once an account spends its hourly starts.
+    A refusal is definitive -- nothing was created, nothing is lost -- so the wave runs serially."""
+    agent = ForkAgent()
+    agent.barrier = threading.Barrier(1)  # serial siblings never meet
+    ctx, client = _host_ctx(tmp_path, agent)
+    parent = ctx.sb.sandbox_id
+    client.refuse_forks = 429
+
+    work_stage.build_and_test(ctx)
+
+    report = _report(ctx)
+    assert report["mode"] == "shared_workspace_serial" and report["parallel"] is False
+    decision = report["wave_decisions"][0]
+    assert decision["fork"] is False and decision["reason"].startswith("provider_refused_fork")
+    assert "HTTP 429" in decision["reason"]
+    (attempted,) = report["fork_waves"]
+    assert attempted["teardown"] == "confirmed" and attempted["merges"] == []
+    assert all(row["fork_refused"] and row["reaped"] for row in attempted["children"])
+    assert {sandbox for _, _, sandbox in agent.calls} == {parent}  # every node ran in the parent
+    assert client.resumes == [parent] and client.state(parent) == "ready"
+    assert ctx.sb.read("src/index.txt") == "alpha beta gamma\n"
 
 
 def test_a_failing_sibling_halts_the_wave_reaps_every_child_and_merges_nothing(tmp_path: Path) -> None:
@@ -430,6 +473,28 @@ def test_a_write_outside_a_nodes_declared_files_is_refused_before_any_merge(tmp_
     assert [c["kind"] for c in wave["conflicts"]] == ["undeclared"] and wave["merges"] == []
     assert stages._workspace_head(ctx) == checkpoint
     assert all(client.state(child) == "archived" for child in client.children())
+
+
+def test_a_rename_cannot_hide_the_deletion_of_an_undeclared_file(tmp_path: Path) -> None:
+    """``git diff --name-only`` reports only a rename's new path; the deleted one must count too."""
+    ctx, client = _host_ctx(tmp_path, ForkAgent(rename="alpha"))
+
+    with pytest.raises(StageError, match=r"undeclared alpha/plan \['src/README'\]"):
+        work_stage.build_and_test(ctx)
+
+    assert ctx.sb.exists("src/README")
+    assert all(client.state(child) == "archived" for child in client.children())
+
+
+def test_a_failed_wave_still_charges_the_stage_what_its_children_committed(tmp_path: Path) -> None:
+    ctx, _ = _host_ctx(tmp_path, ForkAgent(fail="beta"))
+
+    with pytest.raises(StageError):
+        work_stage.build_and_test(ctx)
+
+    (record,) = [row for row in stages.load_stage_results(ctx) if row.stage == "build_and_test"]
+    assert record.status == "failed"
+    assert record.cost_usd == pytest.approx(CallLedger(ctx.state).charged_usd()) and record.cost_usd > 0
 
 
 def test_a_child_forked_from_a_stale_snapshot_is_refused_before_its_agent_runs(tmp_path: Path) -> None:
@@ -530,6 +595,83 @@ def test_a_retry_after_a_dead_process_reaps_the_orphans_unparks_the_parent_and_r
     assert ctx.sb.read("src/index.txt") == "alpha beta gamma\n"
 
 
+def _dead_wave(ctx: Ctx, client: HostBoatClient, *, lost_key: str) -> tuple[str, str, str]:
+    """The journal a process leaves when it dies mid-wave: parent parked, one child journalled,
+    one fork requested whose answer never arrived."""
+    parent = ctx.sb.sandbox_id
+    checkpoint = stages._workspace_head(ctx)
+    ctx.sb.fork_parent()
+    seen = client.fork(parent, ttl_s=600, idempotency_key="swf-fork-dead-seen")
+    lost = client.fork(parent, ttl_s=600, idempotency_key=lost_key)
+    now = time.time()
+    children = [
+        {"node_id": "alpha", "agent_call": 1, "key": "swf-fork-dead-seen", "ttl_s": 600, "child": seen},
+        {"node_id": "beta", "agent_call": 2, "key": lost_key, "ttl_s": 600, "child": None},
+    ]
+    for row in children:
+        row |= {"reaped": False, "fork_requested": True, "requested_at": now}
+    progress = {
+        "schema_version": 1,
+        "plan_digest": work_stage._digest_plan(_plan()),
+        "input_head": checkpoint,
+        "head": checkpoint,
+        "agent_calls": 2,
+        "attempt": None,
+        "nodes": [],
+        "repairs": [],
+        "verified": None,
+        "fork_waves": [],
+        "wave_decisions": [],
+        "fork_wave": {
+            "layer": 0,
+            "checkpoint": checkpoint,
+            "parent": parent,
+            "parked": True,
+            "started_at": now,
+            "children": children,
+        },
+    }
+    ctx.state.write_control(fork_wave.PROGRESS_FILE, json.dumps(progress))
+    return parent, seen, lost
+
+
+def test_the_teardown_task_reaps_a_dead_waves_children_even_if_the_build_is_never_retried(tmp_path: Path) -> None:
+    ctx, client = _host_ctx(tmp_path, ForkAgent())
+    parent, seen, lost = _dead_wave(ctx, client, lost_key="swf-fork-dead-lost")
+
+    stages.teardown(ctx)
+
+    assert client.state(seen) == "archived" and client.state(lost) == "archived"
+    assert client.state(parent) == "archived"  # closed, not resumed
+    progress = _progress(ctx)
+    assert progress["fork_wave"] is None and progress["fork_waves"][-1]["torn_down"] is True
+
+
+def test_a_lost_fork_whose_reclaim_fails_is_debt_and_keeps_the_parent_parked_for_the_next_try(
+    tmp_path: Path,
+) -> None:
+    """Unknown is not absent. A reclaim needs a parked parent -- a running one could fork anew from
+    a periodic snapshot -- so the parent stays parked until a later attempt finds the child."""
+    ctx, client = _host_ctx(tmp_path, ForkAgent())
+    parent, seen, lost = _dead_wave(ctx, client, lost_key="swf-fork-dead-lost")
+    real_fork = client.fork
+
+    def flaky(sandbox_id: str, *, ttl_s: int, idempotency_key: str) -> str:
+        raise BoatError("boat.dev fork failed; check connectivity", retryable=True)
+
+    client.fork = flaky  # type: ignore[method-assign]
+    with pytest.raises(StageError, match="key swf-fork-dead-lost"):
+        work_stage.build_and_test(ctx)
+    assert client.state(seen) == "archived" and client.state(lost) == "ready"
+    assert client.state(parent) == "archived" and _progress(ctx)["fork_wave"]["parked"] is True
+
+    client.fork = real_fork  # type: ignore[method-assign]
+    work_stage.build_and_test(ctx)  # the next attempt reclaims it by key, unparks, and runs the wave
+
+    assert client.state(lost) == "archived"
+    assert ctx.sb.read("src/index.txt") == "alpha beta gamma\n"
+
+
 # ---------------------------------------------------------------- the real service
 
 
@@ -545,6 +687,9 @@ def test_live_boat_fork_wave_end_to_end(tmp_path: Path) -> None:
     children: list[str] = []
     try:
         work_stage.build_and_test(ctx)
+        decision = _report(ctx)["wave_decisions"][0]
+        if not decision["fork"]:  # e.g. the account's hourly start budget: say so, do not pass
+            pytest.fail(f"boat did not fan the wave out: {decision['reason']}")
         (wave,) = _report(ctx)["fork_waves"]
         children = [row["child"] for row in wave["children"]]
         _assert_fanned_out_and_in(ctx, agent, parent, children)

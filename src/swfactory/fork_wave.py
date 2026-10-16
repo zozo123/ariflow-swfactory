@@ -26,10 +26,14 @@ The native-fork contract in ``docs/lifecycle.md``, rule by rule:
    id order, and each applied result is checked blob-for-blob against the child that produced it.
 7. **Full verification.** Nothing is verified in a child. The stage's test/repair loop runs on the
    merged head, as it does for serial work.
-8. **Teardown.** Every child is reaped in its runner's ``finally``; a node failure halts its live
-   siblings at the provider; a retried task reaps whatever the journal names -- a child whose id
-   was lost is found again through its idempotency key -- and unparks the parent before anything
-   else touches the cell.
+8. **Teardown.** Every child is reaped in its runner's ``finally``; a node failure, a timeout or a
+   signal halts live siblings at the provider; a retried task (:func:`recover`) and the teardown
+   task (:func:`teardown`) reap whatever the journal names before anything else. A child whose
+   fork answer was lost is found again through its idempotency key, and until then the parent
+   stays parked -- a running parent could fork anew from a periodic snapshot.
+
+A provider's definite refusal to fork (boat's start-rate limit) creates nothing; a wave whose only
+failures are refusals raises :class:`ForkUnavailable`, and the stage runs it serially instead.
 """
 
 from __future__ import annotations
@@ -47,6 +51,7 @@ from swfactory import stages
 from swfactory.config import protected_for
 from swfactory.models import BuildSummary, PlanTask, StageError
 from swfactory.sandbox import Sandbox
+from swfactory.sandbox_contract import ForkRefused
 from swfactory.work_executor import (
     Cancellation,
     ExecutionReport,
@@ -60,6 +65,7 @@ from swfactory.workgraph import WorkNode, conflict_set
 
 PROGRESS_FILE = "workgraph-progress.json"  # work_stage's journal; this module owns its fork keys
 PATCH_DIR = ".factory/fork-patches"  # below .factory/, which stages.NEVER_COMMITTED excludes
+LEASE_GRACE_S = 300  # past a child's TTL by this much, the provider has stopped it for us
 
 
 @runtime_checkable
@@ -124,14 +130,23 @@ class Harvest:
 Merge = Callable[[PlanTask, Harvest, str], str]
 
 
+class ForkUnavailable(StageError):
+    """Every failure in the wave was the provider refusing to fork. Nothing was merged, every
+    child is confirmed gone and the parent is back at the checkpoint: the wave may run serially."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__("sandbox", message, retryable=True)
+
+
 def fork_decision(ctx: stages.Ctx, pending: Sequence[PlanTask], *, provider_forks: bool) -> tuple[bool, str]:
     """Whether this wave forks, and the reason either way (both are retained as evidence)."""
-    if ctx.cfg.max_parallel_forks < 2:
-        return False, "max_parallel_forks_is_1"
+    # Cheapest facts first: a single-node wave or a provider without fork never reads the config.
     if len(pending) < 2:
         return False, "single_node_wave"
     if not provider_forks:
         return False, "provider_cannot_fork"
+    if ctx.cfg.max_parallel_forks < 2:
+        return False, "max_parallel_forks_is_1"
     if not isinstance(ctx.sb, ForkableSandbox):
         return False, "sandbox_has_no_fork_adapter"
     if ctx.agent.kind == "external":
@@ -159,20 +174,27 @@ def run_wave(
     prompts: dict[str, str],
     store: Callable[[], None],
     merge: Merge,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     """Fork one child per pending node off ``checkpoint``, run them, fan in, reap; the receipt.
 
     Raises the first primary node failure (by node id), a ``policy`` error for a conflict found
     before fan-in, or a retryable ``sandbox`` error when a child could not be confirmed stopped --
-    in which case the in-flight record stays in the journal for :func:`recover`.
+    in which case the in-flight record stays in the journal for :func:`recover` and
+    :func:`teardown`. ``deadline`` (``time.monotonic``) bounds every child's lease to what is left
+    of the stage, so no child is meant to outlive the task that forked it.
     """
     parent = ctx.sb
     if not isinstance(parent, ForkableSandbox):  # fork_decision already refused this
         raise StageError("policy", "fork wave requested on a sandbox that cannot fork")
     nodes = {node.id: node for node in pending}
     lock = threading.RLock()
-    ttl_s = max(1, min(ctx.cfg.sandbox_ttl_s, ctx.cfg.stage_timeout_h * 3600))
+    left = ctx.cfg.stage_timeout_h * 3600 if deadline is None else int(deadline - time.monotonic())
+    ttl_s = max(60, min(ctx.cfg.sandbox_ttl_s, ctx.cfg.stage_timeout_h * 3600, left))
     stages._ensure_clean(ctx, f"fork wave {layer}", allow_artifacts=True)
+    # Everything that can fail on bad local state is settled before the parent is parked.
+    cell_id, epoch, _ = stages.cell_evidence(ctx)
+    protected = tuple(protected_for(stages._contract(ctx), "build"))
     wave: dict[str, Any] = {
         "layer": layer,
         "checkpoint": checkpoint,
@@ -181,28 +203,11 @@ def run_wave(
         "children": [],
         "started_at": time.time(),
     }
-    with lock:
-        progress["fork_wave"] = wave
-        store()
-    try:
-        wave["parent"] = parent.fork_parent()
-    except BaseException:
-        # Nothing was forked. Bring the parent back if the stop got that far; if even that fails,
-        # the record stays and `recover` resumes it on the retry.
-        try:
-            parent.resume_parent()
-        except Exception as error:  # noqa: BLE001 - the in-flight record is the debt
-            print(f"sandbox: parent could not be resumed after a failed park: {error}")
-        else:
-            progress["fork_wave"] = None
-            store()
-        raise
-    with lock:
-        store()
-
     harvests: dict[str, Harvest] = {}
     primary: dict[str, BaseException] = {}
     live: dict[str, dict[str, Any]] = {}
+    merges: list[dict[str, Any]] = []
+    resumed = False
 
     def journal(entry: dict[str, Any], **update: Any) -> None:
         with lock:
@@ -241,10 +246,14 @@ def run_wave(
                 raise _Cancelled()
             # Durable before the call: a fork whose answer is lost is reclaimed by this key, and a
             # key whose fork was never requested must not be "reclaimed" into a brand-new VM.
-            journal(entry, fork_requested=True)
-            child = parent.fork_child(
-                key=entry["key"], ttl_s=ttl_s, record=lambda child_id: journal(entry, child=child_id)
-            )
+            journal(entry, fork_requested=True, requested_at=time.time())
+            try:
+                child = parent.fork_child(
+                    key=entry["key"], ttl_s=ttl_s, record=lambda child_id: journal(entry, child=child_id)
+                )
+            except ForkRefused:
+                journal(entry, fork_refused=True, reaped=True)  # refused outright: nothing to reap
+                raise
             with lock:
                 live[node.id] = entry
             if cancellation.cancelled:
@@ -290,8 +299,6 @@ def run_wave(
                 live.pop(node.id, None)
             _reap_entry(parent, entry, journal)
 
-    resumed = False
-
     def unpark() -> None:
         nonlocal resumed
         if resumed:
@@ -300,17 +307,11 @@ def run_wave(
         resumed = True
         journal(wave, parked=False)
 
-    def fenced_unpark() -> None:
-        first = not resumed
-        unpark()
-        if first:
+    def merger(result: NodeResult, target_head: str, index: int) -> MergeReceipt:
+        if not resumed:
+            unpark()
             # The parent sat parked through the whole wave; it must come back exactly where it left.
             stages._assert_workspace_head(ctx, f"fork wave {layer} fan-in")
-
-    merges: list[dict[str, Any]] = []
-
-    def merger(result: NodeResult, target_head: str, index: int) -> MergeReceipt:
-        fenced_unpark()
         harvest = harvests[result.node_id]
         after = merge(nodes[result.node_id], harvest, target_head)
         receipt = MergeReceipt(
@@ -325,19 +326,24 @@ def run_wave(
         merges.append(dataclasses.asdict(receipt))
         return receipt
 
-    cell_id, epoch, _ = stages.cell_evidence(ctx)
     executor = WorkExecutor(
         runner,
         merger,
         ExecutorPolicy(
             max_parallel=ctx.cfg.max_parallel_forks,
             max_attempts=1,  # a retry is a new fork, a new call and a new key: the task retry's job
-            protected_paths=tuple(protected_for(stages._contract(ctx), "build")),
+            protected_paths=protected,
         ),
     )
+
+    with lock:
+        progress["fork_wave"] = wave
+        store()
     report: ExecutionReport | None = None
     outcome: BaseException | None = None
     try:
+        wave["parent"] = parent.fork_parent()
+        journal(wave)
         report = executor.execute(
             cell_id=cell_id or f"run:{ctx.cfg.run_id}",
             epoch=epoch or 0,
@@ -346,18 +352,25 @@ def run_wave(
             supports_fork=True,
             cancellation=cancellation,
         )
-    except BaseException as error:  # a merge refusal or a dying process: teardown first, then raise
+    except BaseException as error:  # a refused park or merge, a timeout, a signal: teardown first
         outcome = error
-    # Runners reap their own children; this catches any whose runner never reached `finally`, and
-    # -- while the parent is still parked -- any child whose fork answer never arrived.
-    if not resumed:
-        _reclaim_lost(parent, wave, journal)
-    debt = _reap_all(parent, wave, journal)
-    if not resumed:
-        try:
-            unpark()
-        except Exception as error:  # noqa: BLE001 - `parked` stays true, so `recover` resumes it
-            debt.append(f"parent {wave['parent']} not resumed: {str(error)[:200]}")
+    debt: list[str] = []
+    try:
+        # Runners reap their own children; this catches any whose runner never reached `finally`,
+        # and -- while the parent is still parked -- any child whose fork answer never arrived.
+        if not resumed:
+            _reclaim_lost(parent, wave, journal)
+        debt = _reap_all(parent, wave, journal)
+    except BaseException as error:  # noqa: BLE001 - a journal that cannot be written is debt too
+        debt.append(f"teardown journal: {str(error)[:200]}")
+    finally:
+        # A lost fork can be reclaimed only from a parked parent -- a running one might fork anew
+        # from a periodic snapshot -- so it stays parked until recover or teardown finds the child.
+        if not resumed and not _lost(wave, journal):
+            try:
+                unpark()
+            except Exception as error:  # noqa: BLE001 - `parked` stays true; recover/teardown resume it
+                debt.append(f"parent {wave['parent']} not resumed: {str(error)[:200]}")
 
     receipt = {
         "layer": layer,
@@ -366,22 +379,7 @@ def run_wave(
         "parallel": bool(report and report.parallel),
         "max_parallel_forks": ctx.cfg.max_parallel_forks,
         "ttl_s": ttl_s,
-        "children": [
-            {
-                **{k: entry[k] for k in ("node_id", "agent_call", "key", "child", "reaped")},
-                **(
-                    {
-                        "child_input_head": harvests[entry["node_id"]].input_head,
-                        "child_output_head": harvests[entry["node_id"]].output_head,
-                        "touched": list(harvests[entry["node_id"]].touched),
-                        "patch_blob": harvests[entry["node_id"]].patch_blob,
-                    }
-                    if entry["node_id"] in harvests
-                    else {}
-                ),
-            }
-            for entry in sorted(wave["children"], key=lambda row: row["node_id"])
-        ],
+        "children": [_child_receipt(entry, harvests.get(entry["node_id"])) for entry in _by_node(wave)],
         "results": [
             {"node_id": r.node_id, "state": r.state, "duration_s": round(r.duration_s, 3), "detail": r.detail}
             for r in (report.results if report else ())
@@ -397,17 +395,24 @@ def run_wave(
         if not debt:
             progress["fork_wave"] = None
         store()
+    first_failure = primary[min(primary)] if primary else None
     if debt:
+        cause = outcome or first_failure
+        detail = f"; the wave itself failed first: {cause}" if cause else ""
         raise StageError(
             "sandbox",
-            f"fork wave {layer}: teardown not confirmed: {debt}; a retry reaps them first",
+            f"fork wave {layer}: teardown not confirmed: {debt}; a retry or the teardown task reaps them{detail}"[
+                :4000
+            ],
             retryable=True,
-        ) from outcome
+        ) from cause
     if outcome is not None:
         raise outcome
     assert report is not None
-    if primary:
-        raise primary[min(primary)]
+    if first_failure is not None:
+        if not merges and all(isinstance(error, ForkRefused) for error in primary.values()):
+            raise ForkUnavailable(f"fork wave {layer}: the provider refused to fork: {first_failure}"[:2000])
+        raise first_failure
     if report.conflicts:
         detail = "; ".join(f"{c.kind} {c.left}/{c.right} {list(c.files)} {c.detail}".strip() for c in report.conflicts)
         raise StageError("policy", f"fork wave {layer} refused before fan-in: {detail}")
@@ -424,35 +429,43 @@ def recover(ctx: stages.Ctx) -> None:
     journal) and unparks the parent. Children that had not fanned in are simply run again, as
     new forks with new keys: nothing a dead wave produced is a candidate.
     """
-    if not ctx.state.has_control(PROGRESS_FILE):
+    loaded = _in_flight(ctx)
+    if loaded is None:
         return
-    try:
-        progress = json.loads(ctx.state.read_control(PROGRESS_FILE))
-    except ValueError as error:
-        raise StageError("policy", f"workgraph progress is corrupt: {error}") from error
-    wave = progress.get("fork_wave") if isinstance(progress, dict) else None
-    if not wave:
-        return
+    progress, wave, store, journal = loaded
     parent = ctx.sb
     if not isinstance(parent, ForkableSandbox):
         raise StageError("policy", "a fork wave is in flight but the configured sandbox cannot fork")
-
-    def store() -> None:
-        ctx.state.write_control(PROGRESS_FILE, json.dumps(progress, indent=2, sort_keys=True) + "\n")
-
-    def journal(entry: dict[str, Any], **update: Any) -> None:
-        entry.update(update)
-        store()
-
     if wave.get("parked"):
         _reclaim_lost(parent, wave, journal)
     debt = _reap_all(parent, wave, journal)
-    if wave.get("parked"):
+    if wave.get("parked") and not _lost(wave, journal):
         parent.resume_parent()
         journal(wave, parked=False)
     if debt:
         raise StageError("sandbox", f"recovered fork wave left children unconfirmed: {debt}", retryable=True)
     progress.setdefault("fork_waves", []).append({**wave, "recovered": True, "teardown": "confirmed"})
+    progress["fork_wave"] = None
+    store()
+
+
+def teardown(ctx: stages.Ctx) -> None:
+    """Reap what an unfinished fork wave left, for the teardown task, before it closes the parent.
+
+    The build task may never be retried (a killed worker, a teardown-debt error), so ``recover``
+    alone would leave children billing until their lease. The parent is not resumed: the teardown
+    task closes it next. Raises when a child cannot be confirmed stopped, after recording it.
+    """
+    loaded = _in_flight(ctx)
+    if loaded is None or not isinstance(ctx.sb, ForkableSandbox):
+        return
+    progress, wave, store, journal = loaded
+    if wave.get("parked"):
+        _reclaim_lost(ctx.sb, wave, journal)
+    debt = _reap_all(ctx.sb, wave, journal)
+    if debt:
+        raise StageError("sandbox", f"teardown could not confirm fork children stopped: {debt}")
+    progress.setdefault("fork_waves", []).append({**wave, "torn_down": True, "teardown": "confirmed"})
     progress["fork_wave"] = None
     store()
 
@@ -479,6 +492,46 @@ class _HaltingCancellation(Cancellation):
             super().cancel()
         if first:
             self._on_cancel()
+
+
+def _in_flight(
+    ctx: stages.Ctx,
+) -> tuple[dict[str, Any], dict[str, Any], Callable[[], None], Callable[..., None]] | None:
+    if not ctx.state.has_control(PROGRESS_FILE):
+        return None
+    try:
+        progress = json.loads(ctx.state.read_control(PROGRESS_FILE))
+    except ValueError as error:
+        raise StageError("policy", f"workgraph progress is corrupt: {error}") from error
+    wave = progress.get("fork_wave") if isinstance(progress, dict) else None
+    if not wave:
+        return None
+
+    def store() -> None:
+        ctx.state.write_control(PROGRESS_FILE, json.dumps(progress, indent=2, sort_keys=True) + "\n")
+
+    def journal(entry: dict[str, Any], **update: Any) -> None:
+        entry.update(update)
+        store()
+
+    return progress, wave, store, journal
+
+
+def _by_node(wave: dict[str, Any]) -> list[dict[str, Any]]:
+    return sorted(wave.get("children", []), key=lambda row: row["node_id"])
+
+
+def _child_receipt(entry: dict[str, Any], harvest: Harvest | None) -> dict[str, Any]:
+    fields = ("node_id", "agent_call", "key", "child", "reaped", "fork_refused", "teardown_error")
+    row = {k: entry.get(k) for k in fields}
+    if harvest is not None:
+        row |= {
+            "child_input_head": harvest.input_head,
+            "child_output_head": harvest.output_head,
+            "touched": list(harvest.touched),
+            "patch_blob": harvest.patch_blob,
+        }
+    return {k: v for k, v in row.items() if v is not None or k == "child"}
 
 
 def _work_nodes(pending: Sequence[PlanTask]) -> tuple[WorkNode, ...]:
@@ -519,14 +572,17 @@ def _harvest(
 ) -> Harvest:
     q = shlex.quote
     span = f"{q(checkpoint)}..{q(output)}"
-    touched_text = stages._sh(child_ctx, f"git diff --name-only --relative {span} -- .")
-    raw_diff = stages._sh(child_ctx, f"git diff --raw --no-abbrev --relative {span} -- .")
+    # --no-renames: a rename reports only its new path, which would hide the deletion from the
+    # declared-scope, overlap and protected-path checks.
+    touched_text = stages._sh(child_ctx, f"git diff --name-only --relative {span} --no-renames -- .")
+    raw_diff = stages._sh(child_ctx, f"git diff --raw --no-abbrev --relative {span} --no-renames -- .")
     patch_rel = f"{PATCH_DIR}/{node.id}.patch"
     # Repository-root paths (no --relative), limited to the target: `git apply` in the parent runs
     # from the top level, which is right for a git-init target and a full clone alike.
     stages._sh(
         child_ctx,
-        f"mkdir -p {q(PATCH_DIR)} && git diff --binary --full-index {q(checkpoint)} {q(output)} -- . > {q(patch_rel)}",
+        f"mkdir -p {q(PATCH_DIR)} && "
+        f"git diff --binary --full-index --no-renames {q(checkpoint)} {q(output)} -- . > {q(patch_rel)}",
     )
     patch = child_ctx.sb.read(patch_rel)
     in_child = stages._sh(child_ctx, f"git hash-object --no-filters {q(patch_rel)}").strip()
@@ -574,4 +630,19 @@ def _reap_entry(parent: ForkableSandbox, entry: dict[str, Any], journal: Callabl
 
 def _reap_all(parent: ForkableSandbox, wave: dict[str, Any], journal: Callable[..., None]) -> list[str]:
     debt = [_reap_entry(parent, entry, journal) for entry in wave.get("children", [])]
-    return [child for child in debt if child]
+    return [child for child in debt if child] + [f"key {entry['key']}" for entry in _lost(wave, journal)]
+
+
+def _lost(wave: dict[str, Any], journal: Callable[..., None]) -> list[dict[str, Any]]:
+    """Requested forks whose child was never identified: unknown, not absent -- until the lease
+    they were requested with has certainly run out, after which the provider has stopped them."""
+    lost = []
+    for entry in wave.get("children", []):
+        if not entry.get("fork_requested") or entry.get("child") or entry.get("reaped"):
+            continue
+        expires = float(entry.get("requested_at") or 0.0) + int(entry.get("ttl_s") or 0) + LEASE_GRACE_S
+        if entry.get("requested_at") and time.time() >= expires:
+            journal(entry, reaped=True, lease_expired=True)
+            continue
+        lost.append(entry)
+    return lost

@@ -257,8 +257,9 @@ def _settle(ctx: stages.Ctx, progress: dict[str, Any], plan: Plan, after: str) -
         # `--relative`: without it git reports paths from the REPOSITORY root even with `-- .`. A cell
         # that is a full clone (islo, toolset/sbx) holds the target in a subdirectory, so every path
         # would carry `<dir>/` and never match the node's target-relative declaration.
+        # --no-renames: a rename reports only its new path and would hide the deletion from scope.
         changed_text = stages._sh(
-            ctx, f"git diff --name-only --relative {shlex.quote(before)}..{shlex.quote(after)} -- ."
+            ctx, f"git diff --name-only --relative {shlex.quote(before)}..{shlex.quote(after)} --no-renames -- ."
         )
         changed = tuple(sorted(line.strip() for line in changed_text.splitlines() if line.strip()))
         unexpected = sorted(set(changed) - set(node.files))
@@ -268,6 +269,20 @@ def _settle(ctx: stages.Ctx, progress: dict[str, Any], plan: Plan, after: str) -
                 "policy",
                 f"Plan.work node {node.id!r} changed files outside its declared scope: {unexpected}",
             )
+        expected_raw = attempt.get("fork_raw_diff")
+        if expected_raw is not None:
+            # A fanned-in fork patch must reproduce its child's paths, modes and blob ids. Checked
+            # here, not only in the merge, so a commit settled after a crash is held to it too.
+            applied = stages._sh(
+                ctx,
+                f"git diff --raw --no-abbrev --relative {shlex.quote(before)}..{shlex.quote(after)} --no-renames -- .",
+            )
+            if applied != expected_raw:
+                _abandon(ctx, progress, before)
+                raise StageError(
+                    "policy",
+                    f"fork fan-in {node.id}: the merged bytes differ from child {attempt['fork']['child']}'s output",
+                )
         receipt = {
             "node_id": node.id,
             "state": "ok",
@@ -293,8 +308,8 @@ def _fork_merge(ctx: stages.Ctx, plan: Plan, progress: dict[str, Any], *, layer:
     """Fan one forked child's patch into the parent through the same journal a serial node uses.
 
     The attempt row is durable before the patch is applied, so a death between apply and receipt
-    is settled by `_open_progress` exactly like a serial node's commit. The applied result is then
-    held to the child's own bytes: the same paths, modes and blob ids, or the merge is refused.
+    is settled by `_open_progress` exactly like a serial node's commit. `_settle` then holds the
+    applied result to the child's own bytes -- the same paths, modes and blob ids -- or refuses it.
     """
 
     def merge(node: PlanTask, harvest: fork_wave.Harvest, target_head: str) -> str:
@@ -310,6 +325,7 @@ def _fork_merge(ctx: stages.Ctx, plan: Plan, progress: dict[str, Any], *, layer:
             "started_at": time.time(),
             "layer": layer,
             "fork": harvest.lineage(progress["fork_wave"]["parent"], progress["fork_wave"]["checkpoint"]),
+            "fork_raw_diff": harvest.raw_diff,
         }
         _store_progress(ctx, progress)
         try:
@@ -320,12 +336,6 @@ def _fork_merge(ctx: stages.Ctx, plan: Plan, progress: dict[str, Any], *, layer:
                 patch_abs = posixpath.join(ctx.sb.workdir, patch_rel)
                 stages._sh(ctx, f"git -C {q(top)} apply --index --whitespace=nowarn {q(patch_abs)}")
             after = stages.commit(ctx, stage=f"work:{node.id}", msg=harvest.message)
-            applied = stages._sh(ctx, f"git diff --raw --no-abbrev --relative {q(before)}..{q(after)} -- .")
-            if applied != harvest.raw_diff:
-                raise StageError(
-                    "policy",
-                    f"fork fan-in {node.id}: the merged bytes differ from child {harvest.child}'s output",
-                )
         except BaseException:
             _abandon(ctx, progress, before)
             raise
@@ -338,10 +348,16 @@ def _decide(
     ctx: stages.Ctx, progress: dict[str, Any], layer: int, pending: list[PlanTask], provider_forks: bool
 ) -> bool:
     fork, reason = fork_wave.fork_decision(ctx, pending, provider_forks=provider_forks)
+    _record_decision(ctx, progress, layer, pending, fork, reason)
+    return fork
+
+
+def _record_decision(
+    ctx: stages.Ctx, progress: dict[str, Any], layer: int, pending: list[PlanTask], fork: bool, reason: str
+) -> None:
     decision = {"layer": layer, "nodes": [node.id for node in pending], "fork": fork, "reason": reason}
     progress["wave_decisions"] = [row for row in progress["wave_decisions"] if row.get("layer") != layer] + [decision]
     _store_progress(ctx, progress)
-    return fork
 
 
 def _execute_nodes(
@@ -353,6 +369,7 @@ def _execute_nodes(
     population_guidance: str = "",
     *,
     provider_forks: bool = False,
+    deadline: float | None = None,
 ) -> None:
     completed = {
         str(row["node_id"]): row
@@ -366,20 +383,27 @@ def _execute_nodes(
             if missing:
                 raise StageError("policy", f"Plan.work node {node.id!r} has incomplete dependencies: {missing}")
         if pending and _decide(ctx, progress, wave.index, pending, provider_forks):
-            fork_wave.run_wave(
-                ctx,
-                pending,
-                progress,
-                layer=wave.index,
-                checkpoint=stages._assert_workspace_head(ctx, f"fork wave {wave.index}"),
-                prompts={
-                    node.id: _node_prompt(ctx, plan_text, spec_text, node, population_guidance) for node in pending
-                },
-                store=lambda: _store_progress(ctx, progress),
-                merge=_fork_merge(ctx, plan, progress, layer=wave.index),
-            )
-            completed.update({str(row["node_id"]): row for row in progress["nodes"] if row.get("node_id")})
-            continue
+            try:
+                fork_wave.run_wave(
+                    ctx,
+                    pending,
+                    progress,
+                    layer=wave.index,
+                    checkpoint=stages._assert_workspace_head(ctx, f"fork wave {wave.index}"),
+                    prompts={
+                        node.id: _node_prompt(ctx, plan_text, spec_text, node, population_guidance) for node in pending
+                    },
+                    store=lambda: _store_progress(ctx, progress),
+                    merge=_fork_merge(ctx, plan, progress, layer=wave.index),
+                    deadline=deadline,
+                )
+            except fork_wave.ForkUnavailable as refused:
+                # Fork is an optimization: a provider that refuses it (a start-rate limit, say) costs
+                # the wave its parallelism, never its correctness. Nothing merged; run it serially.
+                _record_decision(ctx, progress, wave.index, pending, False, f"provider_refused_fork: {refused}"[:400])
+            else:
+                completed.update({str(row["node_id"]): row for row in progress["nodes"] if row.get("node_id")})
+                continue
         for node in pending:
             after = _attempt(
                 ctx,
@@ -563,6 +587,7 @@ def _load_plan(ctx: stages.Ctx) -> Plan | None:
 @stages._resumable
 def build_and_test(ctx: stages.Ctx) -> StageResult:
     """Airflow-managed build stage with real ``Plan.work`` semantics and legacy fallback."""
+    started = time.monotonic()
     if ctx.blueprint is not None and ctx.blueprint.fusion is not None:
         from swfactory.replica_fusion import execute_fusion_stage
 
@@ -586,12 +611,21 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
     # back; nothing can fence the workspace until it is settled.
     fork_wave.recover(ctx)
     progress = _open_progress(ctx, plan)
-    _execute_nodes(
-        ctx, plan, spec_text, plan_text, progress, population_guidance, provider_forks=provider_can_fork(ctx)
-    )
-    # Children charged the run ledger on their own context copies; this context's view must catch up
-    # before `_timed` takes the stage's cost delta.
-    stages.seed_budget(ctx, refresh=True)
+    try:
+        _execute_nodes(
+            ctx,
+            plan,
+            spec_text,
+            plan_text,
+            progress,
+            population_guidance,
+            provider_forks=provider_can_fork(ctx),
+            deadline=started + ctx.cfg.stage_timeout_h * 3600,
+        )
+    finally:
+        # Fork children charged the run ledger on their own context copies; this context must catch
+        # up before `_timed` takes the stage's cost delta, on failure as much as on success.
+        stages.seed_budget(ctx, refresh=True)
 
     def outcome(tests: TestResult) -> StageResult:
         return StageResult(

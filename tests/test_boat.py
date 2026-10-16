@@ -640,15 +640,36 @@ def test_a_child_that_never_becomes_ready_is_stopped_before_the_error_propagates
     assert recorded and client.stopped == recorded
 
 
-def test_reclaim_reads_a_409_as_no_fork_pending(tmp_path: Path) -> None:
+def test_reclaim_returns_the_lost_child_and_any_refusal_is_debt_not_absence(tmp_path: Path) -> None:
     client, sandbox = _cell(tmp_path, ForkingBoatClient())
     sandbox.ensure()
     assert sandbox.reclaim_fork(key="k", ttl_s=60) == f"{sandbox.sandbox_id}-child-1"
-    client.fork_status = 409
-    assert sandbox.reclaim_fork(key="k", ttl_s=60) is None
-    client.fork_status = 503
-    with pytest.raises(BoatError, match="503"):
-        sandbox.reclaim_fork(key="k", ttl_s=60)
+    for status in (409, 503):
+        client.fork_status = status
+        with pytest.raises(BoatError, match=str(status)):
+            sandbox.reclaim_fork(key="k", ttl_s=60)
+
+
+def test_a_4xx_on_a_fresh_fork_is_a_refusal_and_a_5xx_may_have_made_a_child(tmp_path: Path) -> None:
+    from swfactory.sandbox_contract import ForkRefused
+
+    client, sandbox = _cell(tmp_path, ForkingBoatClient())
+    sandbox.ensure()
+    recorded: list[str] = []
+    for status, refused in ((429, True), (409, True), (503, False)):
+        client.fork_status = status
+        with pytest.raises(BoatError) as error:
+            sandbox.fork_child(key=f"k{status}", ttl_s=60, record=recorded.append)
+        assert isinstance(error.value, ForkRefused) is refused and error.value.status == status
+    assert recorded == []
+
+
+def test_reap_lets_the_observed_state_decide_when_a_second_stop_is_refused(tmp_path: Path) -> None:
+    client, sandbox = _cell(tmp_path, ForkingBoatClient())
+    sandbox.ensure()
+    client.stop_errors.append("halted-child")  # already stopping: the provider refuses once
+    sandbox.reap("halted-child")
+    assert client.waited_stopped[-1] == "halted-child"
 
 
 def test_a_cell_with_no_recorded_sandbox_never_creates_one_to_fork(tmp_path: Path) -> None:
