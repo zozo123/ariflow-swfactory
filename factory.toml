@@ -119,6 +119,7 @@ protected = [
   "src/swfactory/smolvm_backend.py",    # SmolVM confinement and host-owned recovery
   "src/swfactory/sandbox_contract.py",
   "src/swfactory/boat.py",              # the boat sandbox backend and its BOAT_API_KEY bearer
+  "src/swfactory/fork_wave.py",         # fork fan-out, lineage proof and child teardown
   "src/swfactory/paths.py",             # confined_path and the repo/ref validators the sandboxes use
   "src/swfactory/stages.py",            # canonical stage semantics
   "src/swfactory/call_observations.py", # operator billing authority cannot be candidate-edited

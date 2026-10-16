@@ -93,24 +93,62 @@ nodes around the dynamic work nodes. JSON output is the default.
 ## Forkable sandboxes: capability, not fiction
 
 `parallel_safe = true` is a **fork hint**. Multiple parallel-safe work nodes in the same
-topological wave are candidates to start from the same approved plan state. The graph reports them,
-but the current executor still runs the governed build/review cell without claiming a provider can
-clone a live sandbox.
+topological wave are candidates to start from the same approved plan state. A hint is always safe
+to ignore: serial execution in the one governed workspace remains semantically correct, and it is
+the default.
 
-A future native-fork executor must satisfy all of these before enabling parallel branches:
+`swfactory.fork_wave` is the experimental executor for the hint. Inside the Airflow build task it
+fans one wave out over provider forks and back in. A wave forks only when every gate holds, and
+the reason is retained either way in `workgraph-execution.json` (`wave_decisions`):
 
-1. fork from an immutable, content-addressed parent state;
-2. give every branch its own lease/TTL, budget and provenance;
-3. never copy publishing credentials into a coding cell;
-4. record the immutable parent checkpoint, branch id and evidence ids for every child;
-5. never count sibling branches that reuse the same evidence as independent agreement;
-6. merge branches deterministically and surface conflicts as evidence, not silent retries;
-7. run the complete verification and review stream on the merged result;
-8. tear down every child on success, failure, cancellation or scheduler recovery.
+- the line opted in with `[limits] max_parallel_forks` (or `SWF_MAX_PARALLEL_FORKS`) above 1;
+- the configured provider's capability document says `fork` **and** its adapter implements
+  `ForkableSandbox` (today only `boat`, whose fork was observed against a live account);
+- the wave has at least two pending nodes, every one `parallel_safe`, with no declared overlap;
+- the agent is not the external launcher;
+- the run budget can pay every sibling's full per-stage grant at once.
+
+How each rule a native-fork executor must satisfy is held:
+
+1. **Immutable parent.** The parent is parked at the wave's checkpoint SHA (boat forks only a
+   completed snapshot, so parking means `stop`). Every child proves `HEAD == checkpoint` on a
+   clean tree before an agent runs; a child forked from an older periodic snapshot is refused.
+2. **Own lease, budget and provenance.** Each child gets an explicit TTL no longer than the stage,
+   its own agent call number and budget reservation, and an `Idempotency-Key` bound to run, wave,
+   node, call and checkpoint.
+3. **No publishing credentials.** Children are forks of a credential-free cell (boat `noEnv`);
+   published commits and publication happen only in the parent.
+4. **Lineage.** The journal records parent, checkpoint, child id, key, input/output HEAD and the
+   patch blob of every child; each fanned-in node receipt carries that `fork` lineage.
+5. **No false agreement.** Siblings do different work from one shared parent; receipts name the
+   shared `fork_parent`, and nothing counts siblings as independent evidence.
+6. **Deterministic merge.** `WorkExecutor` classifies stale bases, undeclared or protected writes
+   and sibling overlap before any merge (diffs use `--no-renames`, so a rename cannot hide the
+   deletion it implies). Patches are applied in node-id order, and each applied result must
+   reproduce the child's paths, modes and blob ids, or the merge is refused -- also when the
+   commit is settled after a crash.
+7. **Complete verification.** Nothing is verified in a child; the stage's test and repair loop
+   runs on the merged head, then review runs as for any other change.
+8. **Teardown.** Each child is reaped in its runner's `finally`; a failed node, a timeout or a
+   signal halts live siblings at the provider and keeps queued ones from starting; a retried task
+   and the teardown task both reap every journalled child before anything else. A child whose
+   fork answer was lost is found again by its idempotency key, and until it is, the parent stays
+   parked (a running parent could fork anew from a periodic snapshot) and the wave is recorded as
+   teardown debt; past its lease plus a grace period the provider has stopped it.
+
+A provider's definite refusal to fork -- boat answers `429 rate_limited` once an account spends
+its hourly sandbox starts, and a k-node wave costs k + 1 starts -- creates nothing. When every
+failure in a wave is such a refusal, the wave runs serially in the parent and `wave_decisions`
+records `provider_refused_fork`: fork costs a wave its parallelism, never its correctness.
+
+`tests/test_fork_wave_e2e.py` drives the real setup and build stages over boat's measured
+lifecycle, and runs the same scenario on boat.dev with `SWF_TEST_LIVE_BOAT=1`. Support stays
+`experimental` until retained managed workloads show the wall-clock and spend trade against serial
+execution and a second provider implements the same contract.
 
 The lineage/evidence rule follows the core warning in *Evidence-Aware MapReduce for Forkable
 Compute*: cheap snapshot branches do not make reused evidence independent. The managed graph marks
-native forks as `lineage-required` so a future executor has an explicit compatibility contract.
+native forks as `lineage-required` so the executor has an explicit compatibility contract.
 
 The existing `sandbox.snapshot` option is a warm-start image, not a live worktree fork. The two
 concepts must not be conflated.
@@ -126,6 +164,6 @@ not DAG proliferation:
 - Airflow owns retries and recovery; Rust remains an operator/control surface, not a scheduler.
 - Every issue retains its own artifact chain, approvals, budget and sandbox identity.
 - Fork hints are safe to ignore: serial execution remains semantically correct.
+- A forked wave holds at most `max_parallel_forks` child cells, each with its own lease.
 
-This keeps the system KISS today while preserving a clean path to provider-native forks and more
-parallel execution later.
+This keeps the default path KISS while forked waves remain an opt-in, evidence-bound experiment.

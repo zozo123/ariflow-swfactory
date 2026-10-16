@@ -101,6 +101,9 @@ class Config(BaseSettings):
     gate_replay: str | None = None
     stage_timeout_h: int = Field(default=3, ge=1)  # execution_timeout of every stage task
     max_parallel_jobs: int = Field(default=4, ge=1)  # concurrent jobs == concurrent sandboxes
+    # Forked child cells one parallel-safe Plan.work wave may run at once (swfactory.fork_wave).
+    # 1 keeps every node in the one shared workspace; >1 forks only on a provider that can.
+    max_parallel_forks: int = Field(default=1, ge=1, le=16)
 
     # -- islo sandbox: gateway/environment identity and MicroVM lifecycle
     gateway_profile: str = "swfactory"

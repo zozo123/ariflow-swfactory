@@ -81,13 +81,16 @@
       "support": "experimental",
       "invariant": "Parallel candidates need immutable parent identity, isolated workspaces, bounded leases and deterministic conflict-aware fan-in.",
       "owner": "workgraph",
-      "runtime_entry": "swfactory.work_executor.WorkExecutor and swfactory.execution_binding",
-      "environment": "provider-specific; not part of the supported promotion contract",
-      "test": "tests/test_work_executor.py (parallel fan-out, conflict, crash and cancellation scenarios)",
+      "runtime_entry": "swfactory.work_stage.build_and_test -> swfactory.fork_wave.run_wave (WorkExecutor fan-out/fan-in over swfactory.boat.BoatSandbox forks; opt-in limits.max_parallel_forks)",
+      "environment": "boat.dev only (the one provider whose fork was observed and whose adapter implements ForkableSandbox); opt-in per line; not part of the supported promotion contract",
+      "test": "tests/test_fork_wave_e2e.py (fork wave end to end over the measured boat lifecycle: fan-out, node-id-ordered fan-in, halt on failure, scope conflict, stale snapshot, crash recovery; opt-in live boat.dev run) plus tests/test_work_executor.py",
       "evidence": [
-        "unit-level executor receipts only"
+        "tests/test_fork_wave_e2e.py",
+        "tests/test_work_executor.py",
+        "tests/test_boat.py",
+        "src/swfactory/fork_wave.py"
       ],
-      "follow_up": "Qualify one real provider with isolated candidate workspaces and retained lineage before changing support to validated.",
+      "follow_up": "Run the opt-in live boat.dev fork wave on retained managed workloads, measure wall-clock and spend against serial, and implement ForkableSandbox for a second provider before changing support to validated.",
       "public_surface": [
         "provider-native fork",
         "`parallel_safe`"

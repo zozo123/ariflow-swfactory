@@ -238,27 +238,35 @@ class WorkExecutor:
             futures: dict[Future[NodeResult], NodeRequest] = {
                 pool.submit(self._run_with_retry, request, cancellation): request for request in requests
             }
-            for future in as_completed(futures):
-                request = futures[future]
-                if cancellation.cancelled and future.cancel():
-                    continue
-                try:
-                    result = future.result()
-                except BaseException as exc:
-                    result = NodeResult(
-                        logical_id=request.logical_id,
-                        node_id=request.node.id,
-                        state="failed",
-                        input_head=request.input_head,
-                        output_head=None,
-                        attempt=request.attempt,
-                        detail=f"{type(exc).__name__}: {exc}"[:2000],
-                    )
-                by_id[request.node.id] = result
-                if result.state != "ok":
-                    cancellation.cancel()
-                    for pending in futures:
-                        pending.cancel()
+            try:
+                for future in as_completed(futures):
+                    request = futures[future]
+                    if cancellation.cancelled and future.cancel():
+                        continue
+                    try:
+                        result = future.result()
+                    except BaseException as exc:
+                        result = NodeResult(
+                            logical_id=request.logical_id,
+                            node_id=request.node.id,
+                            state="failed",
+                            input_head=request.input_head,
+                            output_head=None,
+                            attempt=request.attempt,
+                            detail=f"{type(exc).__name__}: {exc}"[:2000],
+                        )
+                    by_id[request.node.id] = result
+                    if result.state != "ok":
+                        cancellation.cancel()
+                        for pending in futures:
+                            pending.cancel()
+            except BaseException:
+                # A timeout or signal raised while this thread waits. Leaving the pool joins every
+                # runner, so cancel first: queued nodes never start and running ones see the flag.
+                cancellation.cancel()
+                for pending in futures:
+                    pending.cancel()
+                raise
         return [by_id[r.node.id] for r in requests if r.node.id in by_id]
 
     def _run_with_retry(self, request: NodeRequest, cancellation: Cancellation) -> NodeResult:

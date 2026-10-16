@@ -85,9 +85,10 @@ service, state machine, command family, or storage system.
 | Self-improvement | Propose a bounded change against measured debt | Ordinary reviewed work, with the current policy still in force |
 
 The default managed build uses one governed workspace. The optional population path can execute
-provider-bound search tasks and retain their results inside that build stage. This does not imply
-provider-native source forks, default multi-candidate delivery, calibrated adaptive thresholds, or
-qualified support for every model/provider combination.
+provider-bound search tasks and retain their results inside that build stage. An opt-in line on a
+forkable provider (boat) may fan a parallel-safe wave out over forked child cells and back in
+(`swfactory.fork_wave`, experimental). This does not imply default multi-candidate delivery,
+calibrated adaptive thresholds, or qualified support for every model/provider combination.
 
 ## Current ownership and the Rust destination
 

@@ -6,6 +6,24 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Add experimental fork waves (`swfactory.fork_wave`): with `[limits] max_parallel_forks` above 1
+  on a forkable provider, a parallel-safe `Plan.work` wave runs as one forked boat.dev child per
+  node. The parent is parked at the checkpoint, each child proves its HEAD before an agent runs,
+  `WorkExecutor` refuses stale, undeclared, protected or overlapping writes before any merge, and
+  patches fan in by node id, each checked blob-for-blob against its child. A node failure halts its
+  live siblings; every child is reaped, and a retried task and the teardown task reap journalled
+  orphans (by idempotency key when the id was lost) before anything else. A provider that refuses
+  to fork (boat's start-rate limit) degrades the wave to serial. Verification still runs on the
+  merged head. The default stays serial. `tests/test_fork_wave_e2e.py` runs the scenario over
+  boat's measured lifecycle and, with `SWF_TEST_LIVE_BOAT=1`, on boat.dev.
+- Fix boat work cells, which could not provision on a real VM: the checkout went to `/workspace`,
+  which the VM user cannot create, and control commands ran with `cwd: "/"`, which boat refuses
+  (`Path must resolve under /home/user or /tmp`). The checkout now lives under
+  `/home/user/workspace` and those commands run from the home directory. Add boat `fork`/`resume`.
+- `WorkExecutor` cancels queued nodes when its waiting thread is interrupted (a timeout or signal)
+  instead of joining them, and serial `Plan.work` scope checks no longer let a rename hide the
+  deletion of an undeclared file.
+
 - Add experimental `swfactory campaign-fusion build/verify`: compose two to four
   retained sibling candidates into an exact patch proposal with contributor lineage
   and deduplicated diagnostic observations. Refuse overlapping edits, protected paths

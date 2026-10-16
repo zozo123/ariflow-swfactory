@@ -11,7 +11,17 @@ that repo's vendored ``@boatdev/sdk`` rather than guessed::
     POST  /sandboxes/<id>/commands   exec (``cwd`` and ``timeoutSeconds`` travel per command)
     GET   /sandboxes/<id>/files      read one file (utf8)
     PUT   /sandboxes/<id>/files      write one file (base64)
-    POST  /sandboxes/<id>/stop       archive the sandbox
+    POST  /sandboxes/<id>/stop       archive the sandbox (saves a completed snapshot first)
+    POST  /sandboxes/<id>/fork       new no-env sandbox from the latest completed snapshot -> id
+    POST  /sandboxes/<id>/resume     bring an archived sandbox back from its snapshot
+
+Fork and resume were read off ``@boatdev/sdk`` 1.9.9 (``ForkRequest``, ``ResumeRequest``) and
+then observed live, because the order matters and no page states it: a running sandbox answers
+``409 fork_failed`` ("Fork needs a completed snapshot"), a stopped one forks in ~2 s, and both
+children of one stop came up at the parent's exact HEAD with a clean tree and could not see each
+other's commits. The periodic snapshots a running sandbox also takes could be older than HEAD,
+which is why ``fork_parent`` parks the cell itself and ``swfactory.fork_wave`` makes every child
+prove its HEAD before an agent touches it.
 
 ``BOAT_API_KEY`` (and optional ``BOAT_BASE_URL``) come from the process environment only --
 never a file, never an ``SWF_*`` knob -- and the key never enters an error message, a doctor
@@ -35,6 +45,11 @@ Honest limits, written down rather than discovered:
   and the VM reaches whatever boat.dev lets it reach (its own ``git clone`` of the target included).
 * the sandbox id is persisted in host-owned run state the moment provisioning succeeds, so a
   retried or restarted task reconnects to the same VM instead of leaking a second one.
+* the VM user is ``user`` with ``HOME=/home/user``, and boat refuses any exec ``cwd`` that is not
+  an existing directory under ``/home/user`` or ``/tmp`` (observed: ``cwd: "/"`` is ``400 Path
+  must resolve under /home/user or /tmp``; ``mkdir /workspace`` is ``Permission denied``). The
+  checkout lives under the home directory, and commands the provider-neutral helpers run from
+  ``/`` (their paths are absolute) run from the home directory instead.
 """
 
 from __future__ import annotations
@@ -64,6 +79,7 @@ from swfactory.sandbox import (
     provision_checkout,
     save_handle,
 )
+from swfactory.sandbox_contract import ForkRefused
 from swfactory.state import RunState
 
 BOAT_API_KEY_ENV = "BOAT_API_KEY"
@@ -74,7 +90,8 @@ MISSING_KEY = "BOAT_API_KEY is not set: create a key at https://boat.dev/dashboa
 BOAT_TYPES = ("small", "default", "large")
 BOAT_DEFAULT_TYPE = "small"
 BOAT_MAX_COMMAND_S = 600  # boat accepts 1-600 s per command
-BOAT_WORKDIR_ROOT = "/workspace"  # where the target repo is cloned inside the VM
+BOAT_HOME = "/home/user"  # the VM user's home; exec cwd and file paths must resolve under it or /tmp
+BOAT_WORKDIR_ROOT = f"{BOAT_HOME}/workspace"  # where the target repo is cloned inside the VM
 BOAT_STATE_FILE = "boat-sandbox.json"  # host-owned handle, so teardown survives a crash
 BOAT_READY_STATES = frozenset({"ready", "idle", "running"})
 BOAT_STOPPED_STATES = frozenset({"archived", "cancelled"})
@@ -91,6 +108,11 @@ class BoatError(StageError):
     def __init__(self, message: str, *, retryable: bool = False, status: int | None = None) -> None:
         super().__init__("sandbox", message, retryable=retryable)
         self.status = status
+
+
+class BoatForkRefused(BoatError, ForkRefused):
+    """boat.dev answered a fresh fork with a 4xx (observed: ``429 rate_limited``, ``409
+    fork_failed``): a refusal, not a lost answer, so no child exists under that key."""
 
 
 BoatExecResult = ExecResult
@@ -128,6 +150,17 @@ class BoatClient(Protocol):
 
     def wait_stopped(self, sandbox_id: str) -> None:
         """Resolve once boat.dev reports the VM archived, so teardown is verified, not assumed."""
+        ...
+
+    def fork(self, sandbox_id: str, *, ttl_s: int, idempotency_key: str) -> str:
+        """Fork the latest completed snapshot into a new no-env VM and return its id at once.
+
+        ``idempotency_key`` makes a retry after a lost response return the same child instead of
+        a second billable one; it is also how recovery finds a child whose id was never seen."""
+        ...
+
+    def resume(self, sandbox_id: str) -> None:
+        """Bring an archived VM back from its snapshot; a VM that is already up is a no-op."""
         ...
 
 
@@ -195,6 +228,7 @@ class HttpBoatClient:
         *,
         body: Mapping[str, object] | None = None,
         query: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
         timeout_s: float = _CONTROL_TIMEOUT_S,
     ) -> dict:
         url = self.base_url + path
@@ -204,6 +238,7 @@ class HttpBoatClient:
             url,
             data=json.dumps(body).encode() if body is not None else None,
             headers={
+                **(headers or {}),
                 "Authorization": f"Bearer {self._key}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
@@ -341,6 +376,39 @@ class HttpBoatClient:
 
         self._poll(sandbox_id, observe, BOAT_STOPPED_STATES, "stopped")
 
+    def fork(self, sandbox_id: str, *, ttl_s: int, idempotency_key: str) -> str:
+        if type(ttl_s) is not int or ttl_s <= 0:
+            raise BoatError("boat fork ttl_s must be a positive integer")
+        if not idempotency_key or len(idempotency_key) > 255 or any(ch.isspace() for ch in idempotency_key):
+            raise BoatError("boat fork idempotency key must be 1-255 non-whitespace characters")
+        # noEnv is redundant for a no-env parent ("a fork of a no-env sandbox is always no-env")
+        # and sent anyway: this module never relies on a provider default for credential exposure.
+        # The fork does NOT inherit the parent's TTL, so the child's lease is always explicit.
+        body = {"noEnv": True, "ttlSeconds": ttl_s}
+        payload = self._request(
+            "fork",
+            "POST",
+            f"{_sandbox_path(sandbox_id)}/fork",
+            body=body,
+            headers={"Idempotency-Key": idempotency_key},
+        )
+        sandbox = payload.get("sandbox")
+        child = payload.get("id") or (sandbox.get("id") if isinstance(sandbox, dict) else None)
+        if not isinstance(child, str) or not child.strip():
+            raise BoatError("boat.dev fork returned no sandbox id")
+        if child == sandbox_id:
+            raise BoatError("boat.dev fork returned the parent's own id")
+        return child
+
+    def resume(self, sandbox_id: str) -> None:
+        try:
+            self._request("resume", "POST", f"{_sandbox_path(sandbox_id)}/resume", body={"noEnv": True})
+        except BoatError as error:
+            # A resume of a sandbox that is already up is refused; that is the state asked for.
+            if error.status in (400, 409) and self._state(sandbox_id) in BOAT_READY_STATES:
+                return
+            raise
+
 
 class BoatSandbox:
     """A work cell on a boat.dev VM: create and clone once, exec per command, stop on close.
@@ -363,12 +431,16 @@ class BoatSandbox:
         target_dir: str,
         ttl_s: int,
         state: RunState | None = None,
+        workdir_root: str = BOAT_WORKDIR_ROOT,
     ) -> None:
         self.name = name
         self.client = client
         self.repo = validate_repo(repo)
         self.base_branch = validate_git_ref(base_branch, field="base_branch")
-        self.repo_root = f"{BOAT_WORKDIR_ROOT}/{self.repo.rsplit('/', 1)[-1]}"
+        self.target_dir = target_dir
+        self.workdir_root = workdir_root
+        self.home = posixpath.dirname(workdir_root.rstrip("/")) or BOAT_HOME
+        self.repo_root = f"{workdir_root}/{self.repo.rsplit('/', 1)[-1]}"
         self.workdir = _checkout_dir(self.repo_root, target_dir)
         if type(ttl_s) is not int or ttl_s <= 0:
             raise BoatError("boat sandbox ttl_s must be a positive integer")
@@ -440,6 +512,8 @@ class BoatSandbox:
         return self.run(cmd, timeout_s=timeout_s)
 
     def _exec(self, cmd: str, *, cwd: str, timeout_s: int, sandbox_id: str | None = None) -> RunResult:
+        if cwd == "/":
+            cwd = self.home  # boat refuses "/"; callers passing it only use absolute paths
         started = time.monotonic()
         res = self.client.exec(sandbox_id or self._id(), cmd, cwd=cwd, timeout_s=timeout_s)
         return fold_exec(res, tag="boat", started=started, timeout_exit=TIMEOUT_EXIT_CODE)
@@ -483,6 +557,100 @@ class BoatSandbox:
         self.sandbox_id = None
         if self.state is not None:
             self.state.clear_control(BOAT_STATE_FILE)
+
+    # -- forkable cell: the surface `swfactory.fork_wave.ForkableSandbox` names -------------------
+
+    def fork_parent(self) -> str:
+        """Park this cell at its current disk so boat.dev can fork it; returns the parent's id.
+
+        boat forks only a completed snapshot, and ``stop`` is the one call that takes one of the
+        disk as it is now -- the periodic ones may predate HEAD. The parent runs nothing while it
+        is parked; ``resume_parent`` brings it back for the fan-in.
+        """
+        sandbox_id = self._known_id("fork")
+        self.client.stop(sandbox_id)
+        self.client.wait_stopped(sandbox_id)
+        return sandbox_id
+
+    def fork_child(self, *, key: str, ttl_s: int, record: Callable[[str], None]) -> BoatSandbox:
+        """A ready child VM forked from the parked parent, with its own lease of ``ttl_s``.
+
+        ``record`` receives the child id the moment boat.dev answers and before any wait, so a
+        process killed while the child boots still leaves the id where recovery can reap it. A
+        child that never becomes usable is stopped here before the error propagates. The child has
+        no run state of its own: its handle belongs to the fork wave's journal, not to this cell.
+        """
+        try:
+            child_id = self.client.fork(self._known_id("fork"), ttl_s=ttl_s, idempotency_key=key)
+        except BoatError as error:
+            if error.status is not None and 400 <= error.status < 500:
+                raise BoatForkRefused(str(error).removeprefix("[sandbox] "), status=error.status) from error
+            raise  # a 5xx or a dropped connection may have created the child: the caller reclaims
+        record(child_id)
+        child = BoatSandbox(
+            f"{self.name}-fork",
+            client=self.client,
+            repo=self.repo,
+            base_branch=self.base_branch,
+            target_dir=self.target_dir,
+            ttl_s=ttl_s,
+            workdir_root=self.workdir_root,
+        )
+        child.sandbox_id = child_id
+        try:
+            self.client.wait_ready(child_id)
+            probe = child._exec("true", cwd=child.workdir, timeout_s=_CONTROL_TIMEOUT_S)
+            if not probe.ok:
+                raise BoatError(f"boat fork {child_id} has no checkout at {child.workdir} (rc={probe.exit_code})")
+        except BaseException:
+            try:
+                self.reap(child_id)
+            except Exception as error:  # the journal still holds the id; recovery retries the stop
+                print(f"sandbox: boat fork {child_id} could not be stopped: {error}")
+            raise
+        return child
+
+    def reclaim_fork(self, *, key: str, ttl_s: int) -> str | None:
+        """Re-issue a fork whose answer was lost, so the child it made can be reaped.
+
+        The idempotency key returns the child the lost call created rather than a new one. Only
+        called while the parent is parked, where a fresh key would simply fork; so any refusal --
+        a 409 included, which is also how an in-progress idempotent request can answer -- is not
+        evidence that nothing was created, and it raises for the caller to record as debt.
+        """
+        return self.client.fork(self._known_id("reclaim"), ttl_s=ttl_s, idempotency_key=key)
+
+    def halt(self, provider_id: str) -> None:
+        """Ask boat.dev to stop one forked VM now; its runner's ``reap`` waits for the archive."""
+        self.client.stop(provider_id)
+
+    def reap(self, provider_id: str) -> None:
+        """Stop one VM this cell forked and wait for the archive; raises unless that is confirmed.
+
+        The stop's own answer is not the verdict: a VM a cancellation already halted can refuse a
+        second stop while it archives. ``wait_stopped`` observes the state and is what decides.
+        """
+        try:
+            self.client.stop(provider_id)
+        except BoatError as error:
+            print(f"sandbox: boat stop of fork {provider_id} answered {error}; confirming by state")
+        self.client.wait_stopped(provider_id)
+
+    def resume_parent(self) -> None:
+        """Bring the parked parent back and prove its checkout answers (idempotent)."""
+        sandbox_id = self._known_id("resume")
+        self.client.resume(sandbox_id)
+        self.client.wait_ready(sandbox_id)
+        probe = self._exec("true", cwd=self.workdir, timeout_s=_CONTROL_TIMEOUT_S)
+        if not probe.ok:
+            raise BoatError(f"resumed boat sandbox {sandbox_id} has no checkout (rc={probe.exit_code})", retryable=True)
+
+    def _known_id(self, op: str) -> str:
+        """The persisted id without ``ensure``'s probe: a parked parent cannot answer one."""
+        self._restore_id()
+        if self.sandbox_id is None:
+            raise BoatError(f"boat {op} needs a provisioned sandbox; none is recorded")
+        return self.sandbox_id
 
     def _id(self) -> str:
         if self.sandbox_id is None:
