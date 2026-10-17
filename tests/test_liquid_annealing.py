@@ -195,6 +195,8 @@ def _stage_harness(monkeypatch: Any) -> None:
         stages, "contract_trace", lambda *_args: stages.ContractTrace([], {}, "CHECKLIST", {"schema_version": 1})
     )
     monkeypatch.setattr(stages, "_protected", lambda *_args: "tests/")
+    # The host-side fix scope check reads the contract; the stubbed diff (src/a.py) stays in scope.
+    monkeypatch.setattr(stages, "_contract", lambda _ctx: TargetContract(test="pytest", protected=["tests/"]))
     monkeypatch.setattr(stages, "_summary_line", lambda *_args: "relax material defect")
     monkeypatch.setattr(stages, "commit", lambda *_args, **_kwargs: "fixed-head")
     monkeypatch.setattr(

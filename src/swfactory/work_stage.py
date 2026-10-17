@@ -9,6 +9,11 @@ Progress is journalled in host-owned RunState: an attempt row before every agent
 repair), a receipt after its commit, and the verdict of every test run. An Airflow task retry
 therefore resumes from the last committed candidate without replaying completed work or reusing a
 dead attempt's identity, while workspace-head fencing refuses a checkout the journal cannot explain.
+
+Repairs are bounded and ratcheted (``stages.ratchet``): the journal keeps the best candidate so far,
+and a repair that loses passing tests without winning back enough is reverted to it -- the revert is
+journalled before the reset, so a death in between is finished by the retry -- and the next repair
+starts from the best tree with the best's failures. Reverted attempts spend the same bound.
 """
 
 from __future__ import annotations
@@ -48,6 +53,8 @@ def _load_progress(ctx: stages.Ctx, plan: Plan, current_head: str) -> dict[str, 
             "fork_wave": None,
             "fork_waves": [],
             "wave_decisions": [],
+            "best": None,
+            "revert": None,
         }
     try:
         progress = json.loads(ctx.state.read_control(_PROGRESS))
@@ -60,6 +67,11 @@ def _load_progress(ctx: stages.Ctx, plan: Plan, current_head: str) -> dict[str, 
     progress.setdefault("repairs", [])
     progress.setdefault("fork_waves", [])
     progress.setdefault("wave_decisions", [])
+    progress.setdefault("best", None)
+    if progress.setdefault("revert", None) is not None:
+        # `_finish_revert` completes a journalled revert before the journal is opened; one still
+        # here sits on a workspace that is at neither of its ends.
+        raise StageError("policy", "workgraph progress holds an unfinished ratchet revert")
     if progress.setdefault("fork_wave", None) is not None:
         # `fork_wave.recover` settles an in-flight wave before the journal is opened; one still
         # here means its children were never confirmed stopped.
@@ -93,9 +105,48 @@ def _store_progress(ctx: stages.Ctx, progress: dict[str, Any]) -> None:
 
 
 def _restore(ctx: stages.Ctx, head: str) -> None:
-    stages._sh(ctx, f"git reset --hard {shlex.quote(head)}")
-    ctx.sb.run("git clean -fd -e .factory -e docs/factory")
-    stages._record_workspace_head(ctx, head)
+    stages.restore_head(ctx, head)
+
+
+def _finish_revert(ctx: stages.Ctx, plan: Plan) -> None:
+    """Complete a ratchet revert a dead process journalled but may not have finished.
+
+    The revert row ``{from, to}`` is durable before the reset. A death after it leaves the
+    workspace, the run's fence, or both on either end -- reset done or not, fence moved or not --
+    so before anything fences the workspace, a journalled revert whose fence and HEAD are each one
+    of its two ends is driven to ``to``. Anything else is left for the fence to refuse.
+    """
+    if not ctx.state.has_control(_PROGRESS) or not ctx.state.has_control("workspace-head"):
+        return
+    try:
+        progress = json.loads(ctx.state.read_control(_PROGRESS))
+    except (ValueError, OSError):
+        return  # `_load_progress` reports the corruption
+    if not isinstance(progress, dict) or progress.get("plan_digest") != _digest_plan(plan):
+        return
+    revert = progress.get("revert")
+    if revert is None:
+        return
+    ends = {revert.get("from"), revert.get("to")} if isinstance(revert, dict) else {None}
+    if not all(isinstance(end, str) and end for end in ends):
+        raise StageError("policy", "workgraph ratchet revert is invalid")
+    fence = ctx.state.read_control("workspace-head").strip()
+    if fence not in ends or stages._workspace_head(ctx) not in ends:
+        return
+    _complete_revert(ctx, progress)
+
+
+def _complete_revert(ctx: stages.Ctx, progress: dict[str, Any]) -> None:
+    """Reset to the journalled revert target, then move the checkpoint there and strike the row."""
+    target = progress["revert"]["to"]
+    _restore(ctx, target)
+    progress["head"] = target
+    progress["revert"] = None
+    best = progress.get("best")
+    if isinstance(best, dict) and best.get("head") == target:
+        # The verdict the restored tree already earned; the reverted candidate's no longer applies.
+        progress["verified"] = best.get("verified")
+    _store_progress(ctx, progress)
 
 
 def _with_population_guidance(prompt: str, guidance: str) -> str:
@@ -183,6 +234,7 @@ def _node_prompt(
 
 def _open_progress(ctx: stages.Ctx, plan: Plan) -> dict[str, Any]:
     """Fence the workspace, load the journal, and settle whatever a dead process left in flight."""
+    _finish_revert(ctx, plan)
     current_head = stages._assert_workspace_head(ctx, "workgraph start")
     progress = _load_progress(ctx, plan, current_head)
     attempt = progress["attempt"]
@@ -296,6 +348,9 @@ def _settle(ctx: stages.Ctx, progress: dict[str, Any], plan: Plan, after: str) -
         }
         progress["nodes"].append(receipt)
     else:
+        # Repairs run as `fix`, whose protected set includes the tests dir: checked here, not only
+        # in the kernel, so it holds on every backend and for a commit settled after a crash.
+        stages._assert_stage_scope(ctx, "fix", before, after, on_violation=lambda: _abandon(ctx, progress, before))
         receipt = {"repair": attempt["id"], **receipt}
         progress["repairs"].append(receipt)
     progress["head"] = after
@@ -495,16 +550,25 @@ def execution_decision(ctx: stages.Ctx, plan: Plan, fork_waves: list[dict[str, A
 
 def _verify(
     ctx: stages.Ctx, progress: dict[str, Any], plan: Plan, conflicts: list[dict[str, Any]]
-) -> tuple[TestResult, str]:
-    """Test the checkpointed candidate, journal the verdict, and derive the execution report from it.
+) -> tuple[TestResult, str, bool]:
+    """Test the checkpointed candidate, ratchet it, journal both, and derive the execution report.
 
-    Written after every run, not once after fan-in: the report's ``final_head`` is the HEAD the
-    suite actually ran on, which after a repair is not the HEAD the nodes fanned in to.
+    Returns the tests, their output, and whether the candidate is now the best so far (False: it
+    was reverted). Written after every run, not once after fan-in: the report's ``final_head`` is
+    the HEAD the workspace is left on, which after a repair is not the HEAD the nodes fanned in to
+    -- and after a revert is not the HEAD the suite just ran on either.
     """
     tests, output = stages.run_tests(ctx)
     progress["verified"] = {"head": progress["head"], "ok": tests.ok, **stages._test_numbers(tests)}
     _store_progress(ctx, progress)
+    kept = _judge(ctx, progress, tests, output)
+    _write_report(ctx, progress, plan, conflicts)
+    return tests, output, kept
+
+
+def _write_report(ctx: stages.Ctx, progress: dict[str, Any], plan: Plan, conflicts: list[dict[str, Any]]) -> None:
     by_id = {row["node_id"]: row for row in progress["nodes"]}
+    best = progress.get("best")
     report = {
         "schema_version": 1,
         "scheduler": "airflow",
@@ -517,15 +581,107 @@ def _verify(
         "nodes": [by_id[node.id] for node in plan.work],
         "repairs": progress["repairs"],
         "verified": progress["verified"],
+        "best": ({key: best.get(key) for key in ("head", "iteration", "verified")} if isinstance(best, dict) else None),
+        "ratchet_gain_per_loss": stages.RATCHET_GAIN_PER_LOSS,
         "wave_decisions": progress["wave_decisions"],
         "fork_waves": progress["fork_waves"],
     }
     ctx.write_artifact(f"{ctx.art}/workgraph-execution.json", json.dumps(report, indent=2, sort_keys=True) + "\n")
-    return tests, output
+
+
+# The best candidate's failure text is journalled for the next repair prompt; the run_tests output
+# it comes from is already bounded (or packed), this only keeps the journal from growing past it.
+_FAILURES_KEPT = 12000
+
+
+def _best_row(progress: dict[str, Any], iteration: int, tests: TestResult, output: str) -> dict[str, Any]:
+    """The journalled best-so-far: enough to compare, restore, and brief the next repair from."""
+    return {
+        "head": progress["head"],
+        "iteration": iteration,
+        "verified": progress["verified"],
+        "tests": tests.model_dump(mode="json"),
+        "failures": _failures(tests, output)[-_FAILURES_KEPT:],
+    }
+
+
+def _judge(ctx: stages.Ctx, progress: dict[str, Any], tests: TestResult, output: str) -> bool:
+    """Ratchet the candidate the suite just ran on against the journalled best-so-far.
+
+    A repair whose receipt carries no verdict yet is judged exactly once: the verdict lands on its
+    receipt in the same journal write that either promotes it to best or records the revert
+    ``{from, to}`` -- before the reset, so ``_finish_revert`` can complete a revert a death
+    interrupted. Every other run re-verifies the best itself (the first run after fan-in, or a
+    retry's re-run) and only seeds the best when there is none.
+    """
+    repairs = progress["repairs"]
+    best = progress.get("best")
+    if best is not None and not (isinstance(best, dict) and isinstance(best.get("head"), str)):
+        raise StageError("policy", "workgraph ratchet best-so-far is invalid")
+    pending = bool(repairs) and "ratchet" not in repairs[-1]
+    if not pending:
+        if best is None:
+            progress["best"] = _best_row(progress, 1 + len(repairs), tests, output)
+            _store_progress(ctx, progress)
+        elif best.get("head") != progress["head"]:
+            raise StageError(
+                "policy",
+                f"workgraph ratchet journal is inconsistent: best {best.get('head')} "
+                f"is not the checkpoint {progress['head']}",
+            )
+        return True
+    receipt = repairs[-1]
+    if best is None:
+        # A journal written before the ratchet existed: there is no best to compare against.
+        keep, evidence = True, {"verdict": "kept", "reason": "no best-so-far was journalled before this repair"}
+    else:
+        try:
+            best_tests = TestResult.model_validate(best["tests"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise StageError("policy", f"workgraph ratchet best-so-far is invalid: {error}") from error
+        keep, evidence = stages.ratchet(best_tests, tests)
+        evidence["best_head"] = best["head"]
+        evidence["best_iteration"] = best["iteration"]
+    receipt["ratchet"] = {**evidence, "tests": stages._test_numbers(tests)}
+    if keep:
+        progress["best"] = _best_row(progress, 1 + len(repairs), tests, output)
+        _store_progress(ctx, progress)
+        return True
+    progress["revert"] = {"from": progress["head"], "to": best["head"], "repair": receipt["repair"]}
+    _store_progress(ctx, progress)  # journal before mutate: a retry finishes what this starts
+    _complete_revert(ctx, progress)
+    return False
+
+
+def _repair_failures(progress: dict[str, Any]) -> str:
+    """What the next repair is told: the best candidate's failures, and why the last one was reverted."""
+    best = progress["best"]
+    failures = str(best["failures"])
+    last = progress["repairs"][-1] if progress["repairs"] else None
+    verdict = last.get("ratchet") if isinstance(last, dict) else None
+    if isinstance(last, dict) and isinstance(verdict, dict) and verdict.get("verdict") == "reverted":
+        note = stages.ratchet_note(f"repair {last['repair']}", f"iteration {best['iteration']}", verdict)
+        failures = note + "\n\n" + failures
+    return failures
 
 
 def _failures(tests: TestResult, output: str) -> str:
     return f"exit code {tests.exit_code}; failed={tests.failed} errors={tests.errors}\n\n{output}"
+
+
+def _ratchet_row(iteration: int, stage: str, head: str, tests: TestResult, evidence: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "iteration": iteration,
+        "agent_call": f"{stage}.{iteration}",
+        "head": head,
+        "ok": tests.ok,
+        "report_valid": tests.report_valid,
+        "passed": tests.passed,
+        "failed": tests.failed,
+        "errors": tests.errors,
+        "skipped": tests.skipped,
+        **evidence,
+    }
 
 
 def _legacy_build(
@@ -537,6 +693,16 @@ def _legacy_build(
     population_artifacts: list[str],
     population_numbers: dict[str, float],
 ) -> StageResult:
+    """build.1 then ``fix.N`` until green, ratcheted: every fix starts from the best tree so far.
+
+    ``{art}/build-ratchet.json`` is rewritten after every verdict and before any revert, through
+    the host artifact store, so a run that exhausts the bound (and publishes nothing) still holds
+    one row per attempt and the best candidate it ended on.
+    """
+    evidence_path = f"{ctx.art}/build-ratchet.json"
+    rows: list[dict[str, Any]] = []
+    best: dict[str, Any] | None = None
+    reverts = 0
     failures = ""
     for iteration in range(1, ctx.cfg.max_build_iterations + 1):
         stage = "build" if iteration == 1 else "fix"
@@ -552,23 +718,60 @@ def _legacy_build(
             population_guidance,
         )
         result = stages._agent(ctx, stage, iteration, prompt, BuildSummary)
-        stages.commit(ctx, stage=stage, msg=f"{stage}: {stages._summary_line(result, f'iteration {iteration}')}")
+        head = stages.commit(ctx, stage=stage, msg=f"{stage}: {stages._summary_line(result, f'iteration {iteration}')}")
+        if best is not None:
+            # Every fix starts from the best head (`commit` fenced it there), so that is its input.
+            stages._assert_stage_scope(ctx, "fix", best["head"], head)
         tests, output = stages.run_tests(ctx)
-        if tests.ok:
+        if best is None:
+            keep, evidence = True, {"verdict": "kept", "reason": "first candidate"}
+        else:
+            keep, evidence = stages.ratchet(best["tests"], tests)
+        rows.append(_ratchet_row(iteration, stage, head, tests, evidence))
+        if keep:
+            best = {
+                "iteration": iteration,
+                "agent_call": f"{stage}.{iteration}",
+                "head": head,
+                "tests": tests,
+                "failures": _failures(tests, output),
+            }
+        else:
+            reverts += 1
+        assert best is not None  # iteration 1 always keeps
+        document = {
+            "schema_version": 1,
+            "gain_per_loss": stages.RATCHET_GAIN_PER_LOSS,
+            "iterations": rows,
+            "best": {key: best[key] for key in ("iteration", "agent_call", "head")},
+            "reverts": reverts,
+        }
+        # Before the revert, through the host store: the evidence survives a death in the reset.
+        ctx.write_artifact(evidence_path, json.dumps(document, indent=2, sort_keys=True) + "\n")
+        if not keep:
+            stages.restore_head(ctx, best["head"])
+        elif tests.ok:
             return StageResult(
                 stage="build_and_test",
-                artifacts=population_artifacts,
+                artifacts=[evidence_path, *population_artifacts],
                 numbers={
                     "iterations": float(iteration),
                     "first_pass_ci": float(iteration == 1),
+                    "ratchet_reverts": float(reverts),
+                    "best_iteration": float(best["iteration"]),
                     **population_numbers,
                     **stages._test_numbers(tests),
                 },
             )
-        failures = _failures(tests, output)
+        failures = best["failures"]
+        if not keep:
+            failures = stages.ratchet_note(f"{stage}.{iteration}", best["agent_call"], evidence) + "\n\n" + failures
+    assert best is not None
     raise StageError(
         "policy",
-        f"tests still failing after {ctx.cfg.max_build_iterations} build iterations; last failure:\n{failures[-1500:]}",
+        f"tests still failing after {ctx.cfg.max_build_iterations} build iterations ({reverts} reverted by the "
+        f"ratchet); the workspace is left at the best candidate, {best['agent_call']} ({best['head'][:12]}):\n"
+        f"{best['failures'][-1500:]}",
     )
 
 
@@ -628,6 +831,7 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
         stages.seed_budget(ctx, refresh=True)
 
     def outcome(tests: TestResult) -> StageResult:
+        repairs = progress["repairs"]
         return StageResult(
             stage="build_and_test",
             artifacts=[f"{ctx.art}/workgraph-execution.json", *population_artifacts],
@@ -636,17 +840,22 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
                 "work_nodes": float(len(plan.work)),
                 "work_conflicts": float(len(conflicts)),
                 "parallel_nodes": float(execution_decision(ctx, plan, progress["fork_waves"])["parallel_nodes"]),
-                "repair_iterations": float(len(progress["repairs"])),
-                "first_pass_ci": float(not progress["repairs"]),
+                "repair_iterations": float(len(repairs)),
+                # The legacy loop's meaning: attempts at a green suite, reverted or not. metrics.json
+                # and the eval bound read this key, and it was absent (0) on every Plan.work run.
+                "iterations": float(1 + len(repairs)),
+                "first_pass_ci": float(not repairs),
+                "ratchet_reverts": float(_reverts(progress)),
+                "best_iteration": float(progress["best"]["iteration"]),
                 **stages._test_numbers(tests),
             },
         )
 
-    tests, output = _verify(ctx, progress, plan, conflicts)
-    if tests.ok:
+    tests, _output, kept = _verify(ctx, progress, plan, conflicts)
+    if kept and tests.ok:
         return outcome(tests)
-    failures = _failures(tests, output)
-    # The bound counts journalled repairs, so a retry continues the budget rather than reopening it.
+    # The bound counts journalled repairs, reverted ones included, so a retry continues the budget
+    # rather than reopening it and a revert never buys an extra attempt.
     while len(progress["repairs"]) < ctx.cfg.max_build_iterations - 1:
         repair = len(progress["repairs"]) + 1
         after = _attempt(
@@ -661,7 +870,7 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
                     issue_id=ctx.issue.id,
                     spec=spec_text,
                     plan=plan_text,
-                    failures=failures,
+                    failures=_repair_failures(progress),
                     protected=stages._protected(ctx, "fix"),
                 ),
                 population_guidance,
@@ -671,11 +880,21 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
             title=f"workgraph repair {repair}",
         )
         _settle(ctx, progress, plan, after)
-        tests, output = _verify(ctx, progress, plan, conflicts)
-        if tests.ok:
+        tests, _output, kept = _verify(ctx, progress, plan, conflicts)
+        if kept and tests.ok:
             return outcome(tests)
-        failures = _failures(tests, output)
+    best = progress["best"]
     raise StageError(
         "policy",
-        f"Plan.work tests still failing after bounded repair; last failure:\n{failures[-1500:]}",
+        f"Plan.work tests still failing after bounded repair ({_reverts(progress)} reverted by the ratchet); "
+        f"the workspace is left at the best candidate, iteration {best['iteration']} ({best['head'][:12]}):\n"
+        f"{str(best['failures'])[-1500:]}",
+    )
+
+
+def _reverts(progress: dict[str, Any]) -> int:
+    return sum(
+        1
+        for row in progress["repairs"]
+        if isinstance(row.get("ratchet"), dict) and row["ratchet"].get("verdict") == "reverted"
     )

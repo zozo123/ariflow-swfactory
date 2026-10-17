@@ -697,6 +697,63 @@ def commit_unfenced(ctx: Ctx, *, stage: str, msg: str, paths: Sequence[str] | No
     return _workspace_head(ctx)
 
 
+def restore_head(ctx: Ctx, head: str) -> None:
+    """Put the workspace back on ``head`` (a commit this run made) and move the run's fence there.
+
+    The one host-owned revert primitive: an abandoned attempt, a ratchet that rejects a repair and
+    a review fix that broke the suite all end here. ``.factory`` and the artifact mirror survive the
+    clean; everything the reverted commit added does not.
+    """
+    _sh(ctx, f"git reset --hard {shlex.quote(head)}")
+    ctx.sb.run("git clean -fd -e .factory -e docs/factory")
+    _record_workspace_head(ctx, head)
+
+
+def changed_paths(ctx: Ctx, before: str, after: str) -> list[str]:
+    """Target-relative paths ``before..after`` touches, a rename counted as delete + add."""
+    q = shlex.quote
+    # `--relative` because a full-clone cell (islo, toolset/sbx) holds the target in a
+    # subdirectory; `--no-renames` because a rename would otherwise hide the path it deleted.
+    text = _sh(ctx, f"git diff --name-only --relative {q(before)}..{q(after)} --no-renames -- .")
+    return sorted({line.strip() for line in text.splitlines() if line.strip()})
+
+
+def _assert_stage_scope(
+    ctx: Ctx,
+    stage: str,
+    before: str,
+    after: str,
+    *,
+    on_violation: Callable[[], None] | None = None,
+) -> None:
+    """Refuse a ``stage`` commit that touched a path ``protected_for`` that stage, on every backend.
+
+    "Fix the code, not the tests" used to hold only where the kernel enforces it (srt denyWrite,
+    docker ``:ro``). LocalSandbox, islo, toolset and boat had the Claude guard alone, which a Bash
+    ``sed`` or a scripted patch walks past, and the edited tests were committed and re-run as if
+    they were the gate. This is the host-side check the replica-fusion scope already applies: diff
+    the commit, and on any protected path restore ``before`` (or run ``on_violation``, for callers
+    that journal the revert) and refuse as policy. Nothing of the commit stays a candidate.
+    """
+    if before == after:
+        return
+    from swfactory.campaign_fusion import _is_protected  # lazy: keeps stages import-light
+
+    rules = protected_for(_contract(ctx), stage)
+    escaped = [path for path in changed_paths(ctx, before, after) if _is_protected(path, rules)]
+    if not escaped:
+        return
+    if on_violation is None:
+        restore_head(ctx, before)
+    else:
+        on_violation()
+    raise StageError(
+        "policy",
+        f"{stage} commit {after[:12]} changed protected paths {escaped[:20]}; restored {before[:12]}. "
+        "Fix the code, not the tests or the gate.",
+    )
+
+
 def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
     """Run the target's test command (or the crabbox wrapper) in the sandbox; returns the parsed
     junit result and the tail of its output (the failure text a fix prompt gets)."""
@@ -935,6 +992,86 @@ def _test_numbers(tr: TestResult) -> dict[str, float]:
         "tests_failed": float(tr.failed + tr.errors),
         "tests_count": float(tr.total),
     }
+
+
+# VOLO's bounded-repair ratchet: a repair that turns one passing test red must turn at least this
+# many red tests green, or it is reverted. A constant, not a blueprint knob: it is a property of
+# what "progress" means, and a per-line value would be one more input the approval must pin.
+RATCHET_GAIN_PER_LOSS = 3
+# Evidence rows keep at most this many ids per list; the counts always say how many there were.
+RATCHET_EVIDENCE_IDS = 20
+
+
+def ratchet(best: TestResult, cand: TestResult) -> tuple[bool, dict[str, Any]]:
+    """Whether a repair candidate may replace the best-so-far, and the verdict as evidence.
+
+    Keep iff nothing that passed in ``best`` stopped passing, or the candidate gained at least
+    ``RATCHET_GAIN_PER_LOSS`` tests per test it lost. Comparing per-test sets needs both results
+    to carry case ids over the SAME universe (``cases_digest``). A candidate without a valid report
+    is refused. A best-so-far without a valid report never blocks a valid candidate -- there is
+    nothing it could lose. Without case ids on either side the rule falls back to counts (keep iff
+    the candidate passes at least as many tests). Ties keep the candidate, as the loop always did.
+    Skipped counts as not passing, so a fix that turns a passing test into a skip has lost it.
+
+    A changed universe cannot be compared set-wise, and a fix may not edit tests, so it is refused
+    unless the candidate passes strictly MORE tests. Not a flat refusal: code alone changes the ids
+    a report names -- the commonest repair of all, an import or collection error, turns one error
+    case into the module's real cases -- and refusing that would revert the very fix the loop
+    exists for, every time. Equal or fewer passing tests over a different universe stay refused.
+    """
+    lost: list[str] = []
+    gained: list[str] = []
+
+    def verdict(keep: bool, reason: str) -> tuple[bool, dict[str, Any]]:
+        return keep, {
+            "verdict": "kept" if keep else "reverted",
+            "reason": reason,
+            "lost": lost[:RATCHET_EVIDENCE_IDS],
+            "gained": gained[:RATCHET_EVIDENCE_IDS],
+            "lost_count": len(lost),
+            "gained_count": len(gained),
+            "best_passed": best.passed,
+            "candidate_passed": cand.passed,
+        }
+
+    if not cand.report_valid:
+        return verdict(False, "the candidate left no valid JUnit report")
+    if not best.report_valid:
+        return verdict(True, "the best-so-far had no valid JUnit report; any valid report improves on it")
+    if best.cases_digest is not None and cand.cases_digest is not None:
+        if best.cases_digest != cand.cases_digest:
+            keep = cand.passed > best.passed
+            return verdict(
+                keep,
+                f"the test universe changed (the report names different test ids); passed {best.passed} -> "
+                f"{cand.passed}, {'strictly more' if keep else 'not strictly more'}",
+            )
+        lost = sorted(set(cand.nonpassing_cases) - set(best.nonpassing_cases))
+        gained = sorted(set(best.nonpassing_cases) - set(cand.nonpassing_cases))
+        if not lost:
+            return verdict(True, f"lost no passing test, gained {len(gained)}")
+        keep = len(gained) >= RATCHET_GAIN_PER_LOSS * len(lost)
+        relation = ">=" if keep else "<"
+        return verdict(
+            keep, f"lost {len(lost)}, gained {len(gained)} ({relation} {RATCHET_GAIN_PER_LOSS} per test lost)"
+        )
+    keep = cand.passed >= best.passed
+    return verdict(keep, f"no per-test ids to compare; passed {best.passed} -> {cand.passed}")
+
+
+def ratchet_note(attempt: str, best_label: str, evidence: dict[str, Any]) -> str:
+    """The one line a reverted attempt adds to the next fix prompt's ``{failures}``."""
+
+    def names(ids: list[str], count: int) -> str:
+        shown = ", ".join(case_name(case) for case in ids) or "nothing"
+        return shown + (f" (+{count - len(ids)} more)" if count > len(ids) else "")
+
+    return (
+        f"NOTE: {attempt} was reverted and the workspace is back at {best_label} ({evidence.get('reason', '')}): "
+        f"it broke {names(evidence.get('lost', []), int(evidence.get('lost_count', 0)))} and fixed "
+        f"{names(evidence.get('gained', []), int(evidence.get('gained_count', 0)))}. Do not trade passing tests "
+        "for failing ones; the failures below are the best candidate's."
+    )
 
 
 # ---------------------------------------------------------------- stages
@@ -1576,22 +1713,72 @@ def review_context(
     return packed.prompt_text, packed
 
 
-def fix_and_retest(ctx: Ctx, prompt: str, *, fixes: int, fallback: str, numbers: dict[str, float]) -> Finding | None:
+def fix_and_retest(
+    ctx: Ctx,
+    prompt: str,
+    *,
+    fixes: int,
+    fallback: str,
+    numbers: dict[str, float],
+    reverted: list[dict[str, Any]] | None = None,
+) -> Finding | None:
     """Review fix ``fixes``: agent call ``fix.<max_build_iterations + fixes>``, commit, re-run the
-    suite. Returns the ``_tests_blocker`` a red suite leaves, None when it is green."""
-    res = _agent(ctx, "fix", ctx.cfg.max_build_iterations + fixes, prompt, BuildSummary)
-    commit(ctx, stage="fix", msg=f"fix: {_summary_line(res, fallback)}")
+    suite. None when it is green; otherwise a synthetic blocker, so the stage cannot end ``ok``.
+
+    The review baseline is green (review runs only after a green build), so here the ratchet
+    reduces to "keep a review fix only if the suite stays green". A fix that turns it red is
+    reverted to the pre-fix commit and the suite re-run, so ``numbers`` -- and the ``[BLOCKED]`` PR
+    deliver publishes -- describe green bytes instead of the broken attempt. The attempt stays
+    auditable: its SHA and failure tail travel in the blocker and in ``reverted`` (review.json).
+    Shared by the default review and liquid annealing, so both lines revert alike.
+    """
+    before = _assert_workspace_head(ctx, "review fix")
+    call = ctx.cfg.max_build_iterations + fixes
+    res = _agent(ctx, "fix", call, prompt, BuildSummary)
+    after = commit(ctx, stage="fix", msg=f"fix: {_summary_line(res, fallback)}")
+    _assert_stage_scope(ctx, "fix", before, after)
     tr, output = run_tests(ctx)
-    numbers.update(_test_numbers(tr))
-    return None if tr.ok else _tests_blocker(ctx, tr, output)
+    if tr.ok:
+        numbers.update(_test_numbers(tr))
+        return None
+    if after == before:
+        # Nothing was committed, so there is nothing to revert: the pre-fix head itself is red.
+        numbers.update(_test_numbers(tr))
+        return _tests_blocker(ctx, tr, output)
+    restore_head(ctx, before)
+    restored, _ = run_tests(ctx)
+    numbers.update(_test_numbers(restored))
+    numbers["reverted_fixes"] = numbers.get("reverted_fixes", 0.0) + 1.0
+    row = {
+        "fix": fixes,
+        "agent_call": f"fix.{call}",
+        "reverted_sha": after,
+        "restored_head": before,
+        "failed": tr.failed,
+        "errors": tr.errors,
+        "restored_tests_passed": restored.ok,
+    }
+    if reverted is not None:
+        reverted.append(row)
+    return Finding(
+        severity="blocker",
+        file=_contract(ctx).tests_dir,
+        title=f"Review fix {fixes} reverted: it broke the suite",
+        detail=(
+            f"fix.{call} (commit {after}) left exit code {tr.exit_code}; failed={tr.failed} errors={tr.errors}. "
+            f"It was reverted to {before}, which re-tested "
+            f"{'green' if restored.ok else 'red'}. A review fix must keep the suite green. Tail:\n{output[-1500:]}"
+        ),
+    )
 
 
 @_resumable
 def review(ctx: Ctx) -> StageResult:
     """Agent review (Review schema) with the nit cap and plan fidelity enforced in code; blockers
     trigger at most ``max_review_fixes`` fix + test + re-review rounds. A fix that leaves the
-    suite red is itself a blocker (``_tests_blocker``): the stage cannot end ``ok`` on red tests.
-    Review fixes are agent calls ``fix.<max_build_iterations + k>`` (see module docstring)."""
+    suite red is reverted and is itself a blocker (``fix_and_retest``): the stage cannot end ``ok``
+    after a fix broke the tests, and what it delivers is the green pre-fix head. Review fixes
+    are agent calls ``fix.<max_build_iterations + k>`` (see module docstring)."""
     path = f"{ctx.art}/review.json"
     _assert_workspace_head(ctx, "review")
     base = ctx.state.read_control("base").strip()
@@ -1603,6 +1790,7 @@ def review(ctx: Ctx) -> StageResult:
     rv, dropped, fixes = Review(verdict="approve"), 0, 0
     tests_blocker: Finding | None = None
     trace: ContractTrace | None = None
+    reverted: list[dict[str, Any]] = []
     for k in range(ctx.cfg.max_review_fixes + 1):
         review_diff, _packed = review_context(ctx, base, numbers, saved_key="review_context_saved_bytes")
         # Recomputed every round: a review fix moves HEAD, and only that HEAD's cases count.
@@ -1633,13 +1821,14 @@ def review(ctx: Ctx) -> StageResult:
             protected=_protected(ctx, "fix"),
         )
         tests_blocker = fix_and_retest(
-            ctx, fix_prompt, fixes=fixes, fallback="address review blockers", numbers=numbers
+            ctx, fix_prompt, fixes=fixes, fallback="address review blockers", numbers=numbers, reverted=reverted
         )
     record = {
         "verdict": "request_changes" if rv.blockers else "approve",  # REVIEW.md contract
         "findings": [f.model_dump() for f in rv.findings],
         "dropped_nits": dropped,
         "fixes": fixes,
+        "reverted_fixes": reverted,
     }
     if trace is None:  # max_review_fixes >= 0, so the loop always runs; never publish untraced
         raise StageError("policy", "review ran no round, so it has no requirement trace")
@@ -1653,6 +1842,7 @@ def review(ctx: Ctx) -> StageResult:
             "findings": float(len(rv.findings)),
             "dropped_nits": float(dropped),
             "fixes": float(fixes),
+            "reverted_fixes": float(len(reverted)),
             **{k: float(v) for k, v in counts.items()},
         }
     )

@@ -274,6 +274,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
     risky_files = _risk_count(changed)
     tests_green = _initial_tests_green(ctx)
     tests_blocker: Finding | None = None
+    reverted: list[dict[str, object]] = []
     previous_signature: tuple[tuple[str, str, int | None, str], ...] = ()
     trace: list[dict[str, object]] = []
     numbers: dict[str, float] = {}
@@ -365,7 +366,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
             protected=stages._protected(ctx, "fix"),
         )
         tests_blocker = stages.fix_and_retest(
-            ctx, fix_prompt, fixes=fixes, fallback="relax annealing defects", numbers=numbers
+            ctx, fix_prompt, fixes=fixes, fallback="relax annealing defects", numbers=numbers, reverted=reverted
         )
         tests_green = tests_blocker is None
         previous_signature = signature
@@ -376,6 +377,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
         "findings": [item.model_dump() for item in final_findings],
         "dropped_nits": dropped,
         "fixes": fixes,
+        "reverted_fixes": reverted,
         "annealing": final_state.as_dict(),
         "lanes": final_lanes,
     }

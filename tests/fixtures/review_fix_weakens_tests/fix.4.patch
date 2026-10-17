@@ -1,0 +1,26 @@
+# scripted fixture for DEMO-1, layered over tests/fixtures/blocker: a review fix that lands the
+# docstring line the reviewer asked for AND rewrites a test. Tests are read-only to every fix, the
+# review's included: fix_and_retest refuses it as policy and restores the pre-fix head.
+diff --git a/src/calc/core.py b/src/calc/core.py
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -19,6 +19,7 @@ def compound(principal: float, rate: float, years: int, periods_per_year: int =
+ def percent_change(old: float, new: float) -> float:
+     """Return the relative change from ``old`` to ``new`` as a fraction (0.25 == +25%).
+ 
++    A decrease is negative: ``percent_change(200, 150) == -0.25``.
+     Raises ``ValueError`` when ``old`` is zero: the change is undefined.
+     """
+     if old == 0:
+diff --git a/tests/test_percent_change.py b/tests/test_percent_change.py
+--- a/tests/test_percent_change.py
++++ b/tests/test_percent_change.py
+@@ -13,7 +13,7 @@ def test_increase():
+ 
+ 
+ def test_decrease():
+-    assert percent_change(200, 150) == pytest.approx(-0.25)
++    assert True
+ 
+ 
+ def test_zero_old_raises():
