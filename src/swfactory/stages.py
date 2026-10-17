@@ -708,16 +708,22 @@ def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
         raise StageError("sandbox", f"could not clear stale JUnit report: {removed.stderr[-800:]}")
     res = ctx.sb.run(cmd)
     legacy_output = (res.stdout[-6000:] + "\n" + res.stderr[-2000:]).strip()
+    cases: dict[str, str] | None = None
     try:
-        counts = _parse_junit(ctx.sb.read(contract.junit))
+        report = ctx.sb.read(contract.junit)
+        counts = _parse_junit(report)
     except (FileNotFoundError, ET.ParseError, ValueError):
         result = TestResult(exit_code=res.exit_code or 1, junit_path=None, report_valid=False)
     else:
-        result = TestResult(
-            **counts,
-            exit_code=res.exit_code,
-            junit_path=contract.junit,
-            report_valid=True,
+        cases = _junit_cases(report)
+        result = _with_cases(
+            TestResult(
+                **counts,
+                exit_code=res.exit_code,
+                junit_path=contract.junit,
+                report_valid=True,
+            ),
+            cases,
         )
     output = legacy_output
     if not result.ok:
@@ -733,9 +739,30 @@ def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
         )
         if packed is not None:
             output = packed.prompt_text
-    _assert_workspace_head(ctx, "verification")
+    head = _assert_workspace_head(ctx, "verification")
     _ensure_clean(ctx, "verification", allow_artifacts=True)
+    # Host-owned and bound to the HEAD it ran on: a reader holding a different HEAD has stale
+    # evidence and must say so rather than judge the wrong commit.
+    ctx.state.write_control(
+        JUNIT_CASES,
+        json.dumps({"head": head, "report_valid": result.report_valid, "cases": cases}, sort_keys=True) + "\n",
+    )
     return result, output
+
+
+# Control record of the latest suite run: ``{head, report_valid, cases}`` (cases may be null).
+JUNIT_CASES = "junit-cases.json"
+
+
+def junit_cases_for(ctx: Ctx, head: str) -> dict[str, str] | None:
+    """The per-test outcomes ``run_tests`` recorded for exactly ``head``, or None if it did not."""
+    if not ctx.state.has_control(JUNIT_CASES):
+        return None
+    record = json.loads(ctx.state.read_control(JUNIT_CASES))
+    if record.get("head") != head or not record.get("report_valid"):
+        return None
+    cases = record.get("cases")
+    return dict(cases) if isinstance(cases, dict) else None
 
 
 def crabbox_command(provider: str, junit: str, test_cmd: str) -> str:
@@ -818,6 +845,75 @@ def _parse_junit(xml_text: str) -> dict[str, int]:
     if sum(result.values()) <= 0:
         raise ValueError("JUnit report contains no tests")
     return result
+
+
+# Beyond this many non-passing ids a result keeps counts only: a suite that failed wholesale (an
+# import error) says nothing a per-test comparison could use, and receipts stay small.
+MAX_NONPASSING_CASES = 1000
+
+
+def _junit_cases(xml_text: str) -> dict[str, str] | None:
+    """Every test case of an already-validated report, ``id -> passed|failed|error|skipped``.
+
+    The id is ``<suite>/.../<classname>::<name>``: Node reporters reuse one classname across nested
+    suites, so the suite path is what keeps two cases apart. Outcomes follow ``_parse_junit``'s
+    rules (a Node TODO failure that also carries ``<skipped>`` is a failure). None when the report
+    is summary-only or two cases share an id -- a partial or ambiguous set must never be compared as
+    if it were the whole suite.
+    """
+    root = ET.fromstring(xml_text)
+    cases: dict[str, str] = {}
+
+    def local_name(element: ET.Element) -> str:
+        return element.tag.rsplit("}", 1)[-1]
+
+    def walk(element: ET.Element, path: tuple[str, ...]) -> bool:
+        for child in element:
+            kind = local_name(child)
+            if kind in ("testsuite", "testsuites"):
+                if not walk(child, (*path, child.attrib.get("name", ""))):
+                    return False
+            elif kind == "testcase":
+                scope = "/".join((*path, child.attrib.get("classname", "")))
+                case_id = f"{scope}::{child.attrib.get('name', '')}"
+                present = {local_name(status) for status in child}
+                outcome = (
+                    "failed"
+                    if "failure" in present
+                    else "error"
+                    if "error" in present
+                    else "skipped"
+                    if "skipped" in present
+                    else "passed"
+                )
+                if case_id in cases:
+                    return False
+                cases[case_id] = outcome
+        return True
+
+    start = (root.attrib.get("name", ""),) if local_name(root) == "testsuite" else ()
+    if not walk(root, start) or not cases:
+        return None
+    return cases
+
+
+def case_name(case_id: str) -> str:
+    """The test's own name in a ``_junit_cases`` id, without a pytest ``[param]`` suffix."""
+    return case_id.rsplit("::", 1)[-1].split("[", 1)[0]
+
+
+def cases_digest(cases: dict[str, str]) -> str:
+    """The identity of a test universe: which ids exist, regardless of how they came out."""
+    return hashlib.sha256("\n".join(sorted(cases)).encode()).hexdigest()
+
+
+def _with_cases(result: TestResult, cases: dict[str, str] | None) -> TestResult:
+    if cases is None:
+        return result
+    nonpassing = tuple(sorted(case for case, outcome in cases.items() if outcome != "passed"))
+    if len(nonpassing) > MAX_NONPASSING_CASES:
+        return result
+    return result.model_copy(update={"nonpassing_cases": nonpassing, "cases_digest": cases_digest(cases)})
 
 
 def _ensure_clean(ctx: Ctx, phase: str, *, allow_artifacts: bool = False) -> None:
