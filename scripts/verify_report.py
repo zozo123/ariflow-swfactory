@@ -10,6 +10,9 @@ The three verdicts are deliberately separate, and only the third one is evidence
   the contract out of the CHECKOUT, and re-ran the target's own test command there.
 
 A release scenario that accepts the first two has only proved that the factory did not crash.
+It must still HAVE all three: a delivery the console verified but cannot tie back to the run that
+produced it has lost its provenance, and every Airflow delivery read ``workflow=False`` for as
+long as the verifier mistook the publication key in the branch name for a run id.
 
     scripts/verify_report.py <report.json> <job index>
 """
@@ -36,13 +39,14 @@ def main(argv: list[str]) -> int:
         f"verified={verdicts.get('independently_verified')} "
         f"tests={tests}"
     )
-    if verdicts.get("independently_verified"):
+    if verdicts.get("independently_verified") and verdicts.get("workflow_succeeded"):
         return 0
-    # Say WHY, with the evidence rows that did not pass: "it failed" is not a diagnosis.
+    # Say WHY, with the evidence rows that did not pass: "it failed" is not a diagnosis. Skips are
+    # shown too, because an unread self-report is a skip, not a failure. Rust serializes `id`.
     for check in report.get("checks") or []:
-        if check.get("status") not in ("pass", "skipped"):
+        if check.get("status") != "pass":
             print(
-                f"    {check.get('level', '?')}/{check.get('name', '?')}: "
+                f"    {check.get('level', '?')}/{check.get('id', '?')}: "
                 f"{check.get('status')} — {check.get('detail', '')}",
                 file=sys.stderr,
             )

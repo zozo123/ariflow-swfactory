@@ -305,11 +305,12 @@ impl FromStr for GateId {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryId {
-    /// `factory/<issue_id>-<run_id>` — the branch a delivery publishes.
+    /// `factory/<issue_id>-<key>` — the branch a delivery publishes.
     Branch {
         /// The issue this delivery answers.
         issue_id: String,
-        /// The factory run that produced it.
+        /// The branch suffix: the factory run on branches published before #2104, the publication
+        /// key of the issue x target since (every run of that work shares the branch).
         run_id: String,
     },
     /// A pull request number in the context's repo.

@@ -6,6 +6,15 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Fix `swf deliveries verify`, which reported `workflow_succeeded=false` for every delivery
+  published since #2104: branches are `factory/<issue>-<publication key>`, keyed on the work, and
+  the verifier still read that suffix as the run id, so it never found the run's own
+  `metrics.json`. With `--clone` it now reads the run from the head commit's `Factory-Run:`
+  trailer and judges the `metrics.json` the branch itself commits, ahead of the operator's copy. A
+  head naming zero or several runs leaves the self-report unread rather than guessed.
+  `scripts/swf_e2e.sh` now requires all three verdicts, and its failure rows name the check.
+- Fix replica fusion on macOS: the fusion patch is decoded with `base64 -d < file`, because BSD
+  `base64` rejects a file operand.
 - Add experimental fork waves (`swfactory.fork_wave`): with `[limits] max_parallel_forks` above 1
   on a forkable provider, a parallel-safe `Plan.work` wave runs as one forked boat.dev child per
   node. The parent is parked at the checkpoint, each child proves its HEAD before an agent runs,
