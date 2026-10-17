@@ -29,6 +29,7 @@ import functools
 import getpass
 import hashlib
 import json
+import re
 import shlex
 import shutil
 import time
@@ -1121,11 +1122,21 @@ def plan(ctx: Ctx) -> StageResult:
     ctx.write_artifact(json_path, _dumps(p.model_dump()))
     gate = ctx.blueprint.gate_after("plan") if ctx.blueprint else None
     preview = ctx.read_artifact(f"{ctx.art}/{gate.artifact}") if gate else md
+    # Advisory and refusing nothing: the approver sees which requirement no planned test proves
+    # before any code is written. The table is kept whole and the artifact head shortened, so a
+    # long plan cannot push the coverage out of the bounded preview.
+    rows = requirement_trace(_read_or(ctx, f"{ctx.art}/spec.md"), p.model_dump(), None)
+    coverage = coverage_table(rows)[: PREVIEW_CHARS // 2]
+    trace = trace_numbers(rows)
     return StageResult(
         stage="plan",
         artifacts=[md_path, json_path],
-        numbers={"files": float(len(p.files))},
-        preview=preview[:PREVIEW_CHARS],
+        numbers={
+            "files": float(len(p.files)),
+            "requirements": trace["requirements"],
+            "untested_requirements": trace["untested_requirements"],
+        },
+        preview=preview[: PREVIEW_CHARS - len(coverage) - 1].rstrip("\n") + "\n" + coverage,
     )
 
 
@@ -1179,6 +1190,330 @@ def _plan_fidelity(ctx: Ctx, base: str) -> list[Finding]:
         for f in sorted(planned - changed)
     ]
     return findings
+
+
+# ---------------------------------------------------------------- requirement trace
+#
+# VOLO's step 2: acceptance tests derived from the requirements must exist, run and pass -- and
+# that is checked by code, not left to the reviewer's judgement. The spec numbers requirements, the
+# plan maps each to the exact test that proves it (``R2: test_increase — ...``), and ``run_tests``
+# records per-case JUnit outcomes bound to the HEAD they ran on. ``requirement_trace`` joins the
+# three; review turns every planned acceptance test that is not passing into a blocker. A
+# requirement the plan maps to no test is advisory only (recorded, never a finding): every recorded
+# fixture leaves its docstring requirement untested, and a missing test is a planning gap the plan
+# gate shows the approver, not a defect of the diff under review.
+
+TRACE = "trace.json"  # {art}/trace.json: requirement -> planned acceptance tests -> JUnit outcome
+
+_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+_REQUIREMENTS_TITLE = re.compile(r"\brequirements?\b", re.IGNORECASE)
+# ``R3. ...`` / ``R3: ...`` / ``- **R3** — ...`` as prompts/spec.md asks, or a bare ``3. ...``
+# ordered-list item, which is what every recorded fixture writes. Both name requirement R3.
+_SPEC_TAGGED = re.compile(
+    r"^\s{0,3}(?:[-*+]\s+)?(?:\*\*|__)?R(\d+)(?:\*\*|__)?\s*(?:[.:)]|\s[—–-])?(?:\*\*|__)?\s+(\S.*)$"
+)
+_SPEC_NUMBERED = re.compile(r"^\s{0,3}(\d+)[.)]\s+(\S.*)$")
+# A plan test entry: ``R2: test_x — ...``, ``R2, R3: test_x``, ``R1-R3: test_x``, ``R2 - test_x``.
+_PLAN_TAGS = re.compile(
+    r"^\s*(?:[-*+]\s+)?\(?(R\d+(?:\s*(?:,|/|&|\+|\band\b|\.\.|[-–])\s*R\d+)*)\)?\s*(?::|\)|\]|\s[—–-])\s*(.*)$"
+)
+_PLAN_TAG = re.compile(r"R(\d+)(?:\s*(?:\.\.|[-–])\s*R(\d+))?")
+_TEST_TOKEN = re.compile(r"^[\w./:\[\]-]+")
+# A bare name counts as a planned test only when it is shaped like one; prose after a tag
+# (``R1: percent_change is exported``) must not turn into a "missing test" blocker. Free-form
+# runner names (Node) are written qualified and quoted: ``R1: `suite::adds two numbers` ``.
+_TEST_IDENTIFIER = re.compile(r"(?:[Tt]est[A-Z0-9_]\w*|\w+_test|\w+Test)")
+# Worst first: a requirement's status is the worst status among its planned tests.
+TRACE_STATUSES: tuple[str, ...] = ("failed", "missing", "skipped", "unverified", "passed")
+_TRACE_BLOCKING = frozenset({"failed", "missing", "skipped"})
+_TRACE_MAX_CASES = 20  # case ids kept per planned test in trace.json (parametrized tests fan out)
+
+
+def _requirement_id(number: str) -> str:
+    return f"R{int(number)}"
+
+
+def spec_requirements(spec_text: str) -> dict[str, str]:
+    """``{"R1": text, ...}`` in spec order, read from every heading whose title names requirements.
+
+    Continuation lines (wrapped or indented under an item) join their item's text; the first
+    occurrence of an id wins, so a nested ordered sub-list cannot rename a requirement.
+    """
+    found: dict[str, str] = {}
+    level = 0  # > 0 while inside a requirements section opened by a heading of that depth
+    current: str | None = None
+    after_blank = False
+    for line in spec_text.splitlines():
+        heading = _HEADING.match(line)
+        if heading:
+            depth = len(heading.group(1))
+            current = None
+            if level and depth > level:
+                continue  # a sub-heading inside the requirements section
+            level = depth if _REQUIREMENTS_TITLE.search(heading.group(2)) else 0
+            continue
+        if not level:
+            continue
+        if not line.strip():
+            after_blank = True
+            continue
+        item = _SPEC_TAGGED.match(line) or _SPEC_NUMBERED.match(line)
+        if item:
+            rid = _requirement_id(item.group(1))
+            current = None if rid in found else rid
+            if current is not None:
+                found[current] = item.group(2).strip()
+        elif current is not None and (not after_blank or line[:1].isspace()):
+            found[current] = f"{found[current]} {line.strip()}"
+        else:
+            current = None
+        after_blank = False
+    return found
+
+
+def _planned_test_name(rest: str) -> str | None:
+    """The test named first after a requirement tag, or None when the entry names no test."""
+    rest = rest.strip()
+    if rest.startswith("`"):
+        end = rest.find("`", 1)
+        token = rest[1:end].strip() if end > 0 else ""
+    else:
+        match = _TEST_TOKEN.match(rest)
+        token = match.group(0).rstrip(".:-") if match else ""
+    token = token.removesuffix("()")
+    name = token.rpartition("::")[2].split("[", 1)[0].strip()
+    if not name:
+        return None
+    return token if "::" in token or _TEST_IDENTIFIER.fullmatch(name) else None
+
+
+def plan_test_map(plan_data: object) -> dict[str, list[str]]:
+    """``{"R2": ["test_increase", ...]}`` from plan.json ``tests`` and every work node's ``tests``.
+
+    Entries are ``R<n>: <exact test name> — <what it proves>`` (prompts/plan.md); several
+    requirements may share one test (``R2, R3: test_x``) and ranges expand (``R1-R3``). Entries
+    without a tag, or whose first word is not a test name, map nothing.
+    """
+    if not isinstance(plan_data, dict):
+        return {}
+    entries = list(plan_data.get("tests") or [])
+    for node in plan_data.get("work") or []:
+        if isinstance(node, dict):
+            entries += list(node.get("tests") or [])
+    mapped: dict[str, list[str]] = {}
+    for entry in entries:
+        if not isinstance(entry, str) or not (tagged := _PLAN_TAGS.match(entry)):
+            continue
+        test = _planned_test_name(tagged.group(2))
+        if test is None:
+            continue
+        for tag in _PLAN_TAG.finditer(tagged.group(1)):
+            first = int(tag.group(1))
+            last = int(tag.group(2)) if tag.group(2) else first
+            numbers = range(first, last + 1) if 0 <= last - first <= 50 else (first, last)
+            for number in numbers:
+                tests = mapped.setdefault(_requirement_id(str(number)), [])
+                if test not in tests:
+                    tests.append(test)
+    return mapped
+
+
+def _name_tokens(text: str) -> list[str]:
+    """Path-ish segments of a test qualifier or case scope: ``tests/test_x.py::TestA`` and the
+    pytest scope ``pytest/tests.test_x.TestA`` both end in ``tests, test_x, TestA``."""
+    text = re.sub(r"\.(?:py|[cm]?[jt]sx?)(?=$|::|/)", "", text)
+    return [part.strip() for part in re.split(r"::|[/\\.]", text) if part.strip()]
+
+
+def matching_cases(test: str, cases: dict[str, str]) -> list[str]:
+    """JUnit case ids (``_junit_cases``) that a planned test name denotes.
+
+    The name part must equal the case's name exactly -- without its pytest ``[param]`` suffix
+    (``case_name``) unless the plan names a parameter itself. A ``file::name`` or
+    ``module::Class::name`` qualifier must be a suffix of the case's scope, so
+    ``tests/test_x.py::test_y`` matches ``pytest/tests.test_x::test_y``.
+    """
+    qualifier, _, name = test.rpartition("::")
+    want = _name_tokens(qualifier)
+    found = []
+    for case_id in sorted(cases):
+        scope, _, raw = case_id.rpartition("::")
+        if (raw if "[" in name else case_name(case_id)) != name:
+            continue
+        if want:
+            have = _name_tokens(scope)
+            if len(want) > len(have) or have[-len(want) :] != want:
+                continue
+        found.append(case_id)
+    return found
+
+
+def _planned_outcome(test: str, cases: dict[str, str] | None) -> dict[str, Any]:
+    if cases is None:
+        return {"test": test, "status": "unverified", "cases": [], "case_count": 0}
+    matched = matching_cases(test, cases)
+    outcomes = {cases[case_id] for case_id in matched}
+    status = (
+        "missing"
+        if not matched
+        else "failed"
+        if outcomes & {"failed", "error"}
+        else "skipped"
+        if "skipped" in outcomes
+        else "passed"
+    )
+    return {"test": test, "status": status, "cases": matched[:_TRACE_MAX_CASES], "case_count": len(matched)}
+
+
+def requirement_trace(spec_text: str, plan_data: object, cases: dict[str, str] | None) -> list[dict[str, Any]]:
+    """One row per requirement: ``{requirement, text, in_spec, planned_tests, status}``.
+
+    Pure. Requirements come from the spec in its order, then any the plan tags that the spec does
+    not name. ``planned_tests`` holds ``{test, status, cases, case_count}`` per planned test, where
+    status is ``passed|failed|skipped|missing`` against ``cases`` (a failure or error is
+    ``failed``; one non-passing parametrized case makes the test non-passing) or ``unverified``
+    when ``cases`` is None. The row's status is its worst test's (``TRACE_STATUSES``), or
+    ``untested`` when the plan maps no test to it.
+    """
+    requirements = spec_requirements(spec_text)
+    planned = plan_test_map(plan_data)
+    ids = list(requirements) + sorted(set(planned) - set(requirements), key=lambda rid: int(rid[1:]))
+    rows: list[dict[str, Any]] = []
+    for rid in ids:
+        tests = [_planned_outcome(test, cases) for test in planned.get(rid, [])]
+        status = min((t["status"] for t in tests), key=TRACE_STATUSES.index) if tests else "untested"
+        rows.append(
+            {
+                "requirement": rid,
+                "text": requirements.get(rid, ""),
+                "in_spec": rid in requirements,
+                "planned_tests": tests,
+                "status": status,
+            }
+        )
+    return rows
+
+
+def _planned_by_test(rows: list[dict[str, Any]]) -> dict[str, tuple[str, list[str]]]:
+    """``test -> (status, [requirement ids])``: one entry per planned test, however many it proves."""
+    by_test: dict[str, tuple[str, list[str]]] = {}
+    for row in rows:
+        for planned in row["planned_tests"]:
+            by_test.setdefault(planned["test"], (planned["status"], []))[1].append(row["requirement"])
+    return by_test
+
+
+def trace_numbers(rows: list[dict[str, Any]]) -> dict[str, float]:
+    by_test = _planned_by_test(rows)
+    return {
+        "requirements": float(len(rows)),
+        "untested_requirements": float(sum(row["status"] == "untested" for row in rows)),
+        "acceptance_tests": float(len(by_test)),
+        # planned acceptance tests without a passing case for the HEAD (missing/skipped/failed/unverified)
+        "missing_acceptance_tests": float(sum(status != "passed" for status, _ in by_test.values())),
+    }
+
+
+def trace_findings(rows: list[dict[str, Any]], *, head: str, tests_dir: str, evidence: bool) -> list[Finding]:
+    """Blockers for planned acceptance tests that did not run and pass at ``head``.
+
+    Without per-test evidence for ``head`` (``evidence=False``) nothing planned can be verified,
+    so the one finding is that the evidence is missing: fail closed, never "no news is good news".
+    A plan that maps no test has nothing to verify and yields nothing here (its rows are advisory).
+    """
+    by_test = _planned_by_test(rows)
+    if not by_test:
+        return []
+    if not evidence:
+        return [
+            Finding(
+                severity="blocker",
+                file=tests_dir,
+                title="No per-test JUnit evidence for the reviewed HEAD",
+                detail=(
+                    f"plan.json maps {len(by_test)} acceptance test(s) to requirements, but no per-test "
+                    f"JUnit results were recorded for HEAD {head[:12]} (missing, stale, summary-only or "
+                    "ambiguous report). Acceptance tests cannot be verified, so review fails closed."
+                ),
+            )
+        ]
+    findings = []
+    for test, (status, requirements) in by_test.items():
+        if status not in _TRACE_BLOCKING:
+            continue
+        what = {
+            "missing": "has no such test case",
+            "skipped": "reports it skipped, and a skipped test proves nothing",
+            "failed": "reports it failed or errored",
+        }[status]
+        findings.append(
+            Finding(
+                severity="blocker",
+                file=tests_dir,
+                title=f"Acceptance test {status}: {test}",
+                detail=(
+                    f"{', '.join(requirements)} is planned to be proven by `{test}`, but the JUnit report "
+                    f"for HEAD {head[:12]} {what}. The requirement stays unproven until that test runs "
+                    "and passes."
+                ),
+            )
+        )
+    return findings
+
+
+def contract_checklist(rows: list[dict[str, Any]], plan_data: object = None) -> str:
+    """The review prompt's ``## Contract checklist``: each requirement with its trace status."""
+    if not rows:
+        tests = [str(t) for t in (plan_data or {}).get("tests") or []] if isinstance(plan_data, dict) else []
+        listed = "".join(f"\n- {t}" for t in tests)
+        return "No numbered requirements were found in the spec or the plan." + (
+            f"\nThe plan's tests:{listed}" if listed else ""
+        )
+    lines = []
+    for row in rows:
+        text = (row["text"] or "(not in the spec; tagged by the plan)")[:400]
+        evidence = "; ".join(f"`{t['test']}` {t['status']}" for t in row["planned_tests"]) or "no planned test"
+        lines.append(f"- [{row['status']}] {row['requirement']}: {text} — {evidence}")
+    return "\n".join(lines)
+
+
+def coverage_table(rows: list[dict[str, Any]]) -> str:
+    """The plan gate's advisory coverage: which planned test proves each requirement."""
+    lines = ["", "## Requirement coverage (advisory)"]
+    if not rows:
+        lines.append("- no numbered requirements found in the spec or in the plan's tests")
+    for row in rows:
+        tests = ", ".join(t["test"] for t in row["planned_tests"]) or "no planned test"
+        note = "" if row["in_spec"] else " (not in the spec)"
+        lines.append(f"- {row['requirement']}: {tests}{note}")
+    return "\n".join(lines) + "\n"
+
+
+class ContractTrace(NamedTuple):
+    """One review round's trace: the findings, numbers, prompt checklist and trace.json record."""
+
+    findings: list[Finding]
+    numbers: dict[str, float]
+    checklist: str
+    record: dict[str, Any]
+
+
+def contract_trace(ctx: Ctx, spec_text: str, plan_data: object) -> ContractTrace:
+    """The requirement trace for the HEAD under review, from the JUnit cases ``run_tests``
+    recorded for exactly that HEAD (``junit_cases_for``); any other evidence is stale."""
+    head = _assert_workspace_head(ctx, "requirement trace")
+    cases = junit_cases_for(ctx, head)
+    rows = requirement_trace(spec_text, plan_data, cases)
+    numbers = trace_numbers(rows)
+    record = {
+        "schema_version": 1,
+        "head": head,
+        "evidence": "junit" if cases is not None else "missing",
+        "summary": {key: int(value) for key, value in numbers.items()},
+        "requirements": rows,
+    }
+    findings = trace_findings(rows, head=head, tests_dir=_contract(ctx).tests_dir, evidence=cases is not None)
+    return ContractTrace(findings, numbers, contract_checklist(rows, plan_data), record)
 
 
 def _review_policy(ctx: Ctx) -> str:
@@ -1262,11 +1597,16 @@ def review(ctx: Ctx) -> StageResult:
     base = ctx.state.read_control("base").strip()
     spec_text = _read_or(ctx, f"{ctx.art}/spec.md")  # "(none)" when the line has no spec stage
     plan_text = ctx.read_artifact(f"{ctx.art}/plan.md")
+    plan_data = _read_json(ctx, f"{ctx.art}/plan.json", None)
+    trace_path = f"{ctx.art}/{TRACE}"
     numbers: dict[str, float] = {}
     rv, dropped, fixes = Review(verdict="approve"), 0, 0
     tests_blocker: Finding | None = None
+    trace: ContractTrace | None = None
     for k in range(ctx.cfg.max_review_fixes + 1):
         review_diff, _packed = review_context(ctx, base, numbers, saved_key="review_context_saved_bytes")
+        # Recomputed every round: a review fix moves HEAD, and only that HEAD's cases count.
+        trace = contract_trace(ctx, spec_text, plan_data)
         prompt = render_prompt(
             "review",
             issue_id=ctx.issue.id,
@@ -1274,10 +1614,12 @@ def review(ctx: Ctx) -> StageResult:
             spec=spec_text,
             plan=plan_text,
             diff=review_diff,
+            checklist=trace.checklist,
         )
         res = _agent(ctx, "review", k + 1, prompt, Review)
         rv, dropped = cap_nits(Review.model_validate(res.data), _nit_cap(ctx))
         rv.findings.extend(_plan_fidelity(ctx, base))
+        rv.findings.extend(trace.findings)
         if tests_blocker is not None:
             rv.findings.append(tests_blocker)
         if not rv.blockers or k == ctx.cfg.max_review_fixes:
@@ -1300,6 +1642,10 @@ def review(ctx: Ctx) -> StageResult:
         "fixes": fixes,
     }
     ctx.write_artifact(path, _dumps(record))
+    if trace is None:  # max_review_fixes >= 0, so the loop always runs; never publish untraced
+        raise StageError("policy", "review ran no round, so it has no requirement trace")
+    ctx.write_artifact(trace_path, _dumps(trace.record))
+    numbers.update(trace.numbers)
     counts = metrics_mod.severity_counts(rv.findings)
     numbers.update(
         {
@@ -1311,7 +1657,7 @@ def review(ctx: Ctx) -> StageResult:
         }
     )
     status = "blocked" if rv.blockers else "ok"
-    return StageResult(stage="review", status=status, artifacts=[path], numbers=numbers)
+    return StageResult(stage="review", status=status, artifacts=[path, trace_path], numbers=numbers)
 
 
 def _load_approvals(ctx: Ctx) -> list[Approval]:

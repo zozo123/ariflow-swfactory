@@ -93,18 +93,29 @@ def test_exhausted_fixes_deliver_blocked(tmp_path: Path) -> None:
 
 def test_review_fix_that_breaks_tests_is_a_blocker(tmp_path: Path) -> None:
     """blocker_breaks/fix.4.patch reverts the sign fix: the re-review approves (scripted), but the
-    red suite becomes a synthetic blocker and the run delivers [BLOCKED] instead of a green PR."""
+    red suite becomes a synthetic blocker and the run delivers [BLOCKED] instead of a green PR.
+    The requirement trace names what the red suite costs: the planned R2 and R4 acceptance tests
+    failed at the reviewed HEAD, each its own blocker."""
     report, tmp = _run(tmp_path, fixtures=BREAKS)
     by = {s.stage: s for s in report.stages}
     assert by["review"].status == "blocked" and by["deliver"].status == "blocked"
-    assert by["review"].numbers["fixes"] == 1 and by["review"].numbers["blockers"] == 1
+    assert by["review"].numbers["fixes"] == 1 and by["review"].numbers["blockers"] == 3
     assert by["review"].numbers["tests_passed"] == 0 and by["review"].numbers["tests_failed"] == 2
+    assert by["review"].numbers["missing_acceptance_tests"] == 2
     assert report.tests_passed is False
     review = json.loads((tmp / "work" / ART / "review.json").read_text())
     assert review["verdict"] == "request_changes"
-    (blocker,) = [f for f in review["findings"] if f["severity"] == "blocker"]
+    blockers = [f for f in review["findings"] if f["severity"] == "blocker"]
+    assert [f["title"] for f in blockers] == [
+        "Acceptance test failed: test_increase",
+        "Acceptance test failed: test_decrease",
+        "Tests failing after review fix",
+    ]
+    blocker = blockers[-1]
     assert blocker["title"] == "Tests failing after review fix" and blocker["file"] == "tests"
     assert "failed=2" in blocker["detail"] and "test_decrease" in blocker["detail"]
+    assert blockers[0]["detail"].startswith("R2 is planned to be proven by `test_increase`")
+    assert blockers[1]["detail"].startswith("R4 is planned to be proven by `test_decrease`")
     pr = (tmp / "run" / "pr.md").read_text()
     assert pr.startswith("# [BLOCKED] DEMO-1:") and "factory:blocked" in pr
     assert "Tests failing after review fix" in pr

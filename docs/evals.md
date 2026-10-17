@@ -85,7 +85,7 @@ expect:
   stages: [intent, spec, plan, build_and_test]   # review/deliver are expected to block
   tests_pass: true
   max_build_iterations: 1
-  blockers: 1
+  blockers: 4                                    # one per planned acceptance test never written
   label: factory:blocked
   exports: [calc.median]
 ---
@@ -99,7 +99,7 @@ expect:
 | `02-finite-inputs` | an input-validation fix inside existing functions; nothing new exported |
 | `03-api-contract` | a docstring/API-contract change, pinned by tests that read `__doc__` |
 | `04-underspecified-rounding` | a deliberately vague issue: the correct outcome is a spec whose **open questions** are recorded (checked via `artifacts_contain`) and the narrowest implementation, not a silent guess |
-| `05-blocked-missing-tests` | the reviewer must **block** a public function shipped without tests, and the fix round must fail to launder it: `tests/` is `denyWrite` for `fix`, so the PR ships `[BLOCKED]` + `factory:blocked` |
+| `05-blocked-missing-tests` | a public function shipped without its planned tests is **blocked by code**, not by the reviewer: the scripted review approves, and the requirement trace turns each planned R1-R4 test missing from the JUnit report into a blocker (`trace.json`). The fix round cannot launder it -- `tests/` is read-only for `fix` -- so the PR ships `[BLOCKED]` + `factory:blocked` |
 | `06-build-loop-sign` | the bounded build loop: iteration 1 gets the sign wrong, the tests catch it, `fix.2` converges (`max_build_iterations: 2`) |
 | `07-review-fix-validation` | a review blocker the fix stage *can* resolve (missing `ValueError` in `src/`): one fix round, then a clean re-review |
 

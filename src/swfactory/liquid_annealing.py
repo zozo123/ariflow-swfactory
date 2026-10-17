@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 
 from swfactory import stages
 from swfactory.metrics import severity_counts
-from swfactory.models import Finding, Review, StageResult
+from swfactory.models import Finding, Review, StageError, StageResult
 from swfactory.phase_control import ControlMode, Phase
 
 LANES: tuple[str, ...] = ("correctness", "verification", "risk")
@@ -191,7 +191,7 @@ def _signature(findings: list[Finding]) -> tuple[tuple[str, str, int | None, str
     )
 
 
-def _review_prompt(ctx: stages.Ctx, *, lane: str, spec: str, plan: str, diff: str) -> str:
+def _review_prompt(ctx: stages.Ctx, *, lane: str, spec: str, plan: str, diff: str, checklist: str = "") -> str:
     policy = (
         stages._review_policy(ctx)
         + f"\n\n## Assigned Liquid review lane\n{lane}\n"
@@ -204,6 +204,7 @@ def _review_prompt(ctx: stages.Ctx, *, lane: str, spec: str, plan: str, diff: st
         spec=spec,
         plan=plan,
         diff=diff,
+        checklist=checklist,
     )
 
 
@@ -214,6 +215,7 @@ def _round(
     spec: str,
     plan: str,
     diff: str,
+    checklist: str = "",
 ) -> tuple[list[Finding], int, list[dict[str, object]]]:
     groups: list[list[Finding]] = []
     lane_records: list[dict[str, object]] = []
@@ -223,7 +225,7 @@ def _round(
             ctx,
             "review",
             iteration,
-            _review_prompt(ctx, lane=lane, spec=spec, plan=plan, diff=diff),
+            _review_prompt(ctx, lane=lane, spec=spec, plan=plan, diff=diff, checklist=checklist),
             Review,
         )
         review = Review.model_validate(result.data)
@@ -258,6 +260,9 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
     base = ctx.state.read_control("base").strip()
     spec = stages._read_or(ctx, f"{ctx.art}/spec.md")
     plan = ctx.read_artifact(f"{ctx.art}/plan.md")
+    plan_data = stages._read_json(ctx, f"{ctx.art}/plan.json", None)
+    trace_path = f"{ctx.art}/{stages.TRACE}"
+    contract: stages.ContractTrace | None = None
     changed = tuple(
         line.strip()
         for line in stages._sh(
@@ -284,14 +289,18 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
         review_diff, packed_diff = stages.review_context(
             ctx, base, numbers, fanout=len(LANES), saved_key="review_context_replayed_bytes_avoided"
         )
+        # The same code-decided requirement trace as stages.review, for this round's HEAD.
+        contract = stages.contract_trace(ctx, spec, plan_data)
         findings, dropped, lane_records = _round(
             ctx,
             round_index=round_index,
             spec=spec,
             plan=plan,
             diff=review_diff,
+            checklist=contract.checklist,
         )
         findings.extend(stages._plan_fidelity(ctx, base))
+        findings.extend(contract.findings)
         if tests_blocker is not None:
             findings.append(tests_blocker)
         findings = merge_findings([findings])
@@ -383,6 +392,10 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
     }
     ctx.write_artifact(review_path, stages._dumps(review_record))
     ctx.write_artifact(annealing_path, stages._dumps(annealing_record))
+    if contract is None:  # max_review_fixes >= 0, so a round always ran; never publish untraced
+        raise StageError("policy", "review ran no round, so it has no requirement trace")
+    ctx.write_artifact(trace_path, stages._dumps(contract.record))
+    numbers.update(contract.numbers)
 
     numbers.update(
         {
@@ -400,7 +413,9 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
         }
     )
     status = "ok" if final_state.crystallized else "blocked"
-    return StageResult(stage="review", status=status, artifacts=[review_path, annealing_path], numbers=numbers)
+    return StageResult(
+        stage="review", status=status, artifacts=[review_path, annealing_path, trace_path], numbers=numbers
+    )
 
 
 @stages._resumable

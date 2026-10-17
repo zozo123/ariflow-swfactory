@@ -188,6 +188,12 @@ def _stage_harness(monkeypatch: Any) -> None:
     monkeypatch.setattr(stages, "_read_or", lambda *_args: "# Spec\n")
     monkeypatch.setattr(stages, "_exclude", lambda *_args: ":!docs/factory/LIQ-1")
     monkeypatch.setattr(stages, "_plan_fidelity", lambda *_args: [])
+    # The requirement trace is the same deterministic code stages.review runs; stubbed like
+    # _plan_fidelity so these tests exercise only the annealing loop around it.
+    monkeypatch.setattr(stages, "_read_json", lambda *_args: None)
+    monkeypatch.setattr(
+        stages, "contract_trace", lambda *_args: stages.ContractTrace([], {}, "CHECKLIST", {"schema_version": 1})
+    )
     monkeypatch.setattr(stages, "_protected", lambda *_args: "tests/")
     monkeypatch.setattr(stages, "_summary_line", lambda *_args: "relax material defect")
     monkeypatch.setattr(stages, "commit", lambda *_args, **_kwargs: "fixed-head")
@@ -286,6 +292,56 @@ def test_stage_relaxes_major_retests_and_crystallizes(monkeypatch: Any) -> None:
     assert review["findings"] == []
     assert [step["state"]["phase"] for step in annealing["trace"]] == ["liquid", "crystal"]
     assert annealing["final"]["crystallized"] is True
+
+
+def test_annealed_review_carries_the_requirement_trace(monkeypatch: Any) -> None:
+    """The liquid line renders the same review template, so it gets the same contract checklist
+    and the same code-decided acceptance-test blockers, and commits trace.json beside review.json."""
+    ctx = _Ctx(max_review_fixes=0)
+    _stage_harness(monkeypatch)
+    blocker = Finding(
+        severity="blocker",
+        file="tests",
+        title="Acceptance test missing: test_decrease",
+        detail="R4 is planned to be proven by `test_decrease`, but the JUnit report has no such test case.",
+    )
+    record = {"schema_version": 1, "head": "head", "evidence": "junit", "requirements": []}
+    monkeypatch.setattr(
+        stages,
+        "contract_trace",
+        lambda *_args: stages.ContractTrace([blocker], {"missing_acceptance_tests": 1.0}, "- [missing] R4", record),
+    )
+    checklists: list[str] = []
+
+    def fake_round(_ctx: Any, *, checklist: str, **_kwargs: Any) -> tuple[list[Finding], int, list[dict[str, object]]]:
+        checklists.append(checklist)
+        return [], 0, _lanes()
+
+    monkeypatch.setattr(liquid_annealing, "_round", fake_round)
+    result = liquid_annealing._run_annealed_review(ctx)  # type: ignore[arg-type]
+
+    assert checklists == ["- [missing] R4"]
+    assert result.status == "blocked" and result.numbers["blockers"] == 1
+    assert result.numbers["missing_acceptance_tests"] == 1
+    assert f"{ctx.art}/trace.json" in result.artifacts
+    assert json.loads(ctx.written[f"{ctx.art}/trace.json"]) == record
+    review = json.loads(ctx.written[f"{ctx.art}/review.json"])
+    assert [f["title"] for f in review["findings"]] == ["Acceptance test missing: test_decrease"]
+
+
+def test_liquid_review_prompt_places_the_checklist_after_the_diff(monkeypatch: Any) -> None:
+    monkeypatch.setattr(stages, "_review_policy", lambda _ctx: "# liquid policy")
+    ctx = SimpleNamespace(issue=SimpleNamespace(id="LIQ-1"))
+    prompt = liquid_annealing._review_prompt(
+        ctx,  # type: ignore[arg-type]
+        lane="risk",
+        spec="SPEC",
+        plan="PLAN",
+        diff="DIFF-BODY",
+        checklist="- [passed] R1: CHECK-ROW",
+    )
+    assert prompt.index("## Diff under review") < prompt.index("DIFF-BODY") < prompt.index("## Contract checklist")
+    assert prompt.index("## Contract checklist") < prompt.index("CHECK-ROW") < prompt.index("## Output")
 
 
 def test_exhausted_major_blocks_even_without_a_review_blocker(monkeypatch: Any) -> None:

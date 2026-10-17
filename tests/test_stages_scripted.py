@@ -191,6 +191,54 @@ def test_gate_previews(run) -> None:
     assert plan.startswith("# Plan — DEMO-1\n") and "## Files" in plan
     assert all(len(s.preview) <= 4000 for s in report.stages)
     assert not any(by[s].preview for s in ("spec", "build_and_test", "review", "deliver"))
+    # Advisory requirement coverage appended for the approver: R5 (docstring) has no planned test.
+    coverage = plan[plan.index("## Requirement coverage (advisory)") :]
+    assert "- R4: test_decrease\n" in coverage and "- R5: no planned test\n" in coverage
+    assert by["plan"].numbers["untested_requirements"] == 1 and by["plan"].numbers["requirements"] == 5
+
+
+def test_requirement_trace_of_the_demo(run) -> None:
+    """R1-R4 are proven by the planned tests that passed at the reviewed HEAD; R5 is untested and
+    advisory only, so the demo's review findings (pinned in test_nit_cap_enforced) are unchanged."""
+    report, tmp, _ = run
+    trace = json.loads((tmp / "work" / ART / "trace.json").read_text())
+    assert trace["evidence"] == "junit"
+    assert [(r["requirement"], r["status"]) for r in trace["requirements"]] == [
+        ("R1", "passed"),
+        ("R2", "passed"),
+        ("R3", "passed"),
+        ("R4", "passed"),
+        ("R5", "untested"),
+    ]
+    (r2,) = [r for r in trace["requirements"] if r["requirement"] == "R2"]
+    assert r2["planned_tests"] == [
+        {
+            "test": "test_increase",
+            "status": "passed",
+            "cases": ["pytest/tests.test_percent_change::test_increase"],
+            "case_count": 1,
+        }
+    ]
+    review = {s.stage: s for s in report.stages}["review"].numbers
+    assert review["untested_requirements"] == 1 and review["missing_acceptance_tests"] == 0
+    assert review["acceptance_tests"] == 4
+    findings = json.loads((tmp / "work" / ART / "review.json").read_text())["findings"]
+    assert not any(f["title"].startswith(("Acceptance test", "No per-test JUnit")) for f in findings)
+
+
+def test_review_prompt_shows_the_contract_checklist_after_the_diff(run) -> None:
+    _, tmp, _ = run
+    prompt = (tmp / "work" / ".factory" / "prompt.review.1.md").read_text()
+    diff_at, checklist_at = prompt.index("## Diff under review"), prompt.index("## Contract checklist")
+    # REVIEW.md's own "## Output contract" sits earlier, inside the policy; the template's
+    # "## Output" section is the last one, and the checklist is the section right before it.
+    assert diff_at < prompt.index("+def percent_change") < checklist_at < prompt.rindex("\n## Output\n")
+    rows = prompt[checklist_at:].splitlines()
+    assert (
+        "- [passed] R4: Negative and decreasing values are allowed: `percent_change(200, 150) == -0.25`. "
+        "— `test_decrease` passed" in rows
+    )
+    assert any(row.startswith("- [untested] R5: Docstring") for row in rows)
 
 
 def _pr_path(run) -> Path:
