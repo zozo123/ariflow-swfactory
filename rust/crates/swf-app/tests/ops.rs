@@ -1640,6 +1640,18 @@ async fn verify_publication_key_branch(
     committed: &str,
     known: Vec<RunMetrics>,
 ) -> swf_domain::evidence::DeliveryReport {
+    // The suffix is `sha256(repo, target, issue)[:12]`, not a run: no record is keyed on it.
+    verify_cloned_branch("factory/42-fab2a6d3a23f", run_id, committed, known).await
+}
+
+/// A `--clone` verification of `branch`, whose head carries `trailers` (one `Factory-Run:` value
+/// per line, possibly none) and commits `committed` as its own `docs/factory/42/metrics.json`.
+async fn verify_cloned_branch(
+    branch: &str,
+    trailers: &str,
+    committed: &str,
+    known: Vec<RunMetrics>,
+) -> swf_domain::evidence::DeliveryReport {
     let scratch = tempfile::tempdir().expect("tempdir");
     let checkout = scratch.path().join("checkout");
     std::fs::create_dir_all(&checkout).expect("mkdir");
@@ -1654,7 +1666,7 @@ async fn verify_publication_key_branch(
                 "git".to_string(),
                 CommandOutput {
                     code: 0,
-                    stdout: format!("{run_id}\n"),
+                    stdout: format!("{trailers}\n"),
                     stderr: String::new(),
                 },
             ),
@@ -1693,8 +1705,7 @@ async fn verify_publication_key_branch(
         base_branch: Some("main".to_string()),
         ..VerifyOpts::default()
     };
-    // The suffix is `sha256(repo, target, issue)[:12]`, not a run: no record is keyed on it.
-    let id = swf_domain::ids::DeliveryId::parse("factory/42-fab2a6d3a23f").expect("id");
+    let id = swf_domain::ids::DeliveryId::parse(branch).expect("id");
     ops.verify_delivery(&id, &opts, &CancellationToken::new())
         .await
         .expect("verify")
@@ -1741,6 +1752,53 @@ async fn the_branch_s_own_metrics_outrank_the_operator_s_records() {
         .find(|c| c.id == "metrics.tests_passed")
         .expect("tests_passed row");
     assert!(!passed.status.passed(), "{passed:?}");
+}
+
+#[tokio::test]
+async fn the_head_outranks_a_legacy_branch_suffix_that_names_another_run() {
+    // A pre-#2104 branch named run 11111111, but its head carries run dcfca3c6's commit: the
+    // delivered bytes are dcfca3c6's, so that is the record judged.
+    let committed = r#"{"run_id": "dcfca3c6", "issue_id": "42", "tests_passed": false}"#;
+    let report = verify_cloned_branch(
+        "factory/42-11111111",
+        "dcfca3c6",
+        committed,
+        vec![metrics_for("11111111"), metrics_for("dcfca3c6")],
+    )
+    .await;
+    assert_eq!(report.delivery.run_id, "dcfca3c6");
+    let passed = report
+        .checks
+        .iter()
+        .find(|c| c.id == "metrics.tests_passed")
+        .expect("tests_passed row");
+    assert!(!passed.status.passed(), "judged by the head's own record");
+}
+
+#[tokio::test]
+async fn an_unmarked_head_falls_back_to_a_legacy_suffix_and_never_to_a_publication_key() {
+    let committed = r#"{"run_id": "11111111", "issue_id": "42", "tests_passed": true}"#;
+    // A legacy branch suffix IS a run id: with no trailer it still names the record.
+    let legacy = verify_cloned_branch(
+        "factory/42-11111111",
+        "",
+        committed,
+        vec![metrics_for("11111111")],
+    )
+    .await;
+    assert!(legacy.workflow_succeeded, "{:?}", legacy.checks);
+    assert_eq!(legacy.delivery.run_id, "11111111");
+    // A publication key names the work, which several runs share: nothing is matched against it,
+    // even a record that happens to carry the same string.
+    let keyed = verify_cloned_branch(
+        "factory/42-fab2a6d3a23f",
+        "",
+        committed,
+        vec![metrics_for("fab2a6d3a23f")],
+    )
+    .await;
+    assert!(!keyed.workflow_succeeded);
+    assert!(keyed.independently_verified);
 }
 
 #[tokio::test]

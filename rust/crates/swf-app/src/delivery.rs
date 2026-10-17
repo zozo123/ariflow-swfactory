@@ -261,14 +261,18 @@ pub async fn verify(
         ));
     }
 
-    let mut record = pick_record(&committed, &target);
-    if record.is_none() {
-        if let Some(run_id) = head.run_id.clone() {
-            // The branch name did not name a run the operator's records know, and the head did.
-            record = head_record(&head, &committed, &run_id);
+    // The head is what was delivered, so when it names its run, nothing else is asked. The branch
+    // suffix is only a fallback, and only when it can be a run at all: a publication key names the
+    // work, which several runs share, and matching it against run ids could only ever be a guess.
+    let record = match head.run_id.clone() {
+        Some(run_id) => {
+            let found = head_record(&head, &committed, &run_id);
             target.run_id = run_id;
+            found
         }
-    }
+        None if is_publication_key(&target.run_id) => None,
+        None => pick_record(&committed, &target),
+    };
     if let (Some(found), true) = (&record, target.run_id.is_empty()) {
         // A checkout with exactly one run in it names itself; nothing else could have.
         target.run_id = found.run_id.clone();
@@ -384,10 +388,11 @@ struct HeadClaims {
 
 /// The committed record this delivery is about.
 ///
-/// Matching is on the branch suffix, which named the run on branches published before #2104. A
-/// local checkout that was handed over without an identity falls back to "the only record there
-/// is", and to nothing at all when there is more than one — guessing which run a directory means is
-/// how a report ends up describing the wrong delivery.
+/// The fallback when no head names its run: matching is on the branch suffix, which named the run
+/// on branches published before #2104 (a publication-key suffix never reaches here). A local
+/// checkout that was handed over without an identity falls back to "the only record there is", and
+/// to nothing at all when there is more than one — guessing which run a directory means is how a
+/// report ends up describing the wrong delivery.
 fn pick_record(committed: &[RunMetrics], target: &Target) -> Option<RunMetrics> {
     if !target.run_id.is_empty() {
         return committed
@@ -415,6 +420,21 @@ fn head_record(head: &HeadClaims, committed: &[RunMetrics], run_id: &str) -> Opt
         .find(|run| run.run_id == run_id)
         .cloned()
 }
+
+/// Is this branch suffix a publication key rather than a run id?
+///
+/// The same discriminator `swfactory.publication_identity` reads branches with: exactly 12
+/// lowercase hex characters (`sha256(repo, target, issue)[:12]`). Run ids are 8 (`uuid4().hex[:8]`,
+/// `runtime.run_id_for`), so the two shapes cannot be mistaken for each other.
+fn is_publication_key(suffix: &str) -> bool {
+    suffix.len() == PUBLICATION_KEY_CHARS
+        && suffix
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The length of a publication key (`publication_identity._KEY_CHARS`).
+const PUBLICATION_KEY_CHARS: usize = 12;
 
 /// The single `Factory-Run:` value of a `git log --format=%(trailers:…,valueonly)` answer.
 ///
@@ -1308,6 +1328,18 @@ fn scan_attrs(text: &str) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_publication_key_is_told_apart_from_a_run_id_by_its_shape() {
+        assert!(is_publication_key("fab2a6d3a23f"));
+        assert!(!is_publication_key("dcfca3c6"), "a run id is 8 hex");
+        assert!(
+            !is_publication_key("FAB2A6D3A23F"),
+            "keys are lowercase hex"
+        );
+        assert!(!is_publication_key("fab2a6d3a23g"));
+        assert!(!is_publication_key(""));
+    }
 
     #[test]
     fn a_head_names_its_run_only_with_one_well_formed_trailer() {
