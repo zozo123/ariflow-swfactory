@@ -390,10 +390,10 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
         "trace": trace,
         "final": final_state.as_dict(),
     }
-    ctx.write_artifact(review_path, stages._dumps(review_record))
-    ctx.write_artifact(annealing_path, stages._dumps(annealing_record))
     if contract is None:  # max_review_fixes >= 0, so a round always ran; never publish untraced
         raise StageError("policy", "review ran no round, so it has no requirement trace")
+    ctx.write_artifact(review_path, stages._dumps(review_record))
+    ctx.write_artifact(annealing_path, stages._dumps(annealing_record))
     ctx.write_artifact(trace_path, stages._dumps(contract.record))
     numbers.update(contract.numbers)
 

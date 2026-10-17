@@ -1641,9 +1641,9 @@ def review(ctx: Ctx) -> StageResult:
         "dropped_nits": dropped,
         "fixes": fixes,
     }
-    ctx.write_artifact(path, _dumps(record))
     if trace is None:  # max_review_fixes >= 0, so the loop always runs; never publish untraced
         raise StageError("policy", "review ran no round, so it has no requirement trace")
+    ctx.write_artifact(path, _dumps(record))
     ctx.write_artifact(trace_path, _dumps(trace.record))
     numbers.update(trace.numbers)
     counts = metrics_mod.severity_counts(rv.findings)
