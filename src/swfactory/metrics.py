@@ -47,8 +47,13 @@ def write_run_metrics(
     approvals: list[Approval],
     *,
     total_cost_usd: float | None = None,
+    adherence: str | None = None,
 ) -> dict:
-    """Assemble run metrics and persist them through the host-owned artifact store."""
+    """Assemble run metrics and persist them through the host-owned artifact store.
+
+    ``adherence`` is the verdict of ``swfactory.adherence.audit`` (``adherent`` / ``deviant`` /
+    ``unverifiable``); None when the caller ran no audit.
+    """
     from swfactory import accepted_inputs
     from swfactory.stages import denied_tool_calls  # runtime: stages imports this module
 
@@ -92,6 +97,7 @@ def write_run_metrics(
         # "what was approved" and "what was published" are one comparison, not an investigation.
         "inputs_digest": pinned.digest if pinned is not None else None,
         "policy_sha256": pinned.policy_sha256 if pinned is not None else None,
+        "adherence": adherence,
     }
     if ctx.agent.kind == "external":
         from swfactory.call_accounting import CallLedger

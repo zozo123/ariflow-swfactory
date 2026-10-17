@@ -488,6 +488,11 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         admitted_digest = accepted_inputs.digest_of(ctx.state)
     if hasattr(ctx.sb, "set_protected"):
         ctx.sb.set_protected(protected)
+    # HOLD for read-only roles. Their declaration is a tool allowlist, and nothing else stopped an
+    # edit they managed anyway: the next write stage's `git add -A` would sweep it into a build or
+    # fix commit, attributed to a role that never made it. Taken before the reservation so a
+    # sandbox that cannot answer costs nothing.
+    before = None if policy.writes else _worktree_fingerprint(ctx)
     # Reserve BEFORE the provider can be paid. Everything after this line may be lost to a kill;
     # this row is what makes the next process account for a call it never saw answer.
     ledger = CallLedger(ctx.state)
@@ -569,14 +574,31 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         # the stage log kept the run pinned at the reservation -- forever. Money that reconciliation
         # cannot return is not a reservation, it is a fine.
         raise
-    receipt = {
+    # The answer is in and paid for: nothing between here and `settle` may raise, or the ledger
+    # would keep a known cost as unknown. A fingerprint that cannot be taken is held as unknown
+    # (None) and raised only after settlement.
+    unchanged: bool | None = None
+    hold_error: StageError | None = None
+    if before is not None:
+        try:
+            unchanged = _worktree_fingerprint(ctx) == before
+        except StageError as error:
+            hold_error = error
+    encoded = prompt.encode("utf-8")
+    receipt: dict[str, object] = {
         "session_id": res.session_id,
         "num_turns": res.num_turns,
         "duration_ms": res.duration_ms,
         "subtype": res.subtype,
         "is_error": res.is_error,
         "agent": res.agent,
+        # What this role was told, as a digest: the prompt itself lives only in sandbox scratch,
+        # and the audit needs host-side proof of which context reached which call.
+        "prompt_sha256": hashlib.sha256(encoded).hexdigest(),
+        "prompt_bytes": len(encoded),
     }
+    if before is not None:
+        receipt["worktree_unchanged"] = unchanged
     # Candidate output cannot author billing. Paid external calls retain their full reservation
     # until an operator supplies a trusted provider observation through the existing reconciler.
     if res.cost_usd is None:
@@ -610,11 +632,38 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         ctx.sb.write(envelope, content)
     elif ctx.sb.exists(envelope):
         ctx.state.write_artifact(envelope, ctx.sb.read(envelope))
+    if hold_error is not None:
+        raise hold_error
+    if unchanged is False:
+        # Fail closed like `_ensure_clean`. The edit stays in place as evidence: the settle receipt
+        # above says `worktree_unchanged: false`, which the adherence audit reports as deviant.
+        raise StageError("policy", f"{stage}.{iteration} (read-only) changed the worktree")
     if res.is_error:
         raise StageError("agent", f"{stage}.{iteration} failed: {res.subtype}: {res.text[-800:]}")
     if schema is not None and res.data is None:
         raise StageError("agent", f"{stage}.{iteration} returned no structured output")
     return res
+
+
+# One round trip: porcelain status (paths and states, untracked included), the content of tracked
+# changes, and the content of every untracked regular file. Status alone is blind to a second edit
+# of a file that was already dirty -- `uv sync` can leave uv.lock modified before spec runs -- and
+# content alone is blind to a deletion, so the fingerprint takes both.
+_FINGERPRINT = (
+    "git status --porcelain=v1 -z --untracked-files=all -- . {ex} && printf '\\036' && "
+    "git diff --binary HEAD -- . {ex} && printf '\\036' && "
+    "git ls-files -z -o --exclude-standard -- . {ex} | while IFS= read -r -d '' f; do "
+    'if [ -f "$f" ] && [ ! -L "$f" ]; then printf \'%s\\0\' "$f"; git hash-object --no-filters -- "$f"; fi; done'
+)
+
+
+def _worktree_fingerprint(ctx: Ctx) -> str:
+    """sha256 of the checkout outside the artifact chain (``.factory/`` is excluded by setup).
+
+    Compared before and after a read-only call rather than required to be empty, so a tree that
+    setup already left dirty is tolerated while any change the call made to it is not.
+    """
+    return hashlib.sha256(_sh(ctx, _FINGERPRINT.format(ex=_exclude(ctx))).encode("utf-8")).hexdigest()
 
 
 def _policy(ctx: Ctx, stage: str) -> Policy:
@@ -1702,9 +1751,13 @@ def cell_evidence(ctx: Ctx) -> tuple[str | None, int | None, bool]:
     )
 
 
-@_owned
 def record_approval(ctx: Ctx, approval: Approval) -> None:
     """Record the latest decision for one gate in ``approvals.json`` (committed by deliver).
+
+    Owned as ``record_approval:<gate>``: the operations journal then says which gate each
+    recording answered, in the journal's own append order. A later re-recording replaces the
+    ``approvals.json`` entry (and its ``at``), so that order is the only surviving proof of when a
+    gate was first answered relative to the stages after it -- the adherence audit reads it.
 
     Airflow may retry a record task, so one gate owns one entry rather than accumulating duplicate
     decisions from task attempts.
@@ -1714,6 +1767,11 @@ def record_approval(ctx: Ctx, approval: Approval) -> None:
     answer that already claims a different Cell/epoch is refused instead of being restamped, so a
     response cannot be carried across epochs and re-recorded as current.
     """
+    with owned(ctx.state, f"record_approval:{approval.gate}"):
+        _record_approval(ctx, approval)
+
+
+def _record_approval(ctx: Ctx, approval: Approval) -> None:
     path = f"{ctx.art}/approvals.json"
     artifact = _gate_artifact(ctx, approval.gate)
     digest = _artifact_sha256(ctx, artifact)
@@ -1810,6 +1868,7 @@ def pr_body(
     dropped_nits: int,
     approvals: list[Approval],
     stages: list[StageResult],
+    adherence: str | None = None,
 ) -> str:
     """Render the PR description: banner, findings (blockers first), approvals, stages."""
     parts: list[str] = []
@@ -1855,6 +1914,7 @@ def pr_body(
         "given for these\n"
         f"- artifact chain: `{ctx.art}/` (intent, spec, plan, review, approvals, metrics, agent/)\n"
         f"- commits authored by `{BOT_NAME}` with Factory-Run / Factory-Stage / Agent trailers"
+        + (f"\n- adherence audit: `{adherence}` (`{ctx.art}/adherence.json`, record-only)" if adherence else "")
     )
     return "\n\n".join(parts) + "\n"
 
@@ -1982,11 +2042,18 @@ def deliver(ctx: Ctx) -> StageResult:
     denied = denied_tool_calls(ctx)
     if ctx.agent.kind == "external" and ctx.blueprint and any(gate.mode == "policy" for gate in ctx.blueprint.gates):
         raise StageError("policy", "external agents are not qualified for autonomous publication")
+    from swfactory import adherence  # reads this module's helpers
+
+    # Record-only: the verdict travels with the chain and the metrics, and publication proceeds
+    # whatever it says. Letting `deviant` block is a separate authority decision.
+    audit = adherence.audit(ctx, stages=stages, approvals=approvals)
+    ctx.write_artifact(f"{ctx.art}/{adherence.ARTIFACT}", adherence.render(audit))
     metrics_mod.write_run_metrics(
         ctx,
         stages,
         approvals,
         total_cost_usd=persisted_cost(ctx),
+        adherence=audit["verdict"],
     )
     _copy_audit_logs(ctx)
     cleared = ctx.sb.run(f"rm -rf -- {shlex.quote(ctx.art)}")
@@ -2052,6 +2119,7 @@ def deliver(ctx: Ctx) -> StageResult:
             dropped_nits=int(data.get("dropped_nits", 0)),
             approvals=approvals,
             stages=stages,
+            adherence=audit["verdict"],
         ),
         labels=labels,
         allowed_prefixes=[prefix],
@@ -2065,6 +2133,7 @@ def deliver(ctx: Ctx) -> StageResult:
             "commits": float(commits),
             "rejected": float(rejected),
             "denied_tool_calls": float(denied),
+            "adherence": adherence.VERDICT_SCORE[audit["verdict"]],
         },
     )
 

@@ -619,7 +619,40 @@ def test_guard_denies_protected_paths_and_allows_source(tmp_path: Path) -> None:
     lines = (tmp_path / ".factory/hooks.jsonl").read_text().splitlines()
     log = [json.loads(line) for line in lines]
     assert [e["decision"] for e in log] == ["deny", "deny", "allow", "deny", "deny"]
-    assert set(log[0]) == {"ts", "tool", "path_or_cmd", "decision"}
+    # Every line names the call it belongs to; empty when the factory set no SWF_CALL.
+    assert set(log[0]) == {"ts", "tool", "path_or_cmd", "decision", "call"}
+    assert {e["call"] for e in log} == {""}
+
+
+def test_guard_log_lines_carry_the_agent_call_the_factory_installed(tmp_path: Path) -> None:
+    """``install_guard(call=...)`` puts ``SWF_CALL`` in the settings env; the hook writes it on
+    every decision, so a refusal in the shared per-sandbox log is attributable to one role call."""
+    sb = FakeSandbox()
+    install_guard(sb, ["tests/"], call="fix.4")
+    env = json.loads(sb.files[SETTINGS_DST])["env"]
+    assert env == {"SWF_PROTECTED": "tests/", "SWF_CALL": "fix.4"}
+    denied = _hook(tmp_path, {"tool_name": "Edit", "tool_input": {"file_path": "tests/test_a.py"}}, **env)
+    allowed = _hook(tmp_path, {"tool_name": "Edit", "tool_input": {"file_path": "src/a.py"}}, **env)
+    assert (denied.returncode, allowed.returncode) == (2, 0)
+    log = [json.loads(line) for line in (tmp_path / ".factory/hooks.jsonl").read_text().splitlines()]
+    assert [(e["decision"], e["call"]) for e in log] == [("deny", "fix.4"), ("allow", "fix.4")]
+
+
+def test_claude_run_installs_the_guard_with_its_own_call_name() -> None:
+    envelope = {"is_error": False, "subtype": "success", "result": '{"summary": "ok", "files_changed": []}'}
+    sb = FakeSandbox({".factory/agent.fix.5.json": json.dumps(envelope)})
+    ClaudeAgent().run(
+        sb,
+        stage="fix",
+        iteration=5,
+        prompt="fix",
+        policy=POLICIES["fix"],
+        schema=BuildSummary,
+        cfg=_claude_cfg(),
+        issue_id="DEMO-1",
+        protected=["tests/"],
+    )
+    assert json.loads(sb.files[SETTINGS_DST])["env"]["SWF_CALL"] == "fix.5"
 
 
 def test_guard_bash_denylist(tmp_path: Path) -> None:
