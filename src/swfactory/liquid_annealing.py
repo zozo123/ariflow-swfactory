@@ -356,7 +356,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
         if final_state.crystallized or exhausted:
             break
 
-        actionable = [item for item in findings if item.severity in {"blocker", "major"}]
+        actionable = stages.fixable_findings([item for item in findings if item.severity in {"blocker", "major"}])
         if not actionable:
             break
         fixes = round_index + 1

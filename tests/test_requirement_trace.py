@@ -400,3 +400,20 @@ def test_stale_junit_evidence_blocks_review(tmp_path: Path, monkeypatch: pytest.
     trace = json.loads((art / "trace.json").read_text())
     assert trace["evidence"] == "missing"
     assert {r["status"] for r in trace["requirements"]} == {"unverified", "untested"}
+
+
+def test_a_fix_round_is_never_spent_on_a_missing_or_skipped_acceptance_test() -> None:
+    """The fix role may not touch the tests dir, so only blockers a source change can clear start a
+    fix round; the rest still block and stay in the artifacts."""
+    from swfactory.models import Finding
+    from swfactory.stages import fixable_findings
+
+    def blocker(title: str) -> Finding:
+        return Finding(severity="blocker", file="tests", title=title, detail="R1")
+
+    missing, skipped = blocker("Acceptance test missing: test_a"), blocker("Acceptance test skipped: test_b")
+    failed = blocker("Acceptance test failed: test_c")
+    stale = blocker("No per-test JUnit evidence for the reviewed HEAD")
+    source = blocker("Division by zero is not handled")
+    assert fixable_findings([missing, skipped, failed, stale, source]) == [failed, stale, source]
+    assert fixable_findings([missing, skipped]) == []

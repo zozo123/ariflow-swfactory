@@ -39,7 +39,9 @@ def main(argv: list[str]) -> int:
         f"verified={verdicts.get('independently_verified')} "
         f"tests={tests}"
     )
-    if verdicts.get("independently_verified") and verdicts.get("workflow_succeeded"):
+    # All three, each on its own evidence: a re-run from a clone does not prove the branch was
+    # published, any more than a published branch proves its tests pass.
+    if all(verdicts.get(key) for key in ("workflow_succeeded", "branch_published", "independently_verified")):
         return 0
     # Say WHY, with the evidence rows that did not pass: "it failed" is not a diagnosis. Skips are
     # shown too, because an unread self-report is a skip, not a failure. Rust serializes `id`.

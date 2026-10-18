@@ -1367,6 +1367,21 @@ def _seed_exclude(ctx: Ctx) -> None:
         ctx.sb.write(path, current + sep + "\n".join(missing) + "\n")
 
 
+# How many setup attempts may fail to measure a base that holds tests before the baseline is
+# recorded as unmeasured instead (``_record_base_tests``); the count is host-owned control state.
+MAX_BASE_MEASUREMENTS = 2
+BASE_MEASUREMENT_FAILURES = "base-measurement-failures"
+
+
+def _base_measurement_failures(ctx: Ctx) -> int:
+    if not ctx.state.has_control(BASE_MEASUREMENT_FAILURES):
+        return 0
+    try:
+        return max(0, int(ctx.state.read_control(BASE_MEASUREMENT_FAILURES).strip()))
+    except ValueError:
+        return 0
+
+
 def _record_base_tests(ctx: Ctx, base: str, head: str) -> None:
     """Replay the old behaviour once: run the target's suite on the base and keep what passed.
 
@@ -1382,7 +1397,8 @@ def _record_base_tests(ctx: Ctx, base: str, head: str) -> None:
     the measurement failed (a timeout, a lost crabbox lease or download, a crash before JUnit was
     written), not that the base passed nothing: saved, it would be a permanent zero no candidate can
     fall below, turning the guard off for the whole run. Nothing is recorded then, and setup fails
-    retryable so the next attempt measures again.
+    retryable so the next attempt measures again -- up to ``MAX_BASE_MEASUREMENTS`` attempts, after
+    which the baseline is recorded as explicitly unmeasured, as for a dirty base.
     """
     if ctx.state.has_control(BASE_TESTS) or head != base:
         return
@@ -1407,13 +1423,31 @@ def _record_base_tests(ctx: Ctx, base: str, head: str) -> None:
         tests_dir = _contract(ctx).tests_dir
         tracked = _sh(ctx, f"git ls-tree -r --name-only {shlex.quote(base)} -- {shlex.quote(tests_dir)}")
         if tracked.strip():
-            raise StageError(
-                "sandbox",
+            # Retried for a transient loss (a timeout, a lost crabbox download), but bounded: a base
+            # whose suite cannot report at all (a syntax error, a missing dependency) fails the same
+            # way every time, and refusing setup forever would stop the very run that could fix it.
+            failed = _base_measurement_failures(ctx) + 1
+            ctx.state.write_control(BASE_MEASUREMENT_FAILURES, f"{failed}\n")
+            detail = (
                 f"the base suite left no valid JUnit report although `{tests_dir}` holds tests at base "
-                f"{base[:12]} (exit code {result.exit_code}); the regression guard's baseline was not "
-                f"recorded, and a retry of setup measures it again. Tail:\n{output[-1500:]}",
-                retryable=True,
+                f"{base[:12]} (exit code {result.exit_code})"
             )
+            if failed < MAX_BASE_MEASUREMENTS:
+                raise StageError(
+                    "sandbox",
+                    f"{detail}; the regression guard's baseline was not recorded, and a retry of setup "
+                    f"measures it again. Tail:\n{output[-1500:]}",
+                    retryable=True,
+                )
+            record = {
+                "base": base,
+                "report_valid": False,
+                "passed": 0,
+                "passing": None,
+                "unmeasured": f"{detail} in {failed} attempts",
+            }
+            ctx.state.write_control(BASE_TESTS, json.dumps(record, sort_keys=True) + "\n")
+            return
     cases = junit_cases_for(ctx, base)
     passing = sorted(case for case, outcome in cases.items() if outcome == "passed") if cases is not None else None
     record = {
@@ -2198,6 +2232,19 @@ def fix_and_retest(
     )
 
 
+# Trace blockers a fix round cannot clear: the planned test is absent or skipped, and only a change
+# to the tests dir -- which the fix role may not touch (``protected_for``) -- could produce it.
+UNFIXABLE_TRACE_PREFIXES = ("Acceptance test missing:", "Acceptance test skipped:")
+
+
+def fixable_findings(findings: list[Finding]) -> list[Finding]:
+    """The findings a fix round can act on. A round spent on a missing or skipped acceptance test
+    buys only paid calls and unrelated source edits; those findings still block the stage and stay
+    in every artifact. A failing acceptance test, or missing evidence for the HEAD, stays fixable:
+    a source fix and its re-test can clear both."""
+    return [f for f in findings if not f.title.startswith(UNFIXABLE_TRACE_PREFIXES)]
+
+
 @_resumable
 def review(ctx: Ctx) -> StageResult:
     """Agent review (Review schema) with the nit cap and plan fidelity enforced in code; blockers
@@ -2236,14 +2283,15 @@ def review(ctx: Ctx) -> StageResult:
         rv.findings.extend(trace.findings)
         if tests_blocker is not None:
             rv.findings.append(tests_blocker)
-        if not rv.blockers or k == ctx.cfg.max_review_fixes:
+        fixable = fixable_findings(rv.blockers)
+        if not fixable or k == ctx.cfg.max_review_fixes:
             break
         fixes = k + 1
         fix_prompt = render_prompt(
             "fix",
             issue_id=ctx.issue.id,
             plan=plan_text,
-            failures="Review blockers:\n" + _format_findings(rv.blockers),
+            failures="Review blockers:\n" + _format_findings(fixable),
             protected=_protected(ctx, "fix"),
             dialect=target_dialect(ctx),
         )

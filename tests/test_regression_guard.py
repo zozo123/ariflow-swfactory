@@ -465,6 +465,30 @@ def test_a_failed_base_measurement_is_not_saved_as_an_empty_baseline(
     assert json.loads(ctx.state.read_control(BASE_TESTS))["passing"] == BASE_PASSING
 
 
+def test_a_base_that_never_reports_is_recorded_unmeasured_after_bounded_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A base whose suite cannot report at all (a syntax error, a missing dependency) fails the same
+    way on every attempt. Refusing setup forever would stop the very run that could repair it, so
+    after ``MAX_BASE_MEASUREMENTS`` failed attempts the baseline is recorded as unmeasured."""
+
+    def broken_base(ctx: stages.Ctx):
+        return SuiteResult(exit_code=2, report_valid=False), "SyntaxError: invalid syntax"
+
+    monkeypatch.setattr(stages, "run_tests", broken_base)
+    for _ in range(stages.MAX_BASE_MEASUREMENTS - 1):
+        with pytest.raises(StageError, match="left no valid JUnit report") as error:
+            stages.setup(_ctx(tmp_path))
+        assert error.value.retryable is True
+        assert not (tmp_path / "run" / "state" / BASE_TESTS).exists()
+
+    ctx = _ctx(tmp_path)
+    stages.setup(ctx)  # the last allowed attempt records instead of refusing
+    record = json.loads(ctx.state.read_control(BASE_TESTS))
+    assert record["report_valid"] is False and record["passing"] is None and record["passed"] == 0
+    assert f"in {stages.MAX_BASE_MEASUREMENTS} attempts" in record["unmeasured"]
+
+
 def _break_the_sign(tmp_path: Path) -> None:
     core = tmp_path / "work" / "src" / "calc" / "core.py"
     text = core.read_text()
