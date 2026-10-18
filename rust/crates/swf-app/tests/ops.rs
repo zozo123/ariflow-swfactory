@@ -1755,6 +1755,73 @@ async fn the_branch_s_own_metrics_outrank_the_operator_s_records() {
 }
 
 #[tokio::test]
+async fn a_named_origin_is_verified_without_a_reachable_forge() {
+    // `scm = local` delivers into a bare repository the operator names with `--from`. The forge has
+    // nothing to say about that branch, so an unreachable forge (no network) is not an admission:
+    // publication is attested by fetching the branch from the named origin.
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let checkout = scratch.path().join("checkout");
+    std::fs::create_dir_all(&checkout).expect("mkdir");
+    std::fs::write(
+        checkout.join("factory.toml"),
+        "[commands]\ntest = \"pytest --junitxml=.factory/junit.xml\"\n",
+    )
+    .expect("write");
+    let commands = Arc::new(FakeCommands {
+        answers: vec![
+            (
+                "git".to_string(),
+                CommandOutput {
+                    code: 0,
+                    stdout: "dcfca3c6\n".into(),
+                    stderr: String::new(),
+                },
+            ),
+            ("sh".to_string(), CommandOutput::default()),
+        ],
+        writes: vec![(
+            "sh".to_string(),
+            checkout.join(".factory").join("junit.xml"),
+            r#"<testsuite tests="7" failures="0" errors="0" skipped="0"/>"#.to_string(),
+        )],
+        ..FakeCommands::default()
+    });
+    let ops = Ops::builder(context())
+        .runs(Arc::new(airflow_with_two_runs()))
+        .deliveries(Arc::new(FakeGh {
+            fail: true,
+            ..FakeGh::default()
+        }))
+        .metrics(Arc::new(FakeMetrics {
+            runs: vec![metrics_for("dcfca3c6")],
+            ..FakeMetrics::default()
+        }))
+        .commands(commands)
+        .build();
+    let id = swf_domain::ids::DeliveryId::parse("factory/42-fab2a6d3a23f").expect("id");
+    let named = VerifyOpts {
+        clone: true,
+        workdir: Some(scratch.path().to_path_buf()),
+        keep_checkout: true,
+        origin: Some("/srv/remote.git".to_string()),
+        branch: Some("factory/42-fab2a6d3a23f".to_string()),
+        ..VerifyOpts::default()
+    };
+    let report = ops
+        .verify_delivery(&id, &named, &CancellationToken::new())
+        .await
+        .expect("verify");
+    assert_eq!(report.verdict, Verdict::Verified, "{:?}", report.checks);
+    assert!(report.workflow_succeeded && report.branch_published && report.independently_verified);
+    let forge = report
+        .checks
+        .iter()
+        .find(|c| c.id == "pr.exists")
+        .expect("pr row");
+    assert!(!forge.status.passed() && !forge.status.refutes() && !forge.status.unavailable());
+}
+
+#[tokio::test]
 async fn the_head_outranks_a_legacy_branch_suffix_that_names_another_run() {
     // A pre-#2104 branch named run 11111111, but its head carries run dcfca3c6's commit: the
     // delivered bytes are dcfca3c6's, so that is the record judged.

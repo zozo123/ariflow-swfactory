@@ -597,11 +597,25 @@ fn published_checks(lookup: &PrLookup, target: &Target, opts: &VerifyOpts) -> Ve
             return out;
         }
         PrLookup::Failed(detail) => {
-            out.push(Evidence::unavailable(
-                "pr.exists",
-                EvidenceLevel::Published,
-                format!("the forge could not be asked: {detail}"),
-            ));
+            // A delivery to a named origin is attested by fetching it from there (`branch.in_origin`,
+            // below), exactly as for `Missing`: the forge is not the question, so a forge that
+            // cannot be reached is not an admission either. Without a named origin it is the only
+            // witness, and its silence leaves `Published` unavailable.
+            if opts.origin.is_some() {
+                out.push(Evidence::skipped(
+                    "pr.exists",
+                    EvidenceLevel::Published,
+                    format!(
+                        "this delivery was published to a named remote; the forge was not reachable: {detail}"
+                    ),
+                ));
+            } else {
+                out.push(Evidence::unavailable(
+                    "pr.exists",
+                    EvidenceLevel::Published,
+                    format!("the forge could not be asked: {detail}"),
+                ));
+            }
             return out;
         }
         PrLookup::Missing => {

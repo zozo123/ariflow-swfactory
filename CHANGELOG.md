@@ -12,7 +12,9 @@ All notable changes to this project will be documented here. The format follows
   `metrics.json`. With `--clone` it now reads the run from the head commit's `Factory-Run:`
   trailer and judges the `metrics.json` the branch itself commits, ahead of the operator's copy. A
   head naming zero or several runs leaves the self-report unread rather than guessed.
-  `scripts/swf_e2e.sh` now requires all three verdicts, and its failure rows name the check.
+  `scripts/swf_e2e.sh` now requires all three verdicts, and its failure rows name the check. A
+  delivery verified from a named origin (`--from`) no longer needs a reachable forge: publication
+  is attested by fetching the branch from that origin, so the hermetic e2e passes offline.
 - Fix replica fusion on macOS: the fusion patch is decoded with `base64 -d < file`, because BSD
   `base64` rejects a file operand.
 - Review now checks in code that the plan's requirement-tagged acceptance tests
