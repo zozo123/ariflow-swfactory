@@ -466,7 +466,12 @@ def test_a_provider_that_refuses_every_fork_costs_the_wave_its_parallelism_not_i
     assert "HTTP 429" in decision["reason"]
     (attempted,) = report["fork_waves"]
     assert attempted["teardown"] == "confirmed" and attempted["merges"] == []
-    assert all(row["fork_refused"] and row["reaped"] for row in attempted["children"])
+    # The first refusal halts the wave, so a sibling that had not yet asked the provider was never
+    # forked at all: it says so, and is reaped, instead of reading like a fork of unknown fate.
+    assert any(row.get("fork_refused") for row in attempted["children"])
+    assert all(
+        (row.get("fork_refused") or row.get("cancelled_before_fork")) and row["reaped"] for row in attempted["children"]
+    )
     assert {sandbox for _, _, sandbox in agent.calls} == {parent}  # every node ran in the parent
     assert client.resumes == [parent] and client.state(parent) == "ready"
     assert ctx.sb.read("src/index.txt") == "alpha beta gamma\n"
