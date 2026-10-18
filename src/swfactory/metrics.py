@@ -81,6 +81,10 @@ def write_run_metrics(
         "findings_by_severity": findings,
         "blockers": findings["blocker"],
         "review_fixes": int(review.get("fixes", 0)),
+        # The ratchet's work, next to the loops it bounds: build repairs it reverted for losing
+        # passing tests, and review fixes it reverted for breaking a green suite.
+        "ratchet_reverts": int(build.get("ratchet_reverts", 0)),
+        "review_reverted_fixes": int(review.get("reverted_fixes", 0)),
         "denied_tool_calls": denied_tool_calls(ctx),
         "total_cost_usd": round(
             sum(s.cost_usd for s in stages) if total_cost_usd is None else total_cost_usd,

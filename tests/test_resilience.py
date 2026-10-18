@@ -602,6 +602,15 @@ def test_the_build_loop_stops_at_max_build_iterations_with_a_policy_error(tmp_pa
         "spec.1.json",
     ]
     assert not (art / "review.json").exists() and not (art / "metrics.json").exists()
+    # The failed run still holds the ratchet's per-attempt evidence in host state. fix.2 changes
+    # nothing the suite can see, so it loses nothing and is kept: the workspace ends on it.
+    ratchet = json.loads((tmp_path / "run" / "state" / "artifacts" / DEMO_ART / "build-ratchet.json").read_text())
+    assert [(row["agent_call"], row["verdict"]) for row in ratchet["iterations"]] == [
+        ("build.1", "kept"),
+        ("fix.2", "kept"),
+    ]
+    assert ratchet["best"]["agent_call"] == "fix.2" and ratchet["reverts"] == 0
+    assert git(tmp_path / "work", "rev-parse", "HEAD") == ratchet["best"]["head"]
     assert not (tmp_path / "run" / "pr.md").exists()  # nothing published
     assert not (tmp_path / "run" / "remote.git").exists()
 

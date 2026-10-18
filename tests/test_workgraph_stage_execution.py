@@ -152,11 +152,13 @@ class NodeAgent:
         self.edits = edits
         self.cost = cost
         self.calls: list[tuple[str, int, str]] = []
+        self.prompts: list[str] = []
 
     def run(self, sb: Any, *, stage: str, iteration: int, prompt: str = "", **kwargs: Any) -> AgentResult:
         del sb, kwargs
         node = match.group(1) if (match := re.search(r"Node: `([^`]+)`", prompt)) else stage
         self.calls.append((stage, iteration, node))
+        self.prompts.append(prompt)
         for path in self.edits.get(node, []):
             self.sandbox.write(path, f"# written by {node}\n")
         return AgentResult(agent="scripted", data={"summary": f"{node} done"}, cost_usd=self.cost)
@@ -612,3 +614,154 @@ def test_boat_fork_is_reported_as_a_hint_while_its_nodes_run_serially(tmp_path: 
     assert result.numbers["parallel_nodes"] == 0
     assert report["provider"] == "boat" and report["parallel"] is False
     assert report["mode"] == "shared_workspace_serial" and report["parallel_hint"] is True
+
+
+# ------------------------------------------------- the repair ratchet (VOLO step 3) and fix scope
+
+
+def _junit(*failing: str) -> str:
+    """A pytest-style report over the fixed universe {a, b, c}: per-test ids, so the ratchet compares sets."""
+    failure = '<failure message="x"/>'
+    cases = "".join(
+        f'<testcase classname="t" name="{name}">{failure if name in failing else ""}</testcase>'
+        for name in ("a", "b", "c")
+    )
+    return f'<testsuite name="pytest" tests="3" failures="{len(failing)}">{cases}</testsuite>'
+
+
+BASE = _junit("c")  # 2 of 3 pass
+REGRESS = _junit("a", "b")  # c fixed, a and b broken: gained 1 < 3 x lost 2
+
+
+def test_a_repair_that_loses_tests_is_reverted_and_the_next_starts_from_the_best(tmp_path: Path) -> None:
+    plan = _plan(PlanTask(id="a", title="A", files=["src/a.py"]))
+    sandbox = GitSandbox(junit=[BASE, REGRESS, GREEN])
+    agent = NodeAgent(sandbox, {"a": ["src/a.py"], "fix": ["src/a.py"]})
+    ctx = _ctx(tmp_path, sandbox, agent, plan)
+
+    result = work_stage.build_and_test(ctx)
+    report = _report(ctx)
+
+    assert [(stage, iteration) for stage, iteration, _ in agent.calls] == [("build", 1), ("fix", 2), ("fix", 3)]
+    assert result.numbers["iterations"] == 3 and result.numbers["repair_iterations"] == 2
+    assert result.numbers["ratchet_reverts"] == 1 and result.numbers["best_iteration"] == 3
+    first, second = report["repairs"]
+    assert first["ratchet"]["verdict"] == "reverted"
+    assert (first["ratchet"]["lost"], first["ratchet"]["gained"]) == (["pytest/t::a", "pytest/t::b"], ["pytest/t::c"])
+    assert first["ratchet"]["best_head"] == "head0000-1"
+    assert second["input_head"] == "head0000-1", "the second repair starts from the best tree, not the reverted one"
+    assert second["ratchet"]["verdict"] == "kept"
+    assert "NOTE: repair 1 was reverted and the workspace is back at iteration 1" in agent.prompts[2]
+    assert "broke a, b and fixed c" in agent.prompts[2]
+    assert report["final_head"] == sandbox.head == "head0000-1-3"
+    assert report["best"]["head"] == sandbox.head and report["best"]["iteration"] == 3
+    assert _progress(ctx)["revert"] is None
+
+
+def test_exhaustion_leaves_the_workspace_and_evidence_at_the_best_candidate(tmp_path: Path) -> None:
+    """Delivery on exhaustion is unchanged (policy, nothing published); what changes is that the
+    workspace and the report point at the best candidate instead of the last attempt."""
+    plan = _plan(PlanTask(id="a", title="A", files=["src/a.py"]))
+    sandbox = GitSandbox(junit=[BASE, REGRESS, REGRESS])
+    ctx = _ctx(tmp_path, sandbox, NodeAgent(sandbox, {"a": ["src/a.py"], "fix": ["src/a.py"]}), plan)
+
+    with pytest.raises(StageError, match=r"bounded repair \(2 reverted by the ratchet\)") as error:
+        work_stage.build_and_test(ctx)
+
+    assert error.value.kind == "policy"
+    assert sandbox.head == "head0000-1"
+    assert ctx.state.read_control("workspace-head").strip() == "head0000-1"
+    report = _report(ctx)
+    assert report["final_head"] == "head0000-1" and report["verified"]["head"] == "head0000-1"
+    assert report["best"]["iteration"] == 1
+    assert [row["ratchet"]["verdict"] for row in report["repairs"]] == ["reverted", "reverted"]
+
+
+@pytest.mark.parametrize("dies_at", ["git reset --hard", "git clean"])
+def test_a_death_inside_a_journalled_revert_is_finished_by_the_retry(tmp_path: Path, dies_at: str) -> None:
+    """The revert row is durable before the reset. Dying before the reset leaves HEAD and fence on
+    the reverted commit; dying after it leaves HEAD restored but the fence behind. Either way the
+    retry completes the revert instead of refusing its own workspace as drift, and does not pay
+    for the judged repair again."""
+    plan = _plan(PlanTask(id="a", title="A", files=["src/a.py"]))
+    sandbox = GitSandbox(junit=[BASE, REGRESS, BASE, GREEN], kill_when=lambda _sb, cmd: cmd.startswith(dies_at))
+    agent = NodeAgent(sandbox, {"a": ["src/a.py"], "fix": ["src/a.py"]})
+    ctx = _ctx(tmp_path, sandbox, agent, plan)
+    with pytest.raises(ProcessDeath):
+        work_stage.build_and_test(ctx)
+    journal = _progress(ctx)
+    assert journal["revert"] == {"from": "head0000-1-2", "to": "head0000-1", "repair": 1}
+    assert journal["repairs"][0]["ratchet"]["verdict"] == "reverted"
+    assert sandbox.head == ("head0000-1-2" if dies_at == "git reset --hard" else "head0000-1")
+
+    sandbox.revive()
+    result = work_stage.build_and_test(ctx)
+
+    assert [(stage, iteration) for stage, iteration, _ in agent.calls] == [("build", 1), ("fix", 2), ("fix", 3)]
+    assert result.numbers["ratchet_reverts"] == 1 and result.numbers["iterations"] == 3
+    assert _report(ctx)["repairs"][1]["input_head"] == "head0000-1"
+    assert sandbox.head == "head0000-1-3" and _progress(ctx)["revert"] is None
+
+
+def test_a_revert_the_workspace_cannot_explain_is_refused(tmp_path: Path) -> None:
+    plan = _plan(PlanTask(id="a", title="A", files=["src/a.py"]))
+    sandbox = GitSandbox(junit=[BASE, REGRESS], kill_when=lambda _sb, cmd: cmd.startswith("git reset --hard"))
+    ctx = _ctx(tmp_path, sandbox, NodeAgent(sandbox, {"a": ["src/a.py"], "fix": ["src/a.py"]}), plan)
+    with pytest.raises(ProcessDeath):
+        work_stage.build_and_test(ctx)
+    sandbox.revive()
+    sandbox.head = "feedface"
+    ctx.state.write_control("workspace-head", "feedface\n")
+
+    with pytest.raises(StageError, match="unfinished ratchet revert"):
+        work_stage.build_and_test(ctx)
+
+
+def test_a_journal_from_before_the_ratchet_still_resumes(tmp_path: Path) -> None:
+    """Progress written by a factory without the ratchet has repairs but no best: the retry seeds
+    one from what it verifies instead of refusing or crashing on the missing key."""
+    plan = _plan(PlanTask(id="a", title="A", files=["src/a.py"]))
+    sandbox = GitSandbox(
+        junit=[RED, GREEN],
+        kill_when=lambda sb, cmd: cmd.startswith("pytest") and sb.test_runs == 1,
+    )
+    ctx = _ctx(tmp_path, sandbox, NodeAgent(sandbox, {"a": ["src/a.py"], "fix": ["src/a.py"]}), plan)
+    with pytest.raises(ProcessDeath):
+        work_stage.build_and_test(ctx)
+    legacy = _progress(ctx)
+    del legacy["best"], legacy["revert"]
+    ctx.state.write_control("workgraph-progress.json", json.dumps(legacy))
+    sandbox.revive()
+
+    result = work_stage.build_and_test(ctx)
+
+    assert result.numbers["tests_passed"] == 1 and result.numbers["ratchet_reverts"] == 0
+    assert _report(ctx)["repairs"][0]["ratchet"]["verdict"] == "kept"
+
+
+def test_a_repair_that_edits_tests_is_refused_and_struck(tmp_path: Path) -> None:
+    """Fix the code, not the gate -- held by the host on every backend, not only srt/docker."""
+    plan = _plan(PlanTask(id="a", title="A", files=["src/a.py"]))
+    sandbox = GitSandbox(junit=[RED])
+    agent = NodeAgent(sandbox, {"a": ["src/a.py"], "fix": ["src/a.py", "tests/test_a.py"]})
+    ctx = _ctx(tmp_path, sandbox, agent, plan)
+
+    with pytest.raises(StageError, match=r"changed protected paths \['tests/test_a.py'\]") as error:
+        work_stage.build_and_test(ctx)
+
+    assert error.value.kind == "policy"
+    assert sandbox.head == "head0000-1"
+    assert ctx.state.read_control("workspace-head").strip() == "head0000-1"
+    progress = _progress(ctx)
+    assert progress["attempt"] is None and progress["repairs"] == [] and progress["head"] == "head0000-1"
+
+
+def test_a_first_pass_plan_work_build_reports_one_iteration(tmp_path: Path) -> None:
+    plan = _plan(PlanTask(id="a", title="A", files=["src/a.py"]))
+    sandbox = GitSandbox()
+    ctx = _ctx(tmp_path, sandbox, NodeAgent(sandbox, {"a": ["src/a.py"]}), plan)
+
+    result = work_stage.build_and_test(ctx)
+
+    assert result.numbers["iterations"] == 1 and result.numbers["ratchet_reverts"] == 0
+    assert result.numbers["best_iteration"] == 1

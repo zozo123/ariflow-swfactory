@@ -195,6 +195,8 @@ def _stage_harness(monkeypatch: Any) -> None:
         stages, "contract_trace", lambda *_args: stages.ContractTrace([], {}, "CHECKLIST", {"schema_version": 1})
     )
     monkeypatch.setattr(stages, "_protected", lambda *_args: "tests/")
+    # The host-side fix scope check reads the contract; the stubbed diff (src/a.py) stays in scope.
+    monkeypatch.setattr(stages, "_contract", lambda _ctx: TargetContract(test="pytest", protected=["tests/"]))
     monkeypatch.setattr(stages, "_summary_line", lambda *_args: "relax material defect")
     monkeypatch.setattr(stages, "commit", lambda *_args, **_kwargs: "fixed-head")
     monkeypatch.setattr(
@@ -292,6 +294,41 @@ def test_stage_relaxes_major_retests_and_crystallizes(monkeypatch: Any) -> None:
     assert review["findings"] == []
     assert [step["state"]["phase"] for step in annealing["trace"]] == ["liquid", "crystal"]
     assert annealing["final"]["crystallized"] is True
+
+
+def test_a_relaxation_that_breaks_the_suite_is_reverted_and_blocks(monkeypatch: Any) -> None:
+    """Liquid reuses stages.fix_and_retest, so it reverts alike: the red relaxation goes back to the
+    pre-fix head, the suite is re-run there, and the round still cannot crystallize -- the
+    reverted-fix blocker keeps the stage blocked and review.json names the reverted commit."""
+    ctx = _Ctx(max_review_fixes=1)
+    _stage_harness(monkeypatch)
+    results = iter(
+        [
+            (SwfTestResult(passed=0, failed=1, exit_code=1), "FAILED test_a"),
+            (SwfTestResult(passed=1, exit_code=0), "ok"),
+        ]
+    )
+    monkeypatch.setattr(stages, "run_tests", lambda *_args: next(results))
+    restored: list[str] = []
+    monkeypatch.setattr(stages, "restore_head", lambda _ctx, head: restored.append(head))
+    major = Finding(severity="major", file="src/a.py", title="material defect", detail="repair me")
+
+    def fake_round(
+        _ctx: Any, *, round_index: int, **_kwargs: Any
+    ) -> tuple[list[Finding], int, list[dict[str, object]]]:
+        return ([major] if round_index == 0 else []), 0, _lanes()
+
+    monkeypatch.setattr(liquid_annealing, "_round", fake_round)
+    result = liquid_annealing._run_annealed_review(ctx)  # type: ignore[arg-type]
+
+    assert restored == ["head"]
+    assert result.status == "blocked" and result.numbers["reverted_fixes"] == 1
+    assert result.numbers["tests_passed"] == 1 and result.numbers["tests_failed"] == 0  # the restored head
+    review = json.loads(ctx.written[f"{ctx.art}/review.json"])
+    (row,) = review["reverted_fixes"]
+    assert row["reverted_sha"] == "fixed-head" and row["restored_head"] == "head" and row["agent_call"] == "fix.5"
+    (blocker,) = [item for item in review["findings"] if item["severity"] == "blocker"]
+    assert blocker["title"] == "Review fix 1 reverted: it broke the suite" and "fixed-head" in blocker["detail"]
 
 
 def test_annealed_review_carries_the_requirement_trace(monkeypatch: Any) -> None:
