@@ -214,6 +214,19 @@ DIALECT_LAYOUT_CAP = 60  # tracked paths the card names; the rest are counted, n
 CONVENTION_FILES = ("AGENTS.md", "CLAUDE.md")  # target-root files the card points the agent at
 
 
+def _md_code(text: str) -> str:
+    """``text`` as one line of Markdown inline code, whatever it holds.
+
+    The card quotes target-authored strings (the contract's commands and dirs, tracked file names):
+    a control character is escaped so no value can start a prompt line of its own, and the backtick
+    fence is one longer than the longest backtick run inside (padded when the value starts or ends
+    with one), so a command such as ``echo `date` `` cannot close its own quote early."""
+    flat = "".join(ch if ch.isprintable() else f"\\x{ord(ch):02x}" for ch in text)
+    fence = "`" * (max((len(run) for run in re.findall(r"`+", flat)), default=0) + 1)
+    pad = " " if flat.startswith("`") or flat.endswith("`") else ""
+    return f"{fence}{pad}{flat}{pad}{fence}"
+
+
 def target_dialect(ctx: Ctx) -> str:
     """The run's target dialect card (``prompts/dialect.md``): rendered once, then replayed.
 
@@ -240,7 +253,7 @@ def target_dialect(ctx: Ctx) -> str:
         # names cannot write prompt lines of their own, and no byte can fail the text decode.
         listing = _sh(ctx, f"git -c core.quotePath=true ls-files -- {dirs}")
         listed = sorted({path for path in listing.splitlines() if path})
-        shown = [f"- `{path}`" for path in listed[:DIALECT_LAYOUT_CAP]]
+        shown = [f"- {_md_code(path)}" for path in listed[:DIALECT_LAYOUT_CAP]]
         if not listed:
             shown = ["(no tracked files yet)"]
         elif len(listed) > len(shown):
@@ -248,15 +261,15 @@ def target_dialect(ctx: Ctx) -> str:
         conventions = [name for name in CONVENTION_FILES if ctx.sb.exists(name)]
         card = render_prompt(
             "dialect",
-            test=f"`{contract.test}`",
-            lint=f"`{contract.lint}`" if contract.lint else "(none declared)",
-            source=f"`{contract.source}/`",
-            tests_dir=f"`{contract.tests_dir}/`",
+            test=_md_code(contract.test),
+            lint=_md_code(contract.lint) if contract.lint else "(none declared)",
+            source=_md_code(f"{contract.source}/"),
+            tests_dir=_md_code(f"{contract.tests_dir}/"),
             # The build-time set: the tests dir's fix-time protection is the card's own tests line,
             # and listing it here too would contradict "writable while building".
-            protected=", ".join(f"`{path}`" for path in protected_for(contract, "build")),
+            protected=", ".join(_md_code(path) for path in protected_for(contract, "build")),
             conventions=(
-                ", ".join(f"`{name}`" for name in conventions) + " (read before editing)" if conventions else ""
+                ", ".join(_md_code(name) for name in conventions) + " (read before editing)" if conventions else ""
             ),
             layout=f"{len(listed)} tracked files in total.\n" + "\n".join(shown),
         )

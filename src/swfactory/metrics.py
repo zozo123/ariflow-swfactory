@@ -118,13 +118,19 @@ def call_efficiency(ctx: Ctx) -> dict[str, int]:
 
     A replica-fusion build reserves its whole campaign as one parent-ledger row and runs each role
     as a worker ``Ctx`` with its own ledger; the campaign row is money, not a call, so it is left
-    out and the workers' ledgers are read instead.
+    out and the workers' ledgers are read instead. A managed population search likewise reserves
+    one row for a campaign of search-only trajectories that never pass through ``Agent.run``; that
+    row is left out too (its trajectories are counted in its own retained telemetry), so
+    ``agent_calls`` means one thing on every line: factory agent invocations.
     """
     from swfactory.call_accounting import CallLedger
-    from swfactory.replica_fusion import CAMPAIGN_STAGE, worker_run_dirs
+    from swfactory.population_stage import CAMPAIGN_STAGE as POPULATION_CAMPAIGN
+    from swfactory.replica_fusion import CAMPAIGN_STAGE as FUSION_CAMPAIGN
+    from swfactory.replica_fusion import worker_run_dirs
     from swfactory.state import RunState
 
-    records = [record for record in CallLedger(ctx.state).records() if record.stage != CAMPAIGN_STAGE]
+    campaigns = {FUSION_CAMPAIGN, POPULATION_CAMPAIGN}
+    records = [record for record in CallLedger(ctx.state).records() if record.stage not in campaigns]
     for worker in worker_run_dirs(ctx.run_dir):
         records += CallLedger(RunState(worker)).records()
     turns = 0

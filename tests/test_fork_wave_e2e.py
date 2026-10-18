@@ -392,6 +392,35 @@ def test_a_parallel_safe_wave_forks_runs_at_once_fans_in_by_id_and_verifies_the_
     assert _progress(ctx)["fork_wave"] is None
 
 
+class PromptRecordingForkAgent(ForkAgent):
+    def __init__(self) -> None:
+        super().__init__()
+        self.prompts: dict[str, str] = {}
+
+    def run(self, sb: Any, *, stage: str, iteration: int, prompt: str = "", **kw: Any) -> AgentResult:
+        node = match.group(1) if (match := re.search(r"Node: `([^`]+)`", prompt)) else stage
+        with self.lock:
+            self.prompts[node] = prompt
+        return super().run(sb, stage=stage, iteration=iteration, prompt=prompt, **kw)
+
+
+def test_every_forked_and_serial_node_prompt_carries_the_runs_one_dialect_card(tmp_path: Path) -> None:
+    """Fork-wave prompts are rendered on the parent before fan-out, so each child is told the same
+    stored card as the serial node that runs after the fan-in moved HEAD."""
+    agent = PromptRecordingForkAgent()
+    ctx, _client = _host_ctx(tmp_path, agent)
+
+    work_stage.build_and_test(ctx)
+
+    card = ctx.state.read_control(stages.DIALECT_CONTROL).rstrip("\n")
+    assert card.startswith("## Target dialect") and "You have no shell." in card
+    assert sorted(agent.prompts) == [*SIBLINGS, "index"]
+    assert all(card in prompt for prompt in agent.prompts.values())
+    assert not any("Run the target's test command" in prompt for prompt in agent.prompts.values())
+    # Every declared file is new at its node's checkpoint: nothing to snapshot, so no pack section.
+    assert not any("## Snapshot of the declared files" in prompt for prompt in agent.prompts.values())
+
+
 def test_the_default_keeps_every_node_in_the_one_shared_workspace(tmp_path: Path) -> None:
     """``max_parallel_forks = 1`` is the default: a forkable provider changes nothing until asked."""
     agent = ForkAgent(timeout_s=0.01)

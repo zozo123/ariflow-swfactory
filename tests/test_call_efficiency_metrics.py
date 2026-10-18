@@ -19,6 +19,7 @@ from swfactory.blueprint import load
 from swfactory.call_accounting import CallLedger
 from swfactory.cli import execute
 from swfactory.metrics import call_efficiency
+from swfactory.population_stage import CAMPAIGN_STAGE as POPULATION_CAMPAIGN
 from swfactory.replica_fusion import CAMPAIGN_STAGE
 from swfactory.state import RunState
 
@@ -61,6 +62,18 @@ def test_a_fusion_campaign_counts_its_workers_calls_not_its_reservation(tmp_path
         )
 
     assert call_efficiency(_ctx(run_dir)) == {"agent_calls": 3, "model_turns": 19}
+
+
+def test_a_population_campaign_reservation_is_not_an_agent_call(tmp_path: Path) -> None:
+    """A managed population search reserves its whole search-only campaign as one ledger row; its
+    trajectories never pass through ``Agent.run``, so the row is money, not a factory agent call."""
+    run_dir = tmp_path / "run"
+    ledger = CallLedger(RunState(run_dir))
+    campaign = ledger.reserve(stage=POPULATION_CAMPAIGN, iteration=1, reserved_usd=3.0)
+    ledger.settle(campaign, cost_usd=1.5, receipt={"population_report_digest": "sha256:x"})
+    ledger.settle(ledger.reserve(stage="build", iteration=1, reserved_usd=1.0), cost_usd=0.2, receipt={"num_turns": 6})
+
+    assert call_efficiency(_ctx(run_dir)) == {"agent_calls": 1, "model_turns": 6}
 
 
 def test_a_run_without_calls_reports_zero(tmp_path: Path) -> None:

@@ -127,8 +127,9 @@ call had before packing existed. The same happens when nothing fits. The receipt
 `docs/factory/<id>/harness-file-packs/<sha256>.json`. It records paths, sizes and digests, never
 contents.
 
-`metrics.json` records `agent_calls` (every reserved provider call in the run's call ledger,
-including fusion workers' ledgers) and `model_turns` (the sum of settle receipts' `num_turns`; a call
+`metrics.json` records `agent_calls` (every reserved agent call in the run's call ledger,
+including fusion workers' ledgers; a fusion or population campaign's one budget reservation is
+money, not a call, and is left out) and `model_turns` (the sum of settle receipts' `num_turns`; a call
 whose outcome is unknown adds no turns), so a change that is meant to cut turns has a number to move.
 
 ## Benchmark contract
