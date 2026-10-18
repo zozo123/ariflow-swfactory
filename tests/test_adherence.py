@@ -287,6 +287,33 @@ def test_turns_past_the_cap_and_a_foreign_model_are_deviant(run, tmp_path: Path)
     assert any("without the declared model 'claude-opus-5'" in line for line in findings)
 
 
+@pytest.mark.parametrize(
+    ("stage_cap", "run_limit", "turns", "deviant"),
+    [
+        pytest.param(5, 40, 8, True, id="past-the-stage-cap"),
+        pytest.param(5, 40, 5, False, id="at-the-stage-cap"),
+        pytest.param(30, 10, 20, True, id="run-limit-lowered-below-the-stage-cap"),
+        pytest.param(30, 10, 10, False, id="at-the-lowered-run-limit"),
+    ],
+)
+def test_turns_are_audited_against_the_exact_cap_the_call_ran_under(
+    run, tmp_path: Path, stage_cap: int, run_limit: int, turns: int, deviant: bool
+) -> None:
+    """The dialect feature's ``[policy.<stage>] max_turns`` is tighten-only and the call takes
+    ``min(Config.max_turns, override)`` (``agent.call_max_turns``). The audit holds the envelope to
+    that same number: neither the run limit alone (missing a tightened stage) nor the override
+    alone (missing a run limit lowered after the blueprint loaded)."""
+    ctx = _copy(run, tmp_path)
+    ctx.blueprint = ctx.blueprint.model_copy(update={"policy": {"fix": PolicyOverride(max_turns=stage_cap)}})
+    ctx.cfg = ctx.cfg.model_copy(update={"max_turns": run_limit})
+    _call(ctx, "review", "fix", 9, cost=0.1, envelope={"permission_denials": [], "num_turns": turns})
+    findings = [line for line in _evidence(adherence.audit(ctx), "tool_boundary", "fail") if "fix.9" in line]
+    cap = min(stage_cap, run_limit)
+    assert findings == (
+        [f"fail: fix.9: {turns} turns past the cap of {cap} without a max-turns stop"] if deviant else []
+    )
+
+
 def test_a_guard_hook_denial_is_deviant_and_names_its_call(run, tmp_path: Path) -> None:
     ctx = _copy(run, tmp_path)
     line = {"ts": "t", "tool": "Edit", "path_or_cmd": "tests/test_core.py", "decision": "deny", "call": "fix.2"}

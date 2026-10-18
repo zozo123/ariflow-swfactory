@@ -50,7 +50,7 @@ from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any, Literal
 
 from swfactory import accepted_inputs
-from swfactory.agent import _GUARDED, POLICIES
+from swfactory.agent import _GUARDED, POLICIES, call_max_turns
 from swfactory.blueprint import CANONICAL_ORDER
 from swfactory.call_accounting import CALLS_LOG, CallLedger, CallRecord
 from swfactory.config import protected_for
@@ -438,7 +438,9 @@ def _tool_boundary(ctx: Ctx, calls: Sequence[_Call]) -> _Check:
         else:
             check.add("pass", f"{call.name}: no permission denials")
         policy = stages._policy(ctx, call.role) if call.role in POLICIES else None
-        cap = getattr(policy, "max_turns", None) or ctx.cfg.max_turns
+        # Exactly the cap the call was launched under: a ``[policy.<stage>] max_turns`` override
+        # only tightens, and a run limit lowered after the blueprint loaded still wins over it.
+        cap = ctx.cfg.max_turns if policy is None else call_max_turns(policy, ctx.cfg)
         turns = envelope.get("num_turns")
         if isinstance(turns, int) and turns > cap and envelope.get("subtype") != "error_max_turns":
             check.add("fail", f"{call.name}: {turns} turns past the cap of {cap} without a max-turns stop")
