@@ -471,6 +471,26 @@
         "counterexample-guided synthesis"
       ],
       "follow_up": "Validate native confined providers in managed deployments and compare held-out tasks against single-agent and best-of-four runs with matched total budgets; scripted fixed-pool success is mechanism evidence only."
+    },
+    {
+      "id": "factory.adherence-audit",
+      "state": "experimental",
+      "support": "experimental",
+      "invariant": "Every delivered run carries a deterministic, record-only audit that re-derives from host-owned records (stage and operations journals, per-call ledger, envelopes, approvals, commit trailers) whether each role stayed inside its declared participation, delegation, file, tool, budget and gate boundaries; missing evidence is unverifiable, never adherent.",
+      "owner": "governance",
+      "runtime_entry": "swfactory.stages.deliver -> swfactory.adherence.audit",
+      "environment": "every line and agent; keyless under scripted local replay; replica-fusion children are audited only through their parent campaign reservation; the verdict does not gate publication",
+      "test": "tests/test_adherence.py (adherent scripted run, deviant role, tool, budget and gate cases, unverifiable missing evidence, read-only worktree hold) plus tests/test_agent.py",
+      "evidence": [
+        "tests/test_adherence.py",
+        "src/swfactory/adherence.py",
+        "src/swfactory/stages.py"
+      ],
+      "follow_up": "Measure verdicts on retained native Claude runs, attribute native permission denials per role over time, and decide in a separate authority change whether a deviant verdict may block autonomous publication.",
+      "public_surface": [
+        "adherence audit",
+        "adherence.json"
+      ]
     }
   ]
 }

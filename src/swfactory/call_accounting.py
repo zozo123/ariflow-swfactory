@@ -81,6 +81,11 @@ class CallRecord:
     reason: str | None = None
     owner: str | None = None
     lease_until: float = 0.0
+    # What the HOST observed of a call that answered but whose bill awaits an observation (external
+    # usage): prompt digest, the read-only worktree hold. Never candidate-reported metadata and never
+    # a settlement -- ``receipt`` stays the settle row's, so "what settled this charge" is unchanged.
+    # (Not ``host``: every reservation row already names the machine under that key.)
+    observed: dict[str, Any] | None = None
 
     @property
     def unreconciled(self) -> bool:
@@ -146,8 +151,18 @@ class CallLedger:
             receipt=dict(receipt or {}),
         )
 
-    def mark_unknown(self, attempt: CallAttempt, reason: BaseException | str) -> None:
-        """Record that the attempt died with its usage unknown; the reservation stays charged."""
+    def mark_unknown(
+        self, attempt: CallAttempt, reason: BaseException | str, *, observed: dict[str, Any] | None = None
+    ) -> None:
+        """Record that the attempt's usage is unknown; the reservation stays charged.
+
+        ``observed`` is for a call that DID answer but whose bill only a trusted observation can
+        settle (an external agent): the facts the host itself observed of the call -- prompt
+        digest, the read-only worktree hold -- are known now and are kept on
+        :attr:`CallRecord.observed`, so the later observation settles the money without the run
+        losing the rest of its record. It is not a receipt and never settles the row.
+        """
+        extra: dict[str, Any] = {"observed": dict(observed)} if observed else {}
         self._append(
             attempt,
             event="unknown",
@@ -155,6 +170,7 @@ class CallLedger:
             reserved_usd=attempt.reserved_usd,
             cost_usd=None,
             reason=str(reason)[:2000],
+            **extra,
         )
 
     def reconcile(self, call_id: str, outcome: MutationOutcome) -> CallRecord:
@@ -202,6 +218,7 @@ class CallLedger:
                 reason=row.get("reason") or (prior.reason if prior else None),
                 owner=row.get("owner") or (prior.owner if prior else None),
                 lease_until=float(row.get("lease_until") or (prior.lease_until if prior else 0.0)),
+                observed=row.get("observed") or (prior.observed if prior else None),
             )
         return list(folded.values())
 

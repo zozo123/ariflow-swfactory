@@ -360,6 +360,7 @@ A merge callback already in flight is not interrupted or rolled back.
 | `factory.formal-claims` | `experimental` | `formal/authority/AuthorityKernel.tla` | formal/authority/AuthorityKernel.tla (TLC model; not run in CI) |
 | `autonomous.issue-to-merge` | `experimental` | `swfactory.backend.autonomous_service -> Airflow autonomous DAG` | tests/test_autonomy.py and tests/test_dag_parity.py |
 | `factory.replica-fusion` | `experimental` | `swfactory.work_stage.build_and_test -> swfactory.replica_fusion.execute_fusion_stage` | tests/test_replica_fusion.py and tests/test_campaign_fusion.py; ci:test-core fusion demo step |
+| `factory.adherence-audit` | `experimental` | `swfactory.stages.deliver -> swfactory.adherence.audit` | tests/test_adherence.py (adherent scripted run, deviant role, tool, budget and gate cases, unverifiable missing evidence, read-only worktree hold) plus tests/test_agent.py |
 
 <!-- capability-inventory:end -->
 

@@ -488,6 +488,20 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         admitted_digest = accepted_inputs.digest_of(ctx.state)
     if hasattr(ctx.sb, "set_protected"):
         ctx.sb.set_protected(protected)
+    # HOLD for read-only roles. Their declaration is a tool allowlist, and nothing else stopped an
+    # edit they managed anyway: the next write stage's `git add -A` would sweep it into a build or
+    # fix commit, attributed to a role that never made it. Taken before the reservation so a
+    # sandbox that cannot answer costs nothing.
+    #
+    # The one read-only call that is already held by enforcement rather than observation: an
+    # external agent in a Docker cell sees the whole checkout read-only (`validate_execution` just
+    # refused writable paths for it, before any money moved). Fingerprinting it would cost two
+    # container launches to observe what the mount table forbids, so its receipt names the mount
+    # instead. The development-only LocalSandbox external launcher claims no confinement and is
+    # fingerprinted like every other read-only call.
+    mount_held = external and not policy.writes and isinstance(ctx.sb, DockerSandbox)
+    fingerprinted = not policy.writes and not mount_held
+    before = _worktree_fingerprint(ctx) if fingerprinted else None
     # Reserve BEFORE the provider can be paid. Everything after this line may be lost to a kill;
     # this row is what makes the next process account for a call it never saw answer.
     ledger = CallLedger(ctx.state)
@@ -569,18 +583,47 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         # the stage log kept the run pinned at the reservation -- forever. Money that reconciliation
         # cannot return is not a reservation, it is a fine.
         raise
-    receipt = {
+    # The answer is in and paid for: nothing between here and `settle` may raise, or the ledger
+    # would keep a known cost as unknown. A fingerprint that cannot be taken is held as unknown
+    # (None) and raised only after settlement.
+    unchanged: bool | None = None
+    hold_error: StageError | None = None
+    if fingerprinted:
+        try:
+            after = _worktree_fingerprint(ctx)
+        except StageError as error:
+            hold_error = error
+        else:
+            # Neither side a work tree (a bare unit checkout) is unobservable, not unchanged; a work
+            # tree that appeared or vanished during the call is a change.
+            unchanged = None if before is None and after is None else after == before
+    encoded = prompt.encode("utf-8")
+    # What the HOST observed of the call, as opposed to what the agent reported about itself.
+    observed: dict[str, object] = {
+        "agent": res.agent,
+        # What this role was told, as a digest: the prompt itself lives only in sandbox scratch,
+        # and the audit needs host-side proof of which context reached which call.
+        "prompt_sha256": hashlib.sha256(encoded).hexdigest(),
+        "prompt_bytes": len(encoded),
+    }
+    if fingerprinted:
+        observed["worktree_unchanged"] = unchanged
+    elif mount_held:
+        observed["worktree_hold"] = READ_ONLY_MOUNT
+    receipt: dict[str, object] = {
         "session_id": res.session_id,
         "num_turns": res.num_turns,
         "duration_ms": res.duration_ms,
         "subtype": res.subtype,
         "is_error": res.is_error,
-        "agent": res.agent,
+        **observed,
     }
     # Candidate output cannot author billing. Paid external calls retain their full reservation
     # until an operator supplies a trusted provider observation through the existing reconciler.
     if res.cost_usd is None:
-        ledger.mark_unknown(attempt, "external usage requires a trusted provider observation")
+        # Only the host's own observations ride along -- never the candidate's session metadata --
+        # so the audit's read-only hold and prompt digest survive the observation that bills it.
+        ledger.mark_unknown(attempt, "external usage requires a trusted provider observation", observed=observed)
     else:
         ledger.settle(attempt, cost_usd=res.cost_usd, receipt=receipt)
         ctx.spent_usd += res.cost_usd
@@ -610,11 +653,52 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         ctx.sb.write(envelope, content)
     elif ctx.sb.exists(envelope):
         ctx.state.write_artifact(envelope, ctx.sb.read(envelope))
+    if hold_error is not None:
+        raise hold_error
+    if unchanged is False:
+        # Fail closed like `_ensure_clean`. The edit stays in place as evidence: the settle receipt
+        # above says `worktree_unchanged: false`, which the adherence audit reports as deviant.
+        raise StageError("policy", f"{stage}.{iteration} (read-only) changed the worktree")
     if res.is_error:
         raise StageError("agent", f"{stage}.{iteration} failed: {res.subtype}: {res.text[-800:]}")
     if schema is not None and res.data is None:
         raise StageError("agent", f"{stage}.{iteration} returned no structured output")
     return res
+
+
+# One round trip: porcelain status (paths and states, untracked included), the content of tracked
+# changes, and the content of every untracked regular file. Status alone is blind to a second edit
+# of a file that was already dirty -- `uv sync` can leave uv.lock modified before spec runs -- and
+# content alone is blind to a deletion, so the fingerprint takes both.
+_NO_WORKTREE = "swf:no-worktree"
+_FINGERPRINT = (
+    f'if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" != true ]; then printf {_NO_WORKTREE}; exit 0; fi; '
+    "git status --porcelain=v1 -z --untracked-files=all -- . {ex} && printf '\\036' && "
+    "git diff --binary HEAD -- . {ex} && printf '\\036' && "
+    "git ls-files -z -o --exclude-standard -- . {ex} | while IFS= read -r -d '' f; do "
+    'if [ -f "$f" ] && [ ! -L "$f" ]; then printf \'%s\\0\' "$f"; git hash-object --no-filters -- "$f"; fi; done'
+)
+
+
+# Settle-receipt value of ``worktree_hold`` for a read-only call held by a read-only checkout mount
+# (external agent in a Docker cell) instead of the before/after fingerprint.
+READ_ONLY_MOUNT = "read-only mount"
+
+
+def _worktree_fingerprint(ctx: Ctx) -> str | None:
+    """sha256 of the checkout outside the artifact chain (``.factory/`` is excluded by setup).
+
+    Compared before and after a read-only call rather than required to be empty, so a tree that
+    setup already left dirty is tolerated while any change the call made to it is not.
+
+    None when the workdir is not a git work tree at all. No factory commit can carry an edit out of
+    such a directory, so there is nothing to hold; the receipt then records the hold as unknown
+    (never as unchanged) and the audit reports it so. A sandbox that cannot answer still raises.
+    """
+    out = _sh(ctx, _FINGERPRINT.format(ex=_exclude(ctx)))
+    if out == _NO_WORKTREE:
+        return None
+    return hashlib.sha256(out.encode("utf-8")).hexdigest()
 
 
 def _policy(ctx: Ctx, stage: str) -> Policy:
@@ -2005,9 +2089,13 @@ def cell_evidence(ctx: Ctx) -> tuple[str | None, int | None, bool]:
     )
 
 
-@_owned
 def record_approval(ctx: Ctx, approval: Approval) -> None:
     """Record the latest decision for one gate in ``approvals.json`` (committed by deliver).
+
+    Owned as ``record_approval:<gate>``: the operations journal then says which gate each
+    recording answered, in the journal's own append order. A later re-recording replaces the
+    ``approvals.json`` entry (and its ``at``), so that order is the only surviving proof of when a
+    gate was first answered relative to the stages after it -- the adherence audit reads it.
 
     Airflow may retry a record task, so one gate owns one entry rather than accumulating duplicate
     decisions from task attempts.
@@ -2017,6 +2105,11 @@ def record_approval(ctx: Ctx, approval: Approval) -> None:
     answer that already claims a different Cell/epoch is refused instead of being restamped, so a
     response cannot be carried across epochs and re-recorded as current.
     """
+    with owned(ctx.state, f"record_approval:{approval.gate}"):
+        _record_approval(ctx, approval)
+
+
+def _record_approval(ctx: Ctx, approval: Approval) -> None:
     path = f"{ctx.art}/approvals.json"
     artifact = _gate_artifact(ctx, approval.gate)
     digest = _artifact_sha256(ctx, artifact)
@@ -2113,6 +2206,7 @@ def pr_body(
     dropped_nits: int,
     approvals: list[Approval],
     stages: list[StageResult],
+    adherence: str | None = None,
 ) -> str:
     """Render the PR description: banner, findings (blockers first), approvals, stages."""
     parts: list[str] = []
@@ -2158,6 +2252,7 @@ def pr_body(
         "given for these\n"
         f"- artifact chain: `{ctx.art}/` (intent, spec, plan, review, approvals, metrics, agent/)\n"
         f"- commits authored by `{BOT_NAME}` with Factory-Run / Factory-Stage / Agent trailers"
+        + (f"\n- adherence audit: `{adherence}` (`{ctx.art}/adherence.json`, record-only)" if adherence else "")
     )
     return "\n\n".join(parts) + "\n"
 
@@ -2433,11 +2528,18 @@ def deliver(ctx: Ctx) -> StageResult:
     _assert_unprotected_delivery(ctx, base)
     regressions, guard_numbers = _regression_guard(ctx, base, head, required)
     blockers += len(regressions)
+    from swfactory import adherence  # reads this module's helpers
+
+    # Record-only: the verdict travels with the chain and the metrics, and publication proceeds
+    # whatever it says. Letting `deviant` block is a separate authority decision.
+    audit = adherence.audit(ctx, stages=stages, approvals=approvals)
+    ctx.write_artifact(f"{ctx.art}/{adherence.ARTIFACT}", adherence.render(audit))
     metrics_mod.write_run_metrics(
         ctx,
         stages,
         approvals,
         total_cost_usd=persisted_cost(ctx),
+        adherence=audit["verdict"],
     )
     _copy_audit_logs(ctx)
     cleared = ctx.sb.run(f"rm -rf -- {shlex.quote(ctx.art)}")
@@ -2502,6 +2604,7 @@ def deliver(ctx: Ctx) -> StageResult:
             dropped_nits=int(data.get("dropped_nits", 0)),
             approvals=approvals,
             stages=stages,
+            adherence=audit["verdict"],
         ),
         labels=labels,
         allowed_prefixes=[prefix],
@@ -2516,6 +2619,7 @@ def deliver(ctx: Ctx) -> StageResult:
             "rejected": float(rejected),
             "denied_tool_calls": float(denied),
             **guard_numbers,
+            "adherence": adherence.VERDICT_SCORE[audit["verdict"]],
         },
     )
 
