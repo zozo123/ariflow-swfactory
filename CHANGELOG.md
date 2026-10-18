@@ -15,6 +15,14 @@ All notable changes to this project will be documented here. The format follows
   `scripts/swf_e2e.sh` now requires all three verdicts, and its failure rows name the check.
 - Fix replica fusion on macOS: the fusion patch is decoded with `base64 -d < file`, because BSD
   `base64` rejects a file operand.
+- Review now checks in code that the plan's requirement-tagged acceptance tests
+  (`R<n>: <test name> — ...`) appear in the JUnit report for the reviewed HEAD and pass. A planned
+  test that is missing, skipped or failed is a blocker, and missing or stale per-test evidence for
+  that HEAD fails closed. Each review writes `docs/factory/<id>/trace.json`, the plan gate preview
+  shows an advisory requirement-coverage table, and the review prompt renders a
+  `## Contract checklist` after the diff. Eval 05 is now blocked by this check rather than by a
+  hand-written review verdict. Built on per-test JUnit identity: `run_tests` records each case's
+  outcome (`<suite>/<classname>::<name>`) bound to the HEAD it ran on.
 - Add experimental fork waves (`swfactory.fork_wave`): with `[limits] max_parallel_forks` above 1
   on a forkable provider, a parallel-safe `Plan.work` wave runs as one forked boat.dev child per
   node. The parent is parked at the checkpoint, each child proves its HEAD before an agent runs,
