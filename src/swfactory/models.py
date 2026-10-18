@@ -92,6 +92,11 @@ class TestResult(BoundaryModel):
     exit_code: int
     junit_path: str | None = None
     report_valid: bool = True
+    # Per-test identity (``stages._junit_cases``): the ids that did not pass, and a digest of every
+    # id the report named. Empty/None when the report carried no usable ids, so a comparison falls
+    # back to counts instead of trusting a partial set.
+    nonpassing_cases: tuple[str, ...] = ()
+    cases_digest: str | None = None
 
     @property
     def total(self) -> int:

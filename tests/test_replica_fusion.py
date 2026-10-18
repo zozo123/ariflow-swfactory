@@ -133,6 +133,18 @@ def test_overlapping_repairs_trigger_semantic_synthesis_using_retained_observati
     assert "diff --git" in prompt
 
 
+def test_every_role_prompt_carries_the_one_stored_dialect_card(tmp_path):
+    """Fusion roles are build and fix calls on the same shell-less policy; they get the run's card,
+    rendered once on the parent before any role thread exists."""
+    agent = ExperimentalAgent(overlap=True)
+    ctx = context(tmp_path, agent)
+    work_stage.build_and_test(ctx)
+    card = ctx.state.read_control(stages.DIALECT_CONTROL).rstrip("\n")
+    assert "`python -m pytest --junitxml=.factory/junit.xml`" in card
+    assert {role for role, *_ in agent.calls} >= {"repair-a", "repair-b", "diagnostic", "challenger", "synthesis"}
+    assert all(card in prompt for *_, prompt in agent.calls)
+
+
 def test_second_round_is_guided_by_counterexamples_and_is_bounded(tmp_path):
     agent = ExperimentalAgent(second_round=True)
     ctx = context(tmp_path, agent)

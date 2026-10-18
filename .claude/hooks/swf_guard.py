@@ -10,7 +10,9 @@ Reads the Claude Code PreToolUse payload ({"tool_name", "tool_input"}) on stdin.
 * Bash is denied when the command matches the factory denylist (push / PR / commit / egress):
   the factory commits and delivers, never the agent.
 
-Every decision is appended to ``.factory/hooks.jsonl``. Exit 2 (+ stderr) denies, 0 allows.
+Every decision is appended to ``.factory/hooks.jsonl`` with the ``SWF_CALL`` the factory set for
+this agent call (``<stage>.<iteration>``; empty when unset), so the post-run adherence audit can
+attribute a refusal to the role that attempted it. Exit 2 (+ stderr) denies, 0 allows.
 Stdlib only: this file is copied verbatim into target checkouts by ``swfactory.agent``.
 """
 
@@ -91,6 +93,7 @@ def log_decision(tool: str, target: str, decision: str) -> None:
             "tool": tool,
             "path_or_cmd": target[:500],
             "decision": decision,
+            "call": os.environ.get("SWF_CALL", "")[:100],
         }
         with open(LOG_PATH, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry) + "\n")

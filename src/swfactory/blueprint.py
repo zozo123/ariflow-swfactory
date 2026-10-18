@@ -129,12 +129,17 @@ class Limits(BaseModel):
 
 
 class PolicyOverride(BaseModel):
-    """Additive per-stage tool policy: extra allowed tools and/or a model. Nothing else."""
+    """Per-stage agent policy: extra allowed tools and/or a model (additive), and a turn cap that
+    may only tighten ``limits.max_turns``. Nothing else."""
 
     model_config = ConfigDict(extra="forbid")
 
     model: str | None = None
     extra_allowed_tools: list[str] = Field(default_factory=list)
+    # A draft-style budget for one stage (e.g. build = 3 turns while review keeps 40). Above
+    # ``limits.max_turns`` it is refused at load, not clamped: a number that reads as a widening
+    # must not quietly mean something else.
+    max_turns: int | None = Field(default=None, ge=1)
 
     @field_validator("extra_allowed_tools")
     @classmethod
@@ -330,6 +335,11 @@ class Blueprint(BaseModel):
             ]
             if unsafe:
                 raise ValueError(f"policy.{stage} cannot add shell access or escalate a read-only stage: {unsafe}")
+            if override.max_turns is not None and override.max_turns > self.limits.max_turns:
+                raise ValueError(
+                    f"policy.{stage}.max_turns ({override.max_turns}) must not exceed limits.max_turns "
+                    f"({self.limits.max_turns}); a stage override may only tighten the turn cap"
+                )
         return self
 
     def _check_order(self) -> None:

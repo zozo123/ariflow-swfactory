@@ -344,6 +344,30 @@ def test_policy_override_is_applied_additively() -> None:
     assert stages._policy(_ctx(None), "build") is base
 
 
+def test_a_stage_turn_cap_parses_from_toml_and_reaches_the_stage_policy() -> None:
+    """``[policy.build] max_turns`` is a draft-style budget for one stage; review keeps the limit."""
+    bp = loads(DEFAULT_TOML.replace("extra_allowed_tools = []", "extra_allowed_tools = []\nmax_turns = 3"))
+    assert bp.policy["build"].max_turns == 3
+    assert stages._policy(_ctx(bp), "build").max_turns == 3
+    assert stages._policy(_ctx(bp), "review") is POLICIES["review"]
+    assert POLICIES["review"].max_turns is None
+    # Equal to the run limit is not a widening; it is accepted.
+    assert loads(DEFAULT_TOML.replace("extra_allowed_tools = []", "max_turns = 40")).policy["build"].max_turns == 40
+
+
+@pytest.mark.parametrize(
+    ("max_turns", "match"),
+    [
+        (0, "greater than or equal to 1"),
+        (-3, "greater than or equal to 1"),
+        (41, r"policy\.build\.max_turns \(41\) must not exceed limits\.max_turns \(40\)"),
+    ],
+)
+def test_a_stage_turn_cap_may_only_tighten(max_turns: int, match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        Blueprint.model_validate(_data(limits={"max_turns": 40}, policy={"build": {"max_turns": max_turns}}))
+
+
 def test_blueprint_knobs_default_to_v1_without_blueprint() -> None:
     assert stages._nit_cap(_ctx(None)) == stages.NIT_CAP == 3
     assert stages._nit_cap(_ctx(Blueprint.model_validate(_data(review={"nit_cap": 1})))) == 1

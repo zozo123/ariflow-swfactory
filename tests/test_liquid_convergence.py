@@ -162,6 +162,10 @@ def test_workgraph_retry_resumes_checkpoint_and_uses_new_attempt_identity(monkey
 
     monkeypatch.setattr(work_stage.stages, "render_prompt", _render)
     monkeypatch.setattr(work_stage.stages, "_protected", lambda *_args, **_kwargs: "(none)")
+    # This fake context has no target contract or git: the dialect card and the declared-file
+    # snapshot have their own tests (test_target_dialect, test_harness_efficiency).
+    monkeypatch.setattr(work_stage.stages, "target_dialect", lambda _ctx: "(dialect)")
+    monkeypatch.setattr(work_stage, "_with_file_pack", lambda _ctx, prompt, _paths: prompt)
 
     def agent(_ctx, _stage, iteration, prompt, _schema):
         calls.append((iteration, prompt))

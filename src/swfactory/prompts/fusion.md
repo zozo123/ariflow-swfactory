@@ -22,6 +22,8 @@ semantic conflicts using the approved requirements, not majority agreement.
 ## Approved plan
 {plan}
 
+{dialect}
+
 ## Controller-observed failures
 {failures}
 

@@ -243,6 +243,9 @@ def run_wave(
         started = time.monotonic()
         try:
             if cancellation.cancelled:
+                # Halted before it asked the provider for anything: nothing exists to reap, and the
+                # row must say so rather than read like a fork whose fate is unknown.
+                journal(entry, cancelled_before_fork=True, reaped=True)
                 raise _Cancelled()
             # Durable before the call: a fork whose answer is lost is reclaimed by this key, and a
             # key whose fork was never requested must not be "reclaimed" into a brand-new VM.
@@ -522,7 +525,16 @@ def _by_node(wave: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _child_receipt(entry: dict[str, Any], harvest: Harvest | None) -> dict[str, Any]:
-    fields = ("node_id", "agent_call", "key", "child", "reaped", "fork_refused", "teardown_error")
+    fields = (
+        "node_id",
+        "agent_call",
+        "key",
+        "child",
+        "reaped",
+        "fork_refused",
+        "cancelled_before_fork",
+        "teardown_error",
+    )
     row = {k: entry.get(k) for k in fields}
     if harvest is not None:
         row |= {

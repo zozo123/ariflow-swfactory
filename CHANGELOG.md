@@ -15,6 +15,40 @@ All notable changes to this project will be documented here. The format follows
   `scripts/swf_e2e.sh` now requires all three verdicts, and its failure rows name the check.
 - Fix replica fusion on macOS: the fusion patch is decoded with `base64 -d < file`, because BSD
   `base64` rejects a file operand.
+- Review now checks in code that the plan's requirement-tagged acceptance tests
+  (`R<n>: <test name> — ...`) appear in the JUnit report for the reviewed HEAD and pass. A planned
+  test that is missing, skipped or failed is a blocker, and missing or stale per-test evidence for
+  that HEAD fails closed. Each review writes `docs/factory/<id>/trace.json`, the plan gate preview
+  shows an advisory requirement-coverage table, and the review prompt renders a
+  `## Contract checklist` after the diff. Eval 05 is now blocked by this check rather than by a
+  hand-written review verdict. Built on per-test JUnit identity: `run_tests` records each case's
+  outcome (`<suite>/<classname>::<name>`) bound to the HEAD it ran on.
+- Ratchet bounded repair. A build or Plan.work repair is kept only if it is a net gain by JUnit
+  case id: it may lose a passing test only if it gains three per test lost. Otherwise it is
+  reverted to the best candidate so far (journalled before the reset), and the next fix is told
+  what the reverted attempt broke. A review fix that turns the suite red is reverted, re-tested
+  and recorded as a blocker, so a `[BLOCKED]` PR carries green bytes. Every fix commit is checked
+  on the host against the fix stage's protected paths, on every sandbox backend. Evidence:
+  `build-ratchet.json`, per-repair verdicts in `workgraph-execution.json`, `reverted_fixes` in
+  `review.json`, and metrics `ratchet_reverts` / `review_reverted_fixes`.
+- Guard delivery with no model call. Setup records the base suite once (`base-tests.json`).
+  Deliver refuses a diff that touches a protected path (renames included), and delivers
+  `[BLOCKED]` when a test that passed at base is missing, skipped or failing at the tested head
+  (`regression.json`, numbers `regressions` / `base_tests_passed`). A candidate report without
+  unique per-test ids cannot hide a deleted base test. A base that provisioning left dirty is
+  recorded as `unmeasured` rather than refused. A plan that lists a protected path is refused
+  before build.
+- Audit every delivered run for role adherence (declare → hold → record → audit): a record-only
+  `adherence.json` with verdict `adherent`, `deviant` or `unverifiable` from six checks
+  (participation, delegation, role boundary, tool boundary, budget, information flow). Read-only
+  calls are held: a call that changes the worktree fails closed and blocks later calls until the
+  tree is restored. Settle receipts carry prompt digests, and guard-hook lines name their call.
+  The capability is experimental (`factory.adherence-audit`).
+- Give every plan, build, fix, review-fix, Liquid and fusion prompt the target's dialect card
+  (`{dialect}`: test and lint commands, dirs, the protected set, a bounded layout). The prompts no
+  longer tell a shell-less agent to run the tests. `[policy.<stage>] max_turns` can only lower the
+  turn cap (Python and Rust). Plan.work node and repair prompts get a pack of the declared files'
+  current contents. `metrics.json` gains `agent_calls` and `model_turns`.
 - Add experimental fork waves (`swfactory.fork_wave`): with `[limits] max_parallel_forks` above 1
   on a forkable provider, a parallel-safe `Plan.work` wave runs as one forked boat.dev child per
   node. The parent is parked at the checkpoint, each child proves its HEAD before an agent runs,

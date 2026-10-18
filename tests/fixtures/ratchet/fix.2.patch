@@ -1,0 +1,15 @@
+# ratchet fixture for DEMO-1, layered over demo/scripted: a fix that trades one passing test for
+# two failing ones. It corrects the sign (test_increase and test_decrease go green) but drops the
+# zero guard, so test_zero_old_raises now dies with ZeroDivisionError. Gained 2 < 3 x lost 1: the
+# ratchet reverts it to build.1's tree, though a count comparison (+1 passed) would have kept it.
+diff --git a/src/calc/core.py b/src/calc/core.py
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -21,6 +21,4 @@ def percent_change(old: float, new: float) -> float:
+ 
+     Raises ``ValueError`` when ``old`` is zero: the change is undefined.
+     """
+-    if old == 0:
+-        raise ValueError("old must be non-zero")
+-    return (old - new) / old
++    return (new - old) / old

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -11,6 +12,7 @@ from swfactory.harness_efficiency import (
     ObservationIntegrityError,
     Quote,
     pack_failure_observation,
+    pack_planned_files,
     pack_review_diff,
     verify_quotes,
 )
@@ -290,3 +292,129 @@ def test_compaction_has_no_remote_model_client() -> None:
     assert "httpx." not in text
     assert "anthropic" not in text.lower()
     assert "openai" not in text.lower()
+
+
+# ---------------------------------------------------------------- planned-file packing
+
+
+class GitCtx:
+    """Host-owned run state over a real git checkout, read through a LocalSandbox."""
+
+    art = "docs/factory/ISSUE-1"
+
+    def __init__(self, root: Path, files: dict[str, bytes | str]) -> None:
+        from support import git
+
+        from swfactory.sandbox import LocalSandbox
+
+        self.repo = root / "repo"
+        self.repo.mkdir()
+        git(self.repo, "init", "-q", "-b", "main")
+        for name, content in files.items():
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "base")
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        self.state = RunState(root / "run")
+        self.sb = LocalSandbox(self.repo)
+
+    def write_artifact(self, path: str, content: str) -> None:
+        self.state.write_artifact(path, content)
+        self.sb.write(path, content)
+
+
+def _pack(ctx: GitCtx, paths: list[str], **kwargs: Any) -> Any:
+    return pack_planned_files(ctx, paths=paths, head_sha=ctx.head, **kwargs)  # type: ignore[arg-type]
+
+
+def test_planned_files_are_packed_deterministically_from_the_checkpoint(tmp_path: Path) -> None:
+    ctx = GitCtx(tmp_path, {"src/b.py": "b = 2\n", "src/a.py": "a = 1\n", "src/other.py": "never declared\n"})
+    # An uncommitted edit is not the checkpoint: the snapshot shows the committed bytes.
+    (ctx.repo / "src" / "a.py").write_text("a = 'dirty'\n", encoding="utf-8")
+
+    first = _pack(ctx, ["src/b.py", "src/new.py", "src/a.py"])
+    again = _pack(ctx, ["src/a.py", "src/new.py", "src/b.py", "src/a.py"])
+
+    assert first is not None and again is not None
+    assert first == again, "the same declared set at the same HEAD packs identically, in any order"
+    assert first.head_sha == ctx.head
+    assert first.included == ("src/a.py", "src/b.py")
+    assert first.files_text.index("`src/a.py`") < first.files_text.index("`src/b.py`")
+    assert "a = 1\n" in first.files_text and "dirty" not in first.files_text
+    assert "never declared" not in first.files_text
+    assert first.notes_text == "- `src/new.py`: new, does not exist at this checkpoint"
+    receipt = json.loads(ctx.state.read_control(f"harness/file-packs/{first.sha256}.json"))
+    assert receipt["head_sha"] == ctx.head and receipt["raw_content_committed"] is False
+    assert [(row["path"], row["state"]) for row in receipt["files"]] == [
+        ("src/a.py", "included"),
+        ("src/b.py", "included"),
+        ("src/new.py", "new"),
+    ]
+    assert "a = 1" not in json.dumps(receipt), "the receipt names digests, never contents"
+    artifact = ctx.state.read_artifact(f"{ctx.art}/harness-file-packs/{first.sha256}.json")
+    assert json.loads(artifact) == receipt
+
+
+def test_the_budget_omits_what_does_not_fit_and_records_it(tmp_path: Path) -> None:
+    ctx = GitCtx(tmp_path, {"src/a.py": "a" * 40 + "\n", "src/b.py": "b" * 400 + "\n", "src/c.py": "c\n"})
+    pack = _pack(ctx, ["src/a.py", "src/b.py", "src/c.py"], budget_bytes=100)
+    assert pack is not None
+    assert pack.included == ("src/a.py", "src/c.py")
+    assert pack.content_bytes == 43
+    assert pack.notes_text == "- `src/b.py`: omitted, exceeds the snapshot budget"
+    assert "b" * 400 not in pack.files_text
+
+
+def test_a_secret_shaped_file_refuses_the_whole_pack(tmp_path: Path) -> None:
+    token = "ghp_" + "a" * 36
+    ctx = GitCtx(tmp_path, {"src/a.py": "a = 1\n", "src/config.py": f"TOKEN = '{token}'\n"})
+    assert _pack(ctx, ["src/a.py", "src/config.py"]) is None
+    refusals = list((tmp_path / "run" / "state" / "harness" / "file-packs").glob("refused-*.json"))
+    assert len(refusals) == 1
+    assert token not in refusals[0].read_text(encoding="utf-8")
+    assert not (ctx.repo / ctx.art / "harness-file-packs").exists(), "no public receipt for a refused pack"
+
+
+def test_unreadable_unsafe_and_absent_paths_are_never_packed(tmp_path: Path) -> None:
+    ctx = GitCtx(
+        tmp_path,
+        {
+            "src/a.py": "a = 1\n",
+            "src/.env.local": "NAME=value\n",
+            "src/blob.bin": b"\x00\x01\x02",
+            "src/latin.txt": b"caf\xe9\n",
+            "src/pkg/__init__.py": "",
+        },
+    )
+    pack = _pack(ctx, ["src/a.py", "src/.env.local", "src/blob.bin", "src/latin.txt", "src/pkg", "../escape.py"])
+    assert pack is not None and pack.included == ("src/a.py",)
+    assert pack.notes_text.splitlines() == [
+        "- `../escape.py`: omitted, not a relative path inside the target",
+        "- `src/.env.local`: omitted, the agent's tools may not read it",
+        "- `src/blob.bin`: omitted, binary",
+        "- `src/latin.txt`: omitted, not UTF-8 text",
+        "- `src/pkg`: omitted, not a regular file at this checkpoint",
+    ]
+    assert _pack(ctx, ["src/missing.py", "src/blob.bin"]) is None, "nothing to show keeps the legacy prompt"
+
+
+def test_paths_are_target_relative_when_the_cell_is_a_full_clone(tmp_path: Path) -> None:
+    """islo and toolset/sbx cells clone the whole repository and work in ``<repo>/<dir>``; the
+    plan's paths are target-relative, so the read must be relative to the cell's cwd."""
+    from swfactory.sandbox import LocalSandbox
+
+    ctx = GitCtx(tmp_path, {"demo/target/src/a.py": "inside = True\n", "src/a.py": "repo_root = True\n"})
+    ctx.sb = LocalSandbox(ctx.repo / "demo" / "target")
+    pack = _pack(ctx, ["src/a.py"])
+    assert pack is not None
+    assert "inside = True" in pack.files_text and "repo_root" not in pack.files_text
+
+
+def test_a_fence_is_longer_than_any_backtick_run_in_the_file(tmp_path: Path) -> None:
+    ctx = GitCtx(tmp_path, {"docs/x.md": "```python\nprint(1)\n````\nno newline at end"})
+    pack = _pack(ctx, ["docs/x.md"])
+    assert pack is not None
+    assert "`````\n```python\nprint(1)\n````\nno newline at end\n`````" in pack.files_text
+    assert ", no final newline)" in pack.files_text

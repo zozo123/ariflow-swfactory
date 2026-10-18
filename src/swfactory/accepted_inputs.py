@@ -122,12 +122,16 @@ OPERATIONAL_SETTINGS: frozenset[str] = frozenset(
 # calls, and those templates are the instruction. Kept as data here rather than imported from
 # ``stages`` so the pin stays importable without the stage bodies; ``test_accepted_inputs``
 # re-derives it from the stage source by AST and fails when a new call site escapes this map.
+# ``dialect`` is the target dialect card (``stages.target_dialect``) that every plan, build and fix
+# prompt embeds. Each stage that can be the first to render it pins it, so editing the card's
+# wording fences an epoch exactly like editing a prompt that carries it. ``file_pack`` frames the
+# declared-file snapshot (``harness_efficiency.pack_planned_files``) on Plan.work node and repair calls.
 STAGE_PROMPTS: dict[str, tuple[str, ...]] = {
     "intent": (),  # deterministic front-matter over the issue body; no agent call
     "spec": ("spec",),
-    "plan": ("plan",),
-    "build_and_test": ("build", "fix", "build_node", "fusion"),
-    "review": ("review", "fix"),  # a blocker round re-enters the fix template
+    "plan": ("plan", "dialect"),
+    "build_and_test": ("build", "fix", "build_node", "fusion", "dialect", "file_pack"),
+    "review": ("review", "fix", "dialect"),  # a blocker round re-enters the fix template
     "deliver": (),  # PR body and receipt are code
 }
 

@@ -29,6 +29,7 @@ import functools
 import getpass
 import hashlib
 import json
+import re
 import shlex
 import shutil
 import time
@@ -45,7 +46,7 @@ from pydantic import BaseModel, ValidationError
 
 from swfactory import accepted_inputs
 from swfactory import metrics as metrics_mod
-from swfactory.agent import POLICIES, Agent, Invocation, Policy, render_prompt
+from swfactory.agent import POLICIES, Agent, Invocation, Policy, call_max_turns, render_prompt
 from swfactory.approval_policy import GateMode, check_recorded, replay_approval
 from swfactory.blueprint import CANONICAL_ORDER, Blueprint, ReviewSpec
 from swfactory.call_accounting import CallLedger
@@ -206,6 +207,77 @@ def _contract(ctx: Ctx) -> TargetContract:
                 raise StageError("policy", str(e)) from e
             ctx.state.write_control("target-contract.json", ctx.contract.model_dump_json(indent=2) + "\n")
     return ctx.contract
+
+
+DIALECT_CONTROL = "target-dialect.md"  # host-owned: the card every agent call of the run is shown
+DIALECT_LAYOUT_CAP = 60  # tracked paths the card names; the rest are counted, never listed
+CONVENTION_FILES = ("AGENTS.md", "CLAUDE.md")  # target-root files the card points the agent at
+
+
+def _md_code(text: str) -> str:
+    """``text`` as one line of Markdown inline code, whatever it holds.
+
+    The card quotes target-authored strings (the contract's commands and dirs, tracked file names):
+    a control character is escaped so no value can start a prompt line of its own, and the backtick
+    fence is one longer than the longest backtick run inside (padded when the value starts or ends
+    with one), so a command such as ``echo `date` `` cannot close its own quote early."""
+    flat = "".join(ch if ch.isprintable() else f"\\x{ord(ch):02x}" for ch in text)
+    fence = "`" * (max((len(run) for run in re.findall(r"`+", flat)), default=0) + 1)
+    pad = " " if flat.startswith("`") or flat.endswith("`") else ""
+    return f"{fence}{pad}{flat}{pad}{fence}"
+
+
+def target_dialect(ctx: Ctx) -> str:
+    """The run's target dialect card (``prompts/dialect.md``): rendered once, then replayed.
+
+    Before the card, the build and fix prompts told the agent to look up ``factory.toml`` and the
+    target's ``CLAUDE.md`` itself -- turns spent rediscovering facts the host already holds -- and to
+    run a test command its tool policy gives it no shell for. The card states those facts from the
+    cached ``TargetContract``, a bounded sorted ``git ls-files`` of the declared source and tests
+    dirs (``DIALECT_LAYOUT_CAP`` names plus the total), and which ``CONVENTION_FILES`` exist at the
+    target root, and says plainly that the factory, not the agent, runs the suite.
+
+    Same caching idiom as ``_contract``: host control state ``target-dialect.md`` is written on first
+    use and read back ever after, so a retry, a later Plan.work node, a review fix and a resumed
+    process all see identical bytes even though build commits have since moved HEAD (a fresh listing
+    would name files this run itself added). The returned text is the stored text read back, never
+    the in-memory render, so the first call cannot differ from a replay. ``{art}/dialect.md`` mirrors
+    it as evidence of what the model was told; a listing failure is a sandbox error, not a card with
+    a silently missing layout.
+    """
+    if not ctx.state.has_control(DIALECT_CONTROL):
+        contract = _contract(ctx)
+        dirs = " ".join(shlex.quote(path) for path in (contract.source, contract.tests_dir))
+        # Without -z and with git's default core.quotePath, a name holding a newline, a control
+        # character or a non-ASCII byte is printed C-quoted on one ASCII line: target-chosen file
+        # names cannot write prompt lines of their own, and no byte can fail the text decode.
+        listing = _sh(ctx, f"git -c core.quotePath=true ls-files -- {dirs}")
+        listed = sorted({path for path in listing.splitlines() if path})
+        shown = [f"- {_md_code(path)}" for path in listed[:DIALECT_LAYOUT_CAP]]
+        if not listed:
+            shown = ["(no tracked files yet)"]
+        elif len(listed) > len(shown):
+            shown.append(f"- ... {len(listed) - len(shown)} more not listed")
+        conventions = [name for name in CONVENTION_FILES if ctx.sb.exists(name)]
+        card = render_prompt(
+            "dialect",
+            test=_md_code(contract.test),
+            lint=_md_code(contract.lint) if contract.lint else "(none declared)",
+            source=_md_code(f"{contract.source}/"),
+            tests_dir=_md_code(f"{contract.tests_dir}/"),
+            # The build-time set: the tests dir's fix-time protection is the card's own tests line,
+            # and listing it here too would contradict "writable while building".
+            protected=", ".join(_md_code(path) for path in declared_protected(contract, "build")),
+            conventions=(
+                ", ".join(_md_code(name) for name in conventions) + " (read before editing)" if conventions else ""
+            ),
+            layout=f"{len(listed)} tracked files in total.\n" + "\n".join(shown),
+        )
+        ctx.state.write_control(DIALECT_CONTROL, card)
+    card = ctx.state.read_control(DIALECT_CONTROL)
+    if not ctx.state.has_artifact(f"{ctx.art}/dialect.md"):
+        ctx.write_artifact(f"{ctx.art}/dialect.md", card)
+    return card.rstrip("\n")
 
 
 def _sh(ctx: Ctx, cmd: str, *, timeout_s: int = 600) -> str:
@@ -461,9 +533,13 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         detail = f" ({unknown:.2f} USD of it unreconciled)" if unknown else ""
         raise StageError("policy", f"run budget exhausted before {stage}.{iteration}{detail}")
     granted = min(ctx.cfg.max_budget_usd_per_stage, remaining)
-    call_cfg = ctx.cfg.model_copy(update={"max_budget_usd_per_stage": granted})
-    protected = protected_for(_contract(ctx), stage)
     policy = _policy(ctx, stage)
+    # The stage's tighten-only turn cap rides in the call's Config, so every adapter -- and the
+    # envelope's `cfg` -- sees the cap this call actually ran under, not the run-wide limit.
+    call_cfg = ctx.cfg.model_copy(
+        update={"max_budget_usd_per_stage": granted, "max_turns": call_max_turns(policy, ctx.cfg)}
+    )
+    protected = protected_for(_contract(ctx), stage)
     external = ctx.agent.kind == "external"
     writable: tuple[str, ...] = ()
     admitted_digest = None
@@ -487,6 +563,21 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         admitted_digest = accepted_inputs.digest_of(ctx.state)
     if hasattr(ctx.sb, "set_protected"):
         ctx.sb.set_protected(protected)
+    # HOLD for read-only roles. Their declaration is a tool allowlist, and nothing else stopped an
+    # edit they managed anyway: the next write stage's `git add -A` would sweep it into a build or
+    # fix commit, attributed to a role that never made it. Taken before the reservation so a
+    # sandbox that cannot answer costs nothing.
+    #
+    # The one read-only call that is already held by enforcement rather than observation: an
+    # external agent in a Docker cell sees the whole checkout read-only (`validate_execution` just
+    # refused writable paths for it, before any money moved). Fingerprinting it would cost two
+    # container launches to observe what the mount table forbids, so its receipt names the mount
+    # instead. The development-only LocalSandbox external launcher claims no confinement and is
+    # fingerprinted like every other read-only call.
+    mount_held = external and not policy.writes and isinstance(ctx.sb, DockerSandbox)
+    fingerprinted = not policy.writes and not mount_held
+    _assert_readonly_hold(ctx)
+    before = _worktree_fingerprint(ctx) if fingerprinted else None
     # Reserve BEFORE the provider can be paid. Everything after this line may be lost to a kill;
     # this row is what makes the next process account for a call it never saw answer.
     ledger = CallLedger(ctx.state)
@@ -568,21 +659,56 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         # the stage log kept the run pinned at the reservation -- forever. Money that reconciliation
         # cannot return is not a reservation, it is a fine.
         raise
-    receipt = {
+    # The answer is in and paid for: nothing between here and `settle` may raise, or the ledger
+    # would keep a known cost as unknown. A fingerprint that cannot be taken is held as unknown
+    # (None) and raised only after settlement.
+    unchanged: bool | None = None
+    hold_error: StageError | None = None
+    if fingerprinted:
+        try:
+            after = _worktree_fingerprint(ctx)
+        except StageError as error:
+            hold_error = error
+        else:
+            # Neither side a work tree (a bare unit checkout) is unobservable, not unchanged; a work
+            # tree that appeared or vanished during the call is a change.
+            unchanged = None if before is None and after is None else after == before
+    encoded = prompt.encode("utf-8")
+    # What the HOST observed of the call, as opposed to what the agent reported about itself.
+    observed: dict[str, object] = {
+        "agent": res.agent,
+        # What this role was told, as a digest: the prompt itself lives only in sandbox scratch,
+        # and the audit needs host-side proof of which context reached which call.
+        "prompt_sha256": hashlib.sha256(encoded).hexdigest(),
+        "prompt_bytes": len(encoded),
+    }
+    if fingerprinted:
+        observed["worktree_unchanged"] = unchanged
+    elif mount_held:
+        observed["worktree_hold"] = READ_ONLY_MOUNT
+    receipt: dict[str, object] = {
         "session_id": res.session_id,
         "num_turns": res.num_turns,
         "duration_ms": res.duration_ms,
         "subtype": res.subtype,
         "is_error": res.is_error,
-        "agent": res.agent,
+        **observed,
     }
     # Candidate output cannot author billing. Paid external calls retain their full reservation
     # until an operator supplies a trusted provider observation through the existing reconciler.
     if res.cost_usd is None:
-        ledger.mark_unknown(attempt, "external usage requires a trusted provider observation")
+        # Only the host's own observations ride along -- never the candidate's session metadata --
+        # so the audit's read-only hold and prompt digest survive the observation that bills it.
+        ledger.mark_unknown(attempt, "external usage requires a trusted provider observation", observed=observed)
     else:
         ledger.settle(attempt, cost_usd=res.cost_usd, receipt=receipt)
         ctx.spent_usd += res.cost_usd
+    if unchanged is False:
+        # Durable before anything else can raise: the refusal below is a one-shot, and a re-run of
+        # the stage would fingerprint a tree that already holds the edit and pass.
+        ctx.state.write_control(
+            READONLY_HOLD, json.dumps({"call": f"{stage}.{iteration}", "restore": before}, sort_keys=True) + "\n"
+        )
     if ctx.spent_usd > ctx.cfg.max_budget_usd:
         raise StageError(
             "policy",
@@ -609,6 +735,13 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         ctx.sb.write(envelope, content)
     elif ctx.sb.exists(envelope):
         ctx.state.write_artifact(envelope, ctx.sb.read(envelope))
+    if hold_error is not None:
+        raise hold_error
+    if unchanged is False:
+        # Fail closed like `_ensure_clean`. The edit stays in place as evidence: the settle receipt
+        # above says `worktree_unchanged: false`, which the adherence audit reports as deviant, and
+        # READONLY_HOLD keeps every later call refused until the tree is restored.
+        raise StageError("policy", f"{stage}.{iteration} (read-only) changed the worktree")
     if res.is_error:
         raise StageError("agent", f"{stage}.{iteration} failed: {res.subtype}: {res.text[-800:]}")
     if schema is not None and res.data is None:
@@ -616,19 +749,103 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
     return res
 
 
+# One round trip: porcelain status (paths and states, untracked included), the content of tracked
+# changes, and the content of every untracked regular file. Status alone is blind to a second edit
+# of a file that was already dirty -- `uv sync` can leave uv.lock modified before spec runs -- and
+# content alone is blind to a deletion, so the fingerprint takes both.
+_NO_WORKTREE = "swf:no-worktree"
+_FINGERPRINT = (
+    f'if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" != true ]; then printf {_NO_WORKTREE}; exit 0; fi; '
+    "git status --porcelain=v1 -z --untracked-files=all -- . {ex} && printf '\\036' && "
+    "git diff --binary HEAD -- . {ex} && printf '\\036' && "
+    "git ls-files -z -o --exclude-standard -- . {ex} | while IFS= read -r -d '' f; do "
+    'if [ -f "$f" ] && [ ! -L "$f" ]; then printf \'%s\\0\' "$f"; git hash-object --no-filters -- "$f"; fi; done'
+)
+
+
+# Settle-receipt value of ``worktree_hold`` for a read-only call held by a read-only checkout mount
+# (external agent in a Docker cell) instead of the before/after fingerprint.
+READ_ONLY_MOUNT = "read-only mount"
+# Control record of a read-only call that changed the worktree: ``{call, restore}``, where
+# ``restore`` is the fingerprint of the tree that call found.
+READONLY_HOLD = "readonly-hold.json"
+
+
+def _assert_readonly_hold(ctx: Ctx) -> None:
+    """Keep refusing every agent call while a read-only call's edit is still in the tree.
+
+    The refusal in ``_agent`` alone is one-shot: a re-run of the stage fingerprints a tree that
+    already holds the edit, sees no change, and the next write stage's ``git add -A`` commits it
+    under a role that never made it. The hold lifts itself once the tree is back to the
+    fingerprint the violating call found (an operator restored it); an unreadable record stays a
+    refusal.
+    """
+    if not ctx.state.has_control(READONLY_HOLD):
+        return
+    try:
+        record = json.loads(ctx.state.read_control(READONLY_HOLD))
+        call, restore = str(record["call"]), record["restore"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise StageError("policy", f"read-only hold record is invalid: {error}") from error
+    if _worktree_fingerprint(ctx) == restore:
+        ctx.state.clear_control(READONLY_HOLD)
+        return
+    raise StageError(
+        "policy",
+        f"{call} (read-only) changed the worktree and the change is still there; restore the tree "
+        "that call found before any further agent call (the hold lifts once it matches)",
+    )
+
+
+def _worktree_fingerprint(ctx: Ctx) -> str | None:
+    """sha256 of the checkout outside the artifact chain (``.factory/`` is excluded by setup).
+
+    Compared before and after a read-only call rather than required to be empty, so a tree that
+    setup already left dirty is tolerated while any change the call made to it is not.
+
+    None when the workdir is not a git work tree at all. No factory commit can carry an edit out of
+    such a directory, so there is nothing to hold; the receipt then records the hold as unknown
+    (never as unchanged) and the audit reports it so. A sandbox that cannot answer still raises.
+    """
+    out = _sh(ctx, _FINGERPRINT.format(ex=_exclude(ctx)))
+    if out == _NO_WORKTREE:
+        return None
+    return hashlib.sha256(out.encode("utf-8")).hexdigest()
+
+
 def _policy(ctx: Ctx, stage: str) -> Policy:
-    """``POLICIES[stage]`` plus the blueprint's additive override (extra allowed tools, model).
+    """``POLICIES[stage]`` plus the blueprint's override: extra allowed tools and a model (additive)
+    and a turn cap (tighten-only: ``call_max_turns`` takes the minimum with ``Config.max_turns``).
     ``disallowed_tools`` and ``writes`` cannot be changed from a blueprint."""
     policy = POLICIES[stage]
     override = ctx.blueprint.policy.get(stage) if ctx.blueprint else None
     if override is None:
         return policy
     extra = tuple(t for t in override.extra_allowed_tools if t not in policy.allowed_tools)
-    return dataclasses.replace(policy, allowed_tools=policy.allowed_tools + extra, model=override.model or policy.model)
+    return dataclasses.replace(
+        policy,
+        allowed_tools=policy.allowed_tools + extra,
+        model=override.model or policy.model,
+        max_turns=override.max_turns,
+    )
+
+
+def declared_protected(contract: TargetContract, stage: str) -> list[str]:
+    """The one protected set a run both declares and enforces for ``stage``.
+
+    The target's ``protected_for`` list plus ``campaign_fusion.FIXED_PROTECTED`` (the agent and
+    review instructions, CI, the factory's own state): the same rules deliver's
+    ``_assert_unprotected_delivery`` refuses and ``replica_fusion.scope`` holds fusion children to.
+    The prompts, the dialect card and the plan check render this set, so no path is refused at
+    delivery, after every agent call is paid for, that the run never named as protected.
+    """
+    from swfactory.campaign_fusion import FIXED_PROTECTED  # fusion builds on this module
+
+    return list(dict.fromkeys((*protected_for(contract, stage), *FIXED_PROTECTED)))
 
 
 def _protected(ctx: Ctx, stage: str) -> str:
-    return ", ".join(protected_for(_contract(ctx), stage)) or "(none)"
+    return ", ".join(declared_protected(_contract(ctx), stage)) or "(none)"
 
 
 def _workspace_head(ctx: Ctx) -> str:
@@ -696,6 +913,63 @@ def commit_unfenced(ctx: Ctx, *, stage: str, msg: str, paths: Sequence[str] | No
     return _workspace_head(ctx)
 
 
+def restore_head(ctx: Ctx, head: str) -> None:
+    """Put the workspace back on ``head`` (a commit this run made) and move the run's fence there.
+
+    The one host-owned revert primitive: an abandoned attempt, a ratchet that rejects a repair and
+    a review fix that broke the suite all end here. ``.factory`` and the artifact mirror survive the
+    clean; everything the reverted commit added does not.
+    """
+    _sh(ctx, f"git reset --hard {shlex.quote(head)}")
+    ctx.sb.run("git clean -fd -e .factory -e docs/factory")
+    _record_workspace_head(ctx, head)
+
+
+def changed_paths(ctx: Ctx, before: str, after: str) -> list[str]:
+    """Target-relative paths ``before..after`` touches, a rename counted as delete + add."""
+    q = shlex.quote
+    # `--relative` because a full-clone cell (islo, toolset/sbx) holds the target in a
+    # subdirectory; `--no-renames` because a rename would otherwise hide the path it deleted.
+    text = _sh(ctx, f"git diff --name-only --relative {q(before)}..{q(after)} --no-renames -- .")
+    return sorted({line.strip() for line in text.splitlines() if line.strip()})
+
+
+def _assert_stage_scope(
+    ctx: Ctx,
+    stage: str,
+    before: str,
+    after: str,
+    *,
+    on_violation: Callable[[], None] | None = None,
+) -> None:
+    """Refuse a ``stage`` commit that touched a path ``protected_for`` that stage, on every backend.
+
+    "Fix the code, not the tests" used to hold only where the kernel enforces it (srt denyWrite,
+    docker ``:ro``). LocalSandbox, islo, toolset and boat had the Claude guard alone, which a Bash
+    ``sed`` or a scripted patch walks past, and the edited tests were committed and re-run as if
+    they were the gate. This is the host-side check the replica-fusion scope already applies: diff
+    the commit, and on any protected path restore ``before`` (or run ``on_violation``, for callers
+    that journal the revert) and refuse as policy. Nothing of the commit stays a candidate.
+    """
+    if before == after:
+        return
+    from swfactory.campaign_fusion import _is_protected  # lazy: keeps stages import-light
+
+    rules = protected_for(_contract(ctx), stage)
+    escaped = [path for path in changed_paths(ctx, before, after) if _is_protected(path, rules)]
+    if not escaped:
+        return
+    if on_violation is None:
+        restore_head(ctx, before)
+    else:
+        on_violation()
+    raise StageError(
+        "policy",
+        f"{stage} commit {after[:12]} changed protected paths {escaped[:20]}; restored {before[:12]}. "
+        "Fix the code, not the tests or the gate.",
+    )
+
+
 def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
     """Run the target's test command (or the crabbox wrapper) in the sandbox; returns the parsed
     junit result and the tail of its output (the failure text a fix prompt gets)."""
@@ -708,16 +982,22 @@ def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
         raise StageError("sandbox", f"could not clear stale JUnit report: {removed.stderr[-800:]}")
     res = ctx.sb.run(cmd)
     legacy_output = (res.stdout[-6000:] + "\n" + res.stderr[-2000:]).strip()
+    cases: dict[str, str] | None = None
     try:
-        counts = _parse_junit(ctx.sb.read(contract.junit))
+        report = ctx.sb.read(contract.junit)
+        counts = _parse_junit(report)
     except (FileNotFoundError, ET.ParseError, ValueError):
         result = TestResult(exit_code=res.exit_code or 1, junit_path=None, report_valid=False)
     else:
-        result = TestResult(
-            **counts,
-            exit_code=res.exit_code,
-            junit_path=contract.junit,
-            report_valid=True,
+        cases = _junit_cases(report)
+        result = _with_cases(
+            TestResult(
+                **counts,
+                exit_code=res.exit_code,
+                junit_path=contract.junit,
+                report_valid=True,
+            ),
+            cases,
         )
     output = legacy_output
     if not result.ok:
@@ -733,9 +1013,51 @@ def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
         )
         if packed is not None:
             output = packed.prompt_text
-    _assert_workspace_head(ctx, "verification")
+    head = _assert_workspace_head(ctx, "verification")
     _ensure_clean(ctx, "verification", allow_artifacts=True)
+    # Host-owned and bound to the HEAD it ran on: a reader holding a different HEAD has stale
+    # evidence and must say so rather than judge the wrong commit. The counts ride along because a
+    # summary-only report has no ids, and the regression guard then compares how many passed.
+    counts = {key: getattr(result, key) for key in ("passed", "failed", "errors", "skipped")}
+    ctx.state.write_control(
+        JUNIT_CASES,
+        json.dumps(
+            {
+                "head": head,
+                "report_valid": result.report_valid,
+                "exit_code": result.exit_code,
+                "counts": counts,
+                "cases": cases,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+    )
     return result, output
+
+
+# Control record of the latest suite run: ``{head, report_valid, exit_code, counts, cases}`` (cases
+# may be null).
+JUNIT_CASES = "junit-cases.json"
+# Control record of the base revision's suite, run once by ``setup`` while HEAD is still the base:
+# ``{base, report_valid, passed, passing}``. ``passing`` is the sorted ids that passed, or null when
+# the base report carried no usable ids (summary-only, invalid, or no tests at all).
+BASE_TESTS = "base-tests.json"
+# Regression findings rendered one per test in the PR body; beyond this the rest are summarized in
+# one more blocker, and every id stays in the committed ``regression.json``. A wholesale-broken
+# candidate (an import error fails every case) must not turn the PR body into a test listing.
+MAX_REGRESSION_FINDINGS = 50
+
+
+def junit_cases_for(ctx: Ctx, head: str) -> dict[str, str] | None:
+    """The per-test outcomes ``run_tests`` recorded for exactly ``head``, or None if it did not."""
+    if not ctx.state.has_control(JUNIT_CASES):
+        return None
+    record = json.loads(ctx.state.read_control(JUNIT_CASES))
+    if record.get("head") != head or not record.get("report_valid"):
+        return None
+    cases = record.get("cases")
+    return dict(cases) if isinstance(cases, dict) else None
 
 
 def crabbox_command(provider: str, junit: str, test_cmd: str) -> str:
@@ -820,6 +1142,75 @@ def _parse_junit(xml_text: str) -> dict[str, int]:
     return result
 
 
+# Beyond this many non-passing ids a result keeps counts only: a suite that failed wholesale (an
+# import error) says nothing a per-test comparison could use, and receipts stay small.
+MAX_NONPASSING_CASES = 1000
+
+
+def _junit_cases(xml_text: str) -> dict[str, str] | None:
+    """Every test case of an already-validated report, ``id -> passed|failed|error|skipped``.
+
+    The id is ``<suite>/.../<classname>::<name>``: Node reporters reuse one classname across nested
+    suites, so the suite path is what keeps two cases apart. Outcomes follow ``_parse_junit``'s
+    rules (a Node TODO failure that also carries ``<skipped>`` is a failure). None when the report
+    is summary-only or two cases share an id -- a partial or ambiguous set must never be compared as
+    if it were the whole suite.
+    """
+    root = ET.fromstring(xml_text)
+    cases: dict[str, str] = {}
+
+    def local_name(element: ET.Element) -> str:
+        return element.tag.rsplit("}", 1)[-1]
+
+    def walk(element: ET.Element, path: tuple[str, ...]) -> bool:
+        for child in element:
+            kind = local_name(child)
+            if kind in ("testsuite", "testsuites"):
+                if not walk(child, (*path, child.attrib.get("name", ""))):
+                    return False
+            elif kind == "testcase":
+                scope = "/".join((*path, child.attrib.get("classname", "")))
+                case_id = f"{scope}::{child.attrib.get('name', '')}"
+                present = {local_name(status) for status in child}
+                outcome = (
+                    "failed"
+                    if "failure" in present
+                    else "error"
+                    if "error" in present
+                    else "skipped"
+                    if "skipped" in present
+                    else "passed"
+                )
+                if case_id in cases:
+                    return False
+                cases[case_id] = outcome
+        return True
+
+    start = (root.attrib.get("name", ""),) if local_name(root) == "testsuite" else ()
+    if not walk(root, start) or not cases:
+        return None
+    return cases
+
+
+def case_name(case_id: str) -> str:
+    """The test's own name in a ``_junit_cases`` id, without a pytest ``[param]`` suffix."""
+    return case_id.rsplit("::", 1)[-1].split("[", 1)[0]
+
+
+def cases_digest(cases: dict[str, str]) -> str:
+    """The identity of a test universe: which ids exist, regardless of how they came out."""
+    return hashlib.sha256("\n".join(sorted(cases)).encode()).hexdigest()
+
+
+def _with_cases(result: TestResult, cases: dict[str, str] | None) -> TestResult:
+    if cases is None:
+        return result
+    nonpassing = tuple(sorted(case for case, outcome in cases.items() if outcome != "passed"))
+    if len(nonpassing) > MAX_NONPASSING_CASES:
+        return result
+    return result.model_copy(update={"nonpassing_cases": nonpassing, "cases_digest": cases_digest(cases)})
+
+
 def _ensure_clean(ctx: Ctx, phase: str, *, allow_artifacts: bool = False) -> None:
     """Refuse uncommitted workspace changes outside the trusted artifact chain."""
 
@@ -838,6 +1229,86 @@ def _test_numbers(tr: TestResult) -> dict[str, float]:
         "tests_failed": float(tr.failed + tr.errors),
         "tests_count": float(tr.total),
     }
+
+
+# VOLO's bounded-repair ratchet: a repair that turns one passing test red must turn at least this
+# many red tests green, or it is reverted. A constant, not a blueprint knob: it is a property of
+# what "progress" means, and a per-line value would be one more input the approval must pin.
+RATCHET_GAIN_PER_LOSS = 3
+# Evidence rows keep at most this many ids per list; the counts always say how many there were.
+RATCHET_EVIDENCE_IDS = 20
+
+
+def ratchet(best: TestResult, cand: TestResult) -> tuple[bool, dict[str, Any]]:
+    """Whether a repair candidate may replace the best-so-far, and the verdict as evidence.
+
+    Keep iff nothing that passed in ``best`` stopped passing, or the candidate gained at least
+    ``RATCHET_GAIN_PER_LOSS`` tests per test it lost. Comparing per-test sets needs both results
+    to carry case ids over the SAME universe (``cases_digest``). A candidate without a valid report
+    is refused. A best-so-far without a valid report never blocks a valid candidate -- there is
+    nothing it could lose. Without case ids on either side the rule falls back to counts (keep iff
+    the candidate passes at least as many tests). Ties keep the candidate, as the loop always did.
+    Skipped counts as not passing, so a fix that turns a passing test into a skip has lost it.
+
+    A changed universe cannot be compared set-wise, and a fix may not edit tests, so it is refused
+    unless the candidate passes strictly MORE tests. Not a flat refusal: code alone changes the ids
+    a report names -- the commonest repair of all, an import or collection error, turns one error
+    case into the module's real cases -- and refusing that would revert the very fix the loop
+    exists for, every time. Equal or fewer passing tests over a different universe stay refused.
+    """
+    lost: list[str] = []
+    gained: list[str] = []
+
+    def verdict(keep: bool, reason: str) -> tuple[bool, dict[str, Any]]:
+        return keep, {
+            "verdict": "kept" if keep else "reverted",
+            "reason": reason,
+            "lost": lost[:RATCHET_EVIDENCE_IDS],
+            "gained": gained[:RATCHET_EVIDENCE_IDS],
+            "lost_count": len(lost),
+            "gained_count": len(gained),
+            "best_passed": best.passed,
+            "candidate_passed": cand.passed,
+        }
+
+    if not cand.report_valid:
+        return verdict(False, "the candidate left no valid JUnit report")
+    if not best.report_valid:
+        return verdict(True, "the best-so-far had no valid JUnit report; any valid report improves on it")
+    if best.cases_digest is not None and cand.cases_digest is not None:
+        if best.cases_digest != cand.cases_digest:
+            keep = cand.passed > best.passed
+            return verdict(
+                keep,
+                f"the test universe changed (the report names different test ids); passed {best.passed} -> "
+                f"{cand.passed}, {'strictly more' if keep else 'not strictly more'}",
+            )
+        lost = sorted(set(cand.nonpassing_cases) - set(best.nonpassing_cases))
+        gained = sorted(set(best.nonpassing_cases) - set(cand.nonpassing_cases))
+        if not lost:
+            return verdict(True, f"lost no passing test, gained {len(gained)}")
+        keep = len(gained) >= RATCHET_GAIN_PER_LOSS * len(lost)
+        relation = ">=" if keep else "<"
+        return verdict(
+            keep, f"lost {len(lost)}, gained {len(gained)} ({relation} {RATCHET_GAIN_PER_LOSS} per test lost)"
+        )
+    keep = cand.passed >= best.passed
+    return verdict(keep, f"no per-test ids to compare; passed {best.passed} -> {cand.passed}")
+
+
+def ratchet_note(attempt: str, best_label: str, evidence: dict[str, Any]) -> str:
+    """The one line a reverted attempt adds to the next fix prompt's ``{failures}``."""
+
+    def names(ids: list[str], count: int) -> str:
+        shown = ", ".join(case_name(case) for case in ids) or "nothing"
+        return shown + (f" (+{count - len(ids)} more)" if count > len(ids) else "")
+
+    return (
+        f"NOTE: {attempt} was reverted and the workspace is back at {best_label} ({evidence.get('reason', '')}): "
+        f"it broke {names(evidence.get('lost', []), int(evidence.get('lost_count', 0)))} and fixed "
+        f"{names(evidence.get('gained', []), int(evidence.get('gained_count', 0)))}. Do not trade passing tests "
+        "for failing ones; the failures below are the best candidate's."
+    )
 
 
 # ---------------------------------------------------------------- stages
@@ -896,9 +1367,102 @@ def _seed_exclude(ctx: Ctx) -> None:
         ctx.sb.write(path, current + sep + "\n".join(missing) + "\n")
 
 
+# How many setup attempts may fail to measure a base that holds tests before the baseline is
+# recorded as unmeasured instead (``_record_base_tests``); the count is host-owned control state.
+MAX_BASE_MEASUREMENTS = 2
+BASE_MEASUREMENT_FAILURES = "base-measurement-failures"
+
+
+def _base_measurement_failures(ctx: Ctx) -> int:
+    if not ctx.state.has_control(BASE_MEASUREMENT_FAILURES):
+        return 0
+    try:
+        return max(0, int(ctx.state.read_control(BASE_MEASUREMENT_FAILURES).strip()))
+    except ValueError:
+        return 0
+
+
+def _record_base_tests(ctx: Ctx, base: str, head: str) -> None:
+    """Replay the old behaviour once: run the target's suite on the base and keep what passed.
+
+    ``deliver`` holds the candidate to this record (``regression_findings``), so a build that
+    deletes, skips or breaks a test the base passed cannot publish as green. Recorded once per run:
+    a setup retry or a resumed run finds the record and never re-runs the suite. Only measurable
+    while the checkout still IS the base; a run that progressed without one (it predates the guard)
+    is refused at delivery rather than measured against a candidate standing in for the base.
+
+    A base with no valid report records an explicit empty baseline only when git tracks nothing
+    under the tests dir at the base -- a new project legitimately has no tests, and nothing then
+    exists that a candidate could regress. When the base does hold tests, an invalid report means
+    the measurement failed (a timeout, a lost crabbox lease or download, a crash before JUnit was
+    written), not that the base passed nothing: saved, it would be a permanent zero no candidate can
+    fall below, turning the guard off for the whole run. Nothing is recorded then, and setup fails
+    retryable so the next attempt measures again -- up to ``MAX_BASE_MEASUREMENTS`` attempts, after
+    which the baseline is recorded as explicitly unmeasured, as for a dirty base.
+    """
+    if ctx.state.has_control(BASE_TESTS) or head != base:
+        return
+    # What is measured must be the base commit itself, not the base plus whatever provisioning (a
+    # dependency sync rewriting a stale lockfile) left in the tree. Such a tree cannot be measured
+    # as the base, but it is no reason to refuse a run that worked before the guard existed: the
+    # baseline is recorded as explicitly unmeasured, which ``regression.json`` reports as such.
+    dirty = _sh(ctx, f"git status --porcelain=v1 --untracked-files=all -- . {_exclude(ctx)}").strip()
+    if dirty:
+        changed = ", ".join(line.split(maxsplit=1)[-1] for line in dirty.splitlines()[:5])
+        record = {
+            "base": base,
+            "report_valid": False,
+            "passed": 0,
+            "passing": None,
+            "unmeasured": f"provisioning changed the base checkout before it could be measured: {changed}",
+        }
+        ctx.state.write_control(BASE_TESTS, json.dumps(record, sort_keys=True) + "\n")
+        return
+    result, output = run_tests(ctx)
+    if not result.report_valid:
+        tests_dir = _contract(ctx).tests_dir
+        tracked = _sh(ctx, f"git ls-tree -r --name-only {shlex.quote(base)} -- {shlex.quote(tests_dir)}")
+        if tracked.strip():
+            # Retried for a transient loss (a timeout, a lost crabbox download), but bounded: a base
+            # whose suite cannot report at all (a syntax error, a missing dependency) fails the same
+            # way every time, and refusing setup forever would stop the very run that could fix it.
+            failed = _base_measurement_failures(ctx) + 1
+            ctx.state.write_control(BASE_MEASUREMENT_FAILURES, f"{failed}\n")
+            detail = (
+                f"the base suite left no valid JUnit report although `{tests_dir}` holds tests at base "
+                f"{base[:12]} (exit code {result.exit_code})"
+            )
+            if failed < MAX_BASE_MEASUREMENTS:
+                raise StageError(
+                    "sandbox",
+                    f"{detail}; the regression guard's baseline was not recorded, and a retry of setup "
+                    f"measures it again. Tail:\n{output[-1500:]}",
+                    retryable=True,
+                )
+            record = {
+                "base": base,
+                "report_valid": False,
+                "passed": 0,
+                "passing": None,
+                "unmeasured": f"{detail} in {failed} attempts",
+            }
+            ctx.state.write_control(BASE_TESTS, json.dumps(record, sort_keys=True) + "\n")
+            return
+    cases = junit_cases_for(ctx, base)
+    passing = sorted(case for case, outcome in cases.items() if outcome == "passed") if cases is not None else None
+    record = {
+        "base": base,
+        "report_valid": result.report_valid,
+        "passed": result.passed if result.report_valid else 0,
+        "passing": passing,
+    }
+    ctx.state.write_control(BASE_TESTS, json.dumps(record, sort_keys=True) + "\n")
+
+
 @_owned
 def setup(ctx: Ctx) -> StageResult:
-    """Prepare the sandbox: repo, bot identity, baseline, work branch, deps, base sha, contract."""
+    """Prepare the sandbox: repo, bot identity, baseline, work branch, deps, base sha, contract,
+    and the base revision's test record (``BASE_TESTS``) the delivery regression guard replays."""
     t0 = time.monotonic()
     sb = ctx.sb
     # One definition of "the execution policy", shared with the epoch pin: two lists here and in
@@ -964,6 +1528,7 @@ def setup(ctx: Ctx) -> StageResult:
             raise StageError("sandbox", f"uv sync failed: {res.stderr.strip()[-800:]}", retryable=True)
     _contract(ctx)
     _review_policy(ctx)
+    _record_base_tests(ctx, base, head)
     duration = round(time.monotonic() - t0, 3)
     ctx.state.write_control("setup-timing.json", _dumps({"duration_s": duration}))
     return StageResult(stage="setup", duration_s=duration)
@@ -1017,19 +1582,37 @@ def plan(ctx: Ctx) -> StageResult:
         intent=ctx.read_artifact(f"{ctx.art}/intent.md"),
         spec=_read_or(ctx, f"{ctx.art}/spec.md"),  # "(none)" when the line has no spec stage
         protected=_protected(ctx, "plan"),
+        dialect=target_dialect(ctx),
     )
     res = _agent(ctx, "plan", 1, prompt, Plan)
     p = Plan.model_validate(res.data)
+    # Refused here, before build is paid for, rather than at delivery: a plan that names a
+    # protected file can only end in a diff `_assert_unprotected_delivery` refuses.
+    from swfactory.campaign_fusion import _is_protected  # fusion builds on this module
+
+    rules = declared_protected(_contract(ctx), "build")
+    if hit := sorted({f.strip() for f in p.files if _is_protected(f.strip().removeprefix("./"), rules)}):
+        raise StageError("policy", f"plan lists protected path(s) the run may not change: {', '.join(hit[:20])}")
     md = p.to_markdown(ctx.issue.id)
     ctx.write_artifact(md_path, md)
     ctx.write_artifact(json_path, _dumps(p.model_dump()))
     gate = ctx.blueprint.gate_after("plan") if ctx.blueprint else None
     preview = ctx.read_artifact(f"{ctx.art}/{gate.artifact}") if gate else md
+    # Advisory and refusing nothing: the approver sees which requirement no planned test proves
+    # before any code is written. The table is kept whole and the artifact head shortened, so a
+    # long plan cannot push the coverage out of the bounded preview.
+    rows = requirement_trace(_read_or(ctx, f"{ctx.art}/spec.md"), p.model_dump(), None)
+    coverage = coverage_table(rows)[: PREVIEW_CHARS // 2]
+    trace = trace_numbers(rows)
     return StageResult(
         stage="plan",
         artifacts=[md_path, json_path],
-        numbers={"files": float(len(p.files))},
-        preview=preview[:PREVIEW_CHARS],
+        numbers={
+            "files": float(len(p.files)),
+            "requirements": trace["requirements"],
+            "untested_requirements": trace["untested_requirements"],
+        },
+        preview=preview[: PREVIEW_CHARS - len(coverage) - 1].rstrip("\n") + "\n" + coverage,
     )
 
 
@@ -1085,6 +1668,411 @@ def _plan_fidelity(ctx: Ctx, base: str) -> list[Finding]:
     return findings
 
 
+# ---------------------------------------------------------------- requirement trace
+#
+# VOLO's step 2: acceptance tests derived from the requirements must exist, run and pass -- and
+# that is checked by code, not left to the reviewer's judgement. The spec numbers requirements, the
+# plan maps each to the exact test that proves it (``R2: test_increase — ...``), and ``run_tests``
+# records per-case JUnit outcomes bound to the HEAD they ran on. ``requirement_trace`` joins the
+# three; review turns every planned acceptance test that is not passing into a blocker. A
+# requirement the plan maps to no test is advisory only (recorded, never a finding): every recorded
+# fixture leaves its docstring requirement untested, and a missing test is a planning gap the plan
+# gate shows the approver, not a defect of the diff under review.
+
+TRACE = "trace.json"  # {art}/trace.json: requirement -> planned acceptance tests -> JUnit outcome
+
+_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+_REQUIREMENTS_TITLE = re.compile(r"\brequirements?\b", re.IGNORECASE)
+# ``R3. ...`` / ``R3: ...`` / ``- **R3** — ...`` as prompts/spec.md asks, or a bare ``3. ...``
+# ordered-list item, which is what every recorded fixture writes. Both name requirement R3.
+_SPEC_TAGGED = re.compile(
+    r"^\s{0,3}(?:[-*+]\s+)?(?:\*\*|__)?R(\d+)(?:\*\*|__)?\s*(?:[.:)]|\s[—–-])?(?:\*\*|__)?\s+(\S.*)$"
+)
+_SPEC_NUMBERED = re.compile(r"^\s{0,3}(\d+)[.)]\s+(\S.*)$")
+# A plan test entry: ``R2: test_x — ...``, ``R2, R3: test_x``, ``R1-R3: test_x``, ``R2 - test_x``.
+_PLAN_TAGS = re.compile(
+    r"^\s*(?:[-*+]\s+)?\(?(R\d+(?:\s*(?:,|/|&|\+|\band\b|\.\.|[-–])\s*R\d+)*)\)?\s*(?::|\)|\]|\s[—–-])\s*(.*)$"
+)
+_PLAN_TAG = re.compile(r"R(\d+)(?:\s*(?:\.\.|[-–])\s*R(\d+))?")
+_TEST_TOKEN = re.compile(r"^[\w./:\[\]-]+")
+# A bare name counts as a planned test only when it is shaped like one; prose after a tag
+# (``R1: percent_change is exported``) must not turn into a "missing test" blocker. Free-form
+# runner names (Node) are written qualified and quoted: ``R1: `suite::adds two numbers` ``.
+_TEST_IDENTIFIER = re.compile(r"(?:[Tt]est[A-Z0-9_]\w*|\w+_test|\w+Test)")
+# Worst first: a requirement's status is the worst status among its planned tests.
+TRACE_STATUSES: tuple[str, ...] = ("failed", "missing", "skipped", "unverified", "passed")
+_TRACE_BLOCKING = frozenset({"failed", "missing", "skipped"})
+_TRACE_MAX_CASES = 20  # case ids kept per planned test in trace.json (parametrized tests fan out)
+
+
+def _requirement_id(number: str) -> str:
+    return f"R{int(number)}"
+
+
+def spec_requirements(spec_text: str) -> dict[str, str]:
+    """``{"R1": text, ...}`` in spec order, read from every heading whose title names requirements.
+
+    Continuation lines (wrapped or indented under an item) join their item's text; the first
+    occurrence of an id wins, so a nested ordered sub-list cannot rename a requirement.
+    """
+    found: dict[str, str] = {}
+    level = 0  # > 0 while inside a requirements section opened by a heading of that depth
+    current: str | None = None
+    after_blank = False
+    for line in spec_text.splitlines():
+        heading = _HEADING.match(line)
+        if heading:
+            depth = len(heading.group(1))
+            current = None
+            if level and depth > level:
+                continue  # a sub-heading inside the requirements section
+            level = depth if _REQUIREMENTS_TITLE.search(heading.group(2)) else 0
+            continue
+        if not level:
+            continue
+        if not line.strip():
+            after_blank = True
+            continue
+        item = _SPEC_TAGGED.match(line) or _SPEC_NUMBERED.match(line)
+        if item:
+            rid = _requirement_id(item.group(1))
+            current = None if rid in found else rid
+            if current is not None:
+                found[current] = item.group(2).strip()
+        elif current is not None and (not after_blank or line[:1].isspace()):
+            found[current] = f"{found[current]} {line.strip()}"
+        else:
+            current = None
+        after_blank = False
+    return found
+
+
+def _planned_test_name(rest: str) -> str | None:
+    """The test named first after a requirement tag, or None when the entry names no test."""
+    rest = rest.strip()
+    if rest.startswith("`"):
+        end = rest.find("`", 1)
+        token = rest[1:end].strip() if end > 0 else ""
+    else:
+        match = _TEST_TOKEN.match(rest)
+        token = match.group(0).rstrip(".:-") if match else ""
+    token = token.removesuffix("()")
+    name = token.rpartition("::")[2].split("[", 1)[0].strip()
+    if not name:
+        return None
+    return token if "::" in token or _TEST_IDENTIFIER.fullmatch(name) else None
+
+
+def plan_test_map(plan_data: object) -> dict[str, list[str]]:
+    """``{"R2": ["test_increase", ...]}`` from plan.json ``tests`` and every work node's ``tests``.
+
+    Entries are ``R<n>: <exact test name> — <what it proves>`` (prompts/plan.md); several
+    requirements may share one test (``R2, R3: test_x``) and ranges expand (``R1-R3``). Entries
+    without a tag, or whose first word is not a test name, map nothing.
+    """
+    if not isinstance(plan_data, dict):
+        return {}
+    entries = list(plan_data.get("tests") or [])
+    for node in plan_data.get("work") or []:
+        if isinstance(node, dict):
+            entries += list(node.get("tests") or [])
+    mapped: dict[str, list[str]] = {}
+    for entry in entries:
+        if not isinstance(entry, str) or not (tagged := _PLAN_TAGS.match(entry)):
+            continue
+        test = _planned_test_name(tagged.group(2))
+        if test is None:
+            continue
+        for tag in _PLAN_TAG.finditer(tagged.group(1)):
+            first = int(tag.group(1))
+            last = int(tag.group(2)) if tag.group(2) else first
+            numbers = range(first, last + 1) if 0 <= last - first <= 50 else (first, last)
+            for number in numbers:
+                tests = mapped.setdefault(_requirement_id(str(number)), [])
+                if test not in tests:
+                    tests.append(test)
+    return mapped
+
+
+def _name_tokens(text: str) -> list[str]:
+    """Path-ish segments of a test qualifier or case scope: ``tests/test_x.py::TestA`` and the
+    pytest scope ``pytest/tests.test_x.TestA`` both end in ``tests, test_x, TestA``."""
+    text = re.sub(r"\.(?:py|[cm]?[jt]sx?)(?=$|::|/)", "", text)
+    return [part.strip() for part in re.split(r"::|[/\\.]", text) if part.strip()]
+
+
+def matching_cases(test: str, cases: dict[str, str]) -> list[str]:
+    """JUnit case ids (``_junit_cases``) that a planned test name denotes.
+
+    The name part must equal the case's name exactly -- without its pytest ``[param]`` suffix
+    (``case_name``) unless the plan names a parameter itself. A ``file::name`` or
+    ``module::Class::name`` qualifier must be a suffix of the case's scope, so
+    ``tests/test_x.py::test_y`` matches ``pytest/tests.test_x::test_y``.
+    """
+    qualifier, _, name = test.rpartition("::")
+    want = _name_tokens(qualifier)
+    found = []
+    for case_id in sorted(cases):
+        scope, _, raw = case_id.rpartition("::")
+        if (raw if "[" in name else case_name(case_id)) != name:
+            continue
+        if want:
+            have = _name_tokens(scope)
+            if len(want) > len(have) or have[-len(want) :] != want:
+                continue
+        found.append(case_id)
+    return found
+
+
+def _planned_outcome(test: str, cases: dict[str, str] | None) -> dict[str, Any]:
+    if cases is None:
+        return {"test": test, "status": "unverified", "cases": [], "case_count": 0}
+    matched = matching_cases(test, cases)
+    outcomes = {cases[case_id] for case_id in matched}
+    status = (
+        "missing"
+        if not matched
+        else "failed"
+        if outcomes & {"failed", "error"}
+        else "skipped"
+        if "skipped" in outcomes
+        else "passed"
+    )
+    return {"test": test, "status": status, "cases": matched[:_TRACE_MAX_CASES], "case_count": len(matched)}
+
+
+def requirement_trace(spec_text: str, plan_data: object, cases: dict[str, str] | None) -> list[dict[str, Any]]:
+    """One row per requirement: ``{requirement, text, in_spec, planned_tests, status}``.
+
+    Pure. Requirements come from the spec in its order, then any the plan tags that the spec does
+    not name. ``planned_tests`` holds ``{test, status, cases, case_count}`` per planned test, where
+    status is ``passed|failed|skipped|missing`` against ``cases`` (a failure or error is
+    ``failed``; one non-passing parametrized case makes the test non-passing) or ``unverified``
+    when ``cases`` is None. The row's status is its worst test's (``TRACE_STATUSES``), or
+    ``untested`` when the plan maps no test to it.
+    """
+    requirements = spec_requirements(spec_text)
+    planned = plan_test_map(plan_data)
+    ids = list(requirements) + sorted(set(planned) - set(requirements), key=lambda rid: int(rid[1:]))
+    rows: list[dict[str, Any]] = []
+    for rid in ids:
+        tests = [_planned_outcome(test, cases) for test in planned.get(rid, [])]
+        status = min((t["status"] for t in tests), key=TRACE_STATUSES.index) if tests else "untested"
+        rows.append(
+            {
+                "requirement": rid,
+                "text": requirements.get(rid, ""),
+                "in_spec": rid in requirements,
+                "planned_tests": tests,
+                "status": status,
+            }
+        )
+    return rows
+
+
+def _planned_by_test(rows: list[dict[str, Any]]) -> dict[str, tuple[str, list[str]]]:
+    """``test -> (status, [requirement ids])``: one entry per planned test, however many it proves."""
+    by_test: dict[str, tuple[str, list[str]]] = {}
+    for row in rows:
+        for planned in row["planned_tests"]:
+            by_test.setdefault(planned["test"], (planned["status"], []))[1].append(row["requirement"])
+    return by_test
+
+
+def trace_numbers(rows: list[dict[str, Any]]) -> dict[str, float]:
+    by_test = _planned_by_test(rows)
+    return {
+        "requirements": float(len(rows)),
+        "untested_requirements": float(sum(row["status"] == "untested" for row in rows)),
+        "acceptance_tests": float(len(by_test)),
+        # planned acceptance tests without a passing case for the HEAD (missing/skipped/failed/unverified)
+        "missing_acceptance_tests": float(sum(status != "passed" for status, _ in by_test.values())),
+    }
+
+
+def trace_findings(rows: list[dict[str, Any]], *, head: str, tests_dir: str, evidence: bool) -> list[Finding]:
+    """Blockers for planned acceptance tests that did not run and pass at ``head``.
+
+    Without per-test evidence for ``head`` (``evidence=False``) nothing planned can be verified,
+    so the one finding is that the evidence is missing: fail closed, never "no news is good news".
+    A plan that maps no test has nothing to verify and yields nothing here (its rows are advisory).
+    """
+    by_test = _planned_by_test(rows)
+    if not by_test:
+        return []
+    if not evidence:
+        return [
+            Finding(
+                severity="blocker",
+                file=tests_dir,
+                title="No per-test JUnit evidence for the reviewed HEAD",
+                detail=(
+                    f"plan.json maps {len(by_test)} acceptance test(s) to requirements, but no per-test "
+                    f"JUnit results were recorded for HEAD {head[:12]} (missing, stale, summary-only or "
+                    "ambiguous report). Acceptance tests cannot be verified, so review fails closed."
+                ),
+            )
+        ]
+    findings = []
+    for test, (status, requirements) in by_test.items():
+        if status not in _TRACE_BLOCKING:
+            continue
+        what = {
+            "missing": "has no such test case",
+            "skipped": "reports it skipped, and a skipped test proves nothing",
+            "failed": "reports it failed or errored",
+        }[status]
+        findings.append(
+            Finding(
+                severity="blocker",
+                file=tests_dir,
+                title=f"Acceptance test {status}: {test}",
+                detail=(
+                    f"{', '.join(requirements)} is planned to be proven by `{test}`, but the JUnit report "
+                    f"for HEAD {head[:12]} {what}. The requirement stays unproven until that test runs "
+                    "and passes."
+                ),
+            )
+        )
+    return findings
+
+
+def contract_checklist(rows: list[dict[str, Any]], plan_data: object = None) -> str:
+    """The review prompt's ``## Contract checklist``: each requirement with its trace status."""
+    if not rows:
+        tests = [str(t) for t in (plan_data or {}).get("tests") or []] if isinstance(plan_data, dict) else []
+        listed = "".join(f"\n- {t}" for t in tests)
+        return "No numbered requirements were found in the spec or the plan." + (
+            f"\nThe plan's tests:{listed}" if listed else ""
+        )
+    lines = []
+    for row in rows:
+        text = (row["text"] or "(not in the spec; tagged by the plan)")[:400]
+        evidence = "; ".join(f"`{t['test']}` {t['status']}" for t in row["planned_tests"]) or "no planned test"
+        lines.append(f"- [{row['status']}] {row['requirement']}: {text} — {evidence}")
+    return "\n".join(lines)
+
+
+def coverage_table(rows: list[dict[str, Any]]) -> str:
+    """The plan gate's advisory coverage: which planned test proves each requirement."""
+    lines = ["", "## Requirement coverage (advisory)"]
+    if not rows:
+        lines.append("- no numbered requirements found in the spec or in the plan's tests")
+    for row in rows:
+        tests = ", ".join(t["test"] for t in row["planned_tests"]) or "no planned test"
+        note = "" if row["in_spec"] else " (not in the spec)"
+        lines.append(f"- {row['requirement']}: {tests}{note}")
+    return "\n".join(lines) + "\n"
+
+
+class ContractTrace(NamedTuple):
+    """One review round's trace: the findings, numbers, prompt checklist and trace.json record."""
+
+    findings: list[Finding]
+    numbers: dict[str, float]
+    checklist: str
+    record: dict[str, Any]
+
+
+def contract_trace(ctx: Ctx, spec_text: str, plan_data: object) -> ContractTrace:
+    """The requirement trace for the HEAD under review, from the JUnit cases ``run_tests``
+    recorded for exactly that HEAD (``junit_cases_for``); any other evidence is stale."""
+    head = _assert_workspace_head(ctx, "requirement trace")
+    cases = junit_cases_for(ctx, head)
+    rows = requirement_trace(spec_text, plan_data, cases)
+    numbers = trace_numbers(rows)
+    record = {
+        "schema_version": 1,
+        "head": head,
+        "evidence": "junit" if cases is not None else "missing",
+        "summary": {key: int(value) for key, value in numbers.items()},
+        "requirements": rows,
+    }
+    findings = trace_findings(rows, head=head, tests_dir=_contract(ctx).tests_dir, evidence=cases is not None)
+    return ContractTrace(findings, numbers, contract_checklist(rows, plan_data), record)
+
+
+# How a base-passing test fails the candidate, by candidate outcome (None: the id is gone).
+_REGRESSED = {None: "is missing", "skipped": "is now skipped", "failed": "now fails", "error": "now errors"}
+
+
+def regression_findings(
+    base: dict[str, Any],
+    candidate_cases: dict[str, str] | None,
+    candidate_result: TestResult,
+    *,
+    tests_dir: str = "tests",
+) -> list[Finding]:
+    """The deterministic regression guard: what the base passed, the candidate must still pass.
+
+    ``base`` is the ``BASE_TESTS`` record, ``candidate_cases`` the delivered head's per-test
+    outcomes (``junit_cases_for``) and ``candidate_result`` its counts. Same rule as
+    ``evals.baseline_diff``: every base-passing id that is missing, skipped, failed or errored on the
+    candidate is a blocker, while new tests that fail and tests the base already failed are not a
+    regression (the review and the build loop own those). Deleting, renaming, skipping or
+    deselecting a test therefore cannot read as green, however many trivial tests replace it.
+
+    When the base recorded ids but the candidate's report carries none (summary-only, invalid, or
+    two cases sharing one id), the base-passing tests cannot be confirmed one by one, and a count
+    would let a deleted test hide behind added ones: that is one blocker, whatever the counts say.
+    Only a base without ids (a summary-only report, or no tests at all) falls back to the count,
+    where fewer passing tests than the base is one blocker. An invalid candidate report passed
+    nothing.
+    """
+    passing = base.get("passing")
+    short = str(base.get("base") or "")[:12]
+    candidate_passed = candidate_result.passed if candidate_result.report_valid else 0
+    if passing and candidate_cases is None:
+        return [
+            Finding(
+                severity="blocker",
+                file=tests_dir,
+                title="Regression guard: the delivered head's report carries no unique per-test ids",
+                detail=(
+                    f"The base revision {short} recorded {len(passing)} passing test id(s); the delivered "
+                    f"head's JUnit report names none it can be matched against (summary-only, invalid, or "
+                    f"two cases sharing one id) and passed {candidate_passed}. Whether every base-passing "
+                    "test still passes cannot be confirmed, and a count would let a deleted test hide behind "
+                    "added ones: give every test case a unique id (deterministic guard, no model call)."
+                ),
+            )
+        ]
+    if passing is not None and candidate_cases is not None:
+        regressed = [
+            (case, _REGRESSED.get(outcome, f"now reports {outcome}"))
+            for case in sorted(passing)
+            if (outcome := candidate_cases.get(case)) != "passed"
+        ]
+        return [
+            Finding(
+                severity="blocker",
+                file=tests_dir,
+                title=f"Regression guard: {case} {how}",
+                detail=(
+                    f"`{case}` passed on the base revision {short} and {how} on the delivered head. "
+                    "A delivery keeps every test the base passed passing: restore or fix the test, "
+                    "or fix the code it exercises (deterministic guard, no model call)."
+                ),
+            )
+            for case, how in regressed
+        ]
+    base_passed = int(base.get("passed") or 0)
+    if candidate_passed >= base_passed:
+        return []
+    return [
+        Finding(
+            severity="blocker",
+            file=tests_dir,
+            title=f"Regression guard: {base_passed - candidate_passed} fewer passing test(s) than the base",
+            detail=(
+                f"The base revision {short} passed {base_passed} test(s); the delivered head passed "
+                f"{candidate_passed}. The reports carry no per-test ids, so the counts are compared: "
+                "a delivery may not pass fewer tests than the base it started from."
+            ),
+        )
+    ]
+
+
 def _review_policy(ctx: Ctx) -> str:
     if ctx.state.has_control("review-policy.md"):
         return ctx.state.read_control("review-policy.md")
@@ -1112,6 +2100,46 @@ def _tests_blocker(ctx: Ctx, tr: TestResult, output: str) -> Finding:
         detail=(
             f"exit code {tr.exit_code}; failed={tr.failed} errors={tr.errors}. The review fix "
             f"must keep the suite green. Tail:\n{output[-1500:]}"
+        ),
+    )
+
+
+def refresh_test_evidence(ctx: Ctx, numbers: dict[str, float]) -> Finding | None:
+    """Re-run the suite when the last run (``JUNIT_CASES``) does not describe HEAD's code.
+
+    A review fix killed between its commit and its test run, or between ``restore_head`` and the
+    re-test of the restored head, leaves the record naming another commit. Neither review nor
+    deliver otherwise re-runs the suite on resume, so deliver's ``_tested_record`` would refuse
+    that run as stale on every retry and it could never publish. Every review line calls this
+    first: None when the evidence is current (same rule as ``_tested_record``) or the re-run is
+    green; a red re-run is a blocker, so the stage cannot end ``ok`` on a head nobody saw pass.
+    """
+    head = _assert_workspace_head(ctx, "review evidence")
+    try:
+        record = json.loads(ctx.state.read_control(JUNIT_CASES)) if ctx.state.has_control(JUNIT_CASES) else None
+    except (OSError, ValueError):
+        record = None
+    tested = record.get("head") if isinstance(record, dict) else None
+    if (
+        isinstance(tested, str)
+        and tested.strip()
+        and isinstance(record.get("counts"), dict)
+        and "exit_code" in record
+        and (tested == head or _same_code(ctx, tested, head))
+    ):
+        return None
+    tr, output = run_tests(ctx)
+    numbers.update(_test_numbers(tr))
+    if tr.ok:
+        return None
+    return Finding(
+        severity="blocker",
+        file=_contract(ctx).tests_dir,
+        title="Tests failing on the head review resumed from",
+        detail=(
+            f"The suite's last recorded run did not describe {head[:12]} (an interrupted review fix), "
+            f"so review re-ran it: exit code {tr.exit_code}; failed={tr.failed} errors={tr.errors}. "
+            f"Tail:\n{output[-1500:]}"
         ),
     )
 
@@ -1145,32 +2173,101 @@ def review_context(
     return packed.prompt_text, packed
 
 
-def fix_and_retest(ctx: Ctx, prompt: str, *, fixes: int, fallback: str, numbers: dict[str, float]) -> Finding | None:
+def fix_and_retest(
+    ctx: Ctx,
+    prompt: str,
+    *,
+    fixes: int,
+    fallback: str,
+    numbers: dict[str, float],
+    reverted: list[dict[str, Any]] | None = None,
+) -> Finding | None:
     """Review fix ``fixes``: agent call ``fix.<max_build_iterations + fixes>``, commit, re-run the
-    suite. Returns the ``_tests_blocker`` a red suite leaves, None when it is green."""
-    res = _agent(ctx, "fix", ctx.cfg.max_build_iterations + fixes, prompt, BuildSummary)
-    commit(ctx, stage="fix", msg=f"fix: {_summary_line(res, fallback)}")
+    suite. None when it is green; otherwise a synthetic blocker, so the stage cannot end ``ok``.
+
+    The review baseline is green (review runs only after a green build), so here the ratchet
+    reduces to "keep a review fix only if the suite stays green". A fix that turns it red is
+    reverted to the pre-fix commit and the suite re-run, so ``numbers`` -- and the ``[BLOCKED]`` PR
+    deliver publishes -- describe green bytes instead of the broken attempt. The attempt stays
+    auditable: its SHA and failure tail travel in the blocker and in ``reverted`` (review.json).
+    Shared by the default review and liquid annealing, so both lines revert alike.
+    """
+    before = _assert_workspace_head(ctx, "review fix")
+    call = ctx.cfg.max_build_iterations + fixes
+    res = _agent(ctx, "fix", call, prompt, BuildSummary)
+    after = commit(ctx, stage="fix", msg=f"fix: {_summary_line(res, fallback)}")
+    _assert_stage_scope(ctx, "fix", before, after)
     tr, output = run_tests(ctx)
-    numbers.update(_test_numbers(tr))
-    return None if tr.ok else _tests_blocker(ctx, tr, output)
+    if tr.ok:
+        numbers.update(_test_numbers(tr))
+        return None
+    if after == before:
+        # Nothing was committed, so there is nothing to revert: the pre-fix head itself is red.
+        numbers.update(_test_numbers(tr))
+        return _tests_blocker(ctx, tr, output)
+    restore_head(ctx, before)
+    restored, _ = run_tests(ctx)
+    numbers.update(_test_numbers(restored))
+    numbers["reverted_fixes"] = numbers.get("reverted_fixes", 0.0) + 1.0
+    row = {
+        "fix": fixes,
+        "agent_call": f"fix.{call}",
+        "reverted_sha": after,
+        "restored_head": before,
+        "failed": tr.failed,
+        "errors": tr.errors,
+        "restored_tests_passed": restored.ok,
+    }
+    if reverted is not None:
+        reverted.append(row)
+    return Finding(
+        severity="blocker",
+        file=_contract(ctx).tests_dir,
+        title=f"Review fix {fixes} reverted: it broke the suite",
+        detail=(
+            f"fix.{call} (commit {after}) left exit code {tr.exit_code}; failed={tr.failed} errors={tr.errors}. "
+            f"It was reverted to {before}, which re-tested "
+            f"{'green' if restored.ok else 'red'}. A review fix must keep the suite green. Tail:\n{output[-1500:]}"
+        ),
+    )
+
+
+# Trace blockers a fix round cannot clear: the planned test is absent or skipped, and only a change
+# to the tests dir -- which the fix role may not touch (``protected_for``) -- could produce it.
+UNFIXABLE_TRACE_PREFIXES = ("Acceptance test missing:", "Acceptance test skipped:")
+
+
+def fixable_findings(findings: list[Finding]) -> list[Finding]:
+    """The findings a fix round can act on. A round spent on a missing or skipped acceptance test
+    buys only paid calls and unrelated source edits; those findings still block the stage and stay
+    in every artifact. A failing acceptance test, or missing evidence for the HEAD, stays fixable:
+    a source fix and its re-test can clear both."""
+    return [f for f in findings if not f.title.startswith(UNFIXABLE_TRACE_PREFIXES)]
 
 
 @_resumable
 def review(ctx: Ctx) -> StageResult:
     """Agent review (Review schema) with the nit cap and plan fidelity enforced in code; blockers
     trigger at most ``max_review_fixes`` fix + test + re-review rounds. A fix that leaves the
-    suite red is itself a blocker (``_tests_blocker``): the stage cannot end ``ok`` on red tests.
-    Review fixes are agent calls ``fix.<max_build_iterations + k>`` (see module docstring)."""
+    suite red is reverted and is itself a blocker (``fix_and_retest``): the stage cannot end ``ok``
+    after a fix broke the tests, and what it delivers is the green pre-fix head. Review fixes
+    are agent calls ``fix.<max_build_iterations + k>`` (see module docstring)."""
     path = f"{ctx.art}/review.json"
     _assert_workspace_head(ctx, "review")
     base = ctx.state.read_control("base").strip()
     spec_text = _read_or(ctx, f"{ctx.art}/spec.md")  # "(none)" when the line has no spec stage
     plan_text = ctx.read_artifact(f"{ctx.art}/plan.md")
+    plan_data = _read_json(ctx, f"{ctx.art}/plan.json", None)
+    trace_path = f"{ctx.art}/{TRACE}"
     numbers: dict[str, float] = {}
     rv, dropped, fixes = Review(verdict="approve"), 0, 0
-    tests_blocker: Finding | None = None
+    tests_blocker = refresh_test_evidence(ctx, numbers)  # a resumed review may hold stale evidence
+    trace: ContractTrace | None = None
+    reverted: list[dict[str, Any]] = []
     for k in range(ctx.cfg.max_review_fixes + 1):
         review_diff, _packed = review_context(ctx, base, numbers, saved_key="review_context_saved_bytes")
+        # Recomputed every round: a review fix moves HEAD, and only that HEAD's cases count.
+        trace = contract_trace(ctx, spec_text, plan_data)
         prompt = render_prompt(
             "review",
             issue_id=ctx.issue.id,
@@ -1178,32 +2275,41 @@ def review(ctx: Ctx) -> StageResult:
             spec=spec_text,
             plan=plan_text,
             diff=review_diff,
+            checklist=trace.checklist,
         )
         res = _agent(ctx, "review", k + 1, prompt, Review)
         rv, dropped = cap_nits(Review.model_validate(res.data), _nit_cap(ctx))
         rv.findings.extend(_plan_fidelity(ctx, base))
+        rv.findings.extend(trace.findings)
         if tests_blocker is not None:
             rv.findings.append(tests_blocker)
-        if not rv.blockers or k == ctx.cfg.max_review_fixes:
+        fixable = fixable_findings(rv.blockers)
+        if not fixable or k == ctx.cfg.max_review_fixes:
             break
         fixes = k + 1
         fix_prompt = render_prompt(
             "fix",
             issue_id=ctx.issue.id,
             plan=plan_text,
-            failures="Review blockers:\n" + _format_findings(rv.blockers),
+            failures="Review blockers:\n" + _format_findings(fixable),
             protected=_protected(ctx, "fix"),
+            dialect=target_dialect(ctx),
         )
         tests_blocker = fix_and_retest(
-            ctx, fix_prompt, fixes=fixes, fallback="address review blockers", numbers=numbers
+            ctx, fix_prompt, fixes=fixes, fallback="address review blockers", numbers=numbers, reverted=reverted
         )
     record = {
         "verdict": "request_changes" if rv.blockers else "approve",  # REVIEW.md contract
         "findings": [f.model_dump() for f in rv.findings],
         "dropped_nits": dropped,
         "fixes": fixes,
+        "reverted_fixes": reverted,
     }
+    if trace is None:  # max_review_fixes >= 0, so the loop always runs; never publish untraced
+        raise StageError("policy", "review ran no round, so it has no requirement trace")
     ctx.write_artifact(path, _dumps(record))
+    ctx.write_artifact(trace_path, _dumps(trace.record))
+    numbers.update(trace.numbers)
     counts = metrics_mod.severity_counts(rv.findings)
     numbers.update(
         {
@@ -1211,11 +2317,12 @@ def review(ctx: Ctx) -> StageResult:
             "findings": float(len(rv.findings)),
             "dropped_nits": float(dropped),
             "fixes": float(fixes),
+            "reverted_fixes": float(len(reverted)),
             **{k: float(v) for k, v in counts.items()},
         }
     )
     status = "blocked" if rv.blockers else "ok"
-    return StageResult(stage="review", status=status, artifacts=[path], numbers=numbers)
+    return StageResult(stage="review", status=status, artifacts=[path, trace_path], numbers=numbers)
 
 
 def _load_approvals(ctx: Ctx) -> list[Approval]:
@@ -1260,9 +2367,13 @@ def cell_evidence(ctx: Ctx) -> tuple[str | None, int | None, bool]:
     )
 
 
-@_owned
 def record_approval(ctx: Ctx, approval: Approval) -> None:
     """Record the latest decision for one gate in ``approvals.json`` (committed by deliver).
+
+    Owned as ``record_approval:<gate>``: the operations journal then says which gate each
+    recording answered, in the journal's own append order. A later re-recording replaces the
+    ``approvals.json`` entry (and its ``at``), so that order is the only surviving proof of when a
+    gate was first answered relative to the stages after it -- the adherence audit reads it.
 
     Airflow may retry a record task, so one gate owns one entry rather than accumulating duplicate
     decisions from task attempts.
@@ -1272,6 +2383,11 @@ def record_approval(ctx: Ctx, approval: Approval) -> None:
     answer that already claims a different Cell/epoch is refused instead of being restamped, so a
     response cannot be carried across epochs and re-recorded as current.
     """
+    with owned(ctx.state, f"record_approval:{approval.gate}"):
+        _record_approval(ctx, approval)
+
+
+def _record_approval(ctx: Ctx, approval: Approval) -> None:
     path = f"{ctx.art}/approvals.json"
     artifact = _gate_artifact(ctx, approval.gate)
     digest = _artifact_sha256(ctx, artifact)
@@ -1368,6 +2484,7 @@ def pr_body(
     dropped_nits: int,
     approvals: list[Approval],
     stages: list[StageResult],
+    adherence: str | None = None,
 ) -> str:
     """Render the PR description: banner, findings (blockers first), approvals, stages."""
     parts: list[str] = []
@@ -1413,6 +2530,7 @@ def pr_body(
         "given for these\n"
         f"- artifact chain: `{ctx.art}/` (intent, spec, plan, review, approvals, metrics, agent/)\n"
         f"- commits authored by `{BOT_NAME}` with Factory-Run / Factory-Stage / Agent trailers"
+        + (f"\n- adherence audit: `{adherence}` (`{ctx.art}/adherence.json`, record-only)" if adherence else "")
     )
     return "\n\n".join(parts) + "\n"
 
@@ -1518,14 +2636,170 @@ def _validated_review(
     return review, data, max(len(review.blockers), logged_blockers)
 
 
+def _assert_unprotected_delivery(ctx: Ctx, base: str) -> None:
+    """Refuse a delivered diff that touches a protected path, before anything is committed or pushed.
+
+    In-cell enforcement (permission rules, the guard hook, denyWrite mounts) is the first line, but
+    a provider that enforces nothing, or a scripted replay, would otherwise ship whatever the cell
+    left behind. The rule is the one ``replica_fusion.scope`` already applies to fusion children:
+    ``declared_protected(contract, "build")``, so changing the tests dir during build
+    stays allowed. ``--no-renames`` reports a rename as delete + add, so moving a protected file out
+    of its directory is still a change to the protected path. A policy refusal, not ``[BLOCKED]``:
+    protected paths are human-maintained, no fix round may touch them, and the bytes must not
+    reach a remote branch at all.
+    """
+    from swfactory.campaign_fusion import _is_protected  # fusion builds on this module
+
+    rules = declared_protected(_contract(ctx), "build")
+    diff = f"git diff -z --name-only --relative --no-renames {shlex.quote(base)}..HEAD -- . {_exclude(ctx)}"
+    changed = _sh(ctx, diff)
+    if touched := sorted(path for path in changed.split("\0") if path and _is_protected(path, rules)):
+        shown = ", ".join(touched[:20]) + (f" (+{len(touched) - 20} more)" if len(touched) > 20 else "")
+        raise StageError("policy", f"delivered diff touches protected path(s): {shown}")
+
+
+def _base_tests(ctx: Ctx, base: str) -> dict[str, Any]:
+    """The ``BASE_TESTS`` record for this run's base; any absence or inconsistency fails closed."""
+    if not ctx.state.has_control(BASE_TESTS):
+        raise StageError(
+            "policy",
+            "run has no base test record (setup records it while HEAD is the base); "
+            "the regression guard cannot judge this delivery",
+        )
+    try:
+        record = json.loads(ctx.state.read_control(BASE_TESTS))
+    except (OSError, ValueError) as error:
+        raise StageError("policy", f"base test record is invalid: {error}") from error
+    passed = record.get("passed") if isinstance(record, dict) else None
+    passing = record.get("passing") if isinstance(record, dict) else None
+    if (
+        not isinstance(record, dict)
+        or record.get("base") != base
+        or not isinstance(record.get("report_valid"), bool)
+        or not isinstance(passed, int)
+        or isinstance(passed, bool)
+        or passed < 0
+        or not (passing is None or (isinstance(passing, list) and all(isinstance(case, str) for case in passing)))
+    ):
+        raise StageError("policy", f"base test record does not describe base {base}")
+    return record
+
+
+def _same_code(ctx: Ctx, tested: str, head: str) -> bool:
+    """``head`` descends from ``tested`` and differs from it only inside the artifact chain."""
+    q = shlex.quote
+    return (
+        ctx.sb.run(f"git merge-base --is-ancestor {q(tested)} {q(head)}").ok
+        and ctx.sb.run(f"git diff --quiet {q(tested)} {q(head)} -- . {_exclude(ctx)}").ok
+    )
+
+
+def _tested_record(ctx: Ctx, head: str) -> dict[str, Any]:
+    """The ``JUNIT_CASES`` record whose code is exactly what ``head`` delivers.
+
+    Usually the suite last ran on ``head`` itself. The one legitimate gap is deliver's own
+    artifact-chain commit: a retried delivery (a failed push) starts from it, so a record for an
+    ancestor whose code tree differs from ``head`` only inside the artifact chain describes the same
+    candidate. Anything else -- no record, a record for another commit, code that changed after the
+    suite ran -- is stale evidence, and delivery is refused rather than judged on it.
+    """
+    try:
+        record = json.loads(ctx.state.read_control(JUNIT_CASES)) if ctx.state.has_control(JUNIT_CASES) else None
+    except (OSError, ValueError) as error:
+        raise StageError("policy", f"candidate test evidence is invalid: {error}") from error
+    tested = record.get("head") if isinstance(record, dict) else None
+    if not isinstance(tested, str) or not tested.strip():
+        raise StageError("policy", "delivery has no candidate test evidence for the delivered head")
+    if tested != head and not _same_code(ctx, tested, head):
+        raise StageError(
+            "policy",
+            f"candidate test evidence is stale: the suite last ran on {tested[:12]}, "
+            f"but delivery would publish {head[:12]}",
+        )
+    counts = record.get("counts")
+    if not isinstance(counts, dict) or "exit_code" not in record:
+        raise StageError("policy", "candidate test evidence predates the regression guard; re-run the build")
+    return record
+
+
+def _regression_guard(ctx: Ctx, base: str, head: str, required: list[str]) -> tuple[list[Finding], dict[str, float]]:
+    """Hold the delivered head to the base's passing tests (``regression_findings``).
+
+    Applies whenever a candidate was built or the delivered code differs from the base. A delivery
+    that legitimately has no build -- a gate rejected before ``build_and_test``, publishing the
+    ``[REJECTED]`` evidence PR -- delivers the base's own code, which cannot regress, and has no
+    candidate run to read. The verdict is committed as ``regression.json`` either way it lands.
+    """
+    code_changed = not ctx.sb.run(f"git diff --quiet {shlex.quote(base)} {shlex.quote(head)} -- . {_exclude(ctx)}").ok
+    if "build_and_test" not in required and not code_changed:
+        return [], {}
+    baseline = _base_tests(ctx, base)
+    record = _tested_record(ctx, head)
+    try:
+        candidate = TestResult.model_validate(
+            {**record["counts"], "exit_code": record["exit_code"], "report_valid": record.get("report_valid") is True}
+        )
+    except ValidationError as error:
+        raise StageError("policy", f"candidate test evidence is invalid: {error}") from error
+    cases = junit_cases_for(ctx, record["head"])
+    findings = regression_findings(baseline, cases, candidate, tests_dir=_contract(ctx).tests_dir)
+    ctx.write_artifact(
+        f"{ctx.art}/regression.json",
+        _dumps(
+            {
+                "schema": 1,
+                "base": base,
+                "tested_head": record["head"],
+                "mode": (
+                    "unmeasured"
+                    if baseline.get("unmeasured")
+                    else "cases"
+                    if baseline["passing"] is not None and cases is not None
+                    else "unconfirmed"
+                    if baseline["passing"]
+                    else "counts"
+                ),
+                "unmeasured": baseline.get("unmeasured"),
+                "base_passed": baseline["passed"],
+                "candidate_passed": candidate.passed if candidate.report_valid else 0,
+                "regressions": len(findings),
+                "findings": [finding.model_dump() for finding in findings],
+            }
+        ),
+    )
+    return findings, {"regressions": float(len(findings)), "base_tests_passed": float(baseline["passed"])}
+
+
+def _bounded_findings(findings: list[Finding]) -> list[Finding]:
+    """At most ``MAX_REGRESSION_FINDINGS`` regression findings for the PR body, plus one blocker
+    that counts the rest; ``regression.json`` keeps every one."""
+    if len(findings) <= MAX_REGRESSION_FINDINGS:
+        return findings
+    rest = len(findings) - MAX_REGRESSION_FINDINGS
+    return [
+        *findings[:MAX_REGRESSION_FINDINGS],
+        Finding(
+            severity="blocker",
+            file=findings[0].file,
+            title=f"Regression guard: {rest} more base-passing test(s) regressed",
+            detail="Listed in full in regression.json of the artifact chain.",
+        ),
+    ]
+
+
 @_timed
 def deliver(ctx: Ctx) -> StageResult:
     """Write metrics, commit the artifact chain, extract the patch stream and publish the PR.
     Never skipped: publishing is the observable output of the run. A rejected gate (any
     ``decision == "reject"`` in approvals.json) still publishes, as ``[REJECTED]`` +
     ``factory:rejected``, so the refusal and its actor land in git; blockers left by review
-    publish as ``[BLOCKED]`` + ``factory:blocked``. Both return ``status="blocked"``."""
-    _assert_workspace_head(ctx, "delivery")
+    publish as ``[BLOCKED]`` + ``factory:blocked``. Both return ``status="blocked"``.
+
+    Before anything is committed or pushed, two model-free guards run: a delivered diff that
+    touches a protected path is refused outright (``_assert_unprotected_delivery``), and a candidate
+    that lost a test the base passed delivers ``[BLOCKED]`` with the regressions as blockers
+    (``_regression_guard``)."""
+    head = _assert_workspace_head(ctx, "delivery")
     approvals = _load_approvals(ctx)
     if not ctx.state.has_artifact(f"{ctx.art}/approvals.json"):
         ctx.write_artifact(f"{ctx.art}/approvals.json", "[]\n")
@@ -1540,11 +2814,22 @@ def deliver(ctx: Ctx) -> StageResult:
     denied = denied_tool_calls(ctx)
     if ctx.agent.kind == "external" and ctx.blueprint and any(gate.mode == "policy" for gate in ctx.blueprint.gates):
         raise StageError("policy", "external agents are not qualified for autonomous publication")
+    base = ctx.state.read_control("base").strip()
+    _assert_unprotected_delivery(ctx, base)
+    regressions, guard_numbers = _regression_guard(ctx, base, head, required)
+    blockers += len(regressions)
+    from swfactory import adherence  # reads this module's helpers
+
+    # Record-only: the verdict travels with the chain and the metrics, and publication proceeds
+    # whatever it says. Letting `deviant` block is a separate authority decision.
+    audit = adherence.audit(ctx, stages=stages, approvals=approvals)
+    ctx.write_artifact(f"{ctx.art}/{adherence.ARTIFACT}", adherence.render(audit))
     metrics_mod.write_run_metrics(
         ctx,
         stages,
         approvals,
         total_cost_usd=persisted_cost(ctx),
+        adherence=audit["verdict"],
     )
     _copy_audit_logs(ctx)
     cleared = ctx.sb.run(f"rm -rf -- {shlex.quote(ctx.art)}")
@@ -1558,7 +2843,6 @@ def deliver(ctx: Ctx) -> StageResult:
         msg=f"docs(factory): artifact chain for {ctx.issue.id}",
         paths=[ctx.art],
     )
-    base = ctx.state.read_control("base").strip()
     patch = _sh(ctx, f"git format-patch --stdout {base}..HEAD")
     commits = int(_sh(ctx, f"git rev-list --count {base}..HEAD").strip() or 0)
     # Patch paths are repo-relative; the sandbox cwd may be a subdir of the checkout (islo) or
@@ -1606,10 +2890,11 @@ def deliver(ctx: Ctx) -> StageResult:
         ),
         body=pr_body(
             ctx,
-            findings=rv.findings,
+            findings=[*rv.findings, *_bounded_findings(regressions)],
             dropped_nits=int(data.get("dropped_nits", 0)),
             approvals=approvals,
             stages=stages,
+            adherence=audit["verdict"],
         ),
         labels=labels,
         allowed_prefixes=[prefix],
@@ -1623,6 +2908,8 @@ def deliver(ctx: Ctx) -> StageResult:
             "commits": float(commits),
             "rejected": float(rejected),
             "denied_tool_calls": float(denied),
+            **guard_numbers,
+            "adherence": adherence.VERDICT_SCORE[audit["verdict"]],
         },
     )
 

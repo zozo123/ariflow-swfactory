@@ -320,7 +320,9 @@ def test_a_killed_command_in_the_build_loop_records_failed_evidence_and_retries(
     never satisfy the idempotency check, so a retry still performs the build again."""
     sb = FakeSandbox(
         {"factory.toml": FACTORY_TOML, f"{ART}/plan.md": "# Plan\n", f"{ART}/spec.md": "# Spec\n"},
-        results={"git ls-files": TIMEOUT},
+        # The commit's staging listing (`GIT_ADD_ALL`), not the dialect card's `git ls-files -- src
+        # tests`, which runs before the agent call and is a different command.
+        results={"git ls-files -z -o -m": TIMEOUT},
     )
     agent = CountingAgent(data=BUILD_DATA)
     ctx = ctx_on(tmp_path, sb, agent=agent)
@@ -602,6 +604,15 @@ def test_the_build_loop_stops_at_max_build_iterations_with_a_policy_error(tmp_pa
         "spec.1.json",
     ]
     assert not (art / "review.json").exists() and not (art / "metrics.json").exists()
+    # The failed run still holds the ratchet's per-attempt evidence in host state. fix.2 changes
+    # nothing the suite can see, so it loses nothing and is kept: the workspace ends on it.
+    ratchet = json.loads((tmp_path / "run" / "state" / "artifacts" / DEMO_ART / "build-ratchet.json").read_text())
+    assert [(row["agent_call"], row["verdict"]) for row in ratchet["iterations"]] == [
+        ("build.1", "kept"),
+        ("fix.2", "kept"),
+    ]
+    assert ratchet["best"]["agent_call"] == "fix.2" and ratchet["reverts"] == 0
+    assert git(tmp_path / "work", "rev-parse", "HEAD") == ratchet["best"]["head"]
     assert not (tmp_path / "run" / "pr.md").exists()  # nothing published
     assert not (tmp_path / "run" / "remote.git").exists()
 
@@ -678,6 +689,24 @@ def delivery_ctx(
     ctx.state.write_artifact(f"{ART}/approvals.json", json.dumps(approvals) + "\n")
     if review_json is not None:
         ctx.state.write_artifact(f"{ART}/review.json", review_json)
+    # The regression guard's evidence: setup's base suite record and the build's candidate run on
+    # the delivered head, both host-owned. The candidate kept the base's one passing test.
+    ctx.state.write_control(
+        "base-tests.json",
+        json.dumps({"base": "base0000", "report_valid": True, "passed": 1, "passing": ["pytest/t::test_a"]}),
+    )
+    ctx.state.write_control(
+        "junit-cases.json",
+        json.dumps(
+            {
+                "head": "head0000",
+                "report_valid": True,
+                "exit_code": 0,
+                "counts": {"passed": 1, "failed": 0, "errors": 0, "skipped": 0},
+                "cases": {"pytest/t::test_a": "passed"},
+            }
+        ),
+    )
     write_stage_log(
         tmp_path,
         {"stage": "intent"},

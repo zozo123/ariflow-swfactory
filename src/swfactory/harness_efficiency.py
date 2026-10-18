@@ -11,9 +11,13 @@ promotion dependency and therefore cannot mint authority from a cache or a compa
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import re
+import shlex
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -531,3 +535,196 @@ def pack_review_diff(
         json.dumps(public, indent=2, sort_keys=True) + "\n",
     )
     return packed
+
+
+# ---------------------------------------------------------------- planned-file packing
+
+_FILE_PACK_BUDGET_BYTES = 24_000
+# The agent's own Read deny rules (``agent.GUARD_DENY``/``GUARD_PATH_DENY``): a snapshot must not
+# show the model a file its tools would refuse to open.
+_READ_DENIED = re.compile(r"(^|/)\.env[^/]*$|^\.claude/hooks(/|$)")
+
+
+@dataclass(frozen=True)
+class PackedFileRow:
+    path: str
+    state: Literal["included", "new", "omitted"]
+    reason: str = ""
+    size_bytes: int = 0
+    sha256: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class PlannedFilePack:
+    head_sha: str
+    sha256: str
+    files_text: str
+    notes_text: str
+    rows: tuple[PackedFileRow, ...]
+    content_bytes: int
+    budget_bytes: int
+
+    @property
+    def included(self) -> tuple[str, ...]:
+        return tuple(row.path for row in self.rows if row.state == "included")
+
+
+def _inert(path: str) -> str:
+    """A declared path as one inert line: control characters escaped, never a prompt line."""
+
+    return "".join(ch if ch.isprintable() else f"\\x{ord(ch):02x}" for ch in path)
+
+
+def _fence(text: str) -> str:
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    return "`" * max(3, longest + 1)
+
+
+def _blob(ctx: Ctx, rev: str) -> tuple[int, bytes] | str | None:
+    """``(size, bytes)`` of the blob at ``rev``; None when no such path exists there; a reason
+    string when it exists but is not a regular file that could be read back exactly."""
+
+    quoted = shlex.quote(rev)
+    meta = ctx.sb.run(f"git cat-file -t {quoted} && git cat-file -s {quoted}")
+    if not meta.ok:
+        return None
+    parts = meta.stdout.split()
+    if len(parts) != 2 or parts[0] != "blob" or not parts[1].isdigit():
+        return "not a regular file at this checkpoint"
+    size = int(parts[1])
+    # base64 so arbitrary bytes cross the sandbox's text channel unchanged; the length check below
+    # turns any loss on the way (a failed cat-file inside the pipe, a decoder) into an omission.
+    read = ctx.sb.run(f"git cat-file blob {quoted} | base64")
+    try:
+        raw = base64.b64decode(read.stdout) if read.ok else b""
+    except (binascii.Error, ValueError):
+        raw = b""
+    if len(raw) != size:
+        return "could not be read back exactly"
+    return size, raw
+
+
+def pack_planned_files(
+    ctx: Ctx,
+    *,
+    paths: Sequence[str],
+    head_sha: str,
+    budget_bytes: int | None = None,
+) -> PlannedFilePack | None:
+    """Snapshot the declared files' current contents at ``head_sha`` for a build or repair prompt.
+
+    A Plan.work node is told exactly which files it may touch, yet it had to spend Read turns to
+    see them before its first Edit. The pack reads each declared path as committed at the
+    checkpoint HEAD -- git objects only, so an uncommitted file is never packed and nothing outside
+    the repository can be named -- in sorted order, whole files only, greedily within
+    ``budget_bytes`` of content. A path that does not exist yet is listed as new; a read-denied,
+    binary, non-UTF-8, non-file or over-budget path is listed as omitted with its reason.
+
+    Fail-closed on secrets: if the local classifier (``_sensitivity_kinds``, the one the failure and
+    review packers use) matches ANY packed file, the whole pack is refused and the prompt stays
+    exactly the legacy prompt; a pack never puts secret-shaped bytes in front of a provider. When
+    nothing could be included the result is None as well. The receipt (paths, states, sizes and
+    digests, never contents) is kept in control state and mirrored as
+    ``{art}/harness-file-packs/<sha256>.json``; a refusal is recorded in control state only.
+    """
+
+    from swfactory.paths import normalize_relative_path
+
+    budget_bytes = _FILE_PACK_BUDGET_BYTES if budget_bytes is None else budget_bytes
+    if budget_bytes < 0:
+        raise ValueError("file pack budget must not be negative")
+    rows: list[PackedFileRow] = []
+    texts: dict[str, str] = {}
+    used = 0
+    for declared in sorted(set(paths)):
+        try:
+            path = normalize_relative_path(declared, field="plan file")
+        except ValueError:
+            rows.append(PackedFileRow(_inert(declared), "omitted", "not a relative path inside the target"))
+            continue
+        if _READ_DENIED.search(path):
+            rows.append(PackedFileRow(path, "omitted", "the agent's tools may not read it"))
+            continue
+        blob = _blob(ctx, f"{head_sha}:./{path}")
+        if blob is None:
+            rows.append(PackedFileRow(path, "new", "does not exist at this checkpoint"))
+            continue
+        if isinstance(blob, str):
+            rows.append(PackedFileRow(path, "omitted", blob))
+            continue
+        size, raw = blob
+        digest = hashlib.sha256(raw).hexdigest()
+        if used + size > budget_bytes:
+            rows.append(PackedFileRow(path, "omitted", "exceeds the snapshot budget", size, digest))
+            continue
+        if b"\0" in raw:
+            rows.append(PackedFileRow(path, "omitted", "binary", size, digest))
+            continue
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            rows.append(PackedFileRow(path, "omitted", "not UTF-8 text", size, digest))
+            continue
+        texts[path] = text
+        used += size
+        rows.append(PackedFileRow(path, "included", "", size, digest))
+
+    sensitive = {path: kinds for path, text in texts.items() if (kinds := _sensitivity_kinds(text))}
+    if sensitive:
+        refusal = {
+            "schema_version": 1,
+            "mode": "refused",
+            "head_sha": head_sha,
+            "sensitivity_kinds": {path: list(kinds) for path, kinds in sorted(sensitive.items())},
+            "raw_content_committed": False,
+        }
+        body = json.dumps(refusal, indent=2, sort_keys=True) + "\n"
+        ctx.state.write_control(f"harness/file-packs/refused-{_sha256(body)}.json", body)
+        return None
+    if not texts:
+        return None
+
+    blocks: list[str] = []
+    for row in rows:
+        if row.state != "included":
+            continue
+        text = texts[row.path]
+        fence = _fence(text)
+        ending = "\n" if text and not text.endswith("\n") else ""
+        note = ", no final newline" if ending else ""
+        blocks.append(
+            f"### `{_inert(row.path)}` ({row.size_bytes} bytes, sha256 {row.sha256}{note})\n"
+            f"{fence}\n{text}{ending}{fence}"
+        )
+    files_text = "\n\n".join(blocks)
+    notes_text = "\n".join(
+        f"- `{_inert(row.path)}`: {row.state}, {row.reason}" for row in rows if row.state != "included"
+    )
+    digest = _sha256(f"{head_sha}\n{files_text}\n{notes_text}")
+    receipt = {
+        "schema_version": 1,
+        "mode": "packed",
+        "authority": "context-snapshot-only",
+        "sha256": digest,
+        "head_sha": head_sha,
+        "budget_bytes": budget_bytes,
+        "content_bytes": used,
+        "files": [row.to_dict() for row in rows],
+        "raw_content_committed": False,
+        "remote_model_used": False,
+    }
+    body = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+    ctx.state.write_control(f"harness/file-packs/{digest}.json", body)
+    ctx.write_artifact(f"{ctx.art}/harness-file-packs/{digest}.json", body)
+    return PlannedFilePack(
+        head_sha=head_sha,
+        sha256=digest,
+        files_text=files_text,
+        notes_text=notes_text,
+        rows=tuple(rows),
+        content_bytes=used,
+        budget_bytes=budget_bytes,
+    )

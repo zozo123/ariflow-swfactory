@@ -70,6 +70,24 @@ base-branch checkout, it sees run evidence after merge. Production health, custo
 security, and business results can join the cycle through integrations that create ordinary
 GitHub work orders.
 
+### The harness loop inside one job
+
+Inside a job the host, not the model, owns five mechanisms. Each one writes evidence to the run
+and fails closed when that evidence is missing or stale.
+
+| Mechanism | What the host does | Evidence |
+| --- | --- | --- |
+| Dialect card | Renders the target's test and lint commands, source and tests dirs, protected paths and a capped file layout once per run. Every plan, build and fix prompt gets it. `[policy.<stage>] max_turns` can only lower a call's turn cap. | control `target-dialect.md`, `{art}/dialect.md`; `metrics.json` `agent_calls`, `model_turns` |
+| Requirement trace | Maps every planned requirement to acceptance tests by JUnit case id at the reviewed HEAD. A missing, skipped or failing planned test becomes a review blocker. The contract checklist follows the diff in the review prompt. | `{art}/trace.json` |
+| Ratchet | Keeps a repair only if it is a net gain: a fix may lose one passing test only if it gains three. Otherwise it is reverted to the best candidate, and the next fix is told why. A review fix that turns the suite red is reverted, re-tested and recorded as a blocker. Every fix commit is checked on the host against the fix stage's protected paths. | `{art}/build-ratchet.json`, `workgraph-execution.json` `best` and per-repair `ratchet`, `review.json` `reverted_fixes`; `metrics.json` `ratchet_reverts`, `review_reverted_fixes` |
+| Delivery guard | `setup` runs the base suite once. Before deliver commits or pushes anything, every test that passed at base must still pass at the tested HEAD, or the run delivers `[BLOCKED]`. A delivered diff that touches a protected path is refused outright. | control `base-tests.json`, `junit-cases.json`; `{art}/regression.json` |
+| Adherence audit | After the run, checks participation, delegation, role and tool boundaries, budget and information flow against what the run recorded. Read-only calls get a worktree fingerprint. The verdict is record-only. | `{art}/adherence.json`; `metrics.json` `adherence` |
+
+The mechanisms feed each other. After a ratchet or review-fix revert, the guard and the trace both
+judge the head that was tested last, never the reverted attempt. A reverted call still counts in
+`agent_calls` and in the audit. The host-side fix scope is stronger than the audit: a fix that
+edits tests is refused before delivery, so it never reaches the audit as a deviation.
+
 ## Blueprints
 
 `blueprints/default.toml` (name `factory`) is the default SDLC line; `blueprints/hotfix.toml` is a

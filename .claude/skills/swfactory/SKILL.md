@@ -35,13 +35,19 @@ Treat `plan.json` as the typed source (`Plan` schema) and `plan.md` as its rende
 {
   "files": ["src/calc/core.py", "src/calc/__init__.py", "tests/test_core.py"],
   "steps": ["add percent_change to core.py raising ValueError on old == 0", "export it", "add tests"],
-  "tests": ["test_percent_change_increase", "test_percent_change_decrease", "test_percent_change_zero_old"],
+  "tests": [
+    "R2: test_percent_change_increase — percent_change(100, 125) == 0.25",
+    "R4: test_percent_change_decrease — percent_change(200, 150) == -0.25",
+    "R3: test_percent_change_zero_old — percent_change(0, 5) raises ValueError"
+  ],
   "risks": ["float rounding in equality assertions -> use pytest.approx"]
 }
 ```
 
 Make `files` the complete list the diff may touch. Keep `steps` ordered and one commit's worth of
-work each. Name real test functions in `tests`. List risks honestly; `[]` is acceptable.
+work each. Write each `tests` entry as `R<n>: <exact test function name> — <what it proves>`: the
+factory matches the name against the JUnit report and blocks review when a planned test is
+missing, skipped or failing. List risks honestly; `[]` is acceptable.
 
 ## Review
 

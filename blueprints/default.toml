@@ -50,6 +50,7 @@ max_parallel_jobs = 4       # max_active_tis_per_dagrun on stage tasks == concur
 [policy.build]              # optional, per POLICIES key (spec|plan|build|fix|review|diagnose); ADDITIVE ONLY
 extra_allowed_tools = []    # shell access and read-only-stage write escalation are rejected
 # model = "claude-sonnet-4-5"
+# max_turns = 12            # TIGHTEN-ONLY per-stage turn cap; above limits.max_turns is rejected
 # (disallowed_tools / permissions.deny cannot be touched from a blueprint)
 
 [review]

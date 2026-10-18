@@ -75,6 +75,15 @@ class Policy:
     writes: bool = False  # True => install_guard() before the call
     timeout_s: int = 1800
     model: str | None = None
+    # A blueprint's tighten-only ``[policy.<stage>] max_turns``; None keeps ``Config.max_turns``.
+    max_turns: int | None = None
+
+
+def call_max_turns(policy: Policy, cfg: Config) -> int:
+    """The turn cap one call runs under: the run's ``cfg.max_turns``, lowered -- never raised -- by
+    the stage policy. ``stages._agent`` already folds this into the call's ``Config``; every adapter
+    applies it again so a caller that hands an agent a raw policy cannot widen the cap either."""
+    return cfg.max_turns if policy.max_turns is None else min(cfg.max_turns, policy.max_turns)
 
 
 READ_ONLY: tuple[str, ...] = ("Read", "Grep", "Glob")
@@ -167,12 +176,17 @@ def guard_deny_rules(protected: Sequence[str]) -> list[str]:
     return list(dict.fromkeys(rules))
 
 
-def install_guard(sb: Sandbox, protected: Sequence[str]) -> None:
+def install_guard(sb: Sandbox, protected: Sequence[str], *, call: str = "") -> None:
     """Install the PreToolUse guard in factory scratch (idempotent).
 
     ``--restricted`` ignores repository settings; ``--settings`` loads this file explicitly.
     Keeping both files below ignored ``.factory/`` avoids overwriting a target's own
     ``.claude`` configuration.
+
+    ``call`` (``<stage>.<iteration>``) reaches the hook as ``SWF_CALL`` and is written on every
+    decision line, so ``hooks.jsonl`` -- one log per sandbox, shared by every write call -- says
+    WHICH call a refusal belongs to. Without it the adherence audit could only count denials per
+    run, never attribute one to a role.
     """
     settings = {
         "hooks": {
@@ -184,7 +198,7 @@ def install_guard(sb: Sandbox, protected: Sequence[str]) -> None:
             ]
         },
         "permissions": {"deny": guard_deny_rules(protected)},
-        "env": {"SWF_PROTECTED": ":".join(protected)},
+        "env": {"SWF_PROTECTED": ":".join(protected), "SWF_CALL": call},
     }
     sb.write(SETTINGS_DST, json.dumps(settings, indent=2) + "\n")
     sb.write(GUARD_DST, GUARD_SRC.read_text(encoding="utf-8"))
@@ -225,7 +239,7 @@ class ClaudeAgent:
         if policy.disallowed_tools:
             parts.append("--disallowedTools " + " ".join(q(t) for t in policy.disallowed_tools))
         parts += [
-            f"--max-turns {cfg.max_turns}",
+            f"--max-turns {call_max_turns(policy, cfg)}",
             f"--max-budget-usd {cfg.max_budget_usd_per_stage}",
             "--no-session-persistence",
         ]
@@ -254,7 +268,7 @@ class ClaudeAgent:
         prompt_path = _stage_io(sb, issue_id, stage, iteration, prompt)
         out_path = f".factory/agent.{stage}.{iteration}.json"
         if policy.writes:
-            install_guard(sb, protected)
+            install_guard(sb, protected, call=f"{stage}.{iteration}")
         cmd = self.argv(prompt_path=prompt_path, out_path=out_path, policy=policy, schema=schema, cfg=cfg)
         # This distinct path lets srt/docker scope a real model credential to Claude. Gateway/cell
         # providers (islo/toolset) may provision authentication as a cell capability, but lifecycle

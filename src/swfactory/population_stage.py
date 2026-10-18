@@ -44,6 +44,9 @@ CONTROL_FILE = "population-search.json"
 PIN_FILE = "population-search-pin.json"
 REPORT_FILE = "population-execution.json"
 BUDGET_FILE = "population-budget.json"
+# The ledger stage of the whole search campaign's one reservation: money for many trajectories, not
+# one agent call (``metrics.call_efficiency`` leaves it out of ``agent_calls``).
+CAMPAIGN_STAGE = "population_search"
 INFORMATION_BUDGET_FILE = "population-information-budget.json"
 SCHEMA_VERSION = 1
 AUTHORITY = "search-only"
@@ -251,7 +254,7 @@ def _budget_attempt(ctx: Any, spec: PopulationStageSpec) -> tuple[CallLedger, Ca
             f"population search needs a {spec.max_cost_usd:.4f} USD reservation but only {remaining:.4f} USD remains"
         )
     attempt = ledger.reserve(
-        stage="population_search",
+        stage=CAMPAIGN_STAGE,
         iteration=1,
         reserved_usd=spec.max_cost_usd,
     )

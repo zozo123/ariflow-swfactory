@@ -95,6 +95,43 @@ ObservationPack is the cleanest fit because the factory already has host-owned e
 ignored scratch namespace. Stable handles let compute remain disposable while diagnostic identity
 survives.
 
+## Target dialect card and per-stage turn caps
+
+Build and fix calls used to spend Read turns rediscovering facts the host already held (the test
+command, the source and tests directories, the target's conventions file), and the build and fix
+templates told a shell-less agent to run the test command. `stages.target_dialect` now renders
+`prompts/dialect.md` once per run from the cached target contract, a sorted `git ls-files` listing
+of the declared source and tests directories (at most 60 paths plus the total), and which of
+`AGENTS.md` / `CLAUDE.md` exist at the target root. The card says plainly that the agent has no
+shell and that the factory runs the test command after the call. It is stored in host control state
+`target-dialect.md`, so every plan, build, Plan.work node, repair, review-fix, Liquid and fusion
+prompt of the run embeds the same bytes after build commits move HEAD. It is delivered as
+`docs/factory/<id>/dialect.md`. The template is pinned in `accepted_inputs.STAGE_PROMPTS`, so editing
+it fences in-flight epochs like any other prompt.
+
+A blueprint may lower one stage's turn cap with `[policy.<stage>] max_turns`, for example a
+draft-style build budget while review keeps `limits.max_turns`. The override may only tighten: a
+value above `limits.max_turns` refuses to load, and each call runs under
+`min(Config.max_turns, override)` in both the `claude -p --max-turns` argument and an external
+wrapper's `budget.max_turns`. A cap that is too low ends the call as `error_max_turns`, which fails
+the stage closed.
+
+On the Plan.work path, `harness_efficiency.pack_planned_files` also gives each node call a snapshot
+of its declared files, and each repair call a snapshot of the plan's files, framed by the pinned
+`prompts/file_pack.md`. The snapshot is read from git at the HEAD the call starts from, so it holds
+committed bytes only and a retry at the same HEAD sees the same text. Files are taken in sorted
+order, whole, within a 24 KB content budget. New, binary, non-UTF-8, read-denied (`.env*`) and
+over-budget paths are listed with a reason instead of their content. If the local secret classifier
+matches any packed file, the whole pack is refused, and the prompt is then exactly the prompt the
+call had before packing existed. The same happens when nothing fits. The receipt is
+`docs/factory/<id>/harness-file-packs/<sha256>.json`. It records paths, sizes and digests, never
+contents.
+
+`metrics.json` records `agent_calls` (every reserved agent call in the run's call ledger,
+including fusion workers' ledgers; a fusion or population campaign's one budget reservation is
+money, not a call, and is left out) and `model_turns` (the sum of settle receipts' `num_turns`; a call
+whose outcome is unknown adds no turns), so a change that is meant to cut turns has a number to move.
+
 ## Benchmark contract
 
 Do not turn byte savings into a public cost claim. A research run should record, per mechanism and

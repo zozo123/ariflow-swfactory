@@ -188,7 +188,16 @@ def _stage_harness(monkeypatch: Any) -> None:
     monkeypatch.setattr(stages, "_read_or", lambda *_args: "# Spec\n")
     monkeypatch.setattr(stages, "_exclude", lambda *_args: ":!docs/factory/LIQ-1")
     monkeypatch.setattr(stages, "_plan_fidelity", lambda *_args: [])
+    # The requirement trace is the same deterministic code stages.review runs; stubbed like
+    # _plan_fidelity so these tests exercise only the annealing loop around it.
+    monkeypatch.setattr(stages, "_read_json", lambda *_args: None)
+    monkeypatch.setattr(
+        stages, "contract_trace", lambda *_args: stages.ContractTrace([], {}, "CHECKLIST", {"schema_version": 1})
+    )
     monkeypatch.setattr(stages, "_protected", lambda *_args: "tests/")
+    # The host-side fix scope check reads the contract; the stubbed diff (src/a.py) stays in scope.
+    monkeypatch.setattr(stages, "_contract", lambda _ctx: TargetContract(test="pytest", protected=["tests/"]))
+    monkeypatch.setattr(stages, "target_dialect", lambda *_args: "## Target dialect")
     monkeypatch.setattr(stages, "_summary_line", lambda *_args: "relax material defect")
     monkeypatch.setattr(stages, "commit", lambda *_args, **_kwargs: "fixed-head")
     monkeypatch.setattr(
@@ -208,6 +217,33 @@ def _stage_harness(monkeypatch: Any) -> None:
         lambda _ctx, command, **_kwargs: "src/a.py\n" if "--name-only" in command else "diff",
     )
     monkeypatch.setattr(liquid_annealing, "_initial_tests_green", lambda _ctx: True)
+    # The test evidence is current (the stub state holds no record); a stale record is its own test.
+    monkeypatch.setattr(stages, "refresh_test_evidence", lambda *_args: None)
+
+
+def test_a_resumed_annealed_review_on_a_red_stale_head_cannot_crystallize(monkeypatch: Any) -> None:
+    """Same refresh as stages.review: when the evidence did not describe HEAD (an interrupted fix)
+    and the re-run is red, the stage starts with that blocker and with tests not green."""
+    ctx = _Ctx(max_review_fixes=0)
+    _stage_harness(monkeypatch)
+    stale = Finding(
+        severity="blocker", file="tests", title="Tests failing on the head review resumed from", detail="red"
+    )
+    refreshed: list[dict[str, float]] = []
+
+    def refresh(_ctx: Any, numbers: dict[str, float]) -> Finding:
+        refreshed.append(numbers)
+        return stale
+
+    monkeypatch.setattr(stages, "refresh_test_evidence", refresh)
+    monkeypatch.setattr(liquid_annealing, "_round", lambda *_args, **_kwargs: ([], 0, _lanes()))
+    result = liquid_annealing._run_annealed_review(ctx)  # type: ignore[arg-type]
+
+    assert len(refreshed) == 1
+    assert result.status == "blocked" and result.numbers["crystallized"] == 0
+    review = json.loads(ctx.written[f"{ctx.art}/review.json"])
+    assert [item["title"] for item in review["findings"]] == [stale.title]
+    assert review["annealing"]["crystallized"] is False
 
 
 def test_liquid_packs_review_context_once_per_round_and_reuses_it_across_lanes(monkeypatch: Any) -> None:
@@ -286,6 +322,91 @@ def test_stage_relaxes_major_retests_and_crystallizes(monkeypatch: Any) -> None:
     assert review["findings"] == []
     assert [step["state"]["phase"] for step in annealing["trace"]] == ["liquid", "crystal"]
     assert annealing["final"]["crystallized"] is True
+
+
+def test_a_relaxation_that_breaks_the_suite_is_reverted_and_blocks(monkeypatch: Any) -> None:
+    """Liquid reuses stages.fix_and_retest, so it reverts alike: the red relaxation goes back to the
+    pre-fix head, the suite is re-run there, and the round still cannot crystallize -- the
+    reverted-fix blocker keeps the stage blocked and review.json names the reverted commit."""
+    ctx = _Ctx(max_review_fixes=1)
+    _stage_harness(monkeypatch)
+    results = iter(
+        [
+            (SwfTestResult(passed=0, failed=1, exit_code=1), "FAILED test_a"),
+            (SwfTestResult(passed=1, exit_code=0), "ok"),
+        ]
+    )
+    monkeypatch.setattr(stages, "run_tests", lambda *_args: next(results))
+    restored: list[str] = []
+    monkeypatch.setattr(stages, "restore_head", lambda _ctx, head: restored.append(head))
+    major = Finding(severity="major", file="src/a.py", title="material defect", detail="repair me")
+
+    def fake_round(
+        _ctx: Any, *, round_index: int, **_kwargs: Any
+    ) -> tuple[list[Finding], int, list[dict[str, object]]]:
+        return ([major] if round_index == 0 else []), 0, _lanes()
+
+    monkeypatch.setattr(liquid_annealing, "_round", fake_round)
+    result = liquid_annealing._run_annealed_review(ctx)  # type: ignore[arg-type]
+
+    assert restored == ["head"]
+    assert result.status == "blocked" and result.numbers["reverted_fixes"] == 1
+    assert result.numbers["tests_passed"] == 1 and result.numbers["tests_failed"] == 0  # the restored head
+    review = json.loads(ctx.written[f"{ctx.art}/review.json"])
+    (row,) = review["reverted_fixes"]
+    assert row["reverted_sha"] == "fixed-head" and row["restored_head"] == "head" and row["agent_call"] == "fix.5"
+    (blocker,) = [item for item in review["findings"] if item["severity"] == "blocker"]
+    assert blocker["title"] == "Review fix 1 reverted: it broke the suite" and "fixed-head" in blocker["detail"]
+
+
+def test_annealed_review_carries_the_requirement_trace(monkeypatch: Any) -> None:
+    """The liquid line renders the same review template, so it gets the same contract checklist
+    and the same code-decided acceptance-test blockers, and commits trace.json beside review.json."""
+    ctx = _Ctx(max_review_fixes=0)
+    _stage_harness(monkeypatch)
+    blocker = Finding(
+        severity="blocker",
+        file="tests",
+        title="Acceptance test missing: test_decrease",
+        detail="R4 is planned to be proven by `test_decrease`, but the JUnit report has no such test case.",
+    )
+    record = {"schema_version": 1, "head": "head", "evidence": "junit", "requirements": []}
+    monkeypatch.setattr(
+        stages,
+        "contract_trace",
+        lambda *_args: stages.ContractTrace([blocker], {"missing_acceptance_tests": 1.0}, "- [missing] R4", record),
+    )
+    checklists: list[str] = []
+
+    def fake_round(_ctx: Any, *, checklist: str, **_kwargs: Any) -> tuple[list[Finding], int, list[dict[str, object]]]:
+        checklists.append(checklist)
+        return [], 0, _lanes()
+
+    monkeypatch.setattr(liquid_annealing, "_round", fake_round)
+    result = liquid_annealing._run_annealed_review(ctx)  # type: ignore[arg-type]
+
+    assert checklists == ["- [missing] R4"]
+    assert result.status == "blocked" and result.numbers["blockers"] == 1
+    assert result.numbers["missing_acceptance_tests"] == 1
+    assert f"{ctx.art}/trace.json" in result.artifacts
+    assert json.loads(ctx.written[f"{ctx.art}/trace.json"]) == record
+    review = json.loads(ctx.written[f"{ctx.art}/review.json"])
+    assert [f["title"] for f in review["findings"]] == ["Acceptance test missing: test_decrease"]
+
+
+def test_liquid_review_prompt_places_the_checklist_after_the_diff(monkeypatch: Any) -> None:
+    monkeypatch.setattr(stages, "_review_policy", lambda _ctx: "# liquid policy")
+    ctx = SimpleNamespace(issue=SimpleNamespace(id="LIQ-1"))
+    prompt = liquid_annealing._review_prompt(
+        ctx,  # type: ignore[arg-type]
+        lane="risk",
+        spec="SPEC",
+        plan="PLAN",
+        diff="DIFF-BODY",
+        checklist="- [passed] R1: CHECK-ROW",
+    )
+    assert prompt.index("## Diff under review") < prompt.index("DIFF-BODY") < prompt.index("## Contract checklist")
+    assert prompt.index("## Contract checklist") < prompt.index("CHECK-ROW") < prompt.index("## Output")
 
 
 def test_exhausted_major_blocks_even_without_a_review_blocker(monkeypatch: Any) -> None:

@@ -16,6 +16,15 @@ add passes, do not soften severities, do not review `docs/factory/**` artifacts 
 ## Diff under review
 {diff}
 
+## Contract checklist
+Every requirement of the spec, with the status of the acceptance tests the plan maps to it, read by
+the factory from the JUnit report for the HEAD under review: `passed`, `failed`, `skipped`,
+`missing` (no such test ran), `unverified` (no per-test evidence for this HEAD) or `untested` (the
+plan maps no test to it). The factory already records a blocker for every planned acceptance test
+that is not `passed`. Check the diff above against EVERY requirement below, whatever its status,
+and cite each requirement the change does not meet as a finding whose title starts with its R-id.
+{checklist}
+
 ## Output
 Return ONLY the JSON object defined by the policy's output contract: `verdict` and `findings`,
 each finding with `severity`, `file`, `line`, `title`, `detail`. `verdict` is
