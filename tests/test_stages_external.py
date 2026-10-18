@@ -98,12 +98,17 @@ def test_external_executable_builds_repairs_and_delivers(external_run) -> None:
     assert report.unreconciled_cost_usd == 0
     # These are the real target subprocess runs and freshly parsed reports, including a failed
     # first build. A success string from the external executable cannot supply this evidence.
-    first, first_xml = observations[0]
-    repaired, repaired_xml = observations[1]
+    # The first is setup's replay of the base suite, which the delivery regression guard holds
+    # the candidate to: the three demo tests, all green, before any agent touched the tree.
+    base, base_xml = observations[0]
+    first, first_xml = observations[1]
+    repaired, repaired_xml = observations[2]
+    assert base.ok and base.passed == 3 and "<failure" not in base_xml
     assert first.report_valid and not first.ok and first.failed == 2
     assert repaired.report_valid and repaired.ok and repaired.passed == 7
     assert first_xml != repaired_xml and "<failure" in first_xml and "<failure" not in repaired_xml
-    assert all(result.ok for result, _ in observations[1:])
+    assert all(result.ok for result, _ in observations[2:])
+    assert next(s for s in report.stages if s.stage == "deliver").numbers["regressions"] == 0
     art = tmp / "work" / ART
     assert "return (new - old) / old" in (tmp / "work" / "src" / "calc" / "core.py").read_text()
     assert sorted(path.name for path in (art / "agent").glob("*.json")) == [

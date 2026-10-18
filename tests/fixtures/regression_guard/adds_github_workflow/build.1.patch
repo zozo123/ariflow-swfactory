@@ -1,0 +1,63 @@
+# regression-guard fixture: demo build.1 with the sign right, plus a build that adds a workflow under the protected .github/ directory
+diff --git a/src/calc/__init__.py b/src/calc/__init__.py
+--- a/src/calc/__init__.py
++++ b/src/calc/__init__.py
+@@ -1,5 +1,5 @@
+ """calc: tiny finance helpers (demo target for the software factory)."""
+ 
+-from calc.core import compound, simple_interest
++from calc.core import compound, percent_change, simple_interest
+ 
+-__all__ = ["compound", "simple_interest"]
++__all__ = ["compound", "percent_change", "simple_interest"]
+diff --git a/src/calc/core.py b/src/calc/core.py
+--- a/src/calc/core.py
++++ b/src/calc/core.py
+@@ -14,3 +14,13 @@ def compound(principal: float, rate: float, years: int, periods_per_year: int =
+         raise ValueError("invalid arguments")
+     n = periods_per_year
+     return principal * (1 + rate / n) ** (n * years)
++
++
++def percent_change(old: float, new: float) -> float:
++    """Return the relative change from ``old`` to ``new`` as a fraction (0.25 == +25%).
++
++    Raises ``ValueError`` when ``old`` is zero: the change is undefined.
++    """
++    if old == 0:
++        raise ValueError("old must be non-zero")
++    return (new - old) / old
+diff --git a/tests/test_percent_change.py b/tests/test_percent_change.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_percent_change.py
+@@ -0,0 +1,21 @@
++import pytest
++
++import calc
++from calc import percent_change
++
++
++def test_exported():
++    assert "percent_change" in calc.__all__
++
++
++def test_increase():
++    assert percent_change(100, 125) == pytest.approx(0.25)
++
++
++def test_decrease():
++    assert percent_change(200, 150) == pytest.approx(-0.25)
++
++
++def test_zero_old_raises():
++    with pytest.raises(ValueError):
++        percent_change(0, 5)
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,3 @@
++name: ci
++on: push
++jobs: {}

@@ -15,7 +15,7 @@ from swfactory.agent import ScriptedAgent, render_prompt
 from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
 from swfactory.blueprint import load
 from swfactory.cli import execute
-from swfactory.models import RunReport
+from swfactory.models import RunReport, StageError
 from swfactory.stages import (
     contract_checklist,
     coverage_table,
@@ -384,9 +384,19 @@ def test_stale_junit_evidence_blocks_review(tmp_path: Path, monkeypatch: pytest.
         return result
 
     monkeypatch.setattr(stages, "run_tests", stale)
-    report, art = _run(tmp_path, [DEMO])
-    blocker = _blocked_by(report, art, "No per-test JUnit evidence for the reviewed HEAD")
+    # Review blocks on the stale trace; deliver's regression guard then refuses outright, since the
+    # same stale record cannot vouch for what would be published (not even as a [BLOCKED] PR).
+    with pytest.raises(StageError, match="candidate test evidence is stale") as error:
+        _run(tmp_path, [DEMO])
+    assert error.value.kind == "policy"
+    art = tmp_path / "work" / ART
+    log = [json.loads(line) for line in (tmp_path / "run" / "state" / "stages.jsonl").read_text().splitlines()]
+    assert [(row["stage"], row["status"]) for row in log][-2:] == [("review", "blocked"), ("deliver", "failed")]
+    review = json.loads((art / "review.json").read_text())
+    (blocker,) = [f for f in review["findings"] if f["severity"] == "blocker"]
+    assert blocker["title"] == "No per-test JUnit evidence for the reviewed HEAD"
     assert "4 acceptance test(s)" in blocker["detail"]
+    assert not (tmp_path / "run" / "pr.md").exists()
     trace = json.loads((art / "trace.json").read_text())
     assert trace["evidence"] == "missing"
     assert {r["status"] for r in trace["requirements"]} == {"unverified", "untested"}
