@@ -272,12 +272,14 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
         if line.strip()
     )
     risky_files = _risk_count(changed)
-    tests_green = _initial_tests_green(ctx)
-    tests_blocker: Finding | None = None
     reverted: list[dict[str, object]] = []
     previous_signature: tuple[tuple[str, str, int | None, str], ...] = ()
     trace: list[dict[str, object]] = []
     numbers: dict[str, float] = {}
+    # A resumed review may hold evidence for another commit (an interrupted fix); same rule as
+    # stages.review, so deliver never meets a stale record.
+    tests_blocker: Finding | None = stages.refresh_test_evidence(ctx, numbers)
+    tests_green = _initial_tests_green(ctx) and tests_blocker is None
     fixes = 0
     dropped = 0
     final_findings: list[Finding] = []

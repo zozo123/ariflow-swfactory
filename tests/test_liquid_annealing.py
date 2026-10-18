@@ -217,6 +217,33 @@ def _stage_harness(monkeypatch: Any) -> None:
         lambda _ctx, command, **_kwargs: "src/a.py\n" if "--name-only" in command else "diff",
     )
     monkeypatch.setattr(liquid_annealing, "_initial_tests_green", lambda _ctx: True)
+    # The test evidence is current (the stub state holds no record); a stale record is its own test.
+    monkeypatch.setattr(stages, "refresh_test_evidence", lambda *_args: None)
+
+
+def test_a_resumed_annealed_review_on_a_red_stale_head_cannot_crystallize(monkeypatch: Any) -> None:
+    """Same refresh as stages.review: when the evidence did not describe HEAD (an interrupted fix)
+    and the re-run is red, the stage starts with that blocker and with tests not green."""
+    ctx = _Ctx(max_review_fixes=0)
+    _stage_harness(monkeypatch)
+    stale = Finding(
+        severity="blocker", file="tests", title="Tests failing on the head review resumed from", detail="red"
+    )
+    refreshed: list[dict[str, float]] = []
+
+    def refresh(_ctx: Any, numbers: dict[str, float]) -> Finding:
+        refreshed.append(numbers)
+        return stale
+
+    monkeypatch.setattr(stages, "refresh_test_evidence", refresh)
+    monkeypatch.setattr(liquid_annealing, "_round", lambda *_args, **_kwargs: ([], 0, _lanes()))
+    result = liquid_annealing._run_annealed_review(ctx)  # type: ignore[arg-type]
+
+    assert len(refreshed) == 1
+    assert result.status == "blocked" and result.numbers["crystallized"] == 0
+    review = json.loads(ctx.written[f"{ctx.art}/review.json"])
+    assert [item["title"] for item in review["findings"]] == [stale.title]
+    assert review["annealing"]["crystallized"] is False
 
 
 def test_liquid_packs_review_context_once_per_round_and_reuses_it_across_lanes(monkeypatch: Any) -> None:

@@ -91,8 +91,14 @@ def test_the_card_states_the_contract_the_layout_and_that_the_agent_has_no_shell
     assert _line(card, "Source directory") == "- Source directory: `src/`"
     assert _line(card, "Tests directory").startswith("- Tests directory: `tests/` (writable while building;")
     # The build-time protected set: the tests dir is described by its own line, never listed as
-    # protected in the same card that calls it writable.
-    assert _line(card, "Protected paths (edits are blocked)") == "- Protected paths (edits are blocked): `factory.toml`"
+    # protected in the same card that calls it writable. It is the set deliver enforces (the
+    # target's list plus FIXED_PROTECTED), so CLAUDE.md -- a conventions file to read -- is listed
+    # as protected too: reading it is expected, editing it is refused.
+    from swfactory.campaign_fusion import FIXED_PROTECTED
+
+    declared = ", ".join(f"`{path}`" for path in dict.fromkeys(("factory.toml", *FIXED_PROTECTED)))
+    assert _line(card, "Protected paths (edits are blocked)") == f"- Protected paths (edits are blocked): {declared}"
+    assert "`CLAUDE.md`" in declared and "`AGENTS.md`" in declared and "`tests/`" not in declared
     assert _line(card, "Conventions files at the target root") == (
         "- Conventions files at the target root: `CLAUDE.md` (read before editing)"
     )

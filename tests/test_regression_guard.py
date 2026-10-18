@@ -17,7 +17,7 @@ from swfactory.agent import ScriptedAgent
 from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
 from swfactory.blueprint import load
 from swfactory.cli import execute
-from swfactory.models import RunReport, StageError
+from swfactory.models import RunReport, StageError, StageResult
 from swfactory.models import TestResult as SuiteResult  # not collected as a test class
 from swfactory.runtime import ctx_for
 from swfactory.stages import BASE_TESTS, JUNIT_CASES, regression_findings
@@ -84,6 +84,7 @@ def _result(passed: int, *, valid: bool = True) -> SuiteResult:
 
 
 BASE = {"base": "b" * 40, "report_valid": True, "passed": 3, "passing": ["s::a", "s::b", "s::c"]}
+NO_CANDIDATE_IDS = "Regression guard: the delivered head's report carries no unique per-test ids"
 
 
 @pytest.mark.parametrize(
@@ -137,13 +138,23 @@ BASE = {"base": "b" * 40, "report_valid": True, "passed": 3, "passing": ["s::a",
             id="fallback-both-summary-only-fewer",
         ),
         pytest.param({**BASE, "passing": None}, None, _result(3), [], id="fallback-both-summary-only-equal"),
+        # Stronger than the count fallback this used to take: a base with ids cannot be confirmed
+        # against a candidate without them, however many tests the candidate passes.
         pytest.param(
             BASE,
             None,
             _result(2),
-            ["Regression guard: 1 fewer passing test(s) than the base"],
-            id="fallback-candidate-has-no-ids",
+            [NO_CANDIDATE_IDS],
+            id="candidate-without-ids-fewer",
         ),
+        pytest.param(
+            BASE,
+            None,
+            _result(5),
+            [NO_CANDIDATE_IDS],
+            id="candidate-without-ids-cannot-hide-a-deleted-test-behind-more-passing",
+        ),
+        pytest.param({**BASE, "passing": [], "passed": 0}, None, _result(1), [], id="base-passed-nothing-by-id"),
         pytest.param(
             {**BASE, "passing": None},
             {"s::x": "passed", "s::y": "passed", "s::z": "passed", "s::w": "passed"},
@@ -153,6 +164,13 @@ BASE = {"base": "b" * 40, "report_valid": True, "passed": 3, "passing": ["s::a",
         ),
         pytest.param(
             BASE,
+            None,
+            _result(3, valid=False),
+            [NO_CANDIDATE_IDS],
+            id="invalid-candidate-report-confirms-nothing",
+        ),
+        pytest.param(
+            {**BASE, "passing": None},
             None,
             _result(3, valid=False),
             ["Regression guard: 3 fewer passing test(s) than the base"],
@@ -398,3 +416,130 @@ def test_a_rename_out_of_a_protected_path_is_still_a_change_to_it(tmp_path: Path
         stages._assert_unprotected_delivery(ctx, base)
     assert error.value.kind == "policy"
     assert str(error.value) == "[policy] delivered diff touches protected path(s): CLAUDE.md"
+
+
+def test_a_candidate_whose_report_lost_its_unique_ids_cannot_hide_a_deleted_test(tmp_path: Path) -> None:
+    """The build deletes a base-passing test and adds two cases sharing one JUnit id, so the
+    candidate's report has no usable ids and more tests pass than on the base. Counts alone would
+    publish it green; the base recorded ids, so the guard refuses to judge by counts. (Review's
+    requirement trace has no per-test evidence either and blocks too; no fix round is scripted.)"""
+    bp, cfg = _config(tmp_path)
+    cfg = cfg.model_copy(update={"max_review_fixes": 0})
+    agent = ScriptedAgent([GUARD / "duplicate_ids", DEMO])
+    report = execute(cfg, run_dir=tmp_path / "run", agent=agent, blueprint=bp)
+    by = {s.stage: s for s in report.stages}
+    assert by["build_and_test"].status == "ok" and by["build_and_test"].numbers["tests_passed"] == 1
+    assert by["deliver"].status == "blocked" and by["deliver"].numbers["regressions"] == 1
+    regression = _regression(tmp_path)
+    assert regression["mode"] == "unconfirmed"
+    assert regression["candidate_passed"] > regression["base_passed"] == 3  # counts alone would pass
+    assert [f["title"] for f in regression["findings"]] == [NO_CANDIDATE_IDS]
+    pr = (tmp_path / "run" / "pr.md").read_text()
+    assert pr.startswith("# [BLOCKED] DEMO-1:") and NO_CANDIDATE_IDS in pr
+
+
+def test_a_failed_base_measurement_is_not_saved_as_an_empty_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The base holds tests, but its run left no valid report (a timeout, a lost download): an
+    invalid report is a failed measurement, not a base that passed nothing. Saved as zero it would
+    turn the guard off for the whole run, so setup fails retryable and measures again."""
+    real = stages.run_tests
+
+    def lost_report(ctx: stages.Ctx):
+        return SuiteResult(exit_code=124, report_valid=False), "timed out before JUnit was written"
+
+    monkeypatch.setattr(stages, "run_tests", lost_report)
+    with pytest.raises(StageError, match="left no valid JUnit report although `tests` holds tests") as error:
+        stages.setup(_ctx(tmp_path))
+    assert error.value.kind == "sandbox" and error.value.retryable is True
+    assert not (tmp_path / "run" / "state" / BASE_TESTS).exists()
+
+    monkeypatch.setattr(stages, "run_tests", real)
+    ctx = _ctx(tmp_path)
+    stages.setup(ctx)  # the retry measures the base for real
+    assert json.loads(ctx.state.read_control(BASE_TESTS))["passing"] == BASE_PASSING
+
+
+def _break_the_sign(tmp_path: Path) -> None:
+    core = tmp_path / "work" / "src" / "calc" / "core.py"
+    text = core.read_text()
+    assert "return (new - old) / old" in text
+    core.write_text(text.replace("return (new - old) / old", "return (old - new) / old"))
+
+
+def test_a_resumed_review_re_establishes_stale_test_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A review fix X was committed and tested, then reverted, and the worker died while the
+    restored head was being re-tested: the evidence names X, not HEAD. The re-run review re-tests
+    HEAD instead of leaving deliver to refuse the stale record on every retry."""
+    _run(tmp_path)
+    ctx = _ctx(tmp_path)
+    before = stages._workspace_head(ctx)
+    _break_the_sign(tmp_path)
+    fixed = stages.commit(ctx, stage="fix", msg="fix: a review fix that breaks the sign")
+    tested, _ = stages.run_tests(ctx)
+    assert not tested.ok and json.loads(ctx.state.read_control(JUNIT_CASES))["head"] == fixed
+    stages.restore_head(ctx, before)  # ... and the worker dies before the restored head is re-tested
+    with pytest.raises(StageError, match="candidate test evidence is stale"):
+        stages.deliver(_ctx(tmp_path))
+
+    # The killed review left no completed record, so the operator's re-run executes it again.
+    ctx.state.append_json(stages.RUN_STAGES_LOG, StageResult(stage="review", status="failed").model_dump(mode="json"))
+    calls: list[str] = []
+    real = stages.run_tests
+
+    def counting(ctx: stages.Ctx):
+        calls.append(stages._workspace_head(ctx))
+        return real(ctx)
+
+    monkeypatch.setattr(stages, "run_tests", counting)
+    reviewed = stages.review(_ctx(tmp_path))
+    assert reviewed.status == "ok" and reviewed.numbers["tests_passed"] == 1.0
+    assert calls == [before]
+    assert json.loads(ctx.state.read_control(JUNIT_CASES))["head"] == before
+    assert stages.refresh_test_evidence(_ctx(tmp_path), {}) is None and calls == [before]  # current: no re-run
+    assert stages.deliver(_ctx(tmp_path)).status == "ok"
+
+
+def test_a_stale_head_that_is_red_is_a_review_blocker(tmp_path: Path) -> None:
+    """The kill landed between a fix commit and its first test run: HEAD is the untested fix. The
+    re-tested head is red, so the review cannot end ok on it."""
+    _run(tmp_path)
+    ctx = _ctx(tmp_path)
+    _break_the_sign(tmp_path)
+    head = stages.commit(ctx, stage="fix", msg="fix: committed, never tested")
+    numbers: dict[str, float] = {}
+    blocker = stages.refresh_test_evidence(ctx, numbers)
+    assert blocker is not None and blocker.severity == "blocker"
+    assert blocker.title == "Tests failing on the head review resumed from"
+    assert numbers["tests_passed"] == 0.0
+    assert json.loads(ctx.state.read_control(JUNIT_CASES))["head"] == head
+
+
+def test_the_run_declares_the_protected_set_it_enforces(tmp_path: Path) -> None:
+    """Deliver refuses ``FIXED_PROTECTED`` plus the target's build list; the dialect card and the
+    prompts name that same set, so no refusal arrives unannounced after every call is paid for."""
+    from swfactory.campaign_fusion import FIXED_PROTECTED
+
+    ctx = _ctx(tmp_path)
+    stages.setup(ctx)
+    card = stages.target_dialect(ctx)
+    (line,) = [row for row in card.splitlines() if row.startswith("- Protected paths")]
+    for path in ("AGENTS.md", "CLAUDE.md", "REVIEW_LIQUID.md", ".gitmodules", "factory.toml"):
+        assert f"`{path}`" in line
+    declared = stages.declared_protected(stages._contract(ctx), "build")
+    assert set(FIXED_PROTECTED) <= set(declared) and "tests" not in declared
+    assert "tests" in stages.declared_protected(stages._contract(ctx), "fix")
+    for stage in ("plan", "build", "fix"):
+        assert "AGENTS.md" in stages._protected(ctx, stage) and "CLAUDE.md" in stages._protected(ctx, stage)
+
+
+def test_a_plan_that_lists_a_protected_path_is_refused_before_build(tmp_path: Path) -> None:
+    with pytest.raises(StageError) as error:
+        _run(tmp_path, "plans_agents_md")
+    assert error.value.kind == "policy"
+    assert str(error.value) == "[policy] plan lists protected path(s) the run may not change: AGENTS.md"
+    log = [json.loads(line) for line in (tmp_path / "run" / "state" / "stages.jsonl").read_text().splitlines()]
+    assert (log[-1]["stage"], log[-1]["status"]) == ("plan", "failed")
+    assert "build_and_test" not in {row["stage"] for row in log}
+    assert _factory_branches(tmp_path) == []

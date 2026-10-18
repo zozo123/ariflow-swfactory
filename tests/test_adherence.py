@@ -639,6 +639,27 @@ def test_a_read_only_call_that_writes_a_file_is_refused_after_its_cost_is_settle
     assert record.settled_usd == 0.0 and record.receipt["worktree_unchanged"] is False
 
 
+def test_the_read_only_hold_outlives_the_call_until_the_tree_is_restored(tmp_path: Path) -> None:
+    """The refusal is durable: a re-run of plan would fingerprint a tree that already holds the edit
+    and pass, and the next write stage's ``git add -A`` would commit it. Every later call -- the
+    re-run and a write role alike -- is refused before any money is reserved, until the tree is
+    back to what the violating call found."""
+    ctx = _hold_ctx(tmp_path, {"src/extra.py": "B = 2\n"})
+    with pytest.raises(StageError, match=r"plan\.1 \(read-only\) changed the worktree"):
+        stages._agent(ctx, "plan", 1, "p", None)
+    assert ctx.state.has_control(stages.READONLY_HOLD)
+    ctx.agent = _Writer(tmp_path / "work", {})  # type: ignore[assignment]  # the re-run edits nothing
+    for stage in ("plan", "build"):
+        with pytest.raises(StageError, match=r"plan\.1 \(read-only\) changed the worktree and the change is still"):
+            stages._agent(ctx, stage, 1, "p", None)
+    assert len(CallLedger(ctx.state).records()) == 1, "a held call reserves nothing"
+
+    (tmp_path / "work" / "src" / "extra.py").unlink()  # an operator restores the tree
+    stages._agent(ctx, "plan", 1, "p", None)
+    assert not ctx.state.has_control(stages.READONLY_HOLD)
+    assert CallLedger(ctx.state).records()[-1].receipt["worktree_unchanged"] is True
+
+
 def test_a_read_only_call_that_edits_an_already_dirty_file_is_refused(tmp_path: Path) -> None:
     """The fingerprint covers content, not just porcelain state: setup may leave uv.lock modified,
     and a second edit to it changes no status letter."""

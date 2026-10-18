@@ -267,7 +267,7 @@ def target_dialect(ctx: Ctx) -> str:
             tests_dir=_md_code(f"{contract.tests_dir}/"),
             # The build-time set: the tests dir's fix-time protection is the card's own tests line,
             # and listing it here too would contradict "writable while building".
-            protected=", ".join(_md_code(path) for path in protected_for(contract, "build")),
+            protected=", ".join(_md_code(path) for path in declared_protected(contract, "build")),
             conventions=(
                 ", ".join(_md_code(name) for name in conventions) + " (read before editing)" if conventions else ""
             ),
@@ -576,6 +576,7 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
     # fingerprinted like every other read-only call.
     mount_held = external and not policy.writes and isinstance(ctx.sb, DockerSandbox)
     fingerprinted = not policy.writes and not mount_held
+    _assert_readonly_hold(ctx)
     before = _worktree_fingerprint(ctx) if fingerprinted else None
     # Reserve BEFORE the provider can be paid. Everything after this line may be lost to a kill;
     # this row is what makes the next process account for a call it never saw answer.
@@ -702,6 +703,12 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
     else:
         ledger.settle(attempt, cost_usd=res.cost_usd, receipt=receipt)
         ctx.spent_usd += res.cost_usd
+    if unchanged is False:
+        # Durable before anything else can raise: the refusal below is a one-shot, and a re-run of
+        # the stage would fingerprint a tree that already holds the edit and pass.
+        ctx.state.write_control(
+            READONLY_HOLD, json.dumps({"call": f"{stage}.{iteration}", "restore": before}, sort_keys=True) + "\n"
+        )
     if ctx.spent_usd > ctx.cfg.max_budget_usd:
         raise StageError(
             "policy",
@@ -732,7 +739,8 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         raise hold_error
     if unchanged is False:
         # Fail closed like `_ensure_clean`. The edit stays in place as evidence: the settle receipt
-        # above says `worktree_unchanged: false`, which the adherence audit reports as deviant.
+        # above says `worktree_unchanged: false`, which the adherence audit reports as deviant, and
+        # READONLY_HOLD keeps every later call refused until the tree is restored.
         raise StageError("policy", f"{stage}.{iteration} (read-only) changed the worktree")
     if res.is_error:
         raise StageError("agent", f"{stage}.{iteration} failed: {res.subtype}: {res.text[-800:]}")
@@ -758,6 +766,35 @@ _FINGERPRINT = (
 # Settle-receipt value of ``worktree_hold`` for a read-only call held by a read-only checkout mount
 # (external agent in a Docker cell) instead of the before/after fingerprint.
 READ_ONLY_MOUNT = "read-only mount"
+# Control record of a read-only call that changed the worktree: ``{call, restore}``, where
+# ``restore`` is the fingerprint of the tree that call found.
+READONLY_HOLD = "readonly-hold.json"
+
+
+def _assert_readonly_hold(ctx: Ctx) -> None:
+    """Keep refusing every agent call while a read-only call's edit is still in the tree.
+
+    The refusal in ``_agent`` alone is one-shot: a re-run of the stage fingerprints a tree that
+    already holds the edit, sees no change, and the next write stage's ``git add -A`` commits it
+    under a role that never made it. The hold lifts itself once the tree is back to the
+    fingerprint the violating call found (an operator restored it); an unreadable record stays a
+    refusal.
+    """
+    if not ctx.state.has_control(READONLY_HOLD):
+        return
+    try:
+        record = json.loads(ctx.state.read_control(READONLY_HOLD))
+        call, restore = str(record["call"]), record["restore"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise StageError("policy", f"read-only hold record is invalid: {error}") from error
+    if _worktree_fingerprint(ctx) == restore:
+        ctx.state.clear_control(READONLY_HOLD)
+        return
+    raise StageError(
+        "policy",
+        f"{call} (read-only) changed the worktree and the change is still there; restore the tree "
+        "that call found before any further agent call (the hold lifts once it matches)",
+    )
 
 
 def _worktree_fingerprint(ctx: Ctx) -> str | None:
@@ -793,8 +830,22 @@ def _policy(ctx: Ctx, stage: str) -> Policy:
     )
 
 
+def declared_protected(contract: TargetContract, stage: str) -> list[str]:
+    """The one protected set a run both declares and enforces for ``stage``.
+
+    The target's ``protected_for`` list plus ``campaign_fusion.FIXED_PROTECTED`` (the agent and
+    review instructions, CI, the factory's own state): the same rules deliver's
+    ``_assert_unprotected_delivery`` refuses and ``replica_fusion.scope`` holds fusion children to.
+    The prompts, the dialect card and the plan check render this set, so no path is refused at
+    delivery, after every agent call is paid for, that the run never named as protected.
+    """
+    from swfactory.campaign_fusion import FIXED_PROTECTED  # fusion builds on this module
+
+    return list(dict.fromkeys((*protected_for(contract, stage), *FIXED_PROTECTED)))
+
+
 def _protected(ctx: Ctx, stage: str) -> str:
-    return ", ".join(protected_for(_contract(ctx), stage)) or "(none)"
+    return ", ".join(declared_protected(_contract(ctx), stage)) or "(none)"
 
 
 def _workspace_head(ctx: Ctx) -> str:
@@ -1323,16 +1374,33 @@ def _record_base_tests(ctx: Ctx, base: str, head: str) -> None:
     deletes, skips or breaks a test the base passed cannot publish as green. Recorded once per run:
     a setup retry or a resumed run finds the record and never re-runs the suite. Only measurable
     while the checkout still IS the base; a run that progressed without one (it predates the guard)
-    is refused at delivery rather than measured against a candidate standing in for the base. A
-    base with no valid report records an explicit empty baseline -- a new project legitimately has
-    no tests, and nothing then exists that a candidate could regress.
+    is refused at delivery rather than measured against a candidate standing in for the base.
+
+    A base with no valid report records an explicit empty baseline only when git tracks nothing
+    under the tests dir at the base -- a new project legitimately has no tests, and nothing then
+    exists that a candidate could regress. When the base does hold tests, an invalid report means
+    the measurement failed (a timeout, a lost crabbox lease or download, a crash before JUnit was
+    written), not that the base passed nothing: saved, it would be a permanent zero no candidate can
+    fall below, turning the guard off for the whole run. Nothing is recorded then, and setup fails
+    retryable so the next attempt measures again.
     """
     if ctx.state.has_control(BASE_TESTS) or head != base:
         return
     # What is measured must be the base commit itself, not the base plus whatever provisioning
     # (a dependency sync rewriting a stale lockfile) left in the tree; ``run_tests`` re-checks after.
     _ensure_clean(ctx, "setup before the base test run", allow_artifacts=True)
-    result, _output = run_tests(ctx)
+    result, output = run_tests(ctx)
+    if not result.report_valid:
+        tests_dir = _contract(ctx).tests_dir
+        tracked = _sh(ctx, f"git ls-tree -r --name-only {shlex.quote(base)} -- {shlex.quote(tests_dir)}")
+        if tracked.strip():
+            raise StageError(
+                "sandbox",
+                f"the base suite left no valid JUnit report although `{tests_dir}` holds tests at base "
+                f"{base[:12]} (exit code {result.exit_code}); the regression guard's baseline was not "
+                f"recorded, and a retry of setup measures it again. Tail:\n{output[-1500:]}",
+                retryable=True,
+            )
     cases = junit_cases_for(ctx, base)
     passing = sorted(case for case, outcome in cases.items() if outcome == "passed") if cases is not None else None
     record = {
@@ -1471,6 +1539,13 @@ def plan(ctx: Ctx) -> StageResult:
     )
     res = _agent(ctx, "plan", 1, prompt, Plan)
     p = Plan.model_validate(res.data)
+    # Refused here, before build is paid for, rather than at delivery: a plan that names a
+    # protected file can only end in a diff `_assert_unprotected_delivery` refuses.
+    from swfactory.campaign_fusion import _is_protected  # fusion builds on this module
+
+    rules = declared_protected(_contract(ctx), "build")
+    if hit := sorted({f.strip() for f in p.files if _is_protected(f.strip().removeprefix("./"), rules)}):
+        raise StageError("policy", f"plan lists protected path(s) the run may not change: {', '.join(hit[:20])}")
     md = p.to_markdown(ctx.issue.id)
     ctx.write_artifact(md_path, md)
     ctx.write_artifact(json_path, _dumps(p.model_dump()))
@@ -1890,11 +1965,31 @@ def regression_findings(
     regression (the review and the build loop own those). Deleting, renaming, skipping or
     deselecting a test therefore cannot read as green, however many trivial tests replace it.
 
-    Without ids on either side (a summary-only report) the only honest comparison is the count:
-    fewer passing tests than the base is one blocker. An invalid candidate report passed nothing.
+    When the base recorded ids but the candidate's report carries none (summary-only, invalid, or
+    two cases sharing one id), the base-passing tests cannot be confirmed one by one, and a count
+    would let a deleted test hide behind added ones: that is one blocker, whatever the counts say.
+    Only a base without ids (a summary-only report, or no tests at all) falls back to the count,
+    where fewer passing tests than the base is one blocker. An invalid candidate report passed
+    nothing.
     """
     passing = base.get("passing")
     short = str(base.get("base") or "")[:12]
+    candidate_passed = candidate_result.passed if candidate_result.report_valid else 0
+    if passing and candidate_cases is None:
+        return [
+            Finding(
+                severity="blocker",
+                file=tests_dir,
+                title="Regression guard: the delivered head's report carries no unique per-test ids",
+                detail=(
+                    f"The base revision {short} recorded {len(passing)} passing test id(s); the delivered "
+                    f"head's JUnit report names none it can be matched against (summary-only, invalid, or "
+                    f"two cases sharing one id) and passed {candidate_passed}. Whether every base-passing "
+                    "test still passes cannot be confirmed, and a count would let a deleted test hide behind "
+                    "added ones: give every test case a unique id (deterministic guard, no model call)."
+                ),
+            )
+        ]
     if passing is not None and candidate_cases is not None:
         regressed = [
             (case, _REGRESSED.get(outcome, f"now reports {outcome}"))
@@ -1915,7 +2010,6 @@ def regression_findings(
             for case, how in regressed
         ]
     base_passed = int(base.get("passed") or 0)
-    candidate_passed = candidate_result.passed if candidate_result.report_valid else 0
     if candidate_passed >= base_passed:
         return []
     return [
@@ -1959,6 +2053,46 @@ def _tests_blocker(ctx: Ctx, tr: TestResult, output: str) -> Finding:
         detail=(
             f"exit code {tr.exit_code}; failed={tr.failed} errors={tr.errors}. The review fix "
             f"must keep the suite green. Tail:\n{output[-1500:]}"
+        ),
+    )
+
+
+def refresh_test_evidence(ctx: Ctx, numbers: dict[str, float]) -> Finding | None:
+    """Re-run the suite when the last run (``JUNIT_CASES``) does not describe HEAD's code.
+
+    A review fix killed between its commit and its test run, or between ``restore_head`` and the
+    re-test of the restored head, leaves the record naming another commit. Neither review nor
+    deliver otherwise re-runs the suite on resume, so deliver's ``_tested_record`` would refuse
+    that run as stale on every retry and it could never publish. Every review line calls this
+    first: None when the evidence is current (same rule as ``_tested_record``) or the re-run is
+    green; a red re-run is a blocker, so the stage cannot end ``ok`` on a head nobody saw pass.
+    """
+    head = _assert_workspace_head(ctx, "review evidence")
+    try:
+        record = json.loads(ctx.state.read_control(JUNIT_CASES)) if ctx.state.has_control(JUNIT_CASES) else None
+    except (OSError, ValueError):
+        record = None
+    tested = record.get("head") if isinstance(record, dict) else None
+    if (
+        isinstance(tested, str)
+        and tested.strip()
+        and isinstance(record.get("counts"), dict)
+        and "exit_code" in record
+        and (tested == head or _same_code(ctx, tested, head))
+    ):
+        return None
+    tr, output = run_tests(ctx)
+    numbers.update(_test_numbers(tr))
+    if tr.ok:
+        return None
+    return Finding(
+        severity="blocker",
+        file=_contract(ctx).tests_dir,
+        title="Tests failing on the head review resumed from",
+        detail=(
+            f"The suite's last recorded run did not describe {head[:12]} (an interrupted review fix), "
+            f"so review re-ran it: exit code {tr.exit_code}; failed={tr.failed} errors={tr.errors}. "
+            f"Tail:\n{output[-1500:]}"
         ),
     )
 
@@ -2067,7 +2201,7 @@ def review(ctx: Ctx) -> StageResult:
     trace_path = f"{ctx.art}/{TRACE}"
     numbers: dict[str, float] = {}
     rv, dropped, fixes = Review(verdict="approve"), 0, 0
-    tests_blocker: Finding | None = None
+    tests_blocker = refresh_test_evidence(ctx, numbers)  # a resumed review may hold stale evidence
     trace: ContractTrace | None = None
     reverted: list[dict[str, Any]] = []
     for k in range(ctx.cfg.max_review_fixes + 1):
@@ -2447,15 +2581,15 @@ def _assert_unprotected_delivery(ctx: Ctx, base: str) -> None:
     In-cell enforcement (permission rules, the guard hook, denyWrite mounts) is the first line, but
     a provider that enforces nothing, or a scripted replay, would otherwise ship whatever the cell
     left behind. The rule is the one ``replica_fusion.scope`` already applies to fusion children:
-    ``FIXED_PROTECTED`` plus the target's build-stage list, so changing the tests dir during build
+    ``declared_protected(contract, "build")``, so changing the tests dir during build
     stays allowed. ``--no-renames`` reports a rename as delete + add, so moving a protected file out
     of its directory is still a change to the protected path. A policy refusal, not ``[BLOCKED]``:
     protected paths are human-maintained, no fix round may touch them, and the bytes must not
     reach a remote branch at all.
     """
-    from swfactory.campaign_fusion import FIXED_PROTECTED, _is_protected  # fusion builds on this module
+    from swfactory.campaign_fusion import _is_protected  # fusion builds on this module
 
-    rules = (*FIXED_PROTECTED, *protected_for(_contract(ctx), "build"))
+    rules = declared_protected(_contract(ctx), "build")
     diff = f"git diff -z --name-only --relative --no-renames {shlex.quote(base)}..HEAD -- . {_exclude(ctx)}"
     changed = _sh(ctx, diff)
     if touched := sorted(path for path in changed.split("\0") if path and _is_protected(path, rules)):
@@ -2490,6 +2624,15 @@ def _base_tests(ctx: Ctx, base: str) -> dict[str, Any]:
     return record
 
 
+def _same_code(ctx: Ctx, tested: str, head: str) -> bool:
+    """``head`` descends from ``tested`` and differs from it only inside the artifact chain."""
+    q = shlex.quote
+    return (
+        ctx.sb.run(f"git merge-base --is-ancestor {q(tested)} {q(head)}").ok
+        and ctx.sb.run(f"git diff --quiet {q(tested)} {q(head)} -- . {_exclude(ctx)}").ok
+    )
+
+
 def _tested_record(ctx: Ctx, head: str) -> dict[str, Any]:
     """The ``JUNIT_CASES`` record whose code is exactly what ``head`` delivers.
 
@@ -2506,18 +2649,12 @@ def _tested_record(ctx: Ctx, head: str) -> dict[str, Any]:
     tested = record.get("head") if isinstance(record, dict) else None
     if not isinstance(tested, str) or not tested.strip():
         raise StageError("policy", "delivery has no candidate test evidence for the delivered head")
-    if tested != head:
-        q = shlex.quote
-        same_code = (
-            ctx.sb.run(f"git merge-base --is-ancestor {q(tested)} {q(head)}").ok
-            and ctx.sb.run(f"git diff --quiet {q(tested)} {q(head)} -- . {_exclude(ctx)}").ok
+    if tested != head and not _same_code(ctx, tested, head):
+        raise StageError(
+            "policy",
+            f"candidate test evidence is stale: the suite last ran on {tested[:12]}, "
+            f"but delivery would publish {head[:12]}",
         )
-        if not same_code:
-            raise StageError(
-                "policy",
-                f"candidate test evidence is stale: the suite last ran on {tested[:12]}, "
-                f"but delivery would publish {head[:12]}",
-            )
     counts = record.get("counts")
     if not isinstance(counts, dict) or "exit_code" not in record:
         raise StageError("policy", "candidate test evidence predates the regression guard; re-run the build")
@@ -2552,7 +2689,13 @@ def _regression_guard(ctx: Ctx, base: str, head: str, required: list[str]) -> tu
                 "schema": 1,
                 "base": base,
                 "tested_head": record["head"],
-                "mode": "cases" if baseline["passing"] is not None and cases is not None else "counts",
+                "mode": (
+                    "cases"
+                    if baseline["passing"] is not None and cases is not None
+                    else "unconfirmed"
+                    if baseline["passing"]
+                    else "counts"
+                ),
                 "base_passed": baseline["passed"],
                 "candidate_passed": candidate.passed if candidate.report_valid else 0,
                 "regressions": len(findings),
