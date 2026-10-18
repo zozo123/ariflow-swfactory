@@ -22,7 +22,7 @@ from support import git
 from swfactory import adherence, stages
 from swfactory.agent import ScriptedAgent
 from swfactory.approval_policy import SCRIPTED_REPLAY_FIXTURE
-from swfactory.blueprint import Blueprint, PolicyOverride, load
+from swfactory.blueprint import Blueprint, FusionSpec, PolicyOverride, load
 from swfactory.call_accounting import CALLS_LOG, CallLedger
 from swfactory.cli import execute
 from swfactory.config import Config
@@ -48,8 +48,10 @@ def _at_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(ROOT)
 
 
-def _scripted_run(tmp: Path, fixtures: str) -> tuple[RunReport, Blueprint, Config]:
+def _scripted_run(tmp: Path, fixtures: str, *, fusion: bool = False) -> tuple[RunReport, Blueprint, Config]:
     bp = load("factory")
+    if fusion:  # exactly what `swfactory demo --fusion` runs
+        bp = bp.model_copy(update={"fusion": FusionSpec()})
     (job,) = bp.jobs({"issues": ["demo/issue.md"]})
     cfg = bp.config(
         job,
@@ -173,6 +175,35 @@ def test_a_re_audit_after_delivery_holds_the_deliver_commit_to_the_artifact_dir(
     assert (
         "pass: 3 commit(s) base..HEAD stayed inside their role's boundary" in _check(again, "role_boundary")["evidence"]
     )
+
+
+def test_liquid_review_lanes_and_fork_wave_nodes_are_modelled_not_misread_as_deviant(run, tmp_path: Path) -> None:
+    """The lines whose naming differs from the plain demo: liquid annealing runs its specialist
+    lanes as ``review.<round*10+lane>`` inside the review operation, and Plan.work / fork waves run
+    numbered build calls inside build_and_test and land ``work:<node>`` commits. None of that is a
+    deviation, and none of it may degrade the verdict to unverifiable either."""
+    ctx = _copy(run, tmp_path)
+    for lane in (11, 12, 13):
+        _call(ctx, "review", "review", lane, cost=0.0, envelope={"agent": "scripted"})
+    for call in (2, 3):
+        _call(ctx, "build_and_test", "build", call, cost=0.0, envelope={"agent": "scripted"})
+    _commit(tmp_path / "work", {"src/calc/node.py": "N = 1\n"}, "work:n2")
+    report = adherence.audit(ctx)
+    assert report["verdict"] == "adherent", report
+    assert report["per_role"]["review"]["calls"] == 4 and report["per_role"]["build"]["calls"] == 3
+
+
+def test_the_fusion_demo_audits_its_campaign_reservation_and_stays_adherent(tmp_path: Path) -> None:
+    """Replica-fusion children keep their own ledgers; the parent sees one ``replica_fusion``
+    campaign reservation and a ``fusion`` adoption commit. Both are modelled: participation,
+    delegation and budget read the reservation, role_boundary holds the commit to build."""
+    report, _, _ = _scripted_run(tmp_path, "demo/fusion", fusion=True)
+    assert report.stages[-1].status == "ok"
+    committed = json.loads(git(tmp_path / "work", "show", f"HEAD:{ART}/adherence.json"))
+    assert committed["verdict"] == "adherent", committed
+    assert committed["per_role"]["replica_fusion"]["calls"] == 1
+    assert any("replica-fusion roles run in child ledgers" in note for note in committed["line"]["notes"])
+    assert any(line.startswith("pass: fusion commit") for line in _check(committed, "role_boundary")["evidence"])
 
 
 # ---------------------------------------------------------------- deviant
@@ -536,6 +567,15 @@ def test_a_read_only_call_that_edits_an_already_dirty_file_is_refused(tmp_path: 
     (tmp_path / "work" / "uv.lock").write_text("rewritten by uv sync\n")
     with pytest.raises(StageError, match=r"review\.1 \(read-only\) changed the worktree"):
         stages._agent(ctx, "review", 1, "p", None)
+
+
+def test_a_read_only_call_that_edits_an_already_untracked_file_is_refused(tmp_path: Path) -> None:
+    """Porcelain status names an untracked file once (``??``) however often it changes, and ``git
+    diff`` never shows it: only the content hash of untracked files sees the second edit."""
+    ctx = _hold_ctx(tmp_path, {"notes.txt": "agent\n"})
+    (tmp_path / "work" / "notes.txt").write_text("left by setup\n")
+    with pytest.raises(StageError, match=r"plan\.1 \(read-only\) changed the worktree"):
+        stages._agent(ctx, "plan", 1, "p", None)
 
 
 def test_a_read_only_call_that_changes_nothing_passes_and_a_dirty_tree_it_found_is_tolerated(
