@@ -3,8 +3,8 @@
 One real scripted run is the adherent baseline. Every deviation is then applied to a COPY of that
 run -- its checkout and its host state -- so each test changes exactly one recorded fact and shows
 the verdict the audit derives from it. A second scripted run whose fix fixture also writes under
-``tests/`` shows the same verdict end to end: LocalSandbox has no kernel ``denyWrite``, so the edit
-lands and only the audit can see that fix crossed its boundary.
+``tests/`` shows that, end to end, such a fix never reaches the audit: LocalSandbox has no kernel
+``denyWrite``, so the edit lands, but the host-side fix scope refuses the commit before delivery.
 """
 
 from __future__ import annotations
@@ -540,21 +540,25 @@ def test_a_run_rejected_at_its_first_gate_is_audited_only_up_to_the_refusal(tmp_
     )
 
 
-def test_a_fix_fixture_that_writes_tests_publishes_a_deviant_verdict(tmp_path: Path) -> None:
-    """Scripted + local has no kernel hold on ``tests/`` during fix, so the edit lands, the suite
-    stays green and the run publishes -- record-only -- with the deviation in its committed chain."""
+def test_a_fix_fixture_that_writes_tests_is_refused_before_it_can_publish(tmp_path: Path) -> None:
+    """Scripted + local has no kernel hold on ``tests/`` during fix, so the edit lands in the
+    checkout. The audit alone would only *record* it as deviant and publish anyway (record-only);
+    the host-side fix scope (``stages._assert_stage_scope``, from the ratchet) is stronger and
+    refuses the fix commit as policy, restoring the pre-fix head, so no deviant chain is ever
+    delivered. The audit's own detection of a landed fix-touches-tests commit stays pinned by
+    ``test_a_fix_commit_that_touches_tests_is_deviant_on_role_boundary``."""
     fixtures = tmp_path / "fixtures"
     shutil.copytree(ROOT / "demo" / "scripted", fixtures)
     patch = fixtures / "fix.2.patch"
     patch.write_text(patch.read_text() + EXTRA_TEST)
-    report, _, _ = _scripted_run(tmp_path, str(fixtures))
-    assert report.stages[-1].status == "ok"  # published: the audit does not gate
-    assert report.stages[-1].numbers["adherence"] == adherence.VERDICT_SCORE["deviant"]
-    committed = json.loads(git(tmp_path / "work", "show", f"HEAD:{ART}/adherence.json"))
-    assert committed["verdict"] == "deviant"
-    (finding,) = _evidence(committed, "role_boundary", "fail")
-    assert "(fix) touches paths protected for fix: ['tests/test_extra.py']" in finding
-    assert json.loads((tmp_path / "work" / ART / "metrics.json").read_text())["adherence"] == "deviant"
+    with pytest.raises(StageError) as raised:
+        _scripted_run(tmp_path, str(fixtures))
+    assert raised.value.kind == "policy" and raised.value.retryable is False
+    assert "fix commit" in str(raised.value) and "tests/test_extra.py" in str(raised.value)
+    work = tmp_path / "work"
+    assert not (work / "tests" / "test_extra.py").exists(), "the refused commit was restored away"
+    assert not (work / ART / "adherence.json").exists(), "nothing reached delivery"
+    assert not (work / ART / "metrics.json").exists()
 
 
 # ---------------------------------------------------------------- the read-only hold
