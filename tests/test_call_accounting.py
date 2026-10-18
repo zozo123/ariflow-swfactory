@@ -12,6 +12,7 @@ Hermetic: an in-memory sandbox and scripted agents, no provider, no network.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -258,6 +259,17 @@ def test_external_success_with_unknown_usage_keeps_reservation(tmp_path: Path, m
     assert ledger.charged_usd() == 2.0 and ledger.unreconciled_usd() == 2.0
     assert rows(tmp_path / "run")[-1]["state"] == "in_doubt"
     assert rows(tmp_path / "run")[-1]["call_id"] == seen[0]
+    # The call answered, so what the HOST saw of it is recorded now, before any bill: the prompt
+    # digest and the read-only hold. Not a receipt -- it settles nothing and carries no candidate
+    # session metadata.
+    (record,) = ledger.records()
+    assert record.settled_usd is None and record in ledger.unreconciled() and record.receipt is None
+    assert record.observed == {
+        "agent": "external",
+        "prompt_sha256": hashlib.sha256(b"prompt").hexdigest(),
+        "prompt_bytes": len(b"prompt"),
+        "worktree_unchanged": True,
+    }
     # An infrastructure retry must resolve the old paid attempt before buying another session.
     with pytest.raises(StageError, match="observe and reconcile"):
         _agent(ctx, "spec", 1, "prompt", None)
@@ -457,6 +469,21 @@ def test_an_unknown_charge_is_released_only_by_a_recorded_observation(tmp_path: 
     assert [record.call_id for record in ledger.unreconciled()] == [ambiguous.call_id]
     settled = ledger.record(billed.call_id)
     assert settled.observation == {"status": "committed", "evidence": {"invoice": "inv-1"}, "detail": None}
+
+
+def test_an_answered_call_keeps_what_the_host_saw_through_the_observation_that_bills_it(tmp_path: Path) -> None:
+    """An answer whose bill awaits an observation (external usage) keeps what the host observed of
+    it on the in-doubt row; the observation that settles the money must not erase it, and it is
+    never mistaken for the receipt that settled the charge."""
+    ledger = CallLedger(ctx_on(tmp_path, MemSandbox()).state)
+    attempt = ledger.reserve(stage="review", iteration=1, reserved_usd=2.0)
+    host = {"agent": "external", "prompt_sha256": "a" * 64, "worktree_unchanged": True}
+    ledger.mark_unknown(attempt, "external usage requires a trusted provider observation", observed=host)
+    assert ledger.record(attempt.call_id).observed == host
+    assert ledger.unreconciled_usd() == 2.0, "a host record is not a bill"
+    ledger.reconcile(attempt.call_id, MutationOutcome("committed", 0.4, {"invoice": "inv-2"}))
+    settled = ledger.record(attempt.call_id)
+    assert settled.settled_usd == pytest.approx(0.4) and settled.observed == host and settled.receipt is None
 
 
 def test_a_settled_receipt_is_immutable(tmp_path: Path) -> None:

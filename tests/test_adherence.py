@@ -26,6 +26,7 @@ from swfactory.blueprint import Blueprint, FusionSpec, PolicyOverride, load
 from swfactory.call_accounting import CALLS_LOG, CallLedger
 from swfactory.cli import execute
 from swfactory.config import Config
+from swfactory.idempotency import MutationOutcome
 from swfactory.models import AgentResult, Approval, Issue, RunReport, StageError
 from swfactory.sandbox import LocalSandbox
 from swfactory.state import OPERATIONS_LOG
@@ -419,6 +420,53 @@ def test_a_legacy_read_only_receipt_without_the_fingerprint_is_unverifiable(run,
     ]
 
 
+def test_an_answer_awaiting_its_bill_is_audited_from_the_host_record_and_settles_into_adherence(
+    run, tmp_path: Path
+) -> None:
+    """External usage settles only by observation. Until then the call is unverifiable on budget,
+    but its read-only hold is already shown from what the host recorded; after the observation the
+    run is adherent -- the hold was never waiting on the bill."""
+    ctx = _copy(run, tmp_path)
+    ledger = CallLedger(ctx.state)
+    with ctx.state.exclusive("review"):
+        attempt = ledger.reserve(stage="review", iteration=9, reserved_usd=0.5)
+        host = {"agent": "external", "prompt_sha256": "a" * 64, "prompt_bytes": 3, "worktree_unchanged": True}
+        ledger.mark_unknown(attempt, "external usage requires a trusted provider observation", observed=host)
+    report = adherence.audit(ctx)
+    assert report["verdict"] == "unverifiable"
+    assert "pass: read-only call review.9 left the worktree unchanged" in _evidence(report, "role_boundary", "pass")
+    ledger.reconcile(attempt.call_id, MutationOutcome("committed", 0.2, {"invoice": "i"}))
+    assert adherence.audit(ctx)["verdict"] == "adherent"
+
+
+def test_a_read_only_mount_counts_as_the_hold_and_an_unanswered_read_only_call_is_unseen(run, tmp_path: Path) -> None:
+    ctx = _copy(run, tmp_path)
+    ledger = CallLedger(ctx.state)
+    with ctx.state.exclusive("review"):
+        held = ledger.reserve(stage="review", iteration=8, reserved_usd=0.5)
+        mount = {"agent": "external", "worktree_hold": stages.READ_ONLY_MOUNT}
+        ledger.mark_unknown(held, "awaiting bill", observed=mount)
+        ledger.reconcile(held.call_id, MutationOutcome("committed", 0.1, {"invoice": "i"}))
+    assert adherence.audit(ctx)["verdict"] == "adherent"
+    assert "pass: read-only call review.8 ran on a read-only checkout mount" in _evidence(
+        adherence.audit(ctx), "role_boundary", "pass"
+    )
+    with ctx.state.exclusive("review"):
+        lost = ledger.reserve(stage="review", iteration=9, reserved_usd=0.5)
+        ledger.mark_unknown(lost, "the cell died mid-call")
+        ledger.reconcile(lost.call_id, MutationOutcome("committed", 0.1, {"invoice": "j"}))
+    report = adherence.audit(ctx)
+    assert report["verdict"] == "unverifiable"  # billed, but what it did to the tree was never seen
+    assert _evidence(report, "role_boundary", "unknown") == [
+        "unknown: read-only call review.9 never answered; its effect on the worktree is unseen"
+    ]
+    with ctx.state.exclusive("review"):
+        absent = ledger.reserve(stage="review", iteration=10, reserved_usd=0.5)
+        ledger.mark_unknown(absent, "launch refused")
+        ledger.reconcile(absent.call_id, MutationOutcome("definitely_absent", detail="never started"))
+    assert len(_evidence(adherence.audit(ctx), "role_boundary", "unknown")) == 1  # absent: nothing ran
+
+
 def test_unreadable_records_never_raise_out_of_the_audit(run, tmp_path: Path) -> None:
     ctx = _copy(run, tmp_path)
     (ctx.state.root / OPERATIONS_LOG).write_text('{"event": 1}\n')
@@ -588,6 +636,28 @@ def test_a_read_only_call_that_changes_nothing_passes_and_a_dirty_tree_it_found_
     assert record.receipt["worktree_unchanged"] is True
     assert record.receipt["prompt_sha256"] == hashlib.sha256(b"the prompt").hexdigest()
     assert record.receipt["prompt_bytes"] == len(b"the prompt")
+
+
+def test_a_read_only_call_outside_any_work_tree_is_recorded_as_unobserved_not_unchanged(tmp_path: Path) -> None:
+    """No git work tree, no commit that could carry an edit out: nothing to hold, so the call runs,
+    but its receipt must not claim an unchanged tree it never observed."""
+    ctx = _hold_ctx(tmp_path, {"src/extra.py": "B = 2\n"})
+    shutil.rmtree(tmp_path / "work" / ".git")
+    stages._agent(ctx, "spec", 1, "p", None)
+    (record,) = CallLedger(ctx.state).records()
+    assert "worktree_unchanged" in record.receipt and record.receipt["worktree_unchanged"] is None
+
+
+def test_a_read_only_call_that_deletes_the_repository_is_refused(tmp_path: Path) -> None:
+    class Wiper(_Writer):
+        def run(self, sb: Any, **kw: Any) -> AgentResult:
+            shutil.rmtree(self.root / ".git")
+            return super().run(sb, **kw)
+
+    ctx = _hold_ctx(tmp_path, {})
+    ctx.agent = Wiper(tmp_path / "work", {})  # type: ignore[assignment]
+    with pytest.raises(StageError, match=r"review\.1 \(read-only\) changed the worktree"):
+        stages._agent(ctx, "review", 1, "p", None)
 
 
 def test_write_roles_are_not_fingerprinted(tmp_path: Path) -> None:

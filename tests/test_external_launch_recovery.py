@@ -231,6 +231,24 @@ def test_no_start_recovery_releases_a_reservation_cached_in_the_same_context(tmp
     assert ctx.spent_usd == 0, "the resolved reservation cannot remain cached as observed spend"
 
 
+def test_a_read_only_docker_call_is_held_by_its_mount_and_the_host_records_so(tmp_path, monkeypatch):
+    """The read-only checkout mount is the hold for an external read-only call in a Docker cell: no
+    extra container is launched to fingerprint the tree (create + start are the only commands), and
+    the in-doubt row records which hold applied, for the adherence audit."""
+    ctx = context(tmp_path)
+    fleet = Fleet(monkeypatch)
+    assert _agent(ctx, "review", 1, "prompt", None).text == "candidate"
+    assert [command[1] for command in fleet.commands] == ["create", "start"]
+    (record,) = CallLedger(ctx.state).records()
+    assert record.settled_usd is None and record.receipt is None
+    assert record.observed == {
+        "agent": "external",
+        "prompt_sha256": hashlib.sha256(b"prompt").hexdigest(),
+        "prompt_bytes": len(b"prompt"),
+        "worktree_hold": "read-only mount",
+    }
+
+
 def interrupted_attempt(ctx, fleet):
     ledger = CallLedger(ctx.state)
     attempt = ledger.reserve(stage="spec", iteration=1, reserved_usd=2.0)

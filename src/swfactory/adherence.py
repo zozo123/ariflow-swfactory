@@ -27,8 +27,9 @@ delegation      every call was reserved inside an operations-journal window owne
                 may invoke its role (same process, same clock: no cross-host skew).
 role_boundary   every commit base..HEAD carries one Factory-Stage trailer of a writing role and
                 touches nothing ``protected_for`` that role or the fixed guarded set; deliver
-                commits touch only the artifact dir; every read-only call's settle receipt says it
-                left the worktree unchanged.
+                commits touch only the artifact dir; every read-only call's settle receipt (or, for
+                an answer still awaiting its bill, the host's own record of it) says it left the
+                worktree unchanged or ran on a read-only checkout mount.
 tool_boundary   Claude envelopes: no permission denials, turns within the cap, the declared model;
                 guard-hook denials (attributed through ``SWF_CALL``).
 budget          settled <= reserved for every call; the run total within its ceiling.
@@ -376,10 +377,20 @@ def _role_boundary(ctx: Ctx, calls: Sequence[_Call]) -> _Check:
             check.add("pass", f"{held} commit(s) base..HEAD stayed inside their role's boundary")
     for call in calls:
         policy = POLICIES.get(call.role)
-        if policy is None or policy.writes or call.record.receipt is None:
+        if policy is None or policy.writes or call.role in CAMPAIGN_ROLES:
             continue
-        unchanged = call.record.receipt.get("worktree_unchanged")
-        if unchanged is True:
+        # The settle receipt, or -- for an answer whose bill awaits an observation -- the facts the
+        # host recorded on the in-doubt row. Neither: the call never answered here.
+        seen = call.record.receipt or call.record.observed
+        if seen is None:
+            if (call.record.observation or {}).get("status") == "definitely_absent":
+                continue  # proven never to have started: nothing ran that could edit
+            check.add("unknown", f"read-only call {call.name} never answered; its effect on the worktree is unseen")
+            continue
+        unchanged = seen.get("worktree_unchanged")
+        if unchanged is None and seen.get("worktree_hold") == stages.READ_ONLY_MOUNT:
+            check.add("pass", f"read-only call {call.name} ran on a read-only checkout mount")
+        elif unchanged is True:
             check.add("pass", f"read-only call {call.name} left the worktree unchanged")
         elif unchanged is False:
             check.add("fail", f"read-only call {call.name} changed the worktree")
