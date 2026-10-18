@@ -320,7 +320,9 @@ def test_a_killed_command_in_the_build_loop_records_failed_evidence_and_retries(
     never satisfy the idempotency check, so a retry still performs the build again."""
     sb = FakeSandbox(
         {"factory.toml": FACTORY_TOML, f"{ART}/plan.md": "# Plan\n", f"{ART}/spec.md": "# Spec\n"},
-        results={"git ls-files": TIMEOUT},
+        # The commit's staging listing (`GIT_ADD_ALL`), not the dialect card's `git ls-files -- src
+        # tests`, which runs before the agent call and is a different command.
+        results={"git ls-files -z -o -m": TIMEOUT},
     )
     agent = CountingAgent(data=BUILD_DATA)
     ctx = ctx_on(tmp_path, sb, agent=agent)

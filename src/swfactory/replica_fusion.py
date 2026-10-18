@@ -49,6 +49,14 @@ from swfactory.source_snapshot import create_source_snapshot
 ROLES = ("repair-a", "repair-b", "diagnostic", "challenger")
 CONTROL = "replica-fusion.json"
 REPORT = "replica-fusion-report.json"
+CAMPAIGN_STAGE = "replica_fusion"  # the parent ledger's one campaign reservation, not a provider call
+
+
+def worker_run_dirs(run_dir: Path) -> list[Path]:
+    """Each fusion worker's own run directory, sorted. A worker is a separate ``Ctx`` with its own
+    ``RunState``, so its provider calls sit in its own ledger, not the parent run's."""
+    root = Path(run_dir) / "fusion" / "workers"
+    return sorted(path for path in root.iterdir() if path.is_dir()) if root.is_dir() else []
 
 
 class FusionNotes(BaseModel):
@@ -64,6 +72,9 @@ class FusionExperiment:
         self.lock = threading.RLock()
         self.plan = Plan.model_validate_json(ctx.read_artifact(f"{ctx.art}/plan.json"))
         self.contract = stages._contract(ctx)
+        # Rendered (or replayed) here, on the parent and before any fan-out thread exists, so no two
+        # roles race to persist or mirror the card.
+        self.dialect = stages.target_dialect(ctx)
         self.binding = ctx.state.read_control("cell.json") if ctx.state.has_control("cell.json") else None
         self.pin = json_digest(
             {
@@ -260,6 +271,7 @@ class FusionExperiment:
                 failures=failures,
                 evidence=evidence,
                 protected=stages._protected(child, stage),
+                dialect=self.dialect,
             )
             # _agent owns accounting and guard installation; a role-specific policy
             # is projected through a copy, never by mutating the shared agent policy.
@@ -572,7 +584,7 @@ def execute_fusion_stage(ctx: stages.Ctx) -> StageResult:
         stages.seed_budget(ctx, refresh=True)
         if experiment.spec.max_cost_usd > ctx.cfg.max_budget_usd - ctx.spent_usd:
             raise StageError("policy", "fusion reservation exceeds remaining job budget")
-        attempt = ledger.reserve(stage="replica_fusion", iteration=1, reserved_usd=experiment.spec.max_cost_usd)
+        attempt = ledger.reserve(stage=CAMPAIGN_STAGE, iteration=1, reserved_usd=experiment.spec.max_cost_usd)
         ctx.state.write_control(budget_file, json.dumps(dataclasses.asdict(attempt)) + "\n")
     else:
         attempt = CallAttempt(**json.loads(ctx.state.read_control(budget_file)))

@@ -46,7 +46,7 @@ from pydantic import BaseModel, ValidationError
 
 from swfactory import accepted_inputs
 from swfactory import metrics as metrics_mod
-from swfactory.agent import POLICIES, Agent, Invocation, Policy, render_prompt
+from swfactory.agent import POLICIES, Agent, Invocation, Policy, call_max_turns, render_prompt
 from swfactory.approval_policy import GateMode, check_recorded, replay_approval
 from swfactory.blueprint import CANONICAL_ORDER, Blueprint, ReviewSpec
 from swfactory.call_accounting import CallLedger
@@ -207,6 +207,77 @@ def _contract(ctx: Ctx) -> TargetContract:
                 raise StageError("policy", str(e)) from e
             ctx.state.write_control("target-contract.json", ctx.contract.model_dump_json(indent=2) + "\n")
     return ctx.contract
+
+
+DIALECT_CONTROL = "target-dialect.md"  # host-owned: the card every agent call of the run is shown
+DIALECT_LAYOUT_CAP = 60  # tracked paths the card names; the rest are counted, never listed
+CONVENTION_FILES = ("AGENTS.md", "CLAUDE.md")  # target-root files the card points the agent at
+
+
+def _md_code(text: str) -> str:
+    """``text`` as one line of Markdown inline code, whatever it holds.
+
+    The card quotes target-authored strings (the contract's commands and dirs, tracked file names):
+    a control character is escaped so no value can start a prompt line of its own, and the backtick
+    fence is one longer than the longest backtick run inside (padded when the value starts or ends
+    with one), so a command such as ``echo `date` `` cannot close its own quote early."""
+    flat = "".join(ch if ch.isprintable() else f"\\x{ord(ch):02x}" for ch in text)
+    fence = "`" * (max((len(run) for run in re.findall(r"`+", flat)), default=0) + 1)
+    pad = " " if flat.startswith("`") or flat.endswith("`") else ""
+    return f"{fence}{pad}{flat}{pad}{fence}"
+
+
+def target_dialect(ctx: Ctx) -> str:
+    """The run's target dialect card (``prompts/dialect.md``): rendered once, then replayed.
+
+    Before the card, the build and fix prompts told the agent to look up ``factory.toml`` and the
+    target's ``CLAUDE.md`` itself -- turns spent rediscovering facts the host already holds -- and to
+    run a test command its tool policy gives it no shell for. The card states those facts from the
+    cached ``TargetContract``, a bounded sorted ``git ls-files`` of the declared source and tests
+    dirs (``DIALECT_LAYOUT_CAP`` names plus the total), and which ``CONVENTION_FILES`` exist at the
+    target root, and says plainly that the factory, not the agent, runs the suite.
+
+    Same caching idiom as ``_contract``: host control state ``target-dialect.md`` is written on first
+    use and read back ever after, so a retry, a later Plan.work node, a review fix and a resumed
+    process all see identical bytes even though build commits have since moved HEAD (a fresh listing
+    would name files this run itself added). The returned text is the stored text read back, never
+    the in-memory render, so the first call cannot differ from a replay. ``{art}/dialect.md`` mirrors
+    it as evidence of what the model was told; a listing failure is a sandbox error, not a card with
+    a silently missing layout.
+    """
+    if not ctx.state.has_control(DIALECT_CONTROL):
+        contract = _contract(ctx)
+        dirs = " ".join(shlex.quote(path) for path in (contract.source, contract.tests_dir))
+        # Without -z and with git's default core.quotePath, a name holding a newline, a control
+        # character or a non-ASCII byte is printed C-quoted on one ASCII line: target-chosen file
+        # names cannot write prompt lines of their own, and no byte can fail the text decode.
+        listing = _sh(ctx, f"git -c core.quotePath=true ls-files -- {dirs}")
+        listed = sorted({path for path in listing.splitlines() if path})
+        shown = [f"- {_md_code(path)}" for path in listed[:DIALECT_LAYOUT_CAP]]
+        if not listed:
+            shown = ["(no tracked files yet)"]
+        elif len(listed) > len(shown):
+            shown.append(f"- ... {len(listed) - len(shown)} more not listed")
+        conventions = [name for name in CONVENTION_FILES if ctx.sb.exists(name)]
+        card = render_prompt(
+            "dialect",
+            test=_md_code(contract.test),
+            lint=_md_code(contract.lint) if contract.lint else "(none declared)",
+            source=_md_code(f"{contract.source}/"),
+            tests_dir=_md_code(f"{contract.tests_dir}/"),
+            # The build-time set: the tests dir's fix-time protection is the card's own tests line,
+            # and listing it here too would contradict "writable while building".
+            protected=", ".join(_md_code(path) for path in protected_for(contract, "build")),
+            conventions=(
+                ", ".join(_md_code(name) for name in conventions) + " (read before editing)" if conventions else ""
+            ),
+            layout=f"{len(listed)} tracked files in total.\n" + "\n".join(shown),
+        )
+        ctx.state.write_control(DIALECT_CONTROL, card)
+    card = ctx.state.read_control(DIALECT_CONTROL)
+    if not ctx.state.has_artifact(f"{ctx.art}/dialect.md"):
+        ctx.write_artifact(f"{ctx.art}/dialect.md", card)
+    return card.rstrip("\n")
 
 
 def _sh(ctx: Ctx, cmd: str, *, timeout_s: int = 600) -> str:
@@ -462,9 +533,13 @@ def _agent(ctx: Ctx, stage: str, iteration: int, prompt: str, schema: type[BaseM
         detail = f" ({unknown:.2f} USD of it unreconciled)" if unknown else ""
         raise StageError("policy", f"run budget exhausted before {stage}.{iteration}{detail}")
     granted = min(ctx.cfg.max_budget_usd_per_stage, remaining)
-    call_cfg = ctx.cfg.model_copy(update={"max_budget_usd_per_stage": granted})
-    protected = protected_for(_contract(ctx), stage)
     policy = _policy(ctx, stage)
+    # The stage's tighten-only turn cap rides in the call's Config, so every adapter -- and the
+    # envelope's `cfg` -- sees the cap this call actually ran under, not the run-wide limit.
+    call_cfg = ctx.cfg.model_copy(
+        update={"max_budget_usd_per_stage": granted, "max_turns": call_max_turns(policy, ctx.cfg)}
+    )
+    protected = protected_for(_contract(ctx), stage)
     external = ctx.agent.kind == "external"
     writable: tuple[str, ...] = ()
     admitted_digest = None
@@ -702,14 +777,20 @@ def _worktree_fingerprint(ctx: Ctx) -> str | None:
 
 
 def _policy(ctx: Ctx, stage: str) -> Policy:
-    """``POLICIES[stage]`` plus the blueprint's additive override (extra allowed tools, model).
+    """``POLICIES[stage]`` plus the blueprint's override: extra allowed tools and a model (additive)
+    and a turn cap (tighten-only: ``call_max_turns`` takes the minimum with ``Config.max_turns``).
     ``disallowed_tools`` and ``writes`` cannot be changed from a blueprint."""
     policy = POLICIES[stage]
     override = ctx.blueprint.policy.get(stage) if ctx.blueprint else None
     if override is None:
         return policy
     extra = tuple(t for t in override.extra_allowed_tools if t not in policy.allowed_tools)
-    return dataclasses.replace(policy, allowed_tools=policy.allowed_tools + extra, model=override.model or policy.model)
+    return dataclasses.replace(
+        policy,
+        allowed_tools=policy.allowed_tools + extra,
+        model=override.model or policy.model,
+        max_turns=override.max_turns,
+    )
 
 
 def _protected(ctx: Ctx, stage: str) -> str:
@@ -1386,6 +1467,7 @@ def plan(ctx: Ctx) -> StageResult:
         intent=ctx.read_artifact(f"{ctx.art}/intent.md"),
         spec=_read_or(ctx, f"{ctx.art}/spec.md"),  # "(none)" when the line has no spec stage
         protected=_protected(ctx, "plan"),
+        dialect=target_dialect(ctx),
     )
     res = _agent(ctx, "plan", 1, prompt, Plan)
     p = Plan.model_validate(res.data)
@@ -2016,6 +2098,7 @@ def review(ctx: Ctx) -> StageResult:
             plan=plan_text,
             failures="Review blockers:\n" + _format_findings(rv.blockers),
             protected=_protected(ctx, "fix"),
+            dialect=target_dialect(ctx),
         )
         tests_blocker = fix_and_retest(
             ctx, fix_prompt, fixes=fixes, fallback="address review blockers", numbers=numbers, reverted=reverted

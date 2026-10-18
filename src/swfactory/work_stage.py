@@ -197,6 +197,27 @@ def _population_search(ctx: stages.Ctx) -> tuple[str, list[str], dict[str, float
     )
 
 
+def _with_file_pack(ctx: stages.Ctx, prompt: str, paths: list[str]) -> str:
+    """``prompt`` plus a snapshot of ``paths`` as committed at the current checkpoint HEAD.
+
+    The precondition for a one-request draft: the call sees the code it is told to edit instead of
+    spending Read turns on it. Wording lives in the pinned ``prompts/file_pack.md`` (#2098). Packed
+    at the HEAD the call starts from -- the node's checkpoint, or a fork wave's shared base -- so a
+    retry at the same HEAD sees the same bytes. ``pack_planned_files`` refuses on any secret-shaped
+    file and when nothing fits; the prompt is then exactly the legacy prompt.
+    """
+    from swfactory.harness_efficiency import pack_planned_files
+
+    pack = pack_planned_files(ctx, paths=paths, head_sha=stages._workspace_head(ctx))
+    if pack is None:
+        return prompt
+    return (
+        prompt
+        + "\n"
+        + stages.render_prompt("file_pack", head=pack.head_sha, files=pack.files_text, notes=pack.notes_text)
+    )
+
+
 def _node_prompt(
     ctx: stages.Ctx,
     plan_text: str,
@@ -211,12 +232,14 @@ def _node_prompt(
         plan=plan_text,
         failures="",
         protected=stages._protected(ctx, "build"),
+        dialect=stages.target_dialect(ctx),
     )
     # A template, not a Python literal. As a literal this instruction was outside the accepted-
     # inputs pin (#2098): two swfactory builds differing only in these lines admitted the same
     # digest and told the model different things. `prompts/build_node.md` is digested with the rest.
     return _with_population_guidance(
-        (
+        _with_file_pack(
+            ctx,
             base
             + "\n"
             + stages.render_prompt(
@@ -226,7 +249,8 @@ def _node_prompt(
                 node_depends=", ".join(node.depends_on),
                 node_files=", ".join(node.files),
                 node_tests="; ".join(node.tests),
-            )
+            ),
+            list(node.files),
         ),
         population_guidance,
     )
@@ -709,6 +733,7 @@ def _legacy_build(
                 plan=plan_text,
                 failures=failures,
                 protected=stages._protected(ctx, stage),
+                dialect=stages.target_dialect(ctx),
             ),
             population_guidance,
         )
@@ -860,13 +885,18 @@ def build_and_test(ctx: stages.Ctx) -> StageResult:
             ident=repair,
             stage="fix",
             prompt=_with_population_guidance(
-                stages.render_prompt(
-                    "fix",
-                    issue_id=ctx.issue.id,
-                    spec=spec_text,
-                    plan=plan_text,
-                    failures=_repair_failures(progress),
-                    protected=stages._protected(ctx, "fix"),
+                _with_file_pack(
+                    ctx,
+                    stages.render_prompt(
+                        "fix",
+                        issue_id=ctx.issue.id,
+                        spec=spec_text,
+                        plan=plan_text,
+                        failures=_repair_failures(progress),
+                        protected=stages._protected(ctx, "fix"),
+                        dialect=stages.target_dialect(ctx),
+                    ),
+                    list(plan.files),
                 ),
                 population_guidance,
             ),
