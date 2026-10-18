@@ -196,6 +196,9 @@ def test_rejected_gate_publishes_rejected_pr_with_durable_approval(tmp_path: Pat
     assert [(a["gate"], a["decision"], a["actor"]) for a in approvals] == [("intent", "reject", "alice")]
     assert json.loads((art / "metrics.json").read_text())["approvers"] == ["alice"]
     assert not (art / "spec.md").exists() and not (art / "plan.json").exists()
+    # Nothing was built, so the delivered code is the base's own: the regression guard has no
+    # candidate to judge and must not demand build evidence from a refusal.
+    assert not (art / "regression.json").exists() and "regressions" not in report.stages[-1].numbers
     pr = (tmp / "run" / "pr.md").read_text()
     assert pr.startswith("# [REJECTED] DEMO-1:")
     assert "labels: factory, agent-authored, factory:rejected" in pr

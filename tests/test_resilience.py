@@ -687,6 +687,24 @@ def delivery_ctx(
     ctx.state.write_artifact(f"{ART}/approvals.json", json.dumps(approvals) + "\n")
     if review_json is not None:
         ctx.state.write_artifact(f"{ART}/review.json", review_json)
+    # The regression guard's evidence: setup's base suite record and the build's candidate run on
+    # the delivered head, both host-owned. The candidate kept the base's one passing test.
+    ctx.state.write_control(
+        "base-tests.json",
+        json.dumps({"base": "base0000", "report_valid": True, "passed": 1, "passing": ["pytest/t::test_a"]}),
+    )
+    ctx.state.write_control(
+        "junit-cases.json",
+        json.dumps(
+            {
+                "head": "head0000",
+                "report_valid": True,
+                "exit_code": 0,
+                "counts": {"passed": 1, "failed": 0, "errors": 0, "skipped": 0},
+                "cases": {"pytest/t::test_a": "passed"},
+            }
+        ),
+    )
     write_stage_log(
         tmp_path,
         {"stage": "intent"},

@@ -800,16 +800,37 @@ def run_tests(ctx: Ctx) -> tuple[TestResult, str]:
     head = _assert_workspace_head(ctx, "verification")
     _ensure_clean(ctx, "verification", allow_artifacts=True)
     # Host-owned and bound to the HEAD it ran on: a reader holding a different HEAD has stale
-    # evidence and must say so rather than judge the wrong commit.
+    # evidence and must say so rather than judge the wrong commit. The counts ride along because a
+    # summary-only report has no ids, and the regression guard then compares how many passed.
+    counts = {key: getattr(result, key) for key in ("passed", "failed", "errors", "skipped")}
     ctx.state.write_control(
         JUNIT_CASES,
-        json.dumps({"head": head, "report_valid": result.report_valid, "cases": cases}, sort_keys=True) + "\n",
+        json.dumps(
+            {
+                "head": head,
+                "report_valid": result.report_valid,
+                "exit_code": result.exit_code,
+                "counts": counts,
+                "cases": cases,
+            },
+            sort_keys=True,
+        )
+        + "\n",
     )
     return result, output
 
 
-# Control record of the latest suite run: ``{head, report_valid, cases}`` (cases may be null).
+# Control record of the latest suite run: ``{head, report_valid, exit_code, counts, cases}`` (cases
+# may be null).
 JUNIT_CASES = "junit-cases.json"
+# Control record of the base revision's suite, run once by ``setup`` while HEAD is still the base:
+# ``{base, report_valid, passed, passing}``. ``passing`` is the sorted ids that passed, or null when
+# the base report carried no usable ids (summary-only, invalid, or no tests at all).
+BASE_TESTS = "base-tests.json"
+# Regression findings rendered one per test in the PR body; beyond this the rest are summarized in
+# one more blocker, and every id stays in the committed ``regression.json``. A wholesale-broken
+# candidate (an import error fails every case) must not turn the PR body into a test listing.
+MAX_REGRESSION_FINDINGS = 50
 
 
 def junit_cases_for(ctx: Ctx, head: str) -> dict[str, str] | None:
@@ -1130,9 +1151,38 @@ def _seed_exclude(ctx: Ctx) -> None:
         ctx.sb.write(path, current + sep + "\n".join(missing) + "\n")
 
 
+def _record_base_tests(ctx: Ctx, base: str, head: str) -> None:
+    """Replay the old behaviour once: run the target's suite on the base and keep what passed.
+
+    ``deliver`` holds the candidate to this record (``regression_findings``), so a build that
+    deletes, skips or breaks a test the base passed cannot publish as green. Recorded once per run:
+    a setup retry or a resumed run finds the record and never re-runs the suite. Only measurable
+    while the checkout still IS the base; a run that progressed without one (it predates the guard)
+    is refused at delivery rather than measured against a candidate standing in for the base. A
+    base with no valid report records an explicit empty baseline -- a new project legitimately has
+    no tests, and nothing then exists that a candidate could regress.
+    """
+    if ctx.state.has_control(BASE_TESTS) or head != base:
+        return
+    # What is measured must be the base commit itself, not the base plus whatever provisioning
+    # (a dependency sync rewriting a stale lockfile) left in the tree; ``run_tests`` re-checks after.
+    _ensure_clean(ctx, "setup before the base test run", allow_artifacts=True)
+    result, _output = run_tests(ctx)
+    cases = junit_cases_for(ctx, base)
+    passing = sorted(case for case, outcome in cases.items() if outcome == "passed") if cases is not None else None
+    record = {
+        "base": base,
+        "report_valid": result.report_valid,
+        "passed": result.passed if result.report_valid else 0,
+        "passing": passing,
+    }
+    ctx.state.write_control(BASE_TESTS, json.dumps(record, sort_keys=True) + "\n")
+
+
 @_owned
 def setup(ctx: Ctx) -> StageResult:
-    """Prepare the sandbox: repo, bot identity, baseline, work branch, deps, base sha, contract."""
+    """Prepare the sandbox: repo, bot identity, baseline, work branch, deps, base sha, contract,
+    and the base revision's test record (``BASE_TESTS``) the delivery regression guard replays."""
     t0 = time.monotonic()
     sb = ctx.sb
     # One definition of "the execution policy", shared with the epoch pin: two lists here and in
@@ -1198,6 +1248,7 @@ def setup(ctx: Ctx) -> StageResult:
             raise StageError("sandbox", f"uv sync failed: {res.stderr.strip()[-800:]}", retryable=True)
     _contract(ctx)
     _review_policy(ctx)
+    _record_base_tests(ctx, base, head)
     duration = round(time.monotonic() - t0, 3)
     ctx.state.write_control("setup-timing.json", _dumps({"duration_s": duration}))
     return StageResult(stage="setup", duration_s=duration)
@@ -1651,6 +1702,68 @@ def contract_trace(ctx: Ctx, spec_text: str, plan_data: object) -> ContractTrace
     }
     findings = trace_findings(rows, head=head, tests_dir=_contract(ctx).tests_dir, evidence=cases is not None)
     return ContractTrace(findings, numbers, contract_checklist(rows, plan_data), record)
+
+
+# How a base-passing test fails the candidate, by candidate outcome (None: the id is gone).
+_REGRESSED = {None: "is missing", "skipped": "is now skipped", "failed": "now fails", "error": "now errors"}
+
+
+def regression_findings(
+    base: dict[str, Any],
+    candidate_cases: dict[str, str] | None,
+    candidate_result: TestResult,
+    *,
+    tests_dir: str = "tests",
+) -> list[Finding]:
+    """The deterministic regression guard: what the base passed, the candidate must still pass.
+
+    ``base`` is the ``BASE_TESTS`` record, ``candidate_cases`` the delivered head's per-test
+    outcomes (``junit_cases_for``) and ``candidate_result`` its counts. Same rule as
+    ``evals.baseline_diff``: every base-passing id that is missing, skipped, failed or errored on the
+    candidate is a blocker, while new tests that fail and tests the base already failed are not a
+    regression (the review and the build loop own those). Deleting, renaming, skipping or
+    deselecting a test therefore cannot read as green, however many trivial tests replace it.
+
+    Without ids on either side (a summary-only report) the only honest comparison is the count:
+    fewer passing tests than the base is one blocker. An invalid candidate report passed nothing.
+    """
+    passing = base.get("passing")
+    short = str(base.get("base") or "")[:12]
+    if passing is not None and candidate_cases is not None:
+        regressed = [
+            (case, _REGRESSED.get(outcome, f"now reports {outcome}"))
+            for case in sorted(passing)
+            if (outcome := candidate_cases.get(case)) != "passed"
+        ]
+        return [
+            Finding(
+                severity="blocker",
+                file=tests_dir,
+                title=f"Regression guard: {case} {how}",
+                detail=(
+                    f"`{case}` passed on the base revision {short} and {how} on the delivered head. "
+                    "A delivery keeps every test the base passed passing: restore or fix the test, "
+                    "or fix the code it exercises (deterministic guard, no model call)."
+                ),
+            )
+            for case, how in regressed
+        ]
+    base_passed = int(base.get("passed") or 0)
+    candidate_passed = candidate_result.passed if candidate_result.report_valid else 0
+    if candidate_passed >= base_passed:
+        return []
+    return [
+        Finding(
+            severity="blocker",
+            file=tests_dir,
+            title=f"Regression guard: {base_passed - candidate_passed} fewer passing test(s) than the base",
+            detail=(
+                f"The base revision {short} passed {base_passed} test(s); the delivered head passed "
+                f"{candidate_passed}. The reports carry no per-test ids, so the counts are compared: "
+                "a delivery may not pass fewer tests than the base it started from."
+            ),
+        )
+    ]
 
 
 def _review_policy(ctx: Ctx) -> str:
@@ -2150,14 +2263,158 @@ def _validated_review(
     return review, data, max(len(review.blockers), logged_blockers)
 
 
+def _assert_unprotected_delivery(ctx: Ctx, base: str) -> None:
+    """Refuse a delivered diff that touches a protected path, before anything is committed or pushed.
+
+    In-cell enforcement (permission rules, the guard hook, denyWrite mounts) is the first line, but
+    a provider that enforces nothing, or a scripted replay, would otherwise ship whatever the cell
+    left behind. The rule is the one ``replica_fusion.scope`` already applies to fusion children:
+    ``FIXED_PROTECTED`` plus the target's build-stage list, so changing the tests dir during build
+    stays allowed. ``--no-renames`` reports a rename as delete + add, so moving a protected file out
+    of its directory is still a change to the protected path. A policy refusal, not ``[BLOCKED]``:
+    protected paths are human-maintained, no fix round may touch them, and the bytes must not
+    reach a remote branch at all.
+    """
+    from swfactory.campaign_fusion import FIXED_PROTECTED, _is_protected  # fusion builds on this module
+
+    rules = (*FIXED_PROTECTED, *protected_for(_contract(ctx), "build"))
+    diff = f"git diff -z --name-only --relative --no-renames {shlex.quote(base)}..HEAD -- . {_exclude(ctx)}"
+    changed = _sh(ctx, diff)
+    if touched := sorted(path for path in changed.split("\0") if path and _is_protected(path, rules)):
+        shown = ", ".join(touched[:20]) + (f" (+{len(touched) - 20} more)" if len(touched) > 20 else "")
+        raise StageError("policy", f"delivered diff touches protected path(s): {shown}")
+
+
+def _base_tests(ctx: Ctx, base: str) -> dict[str, Any]:
+    """The ``BASE_TESTS`` record for this run's base; any absence or inconsistency fails closed."""
+    if not ctx.state.has_control(BASE_TESTS):
+        raise StageError(
+            "policy",
+            "run has no base test record (setup records it while HEAD is the base); "
+            "the regression guard cannot judge this delivery",
+        )
+    try:
+        record = json.loads(ctx.state.read_control(BASE_TESTS))
+    except (OSError, ValueError) as error:
+        raise StageError("policy", f"base test record is invalid: {error}") from error
+    passed = record.get("passed") if isinstance(record, dict) else None
+    passing = record.get("passing") if isinstance(record, dict) else None
+    if (
+        not isinstance(record, dict)
+        or record.get("base") != base
+        or not isinstance(record.get("report_valid"), bool)
+        or not isinstance(passed, int)
+        or isinstance(passed, bool)
+        or passed < 0
+        or not (passing is None or (isinstance(passing, list) and all(isinstance(case, str) for case in passing)))
+    ):
+        raise StageError("policy", f"base test record does not describe base {base}")
+    return record
+
+
+def _tested_record(ctx: Ctx, head: str) -> dict[str, Any]:
+    """The ``JUNIT_CASES`` record whose code is exactly what ``head`` delivers.
+
+    Usually the suite last ran on ``head`` itself. The one legitimate gap is deliver's own
+    artifact-chain commit: a retried delivery (a failed push) starts from it, so a record for an
+    ancestor whose code tree differs from ``head`` only inside the artifact chain describes the same
+    candidate. Anything else -- no record, a record for another commit, code that changed after the
+    suite ran -- is stale evidence, and delivery is refused rather than judged on it.
+    """
+    try:
+        record = json.loads(ctx.state.read_control(JUNIT_CASES)) if ctx.state.has_control(JUNIT_CASES) else None
+    except (OSError, ValueError) as error:
+        raise StageError("policy", f"candidate test evidence is invalid: {error}") from error
+    tested = record.get("head") if isinstance(record, dict) else None
+    if not isinstance(tested, str) or not tested.strip():
+        raise StageError("policy", "delivery has no candidate test evidence for the delivered head")
+    if tested != head:
+        q = shlex.quote
+        same_code = (
+            ctx.sb.run(f"git merge-base --is-ancestor {q(tested)} {q(head)}").ok
+            and ctx.sb.run(f"git diff --quiet {q(tested)} {q(head)} -- . {_exclude(ctx)}").ok
+        )
+        if not same_code:
+            raise StageError(
+                "policy",
+                f"candidate test evidence is stale: the suite last ran on {tested[:12]}, "
+                f"but delivery would publish {head[:12]}",
+            )
+    counts = record.get("counts")
+    if not isinstance(counts, dict) or "exit_code" not in record:
+        raise StageError("policy", "candidate test evidence predates the regression guard; re-run the build")
+    return record
+
+
+def _regression_guard(ctx: Ctx, base: str, head: str, required: list[str]) -> tuple[list[Finding], dict[str, float]]:
+    """Hold the delivered head to the base's passing tests (``regression_findings``).
+
+    Applies whenever a candidate was built or the delivered code differs from the base. A delivery
+    that legitimately has no build -- a gate rejected before ``build_and_test``, publishing the
+    ``[REJECTED]`` evidence PR -- delivers the base's own code, which cannot regress, and has no
+    candidate run to read. The verdict is committed as ``regression.json`` either way it lands.
+    """
+    code_changed = not ctx.sb.run(f"git diff --quiet {shlex.quote(base)} {shlex.quote(head)} -- . {_exclude(ctx)}").ok
+    if "build_and_test" not in required and not code_changed:
+        return [], {}
+    baseline = _base_tests(ctx, base)
+    record = _tested_record(ctx, head)
+    try:
+        candidate = TestResult.model_validate(
+            {**record["counts"], "exit_code": record["exit_code"], "report_valid": record.get("report_valid") is True}
+        )
+    except ValidationError as error:
+        raise StageError("policy", f"candidate test evidence is invalid: {error}") from error
+    cases = junit_cases_for(ctx, record["head"])
+    findings = regression_findings(baseline, cases, candidate, tests_dir=_contract(ctx).tests_dir)
+    ctx.write_artifact(
+        f"{ctx.art}/regression.json",
+        _dumps(
+            {
+                "schema": 1,
+                "base": base,
+                "tested_head": record["head"],
+                "mode": "cases" if baseline["passing"] is not None and cases is not None else "counts",
+                "base_passed": baseline["passed"],
+                "candidate_passed": candidate.passed if candidate.report_valid else 0,
+                "regressions": len(findings),
+                "findings": [finding.model_dump() for finding in findings],
+            }
+        ),
+    )
+    return findings, {"regressions": float(len(findings)), "base_tests_passed": float(baseline["passed"])}
+
+
+def _bounded_findings(findings: list[Finding]) -> list[Finding]:
+    """At most ``MAX_REGRESSION_FINDINGS`` regression findings for the PR body, plus one blocker
+    that counts the rest; ``regression.json`` keeps every one."""
+    if len(findings) <= MAX_REGRESSION_FINDINGS:
+        return findings
+    rest = len(findings) - MAX_REGRESSION_FINDINGS
+    return [
+        *findings[:MAX_REGRESSION_FINDINGS],
+        Finding(
+            severity="blocker",
+            file=findings[0].file,
+            title=f"Regression guard: {rest} more base-passing test(s) regressed",
+            detail="Listed in full in regression.json of the artifact chain.",
+        ),
+    ]
+
+
 @_timed
 def deliver(ctx: Ctx) -> StageResult:
     """Write metrics, commit the artifact chain, extract the patch stream and publish the PR.
     Never skipped: publishing is the observable output of the run. A rejected gate (any
     ``decision == "reject"`` in approvals.json) still publishes, as ``[REJECTED]`` +
     ``factory:rejected``, so the refusal and its actor land in git; blockers left by review
-    publish as ``[BLOCKED]`` + ``factory:blocked``. Both return ``status="blocked"``."""
-    _assert_workspace_head(ctx, "delivery")
+    publish as ``[BLOCKED]`` + ``factory:blocked``. Both return ``status="blocked"``.
+
+    Before anything is committed or pushed, two model-free guards run: a delivered diff that
+    touches a protected path is refused outright (``_assert_unprotected_delivery``), and a candidate
+    that lost a test the base passed delivers ``[BLOCKED]`` with the regressions as blockers
+    (``_regression_guard``)."""
+    head = _assert_workspace_head(ctx, "delivery")
     approvals = _load_approvals(ctx)
     if not ctx.state.has_artifact(f"{ctx.art}/approvals.json"):
         ctx.write_artifact(f"{ctx.art}/approvals.json", "[]\n")
@@ -2172,6 +2429,10 @@ def deliver(ctx: Ctx) -> StageResult:
     denied = denied_tool_calls(ctx)
     if ctx.agent.kind == "external" and ctx.blueprint and any(gate.mode == "policy" for gate in ctx.blueprint.gates):
         raise StageError("policy", "external agents are not qualified for autonomous publication")
+    base = ctx.state.read_control("base").strip()
+    _assert_unprotected_delivery(ctx, base)
+    regressions, guard_numbers = _regression_guard(ctx, base, head, required)
+    blockers += len(regressions)
     metrics_mod.write_run_metrics(
         ctx,
         stages,
@@ -2190,7 +2451,6 @@ def deliver(ctx: Ctx) -> StageResult:
         msg=f"docs(factory): artifact chain for {ctx.issue.id}",
         paths=[ctx.art],
     )
-    base = ctx.state.read_control("base").strip()
     patch = _sh(ctx, f"git format-patch --stdout {base}..HEAD")
     commits = int(_sh(ctx, f"git rev-list --count {base}..HEAD").strip() or 0)
     # Patch paths are repo-relative; the sandbox cwd may be a subdir of the checkout (islo) or
@@ -2238,7 +2498,7 @@ def deliver(ctx: Ctx) -> StageResult:
         ),
         body=pr_body(
             ctx,
-            findings=rv.findings,
+            findings=[*rv.findings, *_bounded_findings(regressions)],
             dropped_nits=int(data.get("dropped_nits", 0)),
             approvals=approvals,
             stages=stages,
@@ -2255,6 +2515,7 @@ def deliver(ctx: Ctx) -> StageResult:
             "commits": float(commits),
             "rejected": float(rejected),
             "denied_tool_calls": float(denied),
+            **guard_numbers,
         },
     )
 
