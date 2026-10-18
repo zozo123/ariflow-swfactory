@@ -136,7 +136,8 @@ def test_review_fix_that_breaks_tests_is_reverted_and_still_a_blocker(tmp_path: 
     assert delivered == core.rstrip("\n")  # `git` strips its output
     assert json.loads((work / ART / "metrics.json").read_text())["review_reverted_fixes"] == 1
     trace = json.loads((work / ART / "trace.json").read_text())
-    assert trace["head"] == reverted["restored_head"] == git(work, "rev-parse", "HEAD")
+    # Traced at the restored head -- whose tree is what was delivered (above) -- not the reverted one.
+    assert trace["head"] == reverted["restored_head"] != reverted["reverted_sha"]
     assert trace["evidence"] == "junit" and trace["summary"]["missing_acceptance_tests"] == 0
     pr = (tmp / "run" / "pr.md").read_text()
     assert pr.startswith("# [BLOCKED] DEMO-1:") and "factory:blocked" in pr

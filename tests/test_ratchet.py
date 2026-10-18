@@ -249,6 +249,28 @@ def test_a_regressing_fix_is_reverted_and_the_next_fix_starts_from_the_best_tree
     assert metrics["iterations"] == 3 and metrics["ratchet_reverts"] == 1 and metrics["review_reverted_fixes"] == 0
 
 
+def test_legacy_exhaustion_leaves_the_workspace_and_evidence_at_the_best_candidate(tmp_path: Path) -> None:
+    """Delivery on exhaustion is unchanged -- a policy refusal, nothing published -- but the
+    workspace, the run's fence and build-ratchet.json end on build.1, not on the reverted fix.2."""
+    with pytest.raises(StageError) as raised:
+        _run(tmp_path, [ROOT / "tests" / "fixtures" / "ratchet", SCRIPTED], max_build_iterations=2)
+
+    assert raised.value.kind == "policy" and "(1 reverted by the ratchet)" in str(raised.value)
+    assert "the workspace is left at the best candidate, build.1" in str(raised.value)
+    evidence = json.loads((tmp_path / "run" / "state" / "artifacts" / ART / "build-ratchet.json").read_text())
+    assert [(row["agent_call"], row["verdict"]) for row in evidence["iterations"]] == [
+        ("build.1", "kept"),
+        ("fix.2", "reverted"),
+    ]
+    assert evidence["best"]["agent_call"] == "build.1" and evidence["reverts"] == 1
+    work = tmp_path / "work"
+    head = git(work, "rev-parse", "HEAD")
+    assert head == evidence["best"]["head"] == evidence["iterations"][0]["head"]
+    assert (tmp_path / "run" / "state" / "workspace-head").read_text().strip() == head
+    assert 'raise ValueError("old must be non-zero")' in (work / "src" / "calc" / "core.py").read_text()
+    assert not (tmp_path / "run" / "pr.md").exists()
+
+
 def test_a_fix_that_edits_tests_is_refused_and_the_workspace_restored(tmp_path: Path) -> None:
     """Unchecked, this fix would go green by weakening the tests (on the sign bug). The local
     backend has no kernel rule against it; the host check refuses the commit as policy."""

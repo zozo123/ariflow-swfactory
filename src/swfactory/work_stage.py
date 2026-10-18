@@ -306,14 +306,9 @@ def _settle(ctx: stages.Ctx, progress: dict[str, Any], plan: Plan, after: str) -
     }
     if attempt["kind"] == "node":
         node = next(row for row in plan.work if row.id == attempt["id"])
-        # `--relative`: without it git reports paths from the REPOSITORY root even with `-- .`. A cell
-        # that is a full clone (islo, toolset/sbx) holds the target in a subdirectory, so every path
-        # would carry `<dir>/` and never match the node's target-relative declaration.
-        # --no-renames: a rename reports only its new path and would hide the deletion from scope.
-        changed_text = stages._sh(
-            ctx, f"git diff --name-only --relative {shlex.quote(before)}..{shlex.quote(after)} --no-renames -- ."
-        )
-        changed = tuple(sorted(line.strip() for line in changed_text.splitlines() if line.strip()))
+        # Target-relative (a full-clone cell holds the target in a subdirectory) and rename-split (a
+        # rename would hide its deletion from scope): the same diff the fix-scope check reads.
+        changed = tuple(stages.changed_paths(ctx, before, after))
         unexpected = sorted(set(changed) - set(node.files))
         if unexpected:
             _abandon(ctx, progress, before)
