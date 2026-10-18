@@ -1633,6 +1633,192 @@ async fn with_clone_the_targets_own_test_command_is_re_run_from_the_published_br
     assert!(shell.contains(&"pytest --junitxml=.factory/junit.xml".to_string()));
 }
 
+/// A `--clone` verification of a publication-key branch (#2104), whose head names run `run_id`
+/// and commits `committed` as its own `docs/factory/42/metrics.json`.
+async fn verify_publication_key_branch(
+    run_id: &str,
+    committed: &str,
+    known: Vec<RunMetrics>,
+) -> swf_domain::evidence::DeliveryReport {
+    // The suffix is `sha256(repo, target, issue)[:12]`, not a run: no record is keyed on it.
+    verify_cloned_branch("factory/42-fab2a6d3a23f", run_id, committed, known).await
+}
+
+/// A `--clone` verification of `branch`, whose head carries `trailers` (one `Factory-Run:` value
+/// per line, possibly none) and commits `committed` as its own `docs/factory/42/metrics.json`.
+async fn verify_cloned_branch(
+    branch: &str,
+    trailers: &str,
+    committed: &str,
+    known: Vec<RunMetrics>,
+) -> swf_domain::evidence::DeliveryReport {
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let checkout = scratch.path().join("checkout");
+    std::fs::create_dir_all(&checkout).expect("mkdir");
+    std::fs::write(
+        checkout.join("factory.toml"),
+        "[commands]\ntest = \"pytest --junitxml=.factory/junit.xml\"\n",
+    )
+    .expect("write");
+    let commands = Arc::new(FakeCommands {
+        answers: vec![
+            (
+                "git".to_string(),
+                CommandOutput {
+                    code: 0,
+                    stdout: format!("{trailers}\n"),
+                    stderr: String::new(),
+                },
+            ),
+            ("sh".to_string(), CommandOutput::default()),
+        ],
+        writes: vec![
+            (
+                "git".to_string(),
+                checkout.join("docs/factory/42/metrics.json"),
+                committed.to_string(),
+            ),
+            (
+                "sh".to_string(),
+                checkout.join(".factory").join("junit.xml"),
+                r#"<testsuite tests="7" failures="0" errors="0" skipped="0"/>"#.to_string(),
+            ),
+        ],
+        ..FakeCommands::default()
+    });
+    let ops = Ops::builder(context())
+        .runs(Arc::new(airflow_with_two_runs()))
+        .deliveries(Arc::new(FakeGh {
+            head: Some(head()),
+            ..FakeGh::default()
+        }))
+        .metrics(Arc::new(FakeMetrics {
+            runs: known,
+            ..FakeMetrics::default()
+        }))
+        .commands(commands)
+        .build();
+    let opts = VerifyOpts {
+        clone: true,
+        workdir: Some(scratch.path().to_path_buf()),
+        keep_checkout: true,
+        base_branch: Some("main".to_string()),
+        ..VerifyOpts::default()
+    };
+    let id = swf_domain::ids::DeliveryId::parse(branch).expect("id");
+    ops.verify_delivery(&id, &opts, &CancellationToken::new())
+        .await
+        .expect("verify")
+}
+
+#[tokio::test]
+async fn a_publication_key_branch_is_judged_by_the_run_its_head_names() {
+    // Two sessions worked issue 42 and both are in the operator's records; only the head knows
+    // which one the delivered branch carries.
+    let committed = r#"{"run_id": "dcfca3c6", "issue_id": "42", "tests_passed": true,
+        "stage_status": {"deliver": "ok"}}"#;
+    let report = verify_publication_key_branch(
+        "dcfca3c6",
+        committed,
+        vec![metrics_for("11111111"), metrics_for("dcfca3c6")],
+    )
+    .await;
+    assert_eq!(report.verdict, Verdict::Verified, "{:?}", report.checks);
+    assert!(report.workflow_succeeded, "the run the head names said so");
+    assert_eq!(
+        report.delivery.run_id, "dcfca3c6",
+        "named by the head, not the branch"
+    );
+    let present = report
+        .checks
+        .iter()
+        .find(|c| c.id == "metrics.present")
+        .expect("metrics row");
+    assert!(present.status.passed(), "{present:?}");
+    assert!(present.detail.contains("dcfca3c6"), "{}", present.detail);
+}
+
+#[tokio::test]
+async fn the_branch_s_own_metrics_outrank_the_operator_s_records() {
+    // The operator's copy says green; the bytes that were delivered say red. The delivery is what
+    // is being verified, so the delivery's own claim is the one that is judged.
+    let committed = r#"{"run_id": "dcfca3c6", "issue_id": "42", "tests_passed": false,
+        "stage_status": {"deliver": "ok"}}"#;
+    let report =
+        verify_publication_key_branch("dcfca3c6", committed, vec![metrics_for("dcfca3c6")]).await;
+    let passed = report
+        .checks
+        .iter()
+        .find(|c| c.id == "metrics.tests_passed")
+        .expect("tests_passed row");
+    assert!(!passed.status.passed(), "{passed:?}");
+}
+
+#[tokio::test]
+async fn the_head_outranks_a_legacy_branch_suffix_that_names_another_run() {
+    // A pre-#2104 branch named run 11111111, but its head carries run dcfca3c6's commit: the
+    // delivered bytes are dcfca3c6's, so that is the record judged.
+    let committed = r#"{"run_id": "dcfca3c6", "issue_id": "42", "tests_passed": false}"#;
+    let report = verify_cloned_branch(
+        "factory/42-11111111",
+        "dcfca3c6",
+        committed,
+        vec![metrics_for("11111111"), metrics_for("dcfca3c6")],
+    )
+    .await;
+    assert_eq!(report.delivery.run_id, "dcfca3c6");
+    let passed = report
+        .checks
+        .iter()
+        .find(|c| c.id == "metrics.tests_passed")
+        .expect("tests_passed row");
+    assert!(!passed.status.passed(), "judged by the head's own record");
+}
+
+#[tokio::test]
+async fn an_unmarked_head_falls_back_to_a_legacy_suffix_and_never_to_a_publication_key() {
+    let committed = r#"{"run_id": "11111111", "issue_id": "42", "tests_passed": true}"#;
+    // A legacy branch suffix IS a run id: with no trailer it still names the record.
+    let legacy = verify_cloned_branch(
+        "factory/42-11111111",
+        "",
+        committed,
+        vec![metrics_for("11111111")],
+    )
+    .await;
+    assert!(legacy.workflow_succeeded, "{:?}", legacy.checks);
+    assert_eq!(legacy.delivery.run_id, "11111111");
+    // A publication key names the work, which several runs share: nothing is matched against it,
+    // even a record that happens to carry the same string.
+    let keyed = verify_cloned_branch(
+        "factory/42-fab2a6d3a23f",
+        "",
+        committed,
+        vec![metrics_for("fab2a6d3a23f")],
+    )
+    .await;
+    assert!(!keyed.workflow_succeeded);
+    assert!(keyed.independently_verified);
+}
+
+#[tokio::test]
+async fn a_head_that_names_no_single_run_leaves_the_self_report_unread() {
+    // Two trailers claim two runs, which is a claim to neither: nothing is guessed.
+    let committed = r#"{"run_id": "dcfca3c6", "issue_id": "42", "tests_passed": true}"#;
+    let report = verify_publication_key_branch(
+        "dcfca3c6\n11111111",
+        committed,
+        vec![metrics_for("dcfca3c6")],
+    )
+    .await;
+    assert!(!report.workflow_succeeded);
+    assert!(
+        report.independently_verified,
+        "the re-run still stands on its own"
+    );
+    assert_eq!(report.delivery.run_id, "fab2a6d3a23f");
+}
+
 // ---------------------------------------------------------------- filtering and bulk answers
 
 /// A gate on `factory/r1` for one job index, parked or not according to the task fixture below.

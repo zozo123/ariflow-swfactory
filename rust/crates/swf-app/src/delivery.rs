@@ -64,11 +64,13 @@ const CLONE_DEPTH: &str = "50";
 pub struct Delivery {
     /// The identity `swf deliveries verify` takes.
     pub id: String,
-    /// `factory/<issue_id>-<run_id>`.
+    /// `factory/<issue_id>-<key>`.
     pub branch: String,
     /// The issue this delivery answers, when the branch name yields one.
     pub issue_id: String,
-    /// The run that produced it.
+    /// The branch suffix: the run that produced it on branches published before #2104, the
+    /// publication key of the issue x target since. `deliveries verify --clone` reads the run from
+    /// the head commit instead.
     pub run_id: String,
     /// The pull request number.
     pub number: i64,
@@ -222,19 +224,14 @@ pub async fn verify(
             None => Vec::new(),
         },
     };
-    let record = pick_record(&committed, &target);
-    if let (Some(found), true) = (&record, target.run_id.is_empty()) {
-        // A checkout with exactly one run in it names itself; nothing else could have.
-        target.run_id = found.run_id.clone();
-        target.issue_id = found.issue_id.clone();
-    }
-    let blocked = target.blocked;
-    checks.extend(reported_checks(record.as_ref(), &target, blocked));
-
-    // --- Published: what the forge attests. ---
-    checks.extend(published_checks(&lookup, &target, opts));
 
     // --- Verified: what this process re-derived from the branch itself. ---
+    //
+    // Run before the self-report is judged, because the clone is also the only reader of what the
+    // head says about itself: which run made it, and the metrics it committed. The evidence is
+    // still recorded after `reported` and `published`, in the order the levels are read.
+    let mut head = HeadClaims::default();
+    let mut rerun = Vec::new();
     let mut tests = None;
     if opts.clone {
         // A named origin already says where to clone from, so it stands in for the repo: a
@@ -252,16 +249,41 @@ pub async fn verify(
                 .with_hint("swf deliveries verify … --repo owner/name (or --from <remote>)"))
             }
         };
-        let (rerun, evidence) = rerun_tests(commands, &repo, &target, opts, cancel).await;
-        checks.extend(rerun);
-        tests = evidence;
+        let (evidence, outcome) =
+            rerun_tests(commands, &repo, &target, opts, &mut head, cancel).await;
+        rerun = evidence;
+        tests = outcome;
     } else {
-        checks.push(Evidence::skipped(
+        rerun.push(Evidence::skipped(
             "tests.rerun",
             EvidenceLevel::Verified,
             "--clone was not requested, so nothing above `published` was attempted",
         ));
     }
+
+    // The head is what was delivered, so when it names its run, nothing else is asked. The branch
+    // suffix is only a fallback, and only when it can be a run at all: a publication key names the
+    // work, which several runs share, and matching it against run ids could only ever be a guess.
+    let record = match head.run_id.clone() {
+        Some(run_id) => {
+            let found = head_record(&head, &committed, &run_id);
+            target.run_id = run_id;
+            found
+        }
+        None if is_publication_key(&target.run_id) => None,
+        None => pick_record(&committed, &target),
+    };
+    if let (Some(found), true) = (&record, target.run_id.is_empty()) {
+        // A checkout with exactly one run in it names itself; nothing else could have.
+        target.run_id = found.run_id.clone();
+        target.issue_id = found.issue_id.clone();
+    }
+    let blocked = target.blocked;
+    checks.extend(reported_checks(record.as_ref(), &target, blocked));
+
+    // --- Published: what the forge attests. ---
+    checks.extend(published_checks(&lookup, &target, opts));
+    checks.extend(rerun);
 
     Ok(DeliveryReport::resolve(
         DeliveryRef {
@@ -355,12 +377,22 @@ fn pr_number_in(url: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
+/// What a published head says about itself, read from the verification clone.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct HeadClaims {
+    /// The head commit's `Factory-Run:` trailer, when it carries exactly one well-formed value.
+    run_id: Option<String>,
+    /// Every `metrics.json` the branch itself commits.
+    committed: Vec<RunMetrics>,
+}
+
 /// The committed record this delivery is about.
 ///
-/// Matching is on the run id, which is the half of the branch name that is unambiguous. A local
-/// checkout that was handed over without an identity falls back to "the only record there is",
-/// and to nothing at all when there is more than one — guessing which run a directory means is how
-/// a report ends up describing the wrong delivery.
+/// The fallback when no head names its run: matching is on the branch suffix, which named the run
+/// on branches published before #2104 (a publication-key suffix never reaches here). A local
+/// checkout that was handed over without an identity falls back to "the only record there is", and
+/// to nothing at all when there is more than one — guessing which run a directory means is how a
+/// report ends up describing the wrong delivery.
 fn pick_record(committed: &[RunMetrics], target: &Target) -> Option<RunMetrics> {
     if !target.run_id.is_empty() {
         return committed
@@ -370,6 +402,59 @@ fn pick_record(committed: &[RunMetrics], target: &Target) -> Option<RunMetrics> 
     }
     match committed {
         [only] => Some(only.clone()),
+        _ => None,
+    }
+}
+
+/// The record of the run the published head names.
+///
+/// Since #2104 a delivery branch is `factory/<issue>-<publication key>`: keyed on the work, so every
+/// retry and every factory instance working one issue x target pushes the same ref, and the suffix
+/// names no run. The head commit's `Factory-Run:` trailer does. The branch's own committed metrics
+/// come first, because they are the bytes that were delivered; the operator's records are the
+/// fallback for a branch whose head committed none.
+fn head_record(head: &HeadClaims, committed: &[RunMetrics], run_id: &str) -> Option<RunMetrics> {
+    head.committed
+        .iter()
+        .chain(committed)
+        .find(|run| run.run_id == run_id)
+        .cloned()
+}
+
+/// Is this branch suffix a publication key rather than a run id?
+///
+/// The same discriminator `swfactory.publication_identity` reads branches with: exactly 12
+/// lowercase hex characters (`sha256(repo, target, issue)[:12]`). Run ids are 8 (`uuid4().hex[:8]`,
+/// `runtime.run_id_for`), so the two shapes cannot be mistaken for each other.
+fn is_publication_key(suffix: &str) -> bool {
+    suffix.len() == PUBLICATION_KEY_CHARS
+        && suffix
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The length of a publication key (`publication_identity._KEY_CHARS`).
+const PUBLICATION_KEY_CHARS: usize = 12;
+
+/// The single `Factory-Run:` value of a `git log --format=%(trailers:…,valueonly)` answer.
+///
+/// None for zero values, for several (a head that claims two runs claims neither), and for one that
+/// is not shaped like a run id — the value reaches a report, so it is never trusted as free text.
+fn trailer_run_id(stdout: &str) -> Option<String> {
+    let values: Vec<&str> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    match values.as_slice() {
+        [only]
+            if only.len() <= 64
+                && only
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') =>
+        {
+            Some((*only).to_string())
+        }
         _ => None,
     }
 }
@@ -631,12 +716,14 @@ fn published_checks(lookup: &PrLookup, target: &Target, opts: &VerifyOpts) -> Ve
 /// Clone the published branch and re-run the target's own test command from it.
 ///
 /// Every failure mode below answers `Unavailable`, never `Pass` and never `Fail`: a clone that did
-/// not happen has not verified anything and has not refuted anything either.
+/// not happen has not verified anything and has not refuted anything either. A clone that did
+/// happen also fills `head` with what the branch says about itself, before anything is removed.
 async fn rerun_tests(
     commands: &dyn CommandRunner,
     repo: &str,
     target: &Target,
     opts: &VerifyOpts,
+    head: &mut HeadClaims,
     cancel: &CancellationToken,
 ) -> (Vec<Evidence>, Option<TestEvidence>) {
     let mut out = Vec::new();
@@ -742,6 +829,21 @@ async fn rerun_tests(
         EvidenceLevel::Verified,
         format!("{branch} was cloned from {url}"),
     ));
+    // Read once the checkout exists and before the test run can write to it. A failed read leaves
+    // the run unnamed, which is the answer the branch name alone would have given.
+    let trailer = argv(&[
+        "git",
+        "-C",
+        &checkout_str,
+        "log",
+        "-1",
+        "--format=%(trailers:key=Factory-Run,valueonly)",
+    ]);
+    head.run_id = match commands.run(&trailer, opts.test_timeout, cancel).await {
+        Ok(answer) if answer.code == 0 => trailer_run_id(&answer.stdout),
+        _ => None,
+    };
+    head.committed = FsMetrics::new(checkout.clone()).load();
     if opts.origin.is_some() {
         // Fetching the ref out of the remote is a stronger answer than any forge API gives: the
         // branch is not merely reported to exist, its commits are now on this disk.
@@ -1226,6 +1328,63 @@ fn scan_attrs(text: &str) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_publication_key_is_told_apart_from_a_run_id_by_its_shape() {
+        assert!(is_publication_key("fab2a6d3a23f"));
+        assert!(!is_publication_key("dcfca3c6"), "a run id is 8 hex");
+        assert!(
+            !is_publication_key("FAB2A6D3A23F"),
+            "keys are lowercase hex"
+        );
+        assert!(!is_publication_key("fab2a6d3a23g"));
+        assert!(!is_publication_key(""));
+    }
+
+    #[test]
+    fn a_head_names_its_run_only_with_one_well_formed_trailer() {
+        assert_eq!(trailer_run_id("dcfca3c6\n"), Some("dcfca3c6".to_string()));
+        assert_eq!(
+            trailer_run_id("\n  dcfca3c6  \n\n"),
+            Some("dcfca3c6".to_string())
+        );
+        assert_eq!(trailer_run_id(""), None, "an unmarked head names nothing");
+        assert_eq!(
+            trailer_run_id("dcfca3c6\n11111111\n"),
+            None,
+            "two runs name neither"
+        );
+        assert_eq!(trailer_run_id("run id; rm -rf"), None, "never free text");
+        assert_eq!(trailer_run_id(&"a".repeat(65)), None);
+    }
+
+    #[test]
+    fn the_branch_s_own_record_is_preferred_and_the_operator_s_is_the_fallback() {
+        let mine = RunMetrics {
+            run_id: "dcfca3c6".into(),
+            tests_passed: false,
+            ..RunMetrics::default()
+        };
+        let theirs = RunMetrics {
+            run_id: "dcfca3c6".into(),
+            tests_passed: true,
+            ..RunMetrics::default()
+        };
+        let head = HeadClaims {
+            run_id: Some("dcfca3c6".into()),
+            committed: vec![mine.clone()],
+        };
+        assert_eq!(
+            head_record(&head, std::slice::from_ref(&theirs), "dcfca3c6"),
+            Some(mine)
+        );
+        let bare = HeadClaims::default();
+        assert_eq!(
+            head_record(&bare, std::slice::from_ref(&theirs), "dcfca3c6"),
+            Some(theirs)
+        );
+        assert_eq!(head_record(&bare, &[], "dcfca3c6"), None);
+    }
 
     #[test]
     fn a_branch_splits_on_the_last_hyphen_because_issue_ids_contain_them() {

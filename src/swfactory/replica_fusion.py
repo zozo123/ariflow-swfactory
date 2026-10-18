@@ -243,7 +243,7 @@ class FusionExperiment:
             child = self.workspace(identity, base)
             if starting_patch:
                 child.sb.write(".factory/fusion.patch.b64", base64.b64encode(starting_patch).decode())
-                stages._sh(child, "base64 -d .factory/fusion.patch.b64 | git apply --index")
+                stages._sh(child, "base64 -d < .factory/fusion.patch.b64 | git apply --index")
             stage = (
                 ("build" if round_number == 1 else "fix") if role in {"repair-a", "repair-b", "synthesis"} else "review"
             )
@@ -404,7 +404,7 @@ class FusionExperiment:
         child = self.workspace(identity, base)
         try:
             child.sb.write(".factory/fusion.patch.b64", base64.b64encode(patch).decode())
-            stages._sh(child, "base64 -d .factory/fusion.patch.b64 | git apply --index")
+            stages._sh(child, "base64 -d < .factory/fusion.patch.b64 | git apply --index")
             head = stages.commit(child, stage="fusion", msg=f"fusion {identity}")
             self.scope(child, base, head, "build" if number == 1 else "fix")
             row = {
@@ -503,7 +503,7 @@ class FusionExperiment:
             )
             self.save()
             self.ctx.sb.write(".factory/fusion.patch.b64", base64.b64encode(patch).decode())
-            stages._sh(self.ctx, "base64 -d .factory/fusion.patch.b64 | git apply --index")
+            stages._sh(self.ctx, "base64 -d < .factory/fusion.patch.b64 | git apply --index")
             stages.commit(self.ctx, stage="fusion", msg="adopt verified replica fusion")
         actual_tree = stages._sh(self.ctx, "git rev-parse HEAD^{tree}").strip()
         if actual_tree != expected_tree:
