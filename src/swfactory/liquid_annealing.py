@@ -363,6 +363,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
             plan=plan,
             failures="Liquid annealing defects requiring relaxation:\n" + stages._format_findings(actionable),
             protected=stages._protected(ctx, "fix"),
+            dialect=stages.target_dialect(ctx),
         )
         tests_blocker = stages.fix_and_retest(
             ctx, fix_prompt, fixes=fixes, fallback="relax annealing defects", numbers=numbers

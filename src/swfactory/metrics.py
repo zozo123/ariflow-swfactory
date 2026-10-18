@@ -93,12 +93,46 @@ def write_run_metrics(
         "inputs_digest": pinned.digest if pinned is not None else None,
         "policy_sha256": pinned.policy_sha256 if pinned is not None else None,
     }
+    data.update(call_efficiency(ctx))
     if ctx.agent.kind == "external":
         from swfactory.call_accounting import CallLedger
 
         data["unreconciled_cost_usd"] = round(CallLedger(ctx.state).unreconciled_usd(), 6)
     ctx.write_artifact(f"{ctx.art}/metrics.json", json.dumps(data, indent=2) + "\n")
     return data
+
+
+def call_efficiency(ctx: Ctx) -> dict[str, int]:
+    """``agent_calls`` and ``model_turns`` for this run, from the host-owned per-call ledger.
+
+    The harness-efficiency contract asks for model turns per run, and they existed only in each
+    call's settle receipt (``num_turns``), never summed: a change meant to cut turns -- the dialect
+    card, a per-stage ``max_turns`` -- had nothing in ``metrics.json`` to move. The ledger, not the
+    stage log, is the source because it is written around every provider call and so counts the
+    Plan.work nodes, repairs and review fixes a stage record folds together.
+
+    ``agent_calls`` counts every reserved call, including one whose outcome is unknown: the request
+    left the process, so it was a call. ``model_turns`` sums only what settle receipts report; an
+    unknown call contributes no turns rather than a guessed number, and a receipt whose
+    ``num_turns`` is not a non-negative integer counts as zero rather than failing delivery.
+
+    A replica-fusion build reserves its whole campaign as one parent-ledger row and runs each role
+    as a worker ``Ctx`` with its own ledger; the campaign row is money, not a call, so it is left
+    out and the workers' ledgers are read instead.
+    """
+    from swfactory.call_accounting import CallLedger
+    from swfactory.replica_fusion import CAMPAIGN_STAGE, worker_run_dirs
+    from swfactory.state import RunState
+
+    records = [record for record in CallLedger(ctx.state).records() if record.stage != CAMPAIGN_STAGE]
+    for worker in worker_run_dirs(ctx.run_dir):
+        records += CallLedger(RunState(worker)).records()
+    turns = 0
+    for record in records:
+        value = (record.receipt or {}).get("num_turns")
+        if type(value) is int and value >= 0:
+            turns += value
+    return {"agent_calls": len(records), "model_turns": turns}
 
 
 def _findings_by_severity(ctx: Ctx, review_numbers: dict[str, float]) -> dict[str, int]:

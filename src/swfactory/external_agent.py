@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from swfactory.agent import POLICIES, Invocation, Policy
+from swfactory.agent import POLICIES, Invocation, Policy, call_max_turns
 from swfactory.config import Config
 from swfactory.models import AgentKind, AgentResult, RunResult, StageError
 from swfactory.paths import normalize_absolute_posix_path
@@ -310,7 +310,7 @@ class ExternalAgent:
             "output_schema": schema.model_json_schema() if schema is not None else None,
             "budget": {
                 "usd": cfg.max_budget_usd_per_stage,
-                "max_turns": cfg.max_turns,
+                "max_turns": call_max_turns(policy, cfg),
                 "timeout_s": policy.timeout_s,
             },
             "policy": {

@@ -9,6 +9,8 @@ do not create or edit files.
 ## Spec
 {spec}
 
+{dialect}
+
 ## Deliverable
 Return ONLY a JSON object (it is validated against a schema) with these keys:
 

@@ -136,6 +136,18 @@ def test_external_factory_request_and_candidate_receipt(tmp_path: Path) -> None:
     assert request["output_schema"] == BuildSummary.model_json_schema()
 
 
+def test_external_budget_carries_the_stage_turn_cap(tmp_path: Path) -> None:
+    """A blueprint's tighten-only ``[policy.build] max_turns`` reaches the wrapper's budget, and a
+    policy cap above the run's cannot raise it."""
+    path, _ = _profile(tmp_path)
+    cfg = _cfg(tmp_path, path, max_turns=7)
+    agent = make_agent(cfg)
+    for stage_cap, expected in ((3, 3), (70, 7)):
+        sb = ExternalSandbox(Path(cfg.workdir), RunResult(0, _candidate(), "", 0.1))
+        _run(agent, cfg, sb, policy=replace(POLICIES["build"], max_turns=stage_cap))
+        assert json.loads(sb.calls[0]["request"])["budget"]["max_turns"] == expected
+
+
 def test_hard_cap_does_not_fabricate_known_cost(tmp_path: Path) -> None:
     path, _ = _profile(tmp_path, budget_mode="hard_cap", enforces_usd_limit=True)
     cfg = _cfg(tmp_path, path)

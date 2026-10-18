@@ -479,6 +479,20 @@ def test_an_upgraded_build_prompt_refuses_the_next_task_of_the_epoch(
     assert first.state.read_jsonl(stages.RUN_STAGES_LOG) == []
 
 
+def test_an_upgraded_dialect_card_refuses_the_next_task_of_the_epoch(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dialect card is not a stage prompt of its own, but every plan, build and fix prompt
+    embeds it: rewording "you have no shell" changes what the model is told as surely as editing
+    build.md, so it must fence the epoch the same way."""
+    prompts = _installed_prompts(workspace, monkeypatch)
+    _ctx(workspace)
+    _rewrite(prompts, "dialect", "\nYou may run the test command yourself.\n")
+    with pytest.raises(StageError) as error:
+        _ctx(workspace)
+    assert "prompts/dialect.md" in str(error.value)
+
+
 def test_an_upgraded_review_prompt_refuses_before_any_agent_call(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -585,16 +599,89 @@ def _rendered_in(module: object) -> dict[str, set[str]]:
     return found
 
 
+def _calls_in(module: object) -> dict[str, set[tuple[str | None, str]]]:
+    """Every call each function of ``module`` makes, as ``(qualifier, name)``.
+
+    ``qualifier`` is None for a bare ``f(...)``, ``"self"`` for ``self.f(...)`` and the module alias
+    for ``stages.f(...)``; any other receiver is not followed. Collected so a template a stage
+    renders through a helper -- ``target_dialect`` renders ``dialect.md`` for ``plan``, ``build`` and
+    ``fix`` -- counts as rendered by every stage that calls the helper, instead of only by a helper
+    whose name is not a stage and so was never compared against the pin.
+    """
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))  # type: ignore[attr-defined]
+    calls: dict[str, set[tuple[str | None, str]]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        found = calls.setdefault(node.name, set())
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call):
+                continue
+            if isinstance(call.func, ast.Name):
+                found.add((None, call.func.id))
+            elif isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
+                found.add((call.func.value.id, call.func.attr))
+    return calls
+
+
+def _rendered_through_helpers(modules: dict[str, object]) -> dict[str, dict[str, set[str]]]:
+    """``_rendered_in`` closed over helper calls across ``modules``: a function renders what it
+    renders itself plus what every analysed function it calls renders, transitively.
+
+    A bare name resolves in its own module first and then in any analysed module (a lazy
+    ``from swfactory.x import f`` inside the body); ``self.f`` resolves in its own module; ``stages.f``
+    in ``stages``. Methods are keyed by name, so a shared name over-approximates -- the safe
+    direction for a pin, which must cover at least what is rendered.
+    """
+    direct = {name: _rendered_in(mod) for name, mod in modules.items()}
+    calls = {name: _calls_in(mod) for name, mod in modules.items()}
+
+    def resolve(module: str, qualifier: str | None, name: str) -> tuple[str, str] | None:
+        if qualifier in (None, "self") and name in calls[module]:
+            return module, name
+        if qualifier is None:
+            return next(((other, name) for other in modules if name in calls[other]), None)
+        if qualifier in modules and name in calls[qualifier]:
+            return qualifier, name
+        return None
+
+    edges = {
+        (module, function): {
+            target for qualifier, callee in callees if (target := resolve(module, qualifier, callee)) is not None
+        }
+        for module in modules
+        for function, callees in calls[module].items()
+    }
+    # A fixed point rather than a memoised walk: recursion (mutual or self) must not freeze a
+    # function's set before its cycle has contributed.
+    closed = {key: set(direct[key[0]].get(key[1], set())) for key in edges}
+    changed = True
+    while changed:
+        changed = False
+        for key, targets in edges.items():
+            before = len(closed[key])
+            for target in targets:
+                closed[key] |= closed[target]
+            changed |= len(closed[key]) != before
+    return {module: {function: closed[(module, function)] for function in calls[module]} for module in modules}
+
+
 def test_a_stage_cannot_render_a_template_the_epoch_does_not_pin() -> None:
     """The drift guard. Adding a ``render_prompt`` call to a stage body without extending
     ``STAGE_PROMPTS`` would put a live instruction back outside the digest -- #2098 again."""
-    from swfactory import replica_fusion, work_stage
+    from swfactory import harness_efficiency, liquid_annealing, replica_fusion, work_stage
 
-    rendered = {
-        name: _rendered_in(mod)
-        for name, mod in (("stages", stages), ("work_stage", work_stage), ("replica_fusion", replica_fusion))
+    modules = {
+        "stages": stages,
+        "work_stage": work_stage,
+        "replica_fusion": replica_fusion,
+        "liquid_annealing": liquid_annealing,
+        "harness_efficiency": harness_efficiency,
     }
-    assert rendered["stages"], "no render_prompt call site found: the derivation broke, not the code"
+    direct = {name: _rendered_in(mod) for name, mod in modules.items()}
+    assert direct["stages"], "no render_prompt call site found: the derivation broke, not the code"
+    rendered = _rendered_through_helpers(modules)
+    assert "dialect" in rendered["stages"]["plan"], "helper calls are not followed: the derivation broke"
 
     pinned = set().union(*accepted_inputs.STAGE_PROMPTS.values())
     for module, functions in rendered.items():
@@ -605,14 +692,22 @@ def test_a_stage_cannot_render_a_template_the_epoch_does_not_pin() -> None:
     # Per stage, and EQUAL, not merely a subset. A subset check let the map go stale in the other
     # direction: dropping "fix" from STAGE_PROMPTS["build_and_test"] left every test green while a
     # changed fix.md was admitted silently. What a stage renders and what the epoch pins for it are
-    # the same set, or one of them is wrong.
-    workgraph = rendered["work_stage"].get("_node_prompt", set())
-    for stage, names in rendered["stages"].items():
-        if stage in accepted_inputs.STAGE_PROMPTS:
-            declared = set(accepted_inputs.STAGE_PROMPTS[stage])
-            fusion = set().union(*rendered["replica_fusion"].values())
-            expected = names | (workgraph | fusion if stage == "build_and_test" else set())
-            assert expected == declared, f"{stage} renders {sorted(expected)} but the epoch pins {sorted(declared)}"
+    # the same set, or one of them is wrong. EVERY stage, including those that render nothing in
+    # their own body: `build_and_test` in `stages` only delegates, so comparing just the functions
+    # with a direct call site never compared the build stage at all. Each implementation a line can
+    # resolve the stage to (`stage_registry.resolve`) is held to the same pin: the managed Plan.work
+    # build (whose fusion branch is a lazily imported campaign, so its whole module counts) and the
+    # Liquid review as much as the canonical review.
+    fusion = set().union(*rendered["replica_fusion"].values())
+    implementations = {
+        "build_and_test": [rendered["work_stage"]["build_and_test"] | fusion],
+        "review": [rendered["stages"]["review"], rendered["liquid_annealing"]["review"]],
+    }
+    for stage, declared in accepted_inputs.STAGE_PROMPTS.items():
+        for expected in implementations.get(stage, [rendered["stages"][stage]]):
+            assert expected == set(declared), (
+                f"{stage} renders {sorted(expected)} but the epoch pins {sorted(declared)}"
+            )
 
 
 def test_every_packaged_template_is_declared_referenced_or_maintenance_only() -> None:

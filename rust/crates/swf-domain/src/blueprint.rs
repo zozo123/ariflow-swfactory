@@ -263,7 +263,8 @@ impl Default for Limits {
     }
 }
 
-/// `[policy.<stage>]` — an **additive** relaxation of one agent policy.
+/// `[policy.<stage>]` — an **additive** relaxation of one agent policy, plus a turn cap that may
+/// only tighten.
 ///
 /// Only additive: there is no way to remove a denied tool from a blueprint, because the deny list
 /// is the sandbox's floor and a file in a repository must not be able to lower it.
@@ -274,6 +275,9 @@ pub struct PolicyOverride {
     pub model: Option<String>,
     /// Extra path-scoped file/search tools. Shell, web and MCP tools are refused.
     pub extra_allowed_tools: Vec<String>,
+    /// This stage's per-call turn cap: at least 1 and at most `limits.max_turns`, never a
+    /// widening (the Python `PolicyOverride.max_turns`).
+    pub max_turns: Option<u32>,
 }
 
 /// `[review]` — where the review policy lives and how many nits survive it.
@@ -770,6 +774,21 @@ impl Blueprint {
                     "policy.{stage} cannot add shell access or escalate a read-only stage: {}",
                     py_list(unsafe_tools.iter().copied()),
                 )));
+            }
+            match override_.max_turns {
+                Some(0) => {
+                    return Err(BlueprintError::invalid(format!(
+                        "policy.{stage}.max_turns must be >= 1"
+                    )));
+                }
+                Some(turns) if turns > self.limits.max_turns => {
+                    return Err(BlueprintError::invalid(format!(
+                        "policy.{stage}.max_turns ({turns}) must not exceed limits.max_turns ({}); \
+                         a stage override may only tighten the turn cap",
+                        self.limits.max_turns,
+                    )));
+                }
+                _ => {}
             }
         }
         Ok(())
@@ -1274,6 +1293,20 @@ order = ["intent", "deliver"]
         );
         assert!(parse(&with("build", "Write(src/**)")).is_ok());
         assert!(parse(&with("review", "Read(docs/**)")).is_ok());
+    }
+
+    #[test]
+    fn a_stage_turn_cap_may_only_tighten_the_run_limit() {
+        let with = |turns: u32| format!("{MINIMAL}\n[policy.build]\nmax_turns = {turns}\n");
+        let bp = parse(&with(3)).expect("a tighter cap parses");
+        assert_eq!(bp.policy["build"].max_turns, Some(3));
+        assert!(parse(&with(40)).is_ok());
+        assert_eq!(err(&with(0)), "policy.build.max_turns must be >= 1");
+        assert_eq!(
+            err(&with(41)),
+            "policy.build.max_turns (41) must not exceed limits.max_turns (40); a stage override \
+             may only tighten the turn cap"
+        );
     }
 
     #[test]
