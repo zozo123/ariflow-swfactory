@@ -328,10 +328,12 @@ def test_a_target_without_tests_records_an_explicit_empty_baseline(tmp_path: Pat
     }
 
 
-def test_setup_refuses_to_measure_a_base_that_provisioning_left_dirty(
+def test_a_base_that_provisioning_left_dirty_is_recorded_as_unmeasured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The record must describe the base commit, not the base plus a file a dependency sync wrote."""
+    """A dependency sync that rewrites a tracked lockfile leaves a tree that is not the base, so it
+    cannot be measured as one -- but a run like that worked before the guard existed, so setup goes
+    on and the record says, in words, that no baseline was taken and why."""
     real = stages._review_policy
 
     def dirties(ctx: stages.Ctx) -> str:
@@ -339,10 +341,12 @@ def test_setup_refuses_to_measure_a_base_that_provisioning_left_dirty(
         return real(ctx)
 
     monkeypatch.setattr(stages, "_review_policy", dirties)
-    with pytest.raises(StageError, match="setup before the base test run changed files") as error:
-        stages.setup(_ctx(tmp_path))
-    assert error.value.kind == "policy" and "uv.lock" in str(error.value)
-    assert not (tmp_path / "run" / "state" / BASE_TESTS).exists()
+    stages.setup(_ctx(tmp_path))
+    record = json.loads((tmp_path / "run" / "state" / BASE_TESTS).read_text())
+    assert record["report_valid"] is False and record["passing"] is None and record["passed"] == 0
+    assert "uv.lock" in record["unmeasured"]
+    # An unmeasured baseline names no test a candidate could lose.
+    assert regression_findings(record, {"t::a": "failed"}, _result(0, valid=False), tests_dir="tests") == []
 
 
 def test_a_progressed_run_without_a_base_record_never_measures_the_candidate_as_base(tmp_path: Path) -> None:

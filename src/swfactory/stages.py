@@ -1386,9 +1386,22 @@ def _record_base_tests(ctx: Ctx, base: str, head: str) -> None:
     """
     if ctx.state.has_control(BASE_TESTS) or head != base:
         return
-    # What is measured must be the base commit itself, not the base plus whatever provisioning
-    # (a dependency sync rewriting a stale lockfile) left in the tree; ``run_tests`` re-checks after.
-    _ensure_clean(ctx, "setup before the base test run", allow_artifacts=True)
+    # What is measured must be the base commit itself, not the base plus whatever provisioning (a
+    # dependency sync rewriting a stale lockfile) left in the tree. Such a tree cannot be measured
+    # as the base, but it is no reason to refuse a run that worked before the guard existed: the
+    # baseline is recorded as explicitly unmeasured, which ``regression.json`` reports as such.
+    dirty = _sh(ctx, f"git status --porcelain=v1 --untracked-files=all -- . {_exclude(ctx)}").strip()
+    if dirty:
+        changed = ", ".join(line.split(maxsplit=1)[-1] for line in dirty.splitlines()[:5])
+        record = {
+            "base": base,
+            "report_valid": False,
+            "passed": 0,
+            "passing": None,
+            "unmeasured": f"provisioning changed the base checkout before it could be measured: {changed}",
+        }
+        ctx.state.write_control(BASE_TESTS, json.dumps(record, sort_keys=True) + "\n")
+        return
     result, output = run_tests(ctx)
     if not result.report_valid:
         tests_dir = _contract(ctx).tests_dir
@@ -2690,12 +2703,15 @@ def _regression_guard(ctx: Ctx, base: str, head: str, required: list[str]) -> tu
                 "base": base,
                 "tested_head": record["head"],
                 "mode": (
-                    "cases"
+                    "unmeasured"
+                    if baseline.get("unmeasured")
+                    else "cases"
                     if baseline["passing"] is not None and cases is not None
                     else "unconfirmed"
                     if baseline["passing"]
                     else "counts"
                 ),
+                "unmeasured": baseline.get("unmeasured"),
                 "base_passed": baseline["passed"],
                 "candidate_passed": candidate.passed if candidate.report_valid else 0,
                 "regressions": len(findings),
