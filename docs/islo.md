@@ -1,4 +1,4 @@
-# Running the factory on islo (production)
+# Running the factory on islo (hosted deployment)
 
 Two tiers, both islo sandboxes, one trust boundary between them. Nothing that can push to GitHub
 ever shares a VM with model-generated code, and nothing that can call Anthropic ever sees a GitHub

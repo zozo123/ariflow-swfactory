@@ -41,7 +41,11 @@ if TYPE_CHECKING:
     from swfactory.adaptive_information import InformationBudgetDecision
     from swfactory.population_manifest import PopulationManifest
 
-app = typer.Typer(help="AI-native software factory.", no_args_is_help=True, add_completion=False)
+app = typer.Typer(
+    help="SWFactory: GitHub issues to reviewed pull requests (alpha).",
+    no_args_is_help=True,
+    add_completion=False,
+)
 
 
 def _print_version(requested: bool) -> None:
@@ -59,7 +63,7 @@ def _root(
         typer.Option("--version", callback=_print_version, is_eager=True, help="print the version and exit"),
     ] = False,
 ) -> None:
-    """AI-native software factory."""
+    """SWFactory: GitHub issues to reviewed pull requests (alpha)."""
 
 
 # What reading a JSON file into a typed document can raise (``json.JSONDecodeError`` is a ValueError).

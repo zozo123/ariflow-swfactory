@@ -19,7 +19,7 @@ through their GitHub profile without including exploit details in a public issue
 
 ## Security model
 
-swfactory treats agent-generated code as untrusted. The production design separates the agent
+SWFactory treats agent-generated code as untrusted. The production design separates the agent
 sandbox from the orchestrator that holds source-control credentials, validates patch paths, scans
 for secret-shaped values, and alone performs delivery. See the trust-boundary section and sandbox
 table in [README.md](README.md#execution-and-trust-boundaries) before operating the real-agent path.

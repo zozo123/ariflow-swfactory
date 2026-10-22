@@ -13,10 +13,12 @@
     <meta property="og:title" content="SWFactory | GitHub issues to reviewed pull requests" />
     <meta
       property="og:description"
-      content="Plan, implement, test, and review a GitHub issue. Airflow schedules the work; the trusted backend publishes the pull request and its evidence."
+      content="Turn a GitHub issue into a reviewed pull request: agents plan, write, and review the change, trusted code runs the tests, and a person approves the plan and merges. Alpha."
     />
     <meta property="og:url" content="https://zozo123.github.io/ariflow-swfactory/" />
     <meta property="og:image" content="https://zozo123.github.io/ariflow-swfactory/social-card.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="SWFactory: GitHub issues to reviewed pull requests" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="canonical" href="https://zozo123.github.io/ariflow-swfactory/" />
@@ -32,13 +34,12 @@
       <div class="shell nav">
         <a class="brand" href="#top">SWFactory</a>
         <nav aria-label="Primary navigation">
-          <a href="#algorithm">Method</a>
+          <a href="#quickstart">Run it</a>
+          <a href="#algorithm">How it works</a>
           <a href="#evidence">Evidence</a>
-          <a href="#physics">Authority</a>
+          <a href="#authority">Authority</a>
           <a href="#factory-demo">Walkthrough</a>
           <a href="#sandboxes">Sandboxes</a>
-          <a href="#quickstart">Run it</a>
-          <a href="osai-week-2026.html">Workshop</a>
           <a href="https://github.com/zozo123/ariflow-swfactory">GitHub</a>
         </nav>
       </div>
@@ -49,9 +50,11 @@
         <p class="label">SWFactory · Alpha</p>
         <h1>From GitHub issue to reviewed pull request.</h1>
         <p class="lede">
-          Coding agents plan, implement, test, and review a change. Airflow schedules the work;
-          the trusted backend publishes a pull request with the evidence attached. Human-approved
-          lines wait at review gates; policy-driven autonomous operation remains experimental.
+          Coding agents write the plan and the code, then review the change. Trusted factory code
+          runs the tests, and the backend publishes a pull request with the evidence attached.
+          Airflow schedules the work. On the default line a person approves the intent and the
+          plan, and a person merges. An autonomous line for documentation-only changes is
+          experimental.
         </p>
         <div class="actions">
           <a class="primary" href="#quickstart">Run the local demo</a>
@@ -61,16 +64,23 @@
 
       <section id="quickstart">
         <h2>Run it</h2>
-        <p>No model key is required for the scripted local demo.</p>
+        <p>
+          You need Git, Python 3.12, and <a href="https://docs.astral.sh/uv/">uv</a>. No model key
+          is required for the scripted local demo.
+        </p>
         <pre><code>git clone https://github.com/zozo123/ariflow-swfactory.git
 cd ariflow-swfactory
 uv sync --locked
 uv run swfactory demo</code></pre>
-        <p>Inspect the local stage report and PR description. This fixture replay makes no model calls and opens no GitHub PR.</p>
+        <p>
+          The demo writes its stage report to <code>.factory/&lt;run_id&gt;/report.json</code> and
+          the local PR description to <code>.factory/&lt;run_id&gt;/pr.md</code>. This fixture replay
+          makes no model calls and opens no GitHub PR.
+        </p>
       </section>
 
       <section id="algorithm">
-        <h2>How a change moves</h2>
+        <h2>How it works</h2>
         <ol class="steps">
           <li>
             <strong>1. Submit a GitHub issue.</strong>
@@ -101,49 +111,32 @@ uv run swfactory demo</code></pre>
           issue -> cell -> Airflow -> agent work -> verification -> pull request
         </p>
         <div class="note">
-          The default managed line uses one governed implementation path today. Parallel candidate
-          sketching is a future capability, not a claim about the default runtime.
+          The default managed line uses one governed implementation path today. Trying several
+          candidates in parallel is a future capability, not a claim about the default runtime.
         </div>
       </section>
 
       <section id="evidence">
         <h2>Evidence has a scope.</h2>
         <p>
-          Every important release claim should name the exact candidate, assumptions, verification
-          method, result, and remaining uncertainty. A proof establishes its theorem under its
-          definitions and axioms; it does not automatically prove that deployed software refines
-          the model. Tests, fuzzing, benchmarks, and observations answer different questions.
-        </p>
-        <p class="note">
-          SWFactory records the result, remaining uncertainty, and the next useful check.
-          Formalizability is not a proof verdict, and evidence never grants release authority.
+          SWFactory records each check's result and the uncertainty that remains; evidence informs
+          a release decision but never grants permission to release.
           <a href="https://github.com/zozo123/ariflow-swfactory/blob/main/docs/software-atelier.md">
-            Read the verification and uncertainty method.
+            Read the design rationale.
           </a>
         </p>
       </section>
 
-      <section id="physics">
+      <section id="authority">
         <h2>Who can publish a change?</h2>
         <p>
-          Agents, sandboxes, builds, and caches may be replaced during a run. The control plane
-          retains the work identity, approved artifact digests, evidence, and publication state.
-          An agent or a cache hit cannot approve a gate or grant itself publication authority.
-        </p>
-        <p class="formula" aria-label="Authority boundary">
-          faster execution != permission to publish
-        </p>
-        <ul class="plain-list">
-          <li><strong>Turborepo:</strong> content hashes can skip identical build work.</li>
-          <li><strong>SWFactory:</strong> digest-bound gates decide which exact candidate may advance.</li>
-          <li><strong>Airflow:</strong> remains the only lifecycle scheduler.</li>
-        </ul>
-        <div class="note">
-          <strong>Invariant:</strong> an accelerator may change time-to-answer, never the answer.
+          Agents, sandboxes, and build caches can be replaced during a run, but none of them can
+          approve a gate or publish; only the trusted control plane, which keeps the work identity,
+          approvals, and evidence, can publish.
           <a href="https://github.com/zozo123/ariflow-swfactory/blob/main/docs/polyglot-task-graph.md">
-            Read the polyglot task-graph boundary.
+            Read how build caching stays outside approval.
           </a>
-        </div>
+        </p>
       </section>
 
       <section id="factory-demo">
@@ -249,6 +242,7 @@ uv run swfactory demo</code></pre>
     <footer class="shell">
       <span>SWFactory</span>
       <span>Apache-2.0</span>
+      <a href="osai-week-2026.html">Past workshop (19 Oct 2026)</a>
       <a href="https://github.com/zozo123/ariflow-swfactory">GitHub</a>
     </footer>
   </body>

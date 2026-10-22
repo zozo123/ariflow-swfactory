@@ -1,1 +1,1 @@
-"""swfactory: AI-native software factory core."""
+"""SWFactory: GitHub issues to reviewed pull requests (alpha)."""

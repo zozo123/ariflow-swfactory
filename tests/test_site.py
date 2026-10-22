@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).parents[1]
 SITE = ROOT / "site"
 PAGES_WORKFLOW = ROOT / ".github" / "workflows" / "pages.yml"
+# GitHub Pages serves the project site under this path. A root-absolute reference resolves from it.
+SITE_BASE = "/ariflow-swfactory/"
 
 
 class PageProbe(HTMLParser):
@@ -67,12 +69,13 @@ def parse_page(name: str) -> tuple[str, PageProbe]:
 
 
 def assert_local_references_exist(probe: PageProbe) -> None:
-    """Ensure every relative page asset resolves inside the site root."""
+    """Ensure every local page asset, relative or under ``SITE_BASE``, resolves inside the site root."""
     for reference in probe.references:
         parsed = urlsplit(reference)
         if parsed.scheme or parsed.netloc or reference.startswith(("mailto:", "#")):
             continue
-        target = (SITE / parsed.path).resolve()
+        path = parsed.path.removeprefix(SITE_BASE) if parsed.path.startswith(SITE_BASE) else parsed.path
+        target = (SITE / path).resolve()
         assert target.is_relative_to(SITE.resolve()), reference
         assert target.exists(), reference
 
@@ -127,8 +130,20 @@ def test_custom_not_found_page_is_self_contained() -> None:
     assert page.html_lang == "en"
     assert page.h1_count == 1
     assert page.meta["robots"] == "noindex"
-    assert 'href="./"' in source
+    assert f'href="{SITE_BASE}"' in source
     assert_local_references_exist(page)
+
+
+def test_not_found_page_references_survive_a_nested_missing_path() -> None:
+    """Pages serves 404.html for any missing path, including ``/ariflow-swfactory/a/b``. A relative
+    ``styles.css`` or ``./`` then resolves under ``/a/``, so the page loses its stylesheet and its
+    home link. Every local reference must be root-absolute under the project base."""
+    _, page = parse_page("404.html")
+
+    local = [ref for ref in page.references if not urlsplit(ref).scheme and not ref.startswith(("mailto:", "#"))]
+
+    assert local, "the 404 page should load the site stylesheet"
+    assert [ref for ref in local if not ref.startswith(SITE_BASE)] == []
 
 
 def test_static_assets_remain_valid_without_driving_the_layout() -> None:

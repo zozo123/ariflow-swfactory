@@ -1,6 +1,6 @@
-# swfactory agent contract
+# SWFactory agent contract
 
-This repository is an **Airflow-governed software atelier**:
+This repository is **SWFactory**, an Airflow-governed software factory:
 
 `work order -> Cell -> Airflow -> bounded agent work -> evidence -> PR -> authorized merge`
 

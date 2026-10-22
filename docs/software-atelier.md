@@ -1,13 +1,13 @@
-# The Software Atelier
+# Design rationale: exploration, evidence, and release
 
 For the implemented stage flow, vocabulary, current ownership, and ordered acceptance milestones,
 start with the [system map](system-map.md). This page develops the method and its judgment boundaries.
 
 ## Purpose
 
-The software factory is an **atelier**: a place where people and agents can explore, make, compare,
-and refine software. The atelier protects room for invention while keeping a strict boundary around
-what may be called verified, approved, or released.
+SWFactory is where people and agents explore, build, compare, and refine software changes. The
+factory leaves room for invention while keeping a strict boundary around what may be called
+verified, approved, or released.
 
 This is a product and workflow framing for the existing factory. It does not introduce a second
 scheduler, grant agents new authority, or claim that every step described here is already enforced
@@ -18,23 +18,23 @@ and epoch continue to fence managed effects; promotion remains an explicit autho
 
 The process is inspired by rigorous agent workflows such as pstack: investigate before changing,
 choose a method suited to the task, keep the change small, and verify against the real artifact.
-The atelier extends that discipline across durable work identity, evidence, uncertainty, and release.
+SWFactory extends that discipline across durable work identity, evidence, uncertainty, and release.
 
 ## The making process
 
 ```text
-commission -> sketch -> critique -> freeze -> verify -> steward -> release
-                  ^         |                    |
-                  +---------+--------------------+
-                 counterexample or new question
+admit -> explore -> review -> freeze -> verify -> decide -> release
+            ^         |                   |
+            +---------+-------------------+
+           counterexample or new question
 ```
 
 A counterexample or changed requirement returns the work to exploration. It does not silently
 preserve an earlier verdict.
 
-### 1. Commission: understand the work
+### 1. Admit: understand the work
 
-A commission starts with the accepted work order and records:
+Admission starts with the accepted work order and records:
 
 - the intended outcome and who it is for;
 - constraints, protected surfaces, and authority limits;
@@ -46,7 +46,7 @@ The brief is a contract for the work, not a claim that its requirements are comp
 consistent. If the intent is ambiguous, preserve that uncertainty and ask for a decision at the
 appropriate human gate rather than letting an agent turn a guess into a requirement.
 
-### 2. Sketch: make alternatives safely
+### 2. Explore: make alternatives safely
 
 Agents may investigate, prototype, and explore alternative implementations in bounded, isolated
 execution. Each result is a proposal. Search outputs, model confidence, phase assessments, and
@@ -57,13 +57,13 @@ copies that share a prompt, context, code, or evidence. Parallel count alone doe
 independence. Exploration remains subject to the work order's budgets, sandbox policy, and existing
 authority boundaries.
 
-The default managed line currently uses one governed build/review path. Multi-candidate sketching
+The default managed line currently uses one governed build/review path. Exploring several candidates
 is an architectural direction and must not be described as a default runtime capability until its
 execution and lineage are wired and retained.
 
-### 3. Critique: test the work against its brief
+### 3. Review: test the work against its brief
 
-Compare a candidate with the commission, not just with another agent's preferred answer. Critique
+Compare a candidate with the work order, not just with another agent's preferred answer. Review
 should identify:
 
 - which acceptance criteria have evidence;
@@ -115,12 +115,12 @@ argument and evidence support that bridge. Open-world behavior, subjective quali
 requirements may remain empirical or judgment-based by nature. Preserve those limits instead of
 forcing them into a false proof label.
 
-### 6. Steward: decide whether to release
+### 6. Decide: release or hold
 
-The steward evaluates the frozen candidate against policy, claim evidence, unresolved uncertainty,
-and the human decisions required by the commission. Evidence supports a decision; it does not grant
-permission. Agents and search controllers cannot approve their own work, publish through a path
-outside the factory, or convert a confidence score into authority.
+The release decision weighs the frozen candidate against policy, claim evidence, unresolved
+uncertainty, and the human decisions the work order requires. Evidence supports a decision; it
+does not grant permission. Agents and search controllers cannot approve their own work, publish
+through a path outside the factory, or convert a confidence score into authority.
 
 Possible outcomes should remain explicit:
 
@@ -133,7 +133,7 @@ Possible outcomes should remain explicit:
 A release record should identify the exact candidate, applicable policy, decision-maker, evidence
 root, and any accepted residual uncertainty.
 
-## The atelier's invariants
+## Invariants
 
 1. **One lifecycle authority.** Airflow schedules managed lifecycle work. Local search or execution
    helpers cannot become competing lifecycle schedulers.
@@ -156,12 +156,12 @@ The repository already has the core ingredients: Airflow-managed stages and huma
 Factory Cells and epochs, candidate/evidence identity, phase control marked search-only, and pure
 formal-claim and justification contracts. Some formal contracts are explicitly recorded as not yet
 wired to managed readiness or promotion. The default managed blueprint remains a single build and
-review cell, not a parallel candidate atelier.
+review cell, not a parallel candidate search.
 
 The next engineering milestone is one end-to-end, managed release record that ties together the
-accepted commission, exact candidate identity, claim-level verification and uncertainty, and the
+accepted work order, exact candidate identity, claim-level verification and uncertainty, and the
 existing authority decision. It must preserve the distinction between evidence and permission and
-must survive process replacement. Future multi-sketch execution should add retained parentage and
+must survive process replacement. Future multi-candidate execution should add retained parentage and
 independence evidence without creating a second scheduler.
 
 Graduate each part only when the implementation and retained artifacts demonstrate it. Until then,

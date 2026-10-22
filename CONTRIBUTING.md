@@ -1,4 +1,4 @@
-# Contributing to swfactory
+# Contributing to SWFactory
 
 Thanks for helping make the factory safer and more useful. Changes should preserve the trust
 boundary: an agent may produce code and patches, but only the orchestrator may hold GitHub
@@ -6,7 +6,7 @@ credentials or publish changes.
 
 ## Development setup
 
-swfactory targets Python 3.12 and uses [uv](https://docs.astral.sh/uv/).
+SWFactory targets Python 3.12 and uses [uv](https://docs.astral.sh/uv/).
 
 ```sh
 git clone https://github.com/zozo123/ariflow-swfactory.git

@@ -1,6 +1,8 @@
 # SWFactory
 
-Turn GitHub issues into reviewed pull requests with coding agents, Airflow, and human approval gates.
+GitHub issues to reviewed pull requests with coding agents, Airflow, and approval gates. Alpha.
+
+For maintainers who want agent-written pull requests only through approval gates, with the evidence kept.
 
 [![CI](https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml/badge.svg)](https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
@@ -10,18 +12,15 @@ Turn GitHub issues into reviewed pull requests with coding agents, Airflow, and 
 
 SWFactory runs a change through planning, implementation, tests, and review, then publishes a pull
 request with the evidence attached. Apache Airflow schedules the work; agents run in bounded work
-cells, and the trusted backend owns publication. Human-approved lines wait for an operator.
-An **experimental** autonomous line can approve bounded changes and merge through the backend
-under a checked-in policy. Policy and authority changes remain human maintenance.
+cells, trusted code runs the tests, and the trusted backend owns publication. On the default line a
+person approves the intent and the plan, and a person merges the pull request.
 
-This is an **alpha** implementation. Start with the local replay below; it makes no model calls
-and does not prove that a deployed model/sandbox integration works.
+An **experimental** autonomous line can approve and merge documentation-only (`docs/**`) changes
+under a checked-in policy. It has been tested only with hermetic backend and Airflow DAG tests, not
+in a live deployment. Policy and authority changes remain human maintenance.
 
-[Quickstart](#quickstart) · [Flow, concepts, and finish line](docs/system-map.md) · [Design rationale](docs/software-atelier.md) · [Method](#method) ·
-[Future factory](docs/future-factory.md) · [Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
-[Illustrated walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Agent skills](#agent-skills)
-
-![A GitHub issue moving through isolated work cells toward a reviewed pull request](site/factory-line.webp)
+[Quickstart](#quickstart) · [Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
+[Walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Status](#status-and-verification)
 
 ## Quickstart
 
@@ -35,12 +34,11 @@ uv sync --locked
 uv run swfactory demo
 ```
 
-The demo rebuilds source bytecode before tests so rapid fixes are tested against current code.
-
 The replay uses authored agent fixtures to change a calculator project, fail a build, repair it,
 review the result, and deliver to a local Git remote. Demo approvals are automatic. Dependency
 installation needs network access; the replay needs **no model key, GitHub token, Airflow, Docker,
-or Rust**. It makes no model calls and opens no GitHub PR.
+or Rust**. It makes no model calls, opens no GitHub PR, and does not show that a deployed
+model/sandbox integration works.
 
 The terminal prints the stage report and delivery location. Find the machine-readable report at
 `.factory/<run_id>/report.json` and the local PR description at `.factory/<run_id>/pr.md`.
@@ -51,6 +49,20 @@ uv run swfactory state list
 
 Prefer to see the shape first? The [illustrated walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo)
 draws the same stages and the two human gates as one diagram.
+
+![A GitHub issue moving through isolated work cells toward a reviewed pull request](site/factory-line.webp)
+
+## Choose a run
+
+| Path | Approvals and delivery | Start here |
+| --- | --- | --- |
+| Local replay | Fixture approvals, no model calls, local Git delivery | The quickstart above |
+| Human-approved work | An operator answers artifact gates and merges the resulting PR | [Operator guide](docs/swf.md) |
+| Autonomous documentation work (experimental) | Repo policy approves gates; the backend verifies checks and merges | [Autonomous operating guide](docs/autonomous.md) |
+
+Autonomy requires a deployed backend, Airflow, and configured model/sandbox access. Inspect
+policy refusals with `uv run swfactory state autonomy --json`; set `SWF_BACKEND_URL` and
+`SWF_BACKEND_TOKEN` to read the deployed backend, or use `--root` with its local state directory.
 
 ## What the factory gives you
 
@@ -65,19 +77,6 @@ change is approved, verified, published, and recovered when execution fails.
 | Bounded execution | Stage budgets, timeouts, build attempts, and review repair limits | Explicit success, refusal, or blocked outcomes |
 | Recoverable ownership | Durable Factory Cells, epochs, and operation journals | Work identity survives a worker; managed mutations can be reconciled |
 | Inspectable delivery | Evidence committed alongside the change; CLI/TUI inspection | Trace requirements, approvals, tests, and review back to the PR |
-
-## Choose a run
-
-| Path | Approvals and delivery | Start here |
-| --- | --- | --- |
-| Local replay | Fixture approvals, no model calls, local Git delivery | The quickstart above |
-| Human-approved work | An operator answers artifact gates and merges the resulting PR | [Operator guide](docs/swf.md) |
-| Autonomous documentation work (experimental) | Repo policy approves gates; the backend verifies checks and merges | [Autonomous operating guide](docs/autonomous.md) |
-
-Autonomy requires a deployed backend, Airflow, and configured model/sandbox access. A passing
-replay does not prove that deployment works. Inspect policy refusals with
-`uv run swfactory state autonomy --json`; set `SWF_BACKEND_URL` and `SWF_BACKEND_TOKEN` to read
-the deployed backend, or use `--root` with its local state directory.
 
 ## Architecture and lifecycle
 
@@ -400,7 +399,7 @@ a gate, reconcile an ambiguous mutation, publish a PR, or promote a candidate.
 
 | Goal | Start here |
 | --- | --- |
-| Understand the flow, concepts, current ownership, and finish line | [System map](docs/system-map.md) |
+| Understand the flow, concepts, current ownership, and finish line | [System map](docs/system-map.md), [design rationale](docs/software-atelier.md) |
 | Understand and apply Liquid development | [Methodology](docs/liquid-methodology.md) |
 | Deploy or run against GitHub | [Operations](OPERATIONS.md), [Docker](docs/docker.md), [islo](docs/islo.md) |
 | Run the factory against itself | [Self-hosting](docs/selfhost.md) |

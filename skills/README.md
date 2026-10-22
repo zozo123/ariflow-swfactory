@@ -1,6 +1,6 @@
 # Agent Skills
 
-This repository publishes two installable Agent Skills for the Airflow Software Factory.
+This repository publishes two installable Agent Skills for SWFactory.
 
 [![skills.sh](https://skills.sh/b/zozo123/ariflow-swfactory)](https://skills.sh/zozo123/ariflow-swfactory)
 

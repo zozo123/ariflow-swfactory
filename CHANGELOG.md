@@ -6,6 +6,15 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Finish naming the product SWFactory in prose and state its limits plainly. The README opens with
+  the one-line definition, who it is for, and practical links; the autonomous line is described as
+  documentation-only (`docs/**`) and tested only hermetically. The site hero says trusted code runs
+  the tests and a person approves the intent and plan and merges; the site's "Run it" section lists
+  prerequisites and where the report lands; the `#physics` anchor is now `#authority`; the past
+  workshop page no longer asks for RSVPs; the 404 page uses root-absolute paths so it renders on
+  nested missing URLs; the social card says Alpha. `docs/software-atelier.md` is now the design
+  rationale (same path), and `swfactory --help` reads "SWFactory: GitHub issues to reviewed pull
+  requests (alpha)."
 - Fix `swf deliveries verify`, which reported `workflow_succeeded=false` for every delivery
   published since #2104: branches are `factory/<issue>-<publication key>`, keyed on the work, and
   the verifier still read that suffix as the run id, so it never found the run's own

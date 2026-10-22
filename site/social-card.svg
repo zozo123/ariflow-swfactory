@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
   <title id="title">SWFactory</title>
-  <desc id="desc">GitHub issues to reviewed pull requests.</desc>
+  <desc id="desc">GitHub issues to reviewed pull requests. Alpha.</desc>
   <rect width="1200" height="630" fill="#0d2740"/>
   <g stroke="#eef4f8" stroke-opacity=".07" stroke-width="1">
     <path d="M48.5 0v630M96.5 0v630M144.5 0v630M192.5 0v630M240.5 0v630M288.5 0v630M336.5 0v630M384.5 0v630M432.5 0v630M480.5 0v630M528.5 0v630M576.5 0v630M624.5 0v630M672.5 0v630M720.5 0v630M768.5 0v630M816.5 0v630M864.5 0v630M912.5 0v630M960.5 0v630M1008.5 0v630M1056.5 0v630M1104.5 0v630M1152.5 0v630"/>
@@ -11,6 +11,8 @@
     <rect x=".5" y=".5" width="41" height="41" fill="none" stroke="#eef4f8" stroke-opacity=".5"/>
     <path d="M12 31v-8m9 8V11m9 20v-14" stroke="#eef4f8" stroke-width="5"/>
     <text x="58" y="31" fill="#eef4f8" font-family="'IBM Plex Sans Condensed', 'Arial Narrow', sans-serif" font-size="27" font-weight="700" letter-spacing="1">SWFACTORY</text>
+    <rect x="232.5" y="7.5" width="86" height="28" fill="none" stroke="#eb6a52" stroke-width="2"/>
+    <text x="246" y="28" fill="#eb6a52" font-family="'IBM Plex Mono', monospace" font-size="16" font-weight="700" letter-spacing="2">ALPHA</text>
   </g>
   <text x="86" y="292" fill="#eef4f8" font-family="'IBM Plex Sans Condensed', 'Arial Narrow', sans-serif" font-size="78" font-weight="700" letter-spacing="1">GITHUB ISSUES.</text>
   <text x="86" y="392" fill="#a9c1d4" font-family="'IBM Plex Sans Condensed', 'Arial Narrow', sans-serif" font-size="78" font-weight="700" letter-spacing="1">REVIEWED PULL REQUESTS.</text>

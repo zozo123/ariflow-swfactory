@@ -2,8 +2,8 @@
   "$schema": "https://skills.sh/schemas/skills.sh.schema.json",
   "groupings": [
     {
-      "title": "Airflow Software Factory",
-      "description": "Operate, extend, stabilize, audit, and drive the Airflow-governed software delivery factory from supported agent harnesses.",
+      "title": "SWFactory",
+      "description": "Operate, extend, stabilize, audit, and drive SWFactory, the Airflow-governed software delivery factory, from supported agent harnesses.",
       "skills": ["airflow-software-factory", "swfactory"]
     }
   ]

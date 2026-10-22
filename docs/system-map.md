@@ -1,4 +1,4 @@
-# Software Atelier: flow, concepts, and finish line
+# SWFactory: flow, concepts, and finish line
 
 **Turn an accepted work order into a reviewable change whose evidence and authority survive the
 workers that produced it.** Creative search is useful only when it improves that outcome.
@@ -33,25 +33,25 @@ Metrics and teardown accompany the route. Cleanup failures remain recovery debt.
 completing an Airflow run, merging, and shipping a release are separate events with separate evidence.
 The rejection path publishes a labeled, blocked evidence PR; it does not approve the change.
 
-| Atelier step | Current runtime | Evidence or boundary |
+| Step | Current runtime | Evidence or boundary |
 | --- | --- | --- |
-| Commission | Backend admission, accepted inputs, `intent`, human gate | Work identity, pinned inputs, approved intent digest |
-| Sketch | `spec`, `plan`, human gate, `work_stage.build_and_test` | Typed plan, approved plan digest, bounded attempts and test receipts |
-| Critique | `review`, including bounded repair | Findings and verdict; reviewer approval is not merge authority |
-| Freeze and verify | Workspace-head checks, patch validation; [candidate](candidate-evidence.md) and CI evidence paths | Exact source/base/tested identity and retained artifact digests; no single universal claim certificate yet |
-| Steward | Trusted publication, repository checks, human merge decision | Publication identity and applicable repository policy |
-| Learn and recover | Metrics, operation journals, recovery paths, `swfactory improve` | Observations and proposals; no automatic self-authorization |
+| Admit | Backend admission, accepted inputs, `intent`, human gate | Work identity, pinned inputs, approved intent digest |
+| Plan and build | `spec`, `plan`, human gate, `work_stage.build_and_test` | Typed plan, approved plan digest, bounded attempts and test receipts |
+| Review | `review`, including bounded repair | Findings and verdict; reviewer approval is not merge authority |
+| Verify | Workspace-head checks, patch validation; [candidate](candidate-evidence.md) and CI evidence paths | Exact source/base/tested identity and retained artifact digests; no single universal claim certificate yet |
+| Publish | Trusted publication, repository checks, human merge decision | Publication identity and applicable repository policy |
+| Recover and improve | Metrics, operation journals, recovery paths, `swfactory improve` | Observations and proposals; no automatic self-authorization |
 
 The installed blueprint supplies the actual stage order and gate modes. The default line has human
 intent and plan gates. Scripted replay is an explicitly different execution environment, not proof
 that a live deployment works. Read [lifecycle](lifecycle.md), [design](design.md), and
-[the atelier method](software-atelier.md) for the detailed contracts.
+[the design rationale](software-atelier.md) for the detailed contracts.
 
 ## The objects and their meanings
 
 | Notion | Concrete meaning | Must not be confused with |
 | --- | --- | --- |
-| Work order / commission | Requested outcome for an issue and selected target | An automatically complete specification |
+| Work order | Requested outcome for an issue and selected target | An automatically complete specification |
 | Blueprint | Installed, versioned route with stages, gates, limits, and adapters | A new scheduler generated for every issue |
 | Target contract | `factory.toml`: verification commands, source/tests, protected paths | Permission to rewrite verification during repair |
 | Cell | Durable identity of managed work | A VM, process, model session, or branch |
@@ -73,7 +73,7 @@ service, state machine, command family, or storage system.
 
 | Idea | Useful role | Current boundary / reference |
 | --- | --- | --- |
-| Atelier | Human intent, alternatives, critique, and judgment | Product method; [software atelier](software-atelier.md) |
+| Exploration and critique | Human intent, alternatives, critique, and judgment | Product method; [design rationale](software-atelier.md) |
 | Liquid | Explore broadly, then converge on one exact candidate | Engineering method; [Liquid methodology](liquid-methodology.md) |
 | Gas / liquid / critical / crystal / glass / jammed | Classify measured search and resource conditions | Experimental search-only contract; [phase control](phase-control.md) |
 | System 1 and System 2 | Distinguish proposal generation from measurement | Vocabulary only; [future factory](future-factory.md) |
@@ -117,8 +117,8 @@ not a claim that the repository already satisfies them or a request to enable ev
 | Order | Milestone | Evidence that closes it |
 | --- | --- | --- |
 | 1 | Enforce the existing promotion boundary | No live drift from `.github/promotion-policy.yml`; required aggregate checks, review policy, and intended admin enforcement active. Tracked by [#2048](https://github.com/zozo123/ariflow-swfactory/issues/2048). |
-| 2 | Demonstrate one complete managed delivery | A real commission reaches a reviewed PR and human merge with input, candidate, approval, test, review, publication, and cleanup records retained; repeat across process replacement. |
-| 3 | Join claim-level evidence to that delivery | One inspectable record links the accepted commission, exact candidate, scoped claims, methods, assumptions, residual uncertainty, and existing authority decision. Tampering or stale identity invalidates the affected claim. |
+| 2 | Demonstrate one complete managed delivery | A real work order reaches a reviewed PR and human merge with input, candidate, approval, test, review, publication, and cleanup records retained; repeat across process replacement. |
+| 3 | Join claim-level evidence to that delivery | One inspectable record links the accepted work order, exact candidate, scoped claims, methods, assumptions, residual uncertainty, and existing authority decision. Tampering or stale identity invalidates the affected claim. |
 | 4 | Qualify each advertised live execution path | Retained runs cover isolation, credential boundaries, cancellation, ambiguous effects, restart, and teardown for the specific provider/environment. Graduate only that scope. |
 | 5 | Earn adaptive search | Compare against a fixed-budget baseline on held-out work. Retain lineage, correlation, cost, time, and verifier outcomes; calibrate thresholds from results. |
 | 6 | Establish formal refinement where justified | Check the formal model, project trusted runtime traces into its actions, and bind the refinement receipt to the claim. State model assumptions and unproved boundaries. |
