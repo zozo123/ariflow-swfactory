@@ -1,6 +1,6 @@
-# Software Atelier
+# SWFactory
 
-**Creative exploration. Bounded execution. Evidence-bound release.**
+Turn GitHub issues into reviewed pull requests with coding agents, Airflow, and human approval gates.
 
 [![CI](https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml/badge.svg)](https://github.com/zozo123/ariflow-swfactory/actions/workflows/ci.yml)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
@@ -8,20 +8,20 @@
 [![Alpha](https://img.shields.io/badge/status-alpha-orange)](#status-and-verification)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-Bring a GitHub work order to an **atelier for software**. People and agents investigate and refine
-the commissioned change inside bounded work cells. Apache Airflow owns the managed lifecycle;
-Factory Cell identity and epoch fence managed effects; the trusted control plane publishes a
-reviewable pull request with retained evidence. Human-approved lines wait for an operator;
-the experimental autonomous line uses a checked-in policy to approve bounded changes and merge
-through the backend. Policy and authority changes remain human maintenance. See the
-[software atelier workflow](docs/software-atelier.md) for the method and its current runtime
-boundaries.
+SWFactory runs a change through planning, implementation, tests, and review, then publishes a pull
+request with the evidence attached. Apache Airflow schedules the work; agents run in bounded work
+cells, and the trusted backend owns publication. Human-approved lines wait for an operator.
+An **experimental** autonomous line can approve bounded changes and merge through the backend
+under a checked-in policy. Policy and authority changes remain human maintenance.
 
-[Quickstart](#quickstart) · [Flow, concepts, and finish line](docs/system-map.md) · [Software atelier](docs/software-atelier.md) · [Method](#method) ·
+This is an **alpha** implementation. Start with the local replay below; it makes no model calls
+and does not prove that a deployed model/sandbox integration works.
+
+[Quickstart](#quickstart) · [Flow, concepts, and finish line](docs/system-map.md) · [Design rationale](docs/software-atelier.md) · [Method](#method) ·
 [Future factory](docs/future-factory.md) · [Run a real issue](#run-a-real-issue) · [Operator guide](docs/swf.md) ·
 [Illustrated walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo) · [Agent skills](#agent-skills)
 
-![A commissioned software change moving through isolated work cells toward a reviewed release](site/factory-line.webp)
+![A GitHub issue moving through isolated work cells toward a reviewed pull request](site/factory-line.webp)
 
 ## Quickstart
 
@@ -78,30 +78,6 @@ Autonomy requires a deployed backend, Airflow, and configured model/sandbox acce
 replay does not prove that deployment works. Inspect policy refusals with
 `uv run swfactory state autonomy --json`; set `SWF_BACKEND_URL` and `SWF_BACKEND_TOKEN` to read
 the deployed backend, or use `--root` with its local state directory.
-
-## Method
-
-> **Create entropy where exploration benefits from it; destroy entropy before promotion.**
-
-The factory runs product work and its own development the same way: explore through independent
-lanes, compare them against shared contracts and evidence, then converge on one maintained
-implementation and one exact candidate. **Parallelism is cheap. Authority is singular.**
-
-| Motion: may change or disappear | Matter: must remain durable and authoritative |
-| --- | --- |
-| Workers, agent sessions, sandboxes, VMs, containers | Factory Cell identity, current epoch, work order, and lifecycle binding |
-| Speculative branches, experiments, temporary adapters | Approved contracts, mutation history, evidence, and publication state |
-| Intermediate implementations, work graphs, and caches | The accepted plan revision and the final repository state |
-
-A worker may spend compute; it cannot mint authority. A cache hit can save time; it cannot approve
-a gate, reconcile an ambiguous mutation, publish a PR, or promote a candidate.
-
-| Read next | For |
-| --- | --- |
-| [Liquid methodology](docs/liquid-methodology.md) | Ownership roles, concerns, recovery cases, evidence requirements, and promotion rules |
-| [Phase control](docs/phase-control.md) | The search-only gas/liquid/critical/crystal/glass/jammed vocabulary shared by Python and Rust |
-| [Future factory](docs/future-factory.md) | The north-star end state, its laws, and what to build next |
-| [Polyglot task graph](docs/polyglot-task-graph.md) | Turbo as an accelerator inside verification, not a second scheduler |
 
 ## Architecture and lifecycle
 
@@ -395,6 +371,30 @@ path-filtered, scheduled, or manually triggered, and real-agent jobs need config
 **A green badge does not mean every live path passed.** The
 [methodology's promotion rules](docs/liquid-methodology.md#ci-and-promotion) define the stronger
 acceptance standard and explain the remaining enforcement work.
+
+## Method
+
+> **Create entropy where exploration benefits from it; destroy entropy before promotion.**
+
+The factory runs product work and its own development the same way: explore through independent
+lanes, compare them against shared contracts and evidence, then converge on one maintained
+implementation and one exact candidate. **Parallelism is cheap. Authority is singular.**
+
+| Motion: may change or disappear | Matter: must remain durable and authoritative |
+| --- | --- |
+| Workers, agent sessions, sandboxes, VMs, containers | Factory Cell identity, current epoch, work order, and lifecycle binding |
+| Speculative branches, experiments, temporary adapters | Approved contracts, mutation history, evidence, and publication state |
+| Intermediate implementations, work graphs, and caches | The accepted plan revision and the final repository state |
+
+A worker may spend compute; it cannot mint authority. A cache hit can save time; it cannot approve
+a gate, reconcile an ambiguous mutation, publish a PR, or promote a candidate.
+
+| Read next | For |
+| --- | --- |
+| [Liquid methodology](docs/liquid-methodology.md) | Ownership roles, concerns, recovery cases, evidence requirements, and promotion rules |
+| [Phase control](docs/phase-control.md) | The search-only gas/liquid/critical/crystal/glass/jammed vocabulary shared by Python and Rust |
+| [Future factory](docs/future-factory.md) | The north-star end state, its laws, and what to build next |
+| [Polyglot task graph](docs/polyglot-task-graph.md) | Turbo as an accelerator inside verification, not a second scheduler |
 
 ## Documentation and contribution
 

@@ -5,36 +5,36 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="A software atelier for commissioned work: agents investigate and refine in bounded cells, Airflow governs the lifecycle, and evidence supports human release decisions."
+      content="SWFactory turns GitHub issues into reviewed pull requests with coding agents, Airflow scheduling, verification, and human approval gates. Alpha software."
     />
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1114" />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="Software Atelier | swfactory" />
+    <meta property="og:title" content="SWFactory | GitHub issues to reviewed pull requests" />
     <meta
       property="og:description"
-      content="Explore and refine commissioned software work in bounded agent cells. Airflow governs lifecycle; scoped evidence and human authority govern release."
+      content="Plan, implement, test, and review a GitHub issue. Airflow schedules the work; the trusted backend publishes the pull request and its evidence."
     />
     <meta property="og:url" content="https://zozo123.github.io/ariflow-swfactory/" />
     <meta property="og:image" content="https://zozo123.github.io/ariflow-swfactory/social-card.png" />
-    <meta property="og:image:alt" content="Software Atelier: explore freely, release with evidence" />
+    <meta property="og:image:alt" content="SWFactory: GitHub issues to reviewed pull requests" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="canonical" href="https://zozo123.github.io/ariflow-swfactory/" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="manifest" href="site.webmanifest" />
     <link rel="stylesheet" href="styles.css" />
-    <title>Software Atelier | swfactory</title>
+    <title>SWFactory | GitHub issues to reviewed pull requests</title>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to content</a>
 
     <header class="site-header">
       <div class="shell nav">
-        <a class="brand" href="#top">swfactory</a>
+        <a class="brand" href="#top">SWFactory</a>
         <nav aria-label="Primary navigation">
           <a href="#algorithm">Method</a>
           <a href="#evidence">Evidence</a>
-          <a href="#physics">Physics</a>
+          <a href="#physics">Authority</a>
           <a href="#factory-demo">Walkthrough</a>
           <a href="#sandboxes">Sandboxes</a>
           <a href="#quickstart">Run it</a>
@@ -46,11 +46,12 @@
 
     <main id="main-content" class="shell">
       <section id="top" class="hero">
-        <p class="label">An Airflow-governed software atelier</p>
-        <h1>Explore freely. Release with evidence.</h1>
+        <p class="label">SWFactory · Alpha</p>
+        <h1>From GitHub issue to reviewed pull request.</h1>
         <p class="lede">
-          Bring a commissioned change. Agents investigate and refine it in bounded work cells.
-          Airflow governs the lifecycle; scoped evidence and human decisions govern release.
+          Coding agents plan, implement, test, and review a change. Airflow schedules the work;
+          the trusted backend publishes a pull request with the evidence attached. Human-approved
+          lines wait at review gates; policy-driven autonomous operation remains experimental.
         </p>
         <div class="actions">
           <a class="primary" href="#quickstart">Run the local demo</a>
@@ -58,11 +59,21 @@
         </div>
       </section>
 
+      <section id="quickstart">
+        <h2>Run it</h2>
+        <p>No model key is required for the scripted local demo.</p>
+        <pre><code>git clone https://github.com/zozo123/ariflow-swfactory.git
+cd ariflow-swfactory
+uv sync --locked
+uv run swfactory demo</code></pre>
+        <p>Inspect the local stage report and PR description. This fixture replay makes no model calls and opens no GitHub PR.</p>
+      </section>
+
       <section id="algorithm">
-        <h2>The atelier process</h2>
+        <h2>How a change moves</h2>
         <ol class="steps">
           <li>
-            <strong>1. Commission the work.</strong>
+            <strong>1. Submit a GitHub issue.</strong>
             <span>A GitHub issue selects a versioned blueprint and target.</span>
           </li>
           <li>
@@ -74,7 +85,7 @@
             <span>Airflow is the only lifecycle scheduler: retries, waits, approvals, and cancellation.</span>
           </li>
           <li>
-            <strong>4. Craft in disposable compute.</strong>
+            <strong>4. Run agents in disposable compute.</strong>
             <span>The agent gets a bounded job and sandbox. It does not get release authority.</span>
           </li>
           <li>
@@ -82,12 +93,12 @@
             <span>Tests and review produce scoped evidence; missing checks and unresolved limits stay visible.</span>
           </li>
           <li>
-            <strong>6. Steward release.</strong>
-            <span>The trusted control plane creates the PR. People retain final merge authority.</span>
+            <strong>6. Publish for review.</strong>
+            <span>The trusted control plane creates the PR. Human-approved lines leave the merge decision to an operator.</span>
           </li>
         </ol>
-        <p class="formula" aria-label="Atelier lifecycle">
-          commission -> cell -> airflow -> craft -> evidence -> stewarded release
+        <p class="formula" aria-label="SWFactory lifecycle">
+          issue -> cell -> Airflow -> agent work -> verification -> pull request
         </p>
         <div class="note">
           The default managed line uses one governed implementation path today. Parallel candidate
@@ -104,7 +115,7 @@
           the model. Tests, fuzzing, benchmarks, and observations answer different questions.
         </p>
         <p class="note">
-          The atelier records what is known, what remains fuzzy, and the next useful check.
+          SWFactory records the result, remaining uncertainty, and the next useful check.
           Formalizability is not a proof verdict, and evidence never grants release authority.
           <a href="https://github.com/zozo123/ariflow-swfactory/blob/main/docs/software-atelier.md">
             Read the verification and uncertainty method.
@@ -113,19 +124,18 @@
       </section>
 
       <section id="physics">
-        <h2>Matter, motion, and authority</h2>
+        <h2>Who can publish a change?</h2>
         <p>
-          Treat software delivery like a non-equilibrium system: create entropy while searching,
-          then destroy entropy before promotion. Durable Cells, accepted digests, evidence, and
-          publication state are <strong>matter</strong>. Agents, sandboxes, builds, task graphs,
-          and caches are <strong>motion</strong>.
+          Agents, sandboxes, builds, and caches may be replaced during a run. The control plane
+          retains the work identity, approved artifact digests, evidence, and publication state.
+          An agent or a cache hit cannot approve a gate or grant itself publication authority.
         </p>
-        <p class="formula" aria-label="Atelier invariant">
-          accelerate motion != mint authority
+        <p class="formula" aria-label="Authority boundary">
+          faster execution != permission to publish
         </p>
         <ul class="plain-list">
           <li><strong>Turborepo:</strong> content hashes can skip identical build work.</li>
-          <li><strong>swfactory:</strong> digest-bound gates decide which exact candidate may advance.</li>
+          <li><strong>SWFactory:</strong> digest-bound gates decide which exact candidate may advance.</li>
           <li><strong>Airflow:</strong> remains the only lifecycle scheduler.</li>
         </ul>
         <div class="note">
@@ -137,7 +147,7 @@
       </section>
 
       <section id="factory-demo">
-        <h2>One commission, end to end</h2>
+        <h2>One issue, end to end</h2>
         <p>
           The drawing follows a single issue from the operator console to a pull request a person
           merges: where Airflow maps the work into cells, which two stages stop and wait for a
@@ -162,7 +172,7 @@
       </section>
 
       <section id="invariants">
-        <h2>What stays non-liquid</h2>
+        <h2>Operational boundaries</h2>
         <ul class="plain-list">
           <li><strong>Scheduling:</strong> Apache Airflow only.</li>
           <li><strong>Identity:</strong> one durable Factory Cell per issue and target.</li>
@@ -224,16 +234,6 @@
         </p>
       </section>
 
-      <section id="quickstart">
-        <h2>Run it</h2>
-        <p>No model key is required for the scripted local demo.</p>
-        <pre><code>git clone https://github.com/zozo123/ariflow-swfactory.git
-cd ariflow-swfactory
-uv sync
-uv run swfactory demo</code></pre>
-        <p>Then inspect the generated branch, evidence, and pull-request path.</p>
-      </section>
-
       <section id="source">
         <h2>Go deeper in the repo</h2>
         <ul class="plain-list links">
@@ -247,7 +247,7 @@ uv run swfactory demo</code></pre>
     </main>
 
     <footer class="shell">
-      <span>swfactory</span>
+      <span>SWFactory</span>
       <span>Apache-2.0</span>
       <a href="https://github.com/zozo123/ariflow-swfactory">GitHub</a>
     </footer>
