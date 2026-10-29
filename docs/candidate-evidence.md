@@ -147,8 +147,10 @@ from Git.
 
 Replay refuses a snapshot and recipe from different commits, changed archive bytes, archive
 traversal, links, devices and other non-regular members, a `cwd` outside the snapshot, a missing
-executable, tampered evidence, and a non-empty or symlinked destination. It is replay evidence, not
-a sandbox: untrusted candidate code belongs in an isolated provider, and the receipt records
+executable, tampered evidence, and a non-empty or symlinked destination. Retained output
+streams must be regular files reached without symlinked path components; ordinary nested
+directories are supported. It is replay evidence, not a sandbox: untrusted candidate code belongs
+in an isolated provider, and the receipt records
 `resource_enforcement = declared-not-enforced-local` rather than pretending to enforce quotas.
 
 ## Lineage
