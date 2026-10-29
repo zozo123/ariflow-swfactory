@@ -217,6 +217,28 @@ def _record_task(name: str, stage: str, mode: str):
     return _run
 
 
+def _close_failed_setup(name: str):
+    def close(context: dict[str, Any]) -> None:
+        """Close the cell a setup that failed for good may already have created.
+
+        teardown is ``as_teardown(setups=setup)``, so Airflow runs it as ``all_done_setup_success``
+        and marks it ``upstream_failed`` when no setup succeeded. A cell ``ensure()`` created before
+        ``uv sync``, the contract or the base tests failed would then live until its provider's TTL
+        (toolset has none). Airflow calls this only after the last retry, so no attempt owns the cell.
+        """
+        from swfactory import stages
+
+        ti = context["ti"]
+        jobs = ti.xcom_pull(task_ids="fan_out") or []
+        index = int(ti.map_index)
+        if not isinstance(jobs, list) or not 0 <= index < len(jobs):
+            return
+        stages.teardown(_ctx(name, jobs[index], context["dag_run"].run_id, enforce_inputs=False))
+        _cell_transition(jobs[index], "cleaned", context, "teardown")
+
+    return close
+
+
 def _setup_task(name: str, shape: dict[str, Any]):
     @task(
         task_id="setup",
@@ -225,7 +247,7 @@ def _setup_task(name: str, shape: dict[str, Any]):
         # setup is where a cell comes to exist; unbounded, N setups meant N live cells regardless
         # of the parallelism the stages after it declare
         max_active_tis_per_dagrun=shape["max_parallel_jobs"],
-        on_failure_callback=_failure_callback,
+        on_failure_callback=[_failure_callback, _close_failed_setup(name)],
     )
     def setup(job: dict, **context: Any) -> dict:
         from swfactory import stages

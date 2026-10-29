@@ -35,7 +35,7 @@ from swfactory.improvement_annealing import DEFAULT_ENROL_CAP
 from swfactory.models import RunReport, StageError
 from swfactory.runtime import build_ctx, ctx_for, job_config, job_run_dir
 from swfactory.scm import make_scm
-from swfactory.stages import Approver, Ctx, cli_approver, run_pipeline, setup
+from swfactory.stages import Approver, Ctx, cli_approver, run_pipeline, setup, teardown
 
 if TYPE_CHECKING:
     from swfactory.adaptive_information import InformationBudgetDecision
@@ -165,14 +165,20 @@ SCRIPTED_BANNER = "SCRIPTED REPLAY — agent=scripted, no model calls"
 # ---------------------------------------------------------------- wiring shared by run/demo
 
 
-def run_ctx(ctx: Ctx, approver: Approver = cli_approver) -> RunReport:
+def run_ctx(ctx: Ctx, approver: Approver = cli_approver, *, keep_sandbox: bool = False) -> RunReport:
     """``setup`` then the blueprint's pipeline walk; the report also lands in
-    ``<run_dir>/report.json``."""
-    result = setup(ctx)
-    print(f"{'setup':<16} {result.status:<8} {result.duration_s:6.1f}s  sandbox={ctx.sb.name}")
-    report = run_pipeline(ctx, approver)
-    (ctx.run_dir / "report.json").write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
-    return report
+    ``<run_dir>/report.json``. The sandbox is closed afterwards, on success or failure, as the DAG's
+    teardown does (a local directory is kept either way); ``keep_sandbox`` leaves a remote cell up
+    for inspection or a rerun with the same ``--run-id``."""
+    try:
+        result = setup(ctx)
+        print(f"{'setup':<16} {result.status:<8} {result.duration_s:6.1f}s  sandbox={ctx.sb.name}")
+        report = run_pipeline(ctx, approver)
+        (ctx.run_dir / "report.json").write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        return report
+    finally:
+        if not keep_sandbox:
+            teardown(ctx)
 
 
 def execute(
@@ -204,7 +210,14 @@ def _overrides(**flags: Any) -> dict[str, Any]:
     return {key: value for key, value in flags.items() if value is not None}
 
 
-def _run_jobs(bp: Blueprint, issues: list[str], overrides: dict[str, Any], *, targets: list[str] | None = None) -> None:
+def _run_jobs(
+    bp: Blueprint,
+    issues: list[str],
+    overrides: dict[str, Any],
+    *,
+    targets: list[str] | None = None,
+    keep_sandbox: bool = False,
+) -> None:
     """Run every (issue x target) job of ``bp`` in sequence. ``overrides`` are the CLI flags the
     user passed (``None`` = not passed). Each job's report is printed as a table and written to
     ``.factory/<run_id>/report.json``. Exit 1 if any job blocks, fails its tests or errors.
@@ -251,7 +264,7 @@ def _run_jobs(bp: Blueprint, issues: list[str], overrides: dict[str, Any], *, ta
         if ctx.cfg.agent == "scripted":
             typer.echo(f"{SCRIPTED_BANNER}; fixtures: {ctx.cfg.fixtures_dir}")
         try:
-            report = run_ctx(ctx)
+            report = run_ctx(ctx, keep_sandbox=keep_sandbox)
         except StageError as e:
             typer.echo(f"stage failed: {e}", err=True)
             failed = True
@@ -289,6 +302,9 @@ def run(
     record: Annotated[str | None, typer.Option(help="dump real agent outputs as fixtures")] = None,
     allow_local_agent: Annotated[bool, typer.Option(help="DEV: real agent outside islo")] = False,
     run_id: Annotated[str | None, typer.Option()] = None,
+    keep_sandbox: Annotated[
+        bool, typer.Option(help="leave a remote cell up for inspection or a rerun with the same --run-id")
+    ] = False,
 ) -> None:
     """Run a blueprint's line on one or more issues (one PR per issue x target), or without
     --issue on whatever the line's `trigger.backlog` selects."""
@@ -311,6 +327,7 @@ def run(
             run_id=run_id,
         ),
         targets=target,
+        keep_sandbox=keep_sandbox,
     )
 
 
@@ -493,6 +510,9 @@ def demo(
     fusion: Annotated[
         bool, typer.Option(help="four-role, keyless replica-fusion replay with independent candidate checks")
     ] = False,
+    keep_sandbox: Annotated[
+        bool, typer.Option(help="leave a remote cell up for inspection or a rerun with the same --run-id")
+    ] = False,
 ) -> None:
     """Run the default line on demo/issue.md: scripted replay by default, the real path with
     --real."""
@@ -532,6 +552,7 @@ def demo(
                 run_id=run_id,
             ),
         },
+        keep_sandbox=keep_sandbox,
     )
 
 

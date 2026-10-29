@@ -61,3 +61,35 @@ def test_every_stage_task_carries_the_failure_callback() -> None:
         for task in dag.tasks:
             if task.task_id.startswith("job.") and not task.task_id.startswith(("job.approve_", "job.teardown")):
                 assert module._failure_callback in (task.on_failure_callback or []), (dag.dag_id, task.task_id)
+
+
+def test_a_setup_that_fails_for_good_closes_the_cell_it_may_have_created(monkeypatch: pytest.MonkeyPatch) -> None:
+    """teardown is ``as_teardown(setups=setup)``: with no successful setup Airflow marks it
+    upstream_failed and never runs it, so setup's final-failure callback closes the cell instead,
+    without re-checking accepted inputs (cleanup must not be refused by drift)."""
+    from swfactory import stages
+
+    module = load_dag_module()
+    built: list[tuple[str, str, str, bool]] = []
+    closed: list[str] = []
+
+    def fake_ctx(name: str, job: dict, run_id: str, *, enforce_inputs: bool = True) -> SimpleNamespace:
+        built.append((name, job["issue"], run_id, enforce_inputs))
+        return SimpleNamespace(name=name)
+
+    monkeypatch.setattr(module, "_ctx", fake_ctx)
+    monkeypatch.setattr(stages, "teardown", lambda ctx: closed.append(ctx.name))
+    dags = [v for k, v in vars(module).items() if k.startswith("dag_")]
+    assert dags
+    for dag in dags:
+        callbacks = dag.get_task("job.setup").on_failure_callback or []
+        assert module._failure_callback in callbacks, dag.dag_id  # the Cell is still reported failed
+        (close,) = [callback for callback in callbacks if callback is not module._failure_callback]
+        ti = _TI([{"issue": "7", "job_idx": 0}])
+        ti.task_id = "job.setup"
+        close({"ti": ti, "dag_run": SimpleNamespace(run_id="swf__run")})
+        ti.map_index = 3  # no such job: nothing to close
+        close({"ti": ti, "dag_run": SimpleNamespace(run_id="swf__run")})
+
+    assert closed == [dag.dag_id for dag in dags]
+    assert built == [(dag.dag_id, "7", "swf__run", False) for dag in dags]
