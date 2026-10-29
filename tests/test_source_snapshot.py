@@ -151,3 +151,70 @@ def test_cli_emits_a_machine_readable_verified_receipt(tmp_path: Path) -> None:
     assert document["sha256"]
     assert document["size_bytes"] > 0
     assert Path(document["archive_path"]).is_file()
+
+
+@pytest.mark.parametrize("operation", ["rev-parse", "archive"])
+@pytest.mark.parametrize("failure", ["timeout", "launch", "exit"])
+def test_git_failures_use_snapshot_errors_and_leave_no_partial_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str, failure: str
+) -> None:
+    import subprocess
+
+    repo, _ = make_repo(tmp_path, TRACKED)
+    cache = tmp_path / "snapshots"
+    run = subprocess.run
+    cause = None
+
+    def fail_git(args, **kwargs):
+        nonlocal cause
+        if operation not in args:
+            return run(args, **kwargs)
+        if operation == "archive":
+            kwargs["stdout"].write(b"partial archive")
+        if failure == "exit":
+            detail = "injected failure" if kwargs.get("text") else b"injected failure"
+            return subprocess.CompletedProcess(args, 128, stderr=detail)
+        cause = (
+            subprocess.TimeoutExpired(args, kwargs["timeout"])
+            if failure == "timeout"
+            else OSError("injected launch failure")
+        )
+        raise cause
+
+    monkeypatch.setattr(subprocess, "run", fail_git)
+    with pytest.raises(SourceSnapshotError, match=f"git {operation}") as raised:
+        create_source_snapshot(repo, "HEAD", cache)
+    if cause is not None:
+        assert raised.value.__cause__ is cause
+    assert not cache.exists() or list(cache.iterdir()) == []
+
+    # A transient failure must not poison the next attempt's cache entry.
+    monkeypatch.setattr(subprocess, "run", run)
+    snapshot = create_source_snapshot(repo, "HEAD", cache)
+    assert snapshot.cache_hit is False
+    verify_source_snapshot(snapshot)
+
+
+@pytest.mark.parametrize("operation", ["rev-parse", "archive"])
+def test_cli_reports_git_timeout_without_an_unhandled_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    import subprocess
+
+    repo, _ = make_repo(tmp_path, TRACKED)
+    cache = tmp_path / "snapshots"
+    run = subprocess.run
+
+    def timeout_git(args, **kwargs):
+        if operation in args:
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        return run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", timeout_git)
+    result = CliRunner().invoke(app, ["source-snapshot", str(repo), "--cache-root", str(cache)])
+
+    assert result.exit_code == 2
+    assert isinstance(result.exception, SystemExit)
+    assert f"git {operation}" in result.output
+    assert "timed out" in result.output
+    assert not cache.exists() or list(cache.iterdir()) == []

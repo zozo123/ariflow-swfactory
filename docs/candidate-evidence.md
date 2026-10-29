@@ -37,6 +37,12 @@ cache hit. Dirty tracked edits and untracked files are not inputs. A cached entr
 by name: its digest and size are recomputed before reuse, and a mismatch fails. The cache is an
 optimisation; the digest is the identity.
 
+Revision resolution has a 120-second timeout; archive creation has a 300-second timeout.
+Git timeouts and launch failures raise `SourceSnapshotError`, with the operation named in the
+message and the original exception retained as its cause. The CLI reports these as failures
+without emitting a receipt. Failed archive attempts remove their temporary files, so a later
+attempt can create a fresh, verified snapshot.
+
 ## Worktree
 
 ```sh
