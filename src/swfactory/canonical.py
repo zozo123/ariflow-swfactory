@@ -40,8 +40,17 @@ def run_git(repo: Path, *args: str, text: bool = True) -> subprocess.CompletedPr
 
 
 def git_output(repo: Path, *args: str, error: type[Exception], text: bool = True) -> Any:
-    """``git``'s stdout (``bytes`` when ``text`` is false), or ``error`` carrying git's stderr."""
-    proc = run_git(repo, *args, text=text)
+    """``git``'s stdout (``bytes`` when ``text`` is false), or ``error`` carrying git's stderr.
+
+    A timeout or a git that cannot be launched is also ``error``, with the cause chained, so every
+    caller's domain error is the only exception it has to handle.
+    """
+    try:
+        proc = run_git(repo, *args, text=text)
+    except subprocess.TimeoutExpired as exc:
+        raise error(f"git {args[0]} timed out after {exc.timeout}s") from exc
+    except OSError as exc:
+        raise error(f"git {args[0]} could not run: {exc}") from exc
     if proc.returncode != 0:
         detail = proc.stderr if text else proc.stderr.decode(errors="replace")
         raise error(f"git {' '.join(args)} failed: {detail.strip()}")

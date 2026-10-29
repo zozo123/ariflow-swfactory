@@ -53,8 +53,10 @@ uv run swfactory backend
 ```
 
 The default bind is `127.0.0.1:8082`. For remote operators, put an authenticated deployment behind
-HTTPS and run `swfactory backend --host 0.0.0.0` on its private network. The API always requires
-`Authorization: Bearer <SWF_BACKEND_TOKEN>`, including health. The token must be at least 32
+HTTPS and run `swfactory backend --host 0.0.0.0` on its private network. Every route requires
+`Authorization: Bearer <SWF_BACKEND_TOKEN>`, `GET /v1/health` included, except the two container
+probes `GET /v1/liveness` and `GET /v1/readiness`. Readiness reveals `read_ready`,
+`mutation_ready` and `serving_generation` without the token. The token must be at least 32
 non-whitespace characters. It grants factory operator authority, including approvals and cleanup;
 this is a single trusted-operator deployment, not a multi-tenant authorization system.
 
@@ -162,6 +164,8 @@ filesystem paths or command strings. No route accepts a caller-provided executab
 
 | Route | Request | Response |
 | --- | --- | --- |
+| `GET /v1/liveness` | none, unauthenticated | service name, `live: true` and API version |
+| `GET /v1/readiness` | none, unauthenticated | `read_ready`, `mutation_ready`, `serving_generation`; 503 until read-ready |
 | `GET /v1/health` | none | service name and API version |
 | `POST /v1/doctor` | `{}` | readiness checks from the backend host |
 | `POST /v1/compatibility` | `{}` | contract versions, features and mutation readiness |

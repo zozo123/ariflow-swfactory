@@ -78,8 +78,9 @@ tree, so a dirty orchestrator checkout cannot change it:
 ```
 
 `argv` is an array, not a shell command; `cwd` must stay inside the repository; timeout, CPU and
-memory are bounded; unknown fields fail closed. Environment keys that look secret (`TOKEN`,
-`SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `API_KEY`) are refused, and a non-empty `secret_env`
+memory are bounded; unknown fields fail closed. Environment keys that look secret by the shared
+`security_contract.looks_secret_key` rule (`TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`,
+`API_KEY`, `ACCESS_KEY`, `PRIVATE_KEY`, `AUTHORIZATION`, `COOKIE`) are refused, and a non-empty `secret_env`
 is refused too: a stage that needs a credential asks the trusted broker for a scoped lease (see
 [SECURITY.md](../SECURITY.md#credential-authority)). The recipe's canonical digest changes whenever
 the command, environment, timeout or resources change.
