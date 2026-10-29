@@ -660,13 +660,14 @@ def delivery_ctx(
     review_json: str | None = APPROVED_REVIEW,
     review_status: str = "ok",
     blockers: float = 0.0,
+    cfg: dict[str, Any] | None = None,
 ) -> Ctx:
     """Seed the host evidence a direct ``deliver`` call normally inherits from prior stages.
 
     Evidence is written only to ``RunState``. Any same-named file already in ``sb`` remains
     attacker-controlled and cannot influence the delivery decision.
     """
-    ctx = ctx_on(tmp_path, sb, scm=scm, seed_artifacts=False)
+    ctx = ctx_on(tmp_path, sb, scm=scm, cfg=cfg, seed_artifacts=False)
     intent_text = "---\nid: X-1\n---\nbody\n"
     plan_text = "# Plan — X-1\n\n## Files\n- src/calc/core.py\n"
     intent_path, plan_path = f"{ART}/intent.md", f"{ART}/plan.md"
@@ -918,7 +919,7 @@ def test_deliver_refuses_a_hostile_patch_before_anything_is_pushed(
     git at all."""
     sb = deliver_sandbox(patch=patch.decode(), prefix="demo/target/")
     scm = LocalGitScm(tmp_path / "run" / "remote.git", tmp_path / "run")
-    ctx = delivery_ctx(tmp_path, sb, scm=scm)
+    ctx = delivery_ctx(tmp_path, sb, scm=scm, cfg=REMOTE_CELL)
 
     with pytest.raises(StageError) as ei:
         deliver(ctx)
@@ -926,6 +927,67 @@ def test_deliver_refuses_a_hostile_patch_before_anything_is_pushed(
     assert ei.value.kind == kind and message in str(ei.value)
     assert not (tmp_path / "run" / "remote.git").exists()  # nothing created, cloned or pushed
     assert not (tmp_path / "run" / "pr.md").exists()
+
+
+# A remote cell clones the whole repository and works in the target directory (demo/target).
+REMOTE_CELL = {"sandbox": "islo", "target_dir": "demo/target"}
+
+
+@pytest.mark.parametrize(
+    ("cfg", "reported"),
+    [
+        pytest.param(REMOTE_CELL, "", id="remote-cell-claims-the-repo-root"),
+        pytest.param(REMOTE_CELL, "demo/", id="remote-cell-claims-a-parent"),
+        pytest.param({}, "demo/target/", id="host-cell-claims-a-subdirectory"),
+    ],
+)
+def test_deliver_takes_the_target_prefix_from_host_config_not_the_cell(
+    tmp_path: Path, cfg: dict[str, Any], reported: str
+) -> None:
+    """``git rev-parse --show-prefix`` runs where the agent ran. A cell that reports a wider
+    prefix than its configuration allows would widen ``allowed_prefixes``, so it is refused."""
+    sb = deliver_sandbox(patch="diff --git a/demo/target/src/x.py b/demo/target/src/x.py\n", prefix=reported)
+    scm = RecordingScm()
+    ctx = delivery_ctx(tmp_path, sb, scm=scm, cfg=cfg)
+
+    with pytest.raises(StageError, match="cell reports checkout prefix") as ei:
+        deliver(ctx)
+
+    assert ei.value.kind == "policy" and scm.published == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["demo/target/factory.toml", "demo/target/.github/workflows/ci.yml", "demo/target/docs/factory/OTHER-9/plan.md"],
+)
+def test_deliver_refuses_protected_paths_found_in_the_patch_bytes(tmp_path: Path, path: str) -> None:
+    """The in-cell protected diff can be made to print nothing; the patch stream cannot hide
+    what it changes. Here the cell's ``git diff`` reports no change, the patch still touches a
+    protected path, and nothing is published."""
+    sb = deliver_sandbox(patch=f"diff --git a/{path} b/{path}\n", prefix="demo/target/")
+    scm = RecordingScm()
+    ctx = delivery_ctx(tmp_path, sb, scm=scm, cfg=REMOTE_CELL)
+
+    with pytest.raises(StageError, match="delivered patch touches protected path") as ei:
+        deliver(ctx)
+
+    assert ei.value.kind == "policy" and scm.published == []
+
+
+def test_deliver_publishes_the_runs_own_artifact_chain_from_a_remote_cell(tmp_path: Path) -> None:
+    """``docs/factory`` is protected, except the run's own chain, which deliver rebuilds from host
+    state. The host check exempts exactly that directory, and the SCM is pinned to the host prefix."""
+    patch = (
+        "diff --git a/demo/target/src/x.py b/demo/target/src/x.py\n"
+        f"diff --git a/demo/target/{ART}/intent.md b/demo/target/{ART}/intent.md\n"
+    )
+    sb = deliver_sandbox(patch=patch, prefix="demo/target/")
+    scm = RecordingScm()
+    ctx = delivery_ctx(tmp_path, sb, scm=scm, cfg=REMOTE_CELL)
+
+    assert deliver(ctx).status == "ok"
+    (published,) = scm.published
+    assert published["allowed_prefixes"] == ["demo/target/"]
 
 
 # ================================================================ 7. idempotency under retry

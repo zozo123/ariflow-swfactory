@@ -534,7 +534,7 @@ def test_approved_patch_publishes_then_merges_through_managed_mutations(approved
     publication = {
         **body,
         "operation_key": "publish-integrated",
-        "branch": "swf-101-autonomous",
+        "branch": "factory/101-autonomous",
         "title": "Fix documentation",
         "body": "Managed evidence",
         "labels": ["autonomous"],
@@ -547,7 +547,7 @@ def test_approved_patch_publishes_then_merges_through_managed_mutations(approved
     assert backend.operation("/scm/publish", publication) == receipt
     assert PublishingRemote.publications == 1
     with pytest.raises(ValueError, match="already sealed"):
-        backend.operation("/scm/publish", {**publication, "branch": "different-branch"})
+        backend.operation("/scm/publish", {**publication, "branch": "factory/different-branch"})
     assert PublishingRemote.publications == 1
     stored = autonomous.store(backend).get(f"{cell['cell_id']}:{cell['epoch']}:publication")
     assert stored["receipt"] == receipt

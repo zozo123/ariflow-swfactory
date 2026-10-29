@@ -29,12 +29,16 @@ from swfactory.recovery_accounting import (
     RemoteIdentity,
     classify_observation,
 )
-from swfactory.scm import GitHubScm, patch_content_digest
+from swfactory.scm import FACTORY_BRANCH_PREFIX, GitHubScm, patch_content_digest
 from swfactory.security_contract import Capability, SecurityContext
 
 from .service import Factory, Refused, _attempt, airflow_binding, leased, text
 
 MAX_PATCH_BYTES = 12 * 1024 * 1024
+# .github/promotion-policy.yml control_plane.exemption_label. The backend applies labels with its own
+# GitHub credential, which is not a factory identity, so the gate would read this one as a human
+# maintainer's waiver of protected paths. A publication may never carry it.
+CONTROL_PLANE_EXEMPTION_LABEL = "control-plane-maintenance"
 _MARKER_PREFIX = "<!-- swfactory-patch-sha256:"
 _ISSUE_MARKER_PREFIX = "<!-- swfactory-operation:"
 
@@ -178,6 +182,14 @@ def publish(factory: Factory, body: dict[str, Any], base_branch: str) -> dict[st
     allowed = body.get("allowed_prefixes")
     if allowed is not None and (not isinstance(allowed, list) or any(not isinstance(value, str) for value in allowed)):
         raise ValueError("allowed_prefixes must be an array of strings or null")
+    # The worker's deliver is the only publisher: it always names a factory/ branch, the target
+    # prefix and the blueprint's labels. The backend's credential must not widen any of them.
+    if not branch.startswith(FACTORY_BRANCH_PREFIX):
+        raise Refused(403, f"publication branch must be under {FACTORY_BRANCH_PREFIX}")
+    if allowed is None:
+        raise Refused(403, "publication must name the target's allowed_prefixes")
+    if CONTROL_PLANE_EXEMPTION_LABEL in labels:
+        raise Refused(403, f"publication may not carry {CONTROL_PLANE_EXEMPTION_LABEL!r}; only a maintainer applies it")
     encoded = body.get("patch_b64")
     if not isinstance(encoded, str):
         raise ValueError("patch_b64 is required")

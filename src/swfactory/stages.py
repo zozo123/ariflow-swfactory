@@ -70,9 +70,17 @@ from swfactory.models import (
     StageResult,
     TestResult,
 )
+from swfactory.paths import normalize_target_dir
 from swfactory.publication_identity import PublicationIdentity, publication_key, this_instance
-from swfactory.sandbox import SRT_RUNTIME_PROTECTED, DockerSandbox, LocalSandbox, Sandbox, SrtSandbox
-from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm
+from swfactory.sandbox import (
+    HOST_SANDBOXES,
+    SRT_RUNTIME_PROTECTED,
+    DockerSandbox,
+    LocalSandbox,
+    Sandbox,
+    SrtSandbox,
+)
+from swfactory.scm import BOT_EMAIL, BOT_NAME, Scm, patch_paths, validate_patch
 from swfactory.state import JournalCorruption, RunBusyError, RunState
 
 if TYPE_CHECKING:
@@ -2658,6 +2666,44 @@ def _assert_unprotected_delivery(ctx: Ctx, base: str) -> None:
         raise StageError("policy", f"delivered diff touches protected path(s): {shown}")
 
 
+def _delivery_prefix(ctx: Ctx) -> str:
+    """The checkout-relative directory a delivery may touch, decided by host-owned config.
+
+    Host sandboxes (local, srt, docker) seed the target as its own repository, so the prefix is
+    ``""``; remote cells (islo, toolset, boat) clone the whole repository and work in the target
+    directory. The cell's ``git rev-parse --show-prefix`` runs where the agent ran (a login-shell
+    function or ``core.worktree`` can change its answer), so it is a cross-check, never the source.
+    """
+    expected = "" if ctx.cfg.sandbox in HOST_SANDBOXES else normalize_target_dir(ctx.cfg.target_dir)
+    reported = _sh(ctx, "git rev-parse --show-prefix").strip().strip("/")
+    if reported != expected:
+        raise StageError("policy", f"cell reports checkout prefix {reported!r}; the target is {expected!r}")
+    return expected
+
+
+def _assert_publishable_patch(ctx: Ctx, patch: bytes, prefix: str) -> None:
+    """Judge the bytes that will be published, on the host, before any SCM sees them.
+
+    ``_assert_unprotected_delivery`` asks git inside the cell. The format-patch stream is what the
+    SCM applies, so its paths are the ground truth: the same ``validate_patch`` every SCM runs,
+    pinned to the host's prefix, then the protected set over each path below that prefix. The
+    run's own artifact chain is exempt, as in the cell check: deliver rebuilt it from host state.
+    """
+    from swfactory.campaign_fusion import _is_protected  # fusion builds on this module
+
+    validate_patch(patch, allowed_prefixes=[prefix])
+    rules = declared_protected(_contract(ctx), "build")
+    root = f"{prefix}/" if prefix else ""
+    relative = (path.removeprefix(root) for path in patch_paths(patch))
+    if touched := sorted(
+        path
+        for path in relative
+        if path != ctx.art and not path.startswith(f"{ctx.art}/") and _is_protected(path, rules)
+    ):
+        shown = ", ".join(touched[:20]) + (f" (+{len(touched) - 20} more)" if len(touched) > 20 else "")
+        raise StageError("policy", f"delivered patch touches protected path(s): {shown}")
+
+
 def _base_tests(ctx: Ctx, base: str) -> dict[str, Any]:
     """The ``BASE_TESTS`` record for this run's base; any absence or inconsistency fails closed."""
     if not ctx.state.has_control(BASE_TESTS):
@@ -2843,11 +2889,12 @@ def deliver(ctx: Ctx) -> StageResult:
         msg=f"docs(factory): artifact chain for {ctx.issue.id}",
         paths=[ctx.art],
     )
-    patch = _sh(ctx, f"git format-patch --stdout {base}..HEAD")
+    patch = _sh(ctx, f"git format-patch --stdout {base}..HEAD").encode("utf-8")
     commits = int(_sh(ctx, f"git rev-list --count {base}..HEAD").strip() or 0)
     # Patch paths are repo-relative; the sandbox cwd may be a subdir of the checkout (islo) or
     # the target copy itself (local/srt, prefix ""). Only that target subtree may land.
-    prefix = _sh(ctx, "git rev-parse --show-prefix").strip()
+    prefix = _delivery_prefix(ctx)
+    _assert_publishable_patch(ctx, patch, prefix)
     blocked = rejected or bool(blockers)
     labels = list(ctx.blueprint.labels if ctx.blueprint else DEFAULT_LABELS)
     if rejected:
@@ -2879,7 +2926,7 @@ def deliver(ctx: Ctx) -> StageResult:
         }
     url = ctx.scm.publish(
         branch=ctx.branch,
-        patch=patch.encode("utf-8"),
+        patch=patch,
         title=banner + title,
         # The same instance id the commits carry in their trailer: the remote compares the two.
         identity=PublicationIdentity(
@@ -2897,7 +2944,8 @@ def deliver(ctx: Ctx) -> StageResult:
             adherence=audit["verdict"],
         ),
         labels=labels,
-        allowed_prefixes=[prefix],
+        # git's own show-prefix spelling, which the publication request digest has always carried.
+        allowed_prefixes=[f"{prefix}/" if prefix else ""],
     )
     return StageResult(
         stage="deliver",
