@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6
         with: { python-version: "3.12" }
-      - run: uv sync
+      - run: uv sync --locked
 
       - name: The policy agrees with the workflows it governs
         run: uv run python scripts/promotion_policy.py audit

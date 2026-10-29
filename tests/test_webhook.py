@@ -269,7 +269,7 @@ def served() -> Iterator[tuple[int, FakeOpener, list[str]]]:
         host="127.0.0.1",
         log=lines.append,
     )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         yield server.server_address[1], opener, lines
@@ -404,7 +404,7 @@ def test_server_maps_airflow_failure_to_502() -> None:
         host="127.0.0.1",
         log=lambda _line: None,
     )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         port = server.server_address[1]
@@ -440,7 +440,7 @@ def test_the_inboxless_receiver_forwards_a_backend_drain_instead_of_inventing_a_
         log=lambda _line: None,
         work_orders=webhook.WorkOrders("http://127.0.0.1:8082", token="backend-token"),
     )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         port = server.server_address[1]

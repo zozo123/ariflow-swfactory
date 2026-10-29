@@ -130,7 +130,7 @@ def test_native_source_enters_existing_admission_without_github_issues(box):
 
 def test_operator_cli_uses_real_backend_http_boundary_and_retries_same_receipt(box, monkeypatch):
     server = make_server(box.factory, "127.0.0.1", 0)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     monkeypatch.setenv("SWF_BACKEND_URL", f"http://127.0.0.1:{server.server_port}")
     monkeypatch.setenv("SWF_BACKEND_TOKEN", "t" * 40)

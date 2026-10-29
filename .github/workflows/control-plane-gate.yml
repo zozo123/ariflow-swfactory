@@ -48,7 +48,7 @@ jobs:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with: { python-version: "3.12" }
-      - run: uv sync
+      - run: uv sync --locked
 
       - name: Take the gate's own rules from the base revision, never from this pull request
         id: base
