@@ -61,14 +61,19 @@ def create_source_snapshot(repo: Path, revision: str, cache_root: Path) -> Sourc
     os.close(fd)
     temporary = Path(temporary_name)
     try:
-        with temporary.open("wb") as stream:
-            proc = subprocess.run(
-                ["git", "-C", str(repo), "archive", "--format=tar", commit],
-                stdout=stream,
-                stderr=subprocess.PIPE,
-                check=False,
-                timeout=300,
-            )
+        try:
+            with temporary.open("wb") as stream:
+                proc = subprocess.run(
+                    ["git", "-C", str(repo), "archive", "--format=tar", commit],
+                    stdout=stream,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    timeout=300,
+                )
+        except subprocess.TimeoutExpired as error:
+            raise SourceSnapshotError(f"git archive timed out after {error.timeout}s for {commit}") from error
+        except OSError as error:
+            raise SourceSnapshotError(f"git archive could not run for {commit}: {error}") from error
         if proc.returncode != 0:
             detail = proc.stderr.decode(errors="replace").strip()
             raise SourceSnapshotError(f"git archive failed for {commit}: {detail}")
@@ -143,4 +148,9 @@ def _verify_existing(path: Path, expected_digest: str, expected_size: int) -> No
 
 
 def _git(repo: Path, *args: str) -> str:
-    return git_output(repo, *args, error=SourceSnapshotError)
+    try:
+        return git_output(repo, *args, error=SourceSnapshotError)
+    except subprocess.TimeoutExpired as error:
+        raise SourceSnapshotError(f"git {args[0]} timed out after {error.timeout}s") from error
+    except OSError as error:
+        raise SourceSnapshotError(f"git {args[0]} could not run: {error}") from error
