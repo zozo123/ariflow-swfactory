@@ -766,7 +766,7 @@ class FakeScm:
             "base_revision": self.base,
             "head_revision": "abc",
             "content_digest": patch_content_digest(patch),
-            "branch": "swf/101",
+            "branch": "factory/101-0123456789ab",
             "pr_number": 1,
             "pr_state": "open",
             "url": "https://x/pr/1",
@@ -836,10 +836,11 @@ def _publish_body(cell: dict[str, Any], **changes: Any) -> dict[str, Any]:
         "epoch": int(cell["epoch"]),
         "policy_digest": cell["policy_digest"],
         "operation_key": "publish:1",
-        "branch": "swf/101",
+        "branch": "factory/101-0123456789ab",
         "title": "factory: 101",
         "body": "what changed",
         "labels": ["factory"],
+        "allowed_prefixes": [""],
         "patch_b64": "ZGlmZg==",
     }
     body.update(changes)
@@ -861,6 +862,32 @@ def test_scm_publish_requires_a_live_bound_cell(client: Client, factory: Factory
     assert status == 409
     assert payload == {"detail": "Factory Cell policy digest changed; publication is stale"}
 
+    assert all(instance.published == [] for instance in scm.instances)
+
+
+@pytest.mark.parametrize(
+    ("changes", "detail"),
+    [
+        pytest.param({"branch": "main"}, "branch must be under factory/", id="non-factory-branch"),
+        pytest.param({"allowed_prefixes": None}, "must name the target's allowed_prefixes", id="whole-repo-prefix"),
+        pytest.param(
+            {"labels": ["factory", "control-plane-maintenance"]},
+            "may not carry 'control-plane-maintenance'",
+            id="maintainer-exemption-label",
+        ),
+    ],
+)
+def test_scm_publish_refuses_what_only_a_maintainer_or_the_cell_decides(
+    client: Client, factory: Factory, scm: type[FakeScm], changes: dict[str, Any], detail: str
+) -> None:
+    """The backend pushes and labels with its own GitHub credential, which the protected-paths gate
+    does not count as a factory identity. A live Cell's request still may not choose a non-factory
+    branch, drop the target prefix, or carry the maintainer's exemption label."""
+    cell = factory.cell_store.get(submit(client)["cells"][0])
+
+    status, payload = client.call("POST", "/v1/scm/publish", _publish_body(cell, **changes))
+
+    assert status == 403 and detail in payload["detail"]
     assert all(instance.published == [] for instance in scm.instances)
 
 
@@ -914,9 +941,9 @@ def test_scm_publish_and_open_issue_reach_the_credential_once_identity_holds(
 
     status, payload = client.call("POST", "/v1/scm/publish", _publish_body(cell))
     assert status == 200, payload
-    assert payload["url"] == "https://x/pr/1" and payload["branch"] == "swf/101"
+    assert payload["url"] == "https://x/pr/1" and payload["branch"] == "factory/101-0123456789ab"
     published = scm.instances[-1].published[-1]
-    assert published["branch"] == "swf/101" and published["patch"] == b"diff"
+    assert published["branch"] == "factory/101-0123456789ab" and published["patch"] == b"diff"
     # The digest marker is a lookup hint for people reading the PR; the proof a replay reconciles
     # against is the immutable git content below, never the editable body.
     assert "swfactory-patch-sha256:" + payload["patch_sha256"] in published["body"]
@@ -980,7 +1007,7 @@ def test_scm_publish_retry_refuses_a_remote_that_does_not_carry_the_intended_con
     assert status == 409, payload
     assert "divergent" in payload["detail"]
     assert scm.instances[-1].published == [], "a divergent remote must never be overwritten by a replay"
-    assert scm.instances[-1].observed == ["swf/101"]
+    assert scm.instances[-1].observed == ["factory/101-0123456789ab"]
 
 
 @pytest.mark.parametrize("pr_state", ["open", "closed", "merged"])
@@ -1031,7 +1058,7 @@ def test_scm_publish_retry_resumes_when_the_branch_holds_the_content_but_no_pr_e
     observations = [branch for instance in observing_instances for branch in instance.observed]
     assert len(observing_instances) >= 2
     assert len(observations) >= 2
-    assert set(observations) == {"swf/101"}
+    assert set(observations) == {"factory/101-0123456789ab"}
 
 
 # ---------------------------------------------------------------- transport bounds
@@ -1278,3 +1305,10 @@ def test_live_epoch_policy_mismatch_is_refused_before_the_row_is_overwritten(
         )
 
     assert factory.cell_store.get(cell["cell_id"])["policy_digest"] == legacy
+
+
+def test_the_refused_label_is_the_promotion_policy_exemption_label() -> None:
+    import yaml
+
+    policy = yaml.safe_load((Path(__file__).parents[1] / ".github" / "promotion-policy.yml").read_text())
+    assert policy["control_plane"]["exemption_label"] == scm_mod.CONTROL_PLANE_EXEMPTION_LABEL
