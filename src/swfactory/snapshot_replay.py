@@ -274,8 +274,12 @@ def verify_snapshot_run(
         raise SnapshotReplayError("receipt execution recipe path mismatch")
 
     for stream in (receipt.stdout, receipt.stderr):
-        path = destination / stream.path
-        if path.is_symlink() or not path.is_file():
+        path = destination
+        for part in PurePosixPath(stream.path).parts:
+            path = path / part
+            if path.is_symlink():
+                raise SnapshotReplayError(f"retained replay stream is redirected: {stream.path}")
+        if not path.is_file():
             raise SnapshotReplayError(f"retained replay stream is absent or redirected: {stream.path}")
         digest, size = file_digest(path)
         if digest != stream.sha256 or size != stream.size_bytes:
