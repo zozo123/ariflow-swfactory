@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 from support import git, make_repo
 
+from swfactory import candidate_evidence, canonical
+from swfactory.candidate_evidence import CandidateEvidenceError
 from swfactory.execution_recipe import ExecutionRecipeError, load_execution_recipe
 
 RECIPE = {
@@ -66,6 +70,14 @@ def test_recipe_digest_changes_when_committed_execution_contract_changes(tmp_pat
             "looks secret",
             id="secret_value_in_public_environment",
         ),
+        *(
+            pytest.param(
+                {"environment": {**RECIPE["environment"], name: "do-not-commit-this"}},
+                "looks secret",
+                id=f"secret_name_{name}",
+            )
+            for name in ("SSH_PRIVATE_KEY", "AWS_ACCESS_KEY_ID", "NPM_AUTHORIZATION", "SESSION_COOKIE")
+        ),
         pytest.param({"cwd": "/tmp"}, "escapes repository", id="cwd_escapes-/tmp"),
         pytest.param({"cwd": "../outside"}, "escapes repository", id="cwd_escapes-../outside"),
         pytest.param({"cwd": "safe/../../outside"}, "escapes repository", id="cwd_escapes-safe/../../outside"),
@@ -89,3 +101,30 @@ def test_option_like_revision_and_escaping_recipe_path_are_refused(tmp_path: Pat
         load_execution_recipe(repo, "--help")
     with pytest.raises(ExecutionRecipeError, match="escapes repository"):
         load_execution_recipe(repo, "HEAD", path="../candidate-run.json")
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(lambda args: subprocess.TimeoutExpired(args, 120), id="timeout"),
+        pytest.param(lambda args: OSError("injected launch failure"), id="launch"),
+    ],
+)
+def test_git_timeouts_and_launch_failures_raise_the_callers_domain_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Callable[[list[str]], Exception]
+) -> None:
+    """``canonical.git_output`` is shared; neither recipe nor candidate-evidence may leak a raw exception."""
+    repo, _ = _repo(tmp_path)
+    raised: list[Exception] = []
+
+    def fail(args: list[str], **_: Any) -> subprocess.CompletedProcess[Any]:
+        raised.append(failure(args))
+        raise raised[-1]
+
+    monkeypatch.setattr(canonical.subprocess, "run", fail)
+    with pytest.raises(ExecutionRecipeError, match="git rev-parse") as recipe_error:
+        load_execution_recipe(repo, "HEAD")
+    assert recipe_error.value.__cause__ is raised[-1]
+    with pytest.raises(CandidateEvidenceError, match="git rev-parse") as evidence_error:
+        candidate_evidence._git_bytes(repo, "rev-parse", "HEAD")
+    assert evidence_error.value.__cause__ is raised[-1]

@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from swfactory.canonical import git_output
+from swfactory.security_contract import looks_secret_key
 
 
 class ExecutionRecipeError(RuntimeError):
@@ -143,8 +144,11 @@ def parse_execution_recipe(document: Any) -> ExecutionRecipe:
         _validate_env_name(key)
         if not isinstance(value, str) or "\x00" in value:
             raise ExecutionRecipeError(f"environment value for {key!r} must be a string")
-        if _looks_secret(key):
-            raise ExecutionRecipeError(f"environment key {key!r} looks secret; record only its name in secret_env")
+        if looks_secret_key(key):
+            raise ExecutionRecipeError(
+                f"environment key {key!r} looks secret; request a scoped credential capability "
+                "from the trusted broker instead"
+            )
         environment.append((key, value))
 
     secret_raw = document.get("secret_env", [])
@@ -192,11 +196,6 @@ def _validate_env_name(value: Any) -> None:
         raise ExecutionRecipeError(f"invalid environment name: {value!r}")
     if not all(ch.isalnum() or ch == "_" for ch in value):
         raise ExecutionRecipeError(f"invalid environment name: {value!r}")
-
-
-def _looks_secret(name: str) -> bool:
-    upper = name.upper()
-    return any(token in upper for token in ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "API_KEY"))
 
 
 def _git(repo: Path, *args: str) -> str:

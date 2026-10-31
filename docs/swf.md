@@ -196,8 +196,9 @@ swf context show                                  # the active one, every creden
 swf --context staging jobs list                   # one command against another environment
 ```
 
-The file is `config.toml` under `$SWF_CONFIG`, else `$XDG_CONFIG_HOME/swf/`, else the platform's own
-config directory (`~/Library/Application Support/swf/` on macOS). It is written atomically at mode
+The file is `$SWF_CONFIG` itself (a file path, not a directory) when that is set, else
+`config.toml` under `$XDG_CONFIG_HOME/swf/`, else under the platform's own config directory
+(`~/Library/Application Support/swf/` on macOS). It is written atomically at mode
 `0600`. Precedence for the active context is `--context NAME` > `$SWF_CONTEXT` > the file's
 `default` key > the only context if there is exactly one > a built-in `local` pointing at
 `http://localhost:8080`. That fallback is never written to disk, and `swf doctor` says so:
