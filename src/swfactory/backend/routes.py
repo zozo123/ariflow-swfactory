@@ -23,6 +23,7 @@ from swfactory.product_surface import build_preview
 
 from . import autonomous_service as autonomous
 from . import core_service as core
+from . import followups
 from . import population_service as population
 from . import scm_service as scm
 from .service import Factory, Refused, text
@@ -278,6 +279,9 @@ def _autonomous(decide: Route) -> Route:
 
 
 ROUTES: dict[str, Route] = {
+    "/followups/receive": followups.receive,
+    "/followups/attention": followups.attention,
+    "/followups/dismiss": followups.dismiss,
     "/doctor": _doctor,
     "/compatibility": lambda factory, _body: factory.capabilities(),
     "/fleet": lambda factory, _body: factory.fleet(),

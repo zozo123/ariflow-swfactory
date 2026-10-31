@@ -63,6 +63,60 @@ repository, event type and a SHA-256 digest of the event type plus original body
 comment text, HMAC signatures, API tokens and passwords are not stored. Airflow receives the
 provenance in `conf._swfactory_webhook` alongside `issues` and `targets`.
 
+## PR follow-ups (managed mode)
+
+Subscribe the GitHub webhook to `issue_comment` events. In backend-managed mode, newly created
+PR conversation comments from GitHub users enter the same durable receiver inbox as work orders.
+The saved envelope contains only repository, PR number, and comment ID. It does not create an
+Airflow run. Legacy direct-Airflow mode continues to ignore PR comments.
+
+The backend re-fetches the comment from GitHub and links it using a **committed host publication
+receipt**. A PR label, branch name, body marker, or a caller-supplied Cell ID is not ownership
+proof. PRs without a recorded managed publication are ignored. This initial integration does not
+handle inline review comments, edited/deleted comments, chat sources, or older publications whose
+host receipts were not retained.
+
+An OWNER, MEMBER, or COLLABORATOR can request a revision by putting this exact command on the first
+line of a new PR conversation comment:
+
+```text
+@factory revise
+Please cover the empty-input case as well.
+```
+
+Ordinary discussion is retained as context. Untrusted revision requests are recorded as refused;
+bot comments are ignored. Cancelled work is not resumed. The backend stores the first observed
+comment text, its SHA-256, actor, source URL, publication epoch, and recording epoch in the existing
+Cell timeline. It reads the text at processing time, not necessarily the instant the webhook was
+sent. Retries preserve that first record even if the remote comment is later edited. Context is
+never delivered to a stage agent automatically.
+
+`swf attention` (including `--json`) shows explicit trusted requests with their source link and
+next action. The attention projection omits full comment text; inspect `/v1/cells/history` for the
+retained snapshot. Backend/CLI version mismatch or a failed follow-up read is shown as a source
+error, rather than reporting a clear attention list.
+
+A revision request **does not authorize execution or reuse approval**. Review its retained text,
+incorporate the accepted scope into the original issue, and submit a new managed work order through
+the existing `swf submit --blueprint <line> --issue <original-issue>` path. That path owns capacity,
+Cell epochs, accepted inputs, and fresh gates. If the Cell is still active, finish or explicitly
+cancel it through the existing controls first. This integration does not automate admission or
+claim that a comment became part of an approved plan merely because it was recorded.
+
+After handling or declining the request, acknowledge it through the authenticated backend:
+
+```sh
+curl --fail-with-body "$SWF_BACKEND_URL/v1/followups/dismiss" \
+  -H "Authorization: Bearer $SWF_BACKEND_TOKEN" -H 'Content-Type: application/json' \
+  --data '{"cell_id":"<cell-id>","epoch":1,"id":"github-comment:55","reason":"Handled in a new work order"}'
+```
+
+Use the current Cell epoch from `swf cells inspect <cell-id>`; the recording epoch may be older.
+Dismissal appends an acknowledgement, retains the original request, and grants no approval.
+Unresolved requests survive receiver/backend restart and Cell replacement until acknowledged.
+Deploy the receiver, backend, and CLI from the same revision. Rollback needs no schema migration:
+new records are additive event kinds in the existing Cell store; an older CLI will not display them.
+
 ## Receipts and recovery
 
 Each delivery gets `swf_webhook__<sha256(repository, delivery-id)>` as its Airflow run ID. Attempts

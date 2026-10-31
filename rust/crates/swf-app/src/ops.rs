@@ -441,7 +441,20 @@ impl Ops {
     /// What needs a human right now.
     pub async fn attention(&self, cancel: &CancellationToken) -> Attention {
         let snap = self.snapshot_default(cancel).await;
-        Attention::from_snapshot(&snap, Utc::now())
+        let mut attention = Attention::from_snapshot(&snap, Utc::now());
+        if let Some(backend) = &self.backend {
+            match backend
+                .call("/followups/attention", serde_json::json!({}), cancel)
+                .await
+            {
+                Ok(rows) => attention.followups = rows,
+                Err(error) => attention.errors.push(swf_domain::model::SourceError {
+                    source: "followups".to_string(),
+                    message: error.to_string(),
+                }),
+            }
+        }
+        attention
     }
 
     /// The readiness report for this machine. Never fails — a failing check *is* the answer.
