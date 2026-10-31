@@ -148,3 +148,34 @@ def test_cli_loads_recipe_from_source_commit_and_verifies(tmp_path: Path) -> Non
     document = json.loads(verify.stdout)
     assert document["commit_sha"] == snapshot.commit_sha
     assert document["receipt_digest"]
+
+
+@pytest.mark.parametrize("stream_name", ["stdout", "stderr"])
+@pytest.mark.parametrize("redirected", [False, True])
+def test_retained_stream_parent_must_not_redirect_outside_bundle(
+    tmp_path: Path, stream_name: str, redirected: bool
+) -> None:
+    from dataclasses import asdict, replace
+
+    repo, snapshot, recipe = _repo(tmp_path)
+    destination = tmp_path / "run"
+    receipt = run_snapshot_recipe(snapshot, recipe, destination)
+    stream = getattr(receipt, stream_name)
+    logs = destination / "logs"
+    if redirected:
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        logs.symlink_to(outside, target_is_directory=True)
+    else:
+        logs.mkdir()
+    (destination / stream.path).rename(logs / stream.path)
+    receipt = replace(receipt, **{stream_name: replace(stream, path=f"logs/{stream.path}")})
+    document = {**asdict(receipt), "receipt_digest": receipt.digest}
+    (destination / "receipt.json").write_text(json.dumps(document), encoding="utf-8")
+
+    if redirected:
+        with pytest.raises(SnapshotReplayError, match="redirected"):
+            verify_snapshot_run(destination, snapshot=snapshot, repo=repo)
+    else:
+        _, observed = verify_snapshot_run(destination, snapshot=snapshot, repo=repo)
+        assert observed == receipt
