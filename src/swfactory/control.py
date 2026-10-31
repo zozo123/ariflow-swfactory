@@ -636,6 +636,10 @@ class GitHubClient:
         self.repo = repo
         self._runner = runner
 
+    def issue_comment(self, number: int) -> dict[str, Any]:
+        """Read authoritative comment metadata; webhook text never grants work authority."""
+        return _json(_exec(self._runner, ["gh", "api", f"repos/{self.repo}/issues/comments/{number}"]), "gh api")
+
     def prs(self, label: str = "factory", limit: int = 30) -> list[PullRequest]:
         out = _exec(
             self._runner,

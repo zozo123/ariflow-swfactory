@@ -14,7 +14,7 @@
 //! sentence this module must never say.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use swf_domain::ids::{GateId, JobId};
 use swf_domain::model::{
     is_factory_name, Gate, JobRow, PullRequest, SandboxRef, Snapshot, SourceError,
@@ -96,9 +96,22 @@ pub struct OrphanSandbox {
     pub reason: String,
 }
 
+/// A revision request awaiting a fresh managed admission; never an approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FollowupItem {
+    pub id: String,
+    pub cell_id: String,
+    pub epoch: u64,
+    pub actor: String,
+    pub source_url: String,
+    pub next_action: String,
+}
+
 /// Everything waiting for a person, and everything the pass could not see.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Attention {
+    /// Explicit PR follow-ups served by the backend Cell timeline.
+    pub followups: Vec<FollowupItem>,
     /// Approvals. Ready ones first — those are the ones that can be answered right now.
     pub gates: Vec<GateItem>,
     /// Jobs that failed.
@@ -114,7 +127,11 @@ pub struct Attention {
 impl Attention {
     /// How many rows a person is being asked to look at.
     pub fn count(&self) -> usize {
-        self.gates.len() + self.failures.len() + self.blocked.len() + self.orphans.len()
+        self.gates.len()
+            + self.failures.len()
+            + self.blocked.len()
+            + self.orphans.len()
+            + self.followups.len()
     }
 
     /// True when nothing needs a person *and* every source answered.
@@ -150,6 +167,7 @@ impl Attention {
             .collect();
 
         Self {
+            followups: Vec::new(),
             gates,
             failures,
             blocked,
@@ -441,5 +459,21 @@ mod tests {
             "we could not tell is not nothing is wrong"
         );
         assert_eq!(attention.errors.len(), 1);
+    }
+    #[test]
+    fn a_revision_request_prevents_a_clear_attention_report() {
+        let mut attention = Attention::default();
+        let row = serde_json::json!({
+            "id": "github-comment:55", "cell_id": "cell_0123456789abcdef01234567",
+            "epoch": 1, "actor": "maintainer", "source_url": "https://github.com/o/r/pull/7#issuecomment-55",
+            "next_action": "Review and submit fresh work", "disposition": "needs_admission"
+        });
+        attention
+            .followups
+            .push(serde_json::from_value(row).unwrap());
+        assert_eq!(attention.count(), 1);
+        assert!(!attention.is_clear());
+        let json = serde_json::to_value(attention).unwrap();
+        assert_eq!(json["followups"][0]["id"], "github-comment:55");
     }
 }

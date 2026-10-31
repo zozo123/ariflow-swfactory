@@ -358,6 +358,16 @@ class OperationJournal:
                     return
                 raise OperationInDoubt(ref.key, "commit_lost_attempt_owner")
 
+    def publications_for_pr(self, repository: str, number: int) -> list[dict[str, Any]]:
+        """Committed host receipts linking a GitHub PR to its original Cell epoch."""
+        with self.lock:
+            keys = self.db.execute(
+                "SELECT operation_key FROM operations WHERE kind='github_publish' AND state='committed' "
+                "AND json_extract(result_json, '$.repository')=? AND json_extract(result_json, '$.pr_number')=?",
+                (repository, number),
+            ).fetchall()
+            return [self.get(row[0]) for row in keys]
+
     def get(self, key: str) -> dict[str, Any]:
         with self.lock:
             row = self.db.execute("SELECT * FROM operations WHERE operation_key=?", (key,)).fetchone()

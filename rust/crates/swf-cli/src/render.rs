@@ -371,6 +371,22 @@ pub fn count_of(n: usize, what: &str) -> String {
 pub fn attention(att: &Attention, term: &Term) -> String {
     let mut blocks: Vec<String> = Vec::new();
 
+    if !att.followups.is_empty() {
+        let mut table = Table::new(["request", "cell", "source", "next action"]);
+        for item in &att.followups {
+            table.row([
+                item.id.clone(),
+                item.cell_id.clone(),
+                item.source_url.clone(),
+                swf_domain::sanitize::sanitize_line(&item.next_action),
+            ]);
+        }
+        blocks.push(format!(
+            "{}\n{}",
+            term.head("revision requests"),
+            table.render(term)
+        ));
+    }
     if !att.gates.is_empty() {
         let mut table = Table::new(["gate", "ready", "age", "subject"]);
         for item in &att.gates {

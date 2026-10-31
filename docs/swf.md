@@ -219,7 +219,7 @@ appended to it — because `[api] base_url` can put Airflow behind a prefix.
 | `swf doctor` | is this machine able to drive a factory: one line per check, a `fix:` per failure |
 | `swf factory run [NAME] --issue <ref>… [--target R]… [--wait] \| status <run>` | run one logical factory (`submit` is its alias) / its run's status |
 | `swf submit --issue <ref>… [--blueprint N] [--target R]… [--wait]` | send governed work to Airflow |
-| `swf attention` | approvals waiting, failures, blocked deliveries, orphan sandboxes |
+| `swf attention` | approvals waiting, failures, blocked deliveries, orphan sandboxes, backend-managed PR revision requests |
 | `swf runs list \| inspect <run> \| stop <run> \| unpause <dag>` | DAG runs |
 | `swf jobs list [--attention] \| inspect <job>` | mapped jobs — identity, progress, gates |
 | `swf cells list [--limit N] \| inspect <cell_id> \| history <cell_id>` | durable Factory Cells and their ownership/evidence history |

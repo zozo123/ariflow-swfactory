@@ -104,6 +104,27 @@ class WorkOrders:
 # ---------------------------------------------------------------- routing (pure)
 
 
+def followup_trigger(event: str, payload: Any) -> Trigger | None:
+    """Queue PR conversation comments as context; the backend re-reads and classifies them."""
+    if event != "issue_comment" or not isinstance(payload, dict) or payload.get("action") != "created":
+        return None
+    issue, comment = payload.get("issue"), payload.get("comment")
+    if not isinstance(issue, dict) or not isinstance(issue.get("pull_request"), dict):
+        return None
+    if not isinstance(comment, dict) or not isinstance(comment.get("user"), dict):
+        return None
+    if comment["user"].get("type") != "User":
+        return None
+    number, comment_id = issue.get("number"), comment.get("id")
+    if type(number) is not int or number <= 0 or type(comment_id) is not int or comment_id <= 0:
+        return None
+    try:
+        repository = _repository(payload)
+    except ValueError:
+        return None
+    return Trigger("followup", {"_followup": {"repository": repository, "pr_number": number, "comment_id": comment_id}})
+
+
 def route(event: str, payload: Mapping[str, Any]) -> Trigger | None:
     """Map a GitHub event to a ``Trigger`` or ``None`` (ignore).
 
@@ -187,6 +208,8 @@ def repository_trigger(trigger: Trigger, repository: str) -> Trigger:
     from swfactory.blueprint import load
 
     repository = validate_repo(repository).casefold()
+    if "_followup" in trigger.conf:
+        return trigger
     blueprint = load(trigger.dag_id)
     if blueprint.name != trigger.dag_id:
         raise ValueError("blueprint name does not match the requested DAG")
@@ -358,6 +381,21 @@ def submit_work_order(
     # Only the fields the canonical route admits on. The inbox's own ``_swfactory_webhook`` block is
     # receiver bookkeeping; sending it would change the request digest and split the work identity
     # a second channel has to collide with.
+    followup = trigger.conf.get("_followup")
+    if followup is not None:
+        _, response = _post_json(
+            base + "/v1/followups/receive",
+            followup,
+            headers={"Authorization": f"Bearer {backend.token}"},
+            opener=opener,
+        )
+        try:
+            document = json.loads(response)
+        except ValueError:
+            raise RuntimeError("backend returned an invalid follow-up receipt") from None
+        if not isinstance(document, dict) or not isinstance(document.get("submission_id"), str):
+            raise RuntimeError("backend returned an invalid follow-up receipt")
+        return document
     order: dict[str, Any] = {"line": trigger.dag_id, "actor": backend.actor}
     for key in ("issues", "targets"):
         value = trigger.conf.get(key)
@@ -487,6 +525,8 @@ def make_handler(
                 self._reply(400, {"error": "invalid JSON"}, delivery, event)
                 return
             trigger = route(event, payload if isinstance(payload, dict) else {})
+            if work_orders is not None:
+                trigger = followup_trigger(event, payload) or trigger
             if trigger is None:
                 self._reply(200, {"routed": False, "event": event}, delivery, event)
                 return

@@ -237,6 +237,17 @@ class CellStore:
             ).fetchall()
             return [self._decode(r) for r in rows]
 
+    def followup_attention(self) -> list[dict[str, Any]]:
+        """Outstanding revision requests from the existing append-only Cell timeline."""
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT json_remove(e.payload_json, '$.body') FROM cell_events e WHERE e.kind='github_followup' "
+                "AND json_extract(e.payload_json, '$.disposition')='needs_admission' "
+                "AND NOT EXISTS (SELECT 1 FROM cell_events d WHERE d.cell_id=e.cell_id "
+                "AND d.operation_key='dismiss:' || e.operation_key) ORDER BY e.seq"
+            ).fetchall()
+            return [json.loads(row[0]) for row in rows]
+
     def history(self, cell_id: str) -> list[dict[str, Any]]:
         with self.lock:
             rows = self.db.execute(
