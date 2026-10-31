@@ -635,6 +635,7 @@ PROVIDER_CHECKS = frozenset(
         "external agent",
         "toolset backend",
         "boat api key",
+        "model credential",
     }
 )
 
@@ -658,6 +659,24 @@ def _check_boat(env: Mapping[str, str]) -> Check:
     if not key:
         return Check("boat api key", False, "BOAT_API_KEY is not set", boat_key_fix())
     return Check("boat api key", True, "BOAT_API_KEY is set (its value is never reported)")
+
+
+def _check_model_credential(env: Mapping[str, str]) -> Check:
+    """The key a docker (``credentials=env``) or toolset cell forwards to ``claude``, by name only.
+
+    Both pass ``ANTHROPIC_API_KEY`` only when the worker has it, so a missing key used to surface
+    as the agent's own auth error stages in, after a cell was provisioned. Presence only: a doctor
+    report gets pasted into issues, so the value is never read into it.
+    """
+    if (env.get("ANTHROPIC_API_KEY") or "").strip():
+        return Check("model credential", True, "ANTHROPIC_API_KEY is set (its value is never reported)")
+    return Check(
+        "model credential",
+        False,
+        "ANTHROPIC_API_KEY is not set; the cell's claude would start without a key",
+        "export ANTHROPIC_API_KEY in the environment that runs the factory "
+        "(a docker cell can use SWF_DOCKER_CREDENTIALS=host to mount ~/.claude instead)",
+    )
 
 
 def sandbox_checks(
@@ -731,6 +750,10 @@ def sandbox_checks(
             checks.append(Check("external agent", True, f"{profile['id']} {profile['version']}: manifest validated"))
         except (OSError, ValueError, StageError) as error:
             checks.append(Check("external agent", False, str(error), fix="verify SWF_AGENT_PROFILE on the worker"))
+    if cfg.agent == "claude" and (
+        cfg.sandbox == "toolset" or (cfg.sandbox == "docker" and cfg.docker_credentials == "env")
+    ):
+        checks.append(_check_model_credential(env))
     return checks
 
 

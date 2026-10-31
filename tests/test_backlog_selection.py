@@ -206,7 +206,7 @@ def test_cli_run_without_issues_submits_the_selection_and_prints_the_skips(
     ran: list[str] = []
     monkeypatch.setattr(runtime, "ctx_for", lambda cfg, **kw: (ran.append(cfg.issue), SimpleNamespace(cfg=cfg))[1])
     report = SimpleNamespace(stages=[], tests_passed=True, table=lambda: "ok")
-    monkeypatch.setattr(cli, "run_ctx", lambda ctx, *args: report)
+    monkeypatch.setattr(cli, "run_ctx", lambda ctx, *args, **kwargs: report)
 
     cli._run_jobs(bp, [], {**LOCAL, "run_id": "dra1n001"})
 

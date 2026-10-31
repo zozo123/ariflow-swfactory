@@ -210,7 +210,8 @@ uv run swfactory run \
 ```
 
 This invokes the shared Python stages directly with terminal approvals. It can publish a real PR.
-It does not provide a backend-managed Airflow lifecycle or establish managed Cell authority merely
+The remote cell is removed when the run ends, as the DAG's teardown does; pass `--keep-sandbox` to
+leave it up for inspection or a rerun with the same `--run-id`. It does not provide a backend-managed Airflow lifecycle or establish managed Cell authority merely
 by sharing stage code. Use the deployed path for managed concurrency, durable approval waits, and
 centralized publication.
 

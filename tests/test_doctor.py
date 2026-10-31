@@ -765,11 +765,43 @@ def test_preflight_blocks_on_the_provider_and_only_the_provider() -> None:
     runner = green(**{INSPECT: None, MANIFEST: None, "gh auth status": None})
     configuration = cfg(sandbox="docker")
 
-    report = run_doctor(configuration, runner, root=ROOT)
+    report = run_doctor(configuration, runner, root=ROOT, env={"ANTHROPIC_API_KEY": "sk-test"})
     blocking = doctor.blocking(report)
 
     assert [check.name for check in blocking] == ["docker image"]
     assert not by_name(report)["gh auth"].ok
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"sandbox": "docker"}, id="docker-env-credentials"),
+        pytest.param({"sandbox": "toolset"}, id="toolset"),
+    ],
+)
+def test_a_cell_that_forwards_the_model_key_by_name_refuses_without_it(overrides: dict[str, str]) -> None:
+    """docker (``credentials=env``) and toolset pass ``ANTHROPIC_API_KEY`` only when the worker has
+    it; without it the run would provision a cell whose first agent call fails."""
+    configuration = cfg(**overrides)
+
+    missing = by_name(run_doctor(configuration, green(), root=ROOT, env={}))["model credential"]
+    present = by_name(run_doctor(configuration, green(), root=ROOT, env={"ANTHROPIC_API_KEY": "sk-secret-value"}))
+
+    assert not missing.ok and missing.required and "ANTHROPIC_API_KEY" in missing.fix
+    assert "model credential" in [check.name for check in doctor.blocking([missing])]
+    assert present["model credential"].ok and "sk-secret-value" not in present["model credential"].detail
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"sandbox": "docker", "docker_credentials": "host"}, id="docker-host-session"),
+        pytest.param({"sandbox": "docker", "agent": "scripted"}, id="scripted-agent"),
+        pytest.param({"sandbox": "srt"}, id="srt-uses-the-host-claude-login"),
+    ],
+)
+def test_no_model_credential_row_where_the_cell_does_not_forward_one(overrides: dict[str, str]) -> None:
+    assert "model credential" not in by_name(run_doctor(cfg(**overrides), green(), root=ROOT, env={}))
 
 
 def test_preflight_costs_nothing_for_a_local_sandbox() -> None:

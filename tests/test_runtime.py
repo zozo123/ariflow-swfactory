@@ -165,7 +165,7 @@ def test_cli_run_derives_its_config_with_job_config(tmp_path: Path, monkeypatch:
         approvals=[],
         tests_passed=True,
     )
-    monkeypatch.setattr(cli, "run_ctx", lambda ctx, *args: report)
+    monkeypatch.setattr(cli, "run_ctx", lambda ctx, *args, **kwargs: report)
 
     cli._run_jobs(bp, [ISSUE], {**LOCAL, "run_id": "c1i00001"})
 
