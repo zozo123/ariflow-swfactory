@@ -389,7 +389,10 @@ def submit_work_order(
             headers={"Authorization": f"Bearer {backend.token}"},
             opener=opener,
         )
-        document = json.loads(response)
+        try:
+            document = json.loads(response)
+        except ValueError:
+            raise RuntimeError("backend returned an invalid follow-up receipt") from None
         if not isinstance(document, dict) or not isinstance(document.get("submission_id"), str):
             raise RuntimeError("backend returned an invalid follow-up receipt")
         return document

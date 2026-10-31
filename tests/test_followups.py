@@ -287,3 +287,34 @@ def test_signed_receiver_queues_pr_context_only_in_managed_mode(tmp_path):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+
+def test_invalid_backend_receipt_keeps_comment_retryable(tmp_path):
+    from backend_support import FakeResponse
+
+    from swfactory.dispatch import Dispatcher
+    from swfactory.webhook import Trigger
+
+    inbox = DeliveryInbox(tmp_path / "inbox.sqlite3")
+    inbox.enqueue(
+        "retry-me",
+        "issue_comment",
+        b"payload",
+        REPO_SLUG,
+        Trigger(
+            "followup",
+            {"_followup": {"repository": REPO_SLUG, "pr_number": 7, "comment_id": 55}},
+        ),
+    )
+    dispatcher = Dispatcher(
+        inbox,
+        airflow_url="http://localhost:8080",
+        token_provider=None,
+        work_orders=WorkOrders("http://localhost:8082", "t" * 40),
+        opener=lambda request, timeout=0: FakeResponse(b"temporary proxy response"),
+        log=lambda _: None,
+    )
+    assert dispatcher.dispatch_one()
+    receipt = inbox.get("retry-me")
+    assert receipt.state == "pending"
+    assert receipt.last_error == "work_order_invalid_response"
