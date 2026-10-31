@@ -281,7 +281,7 @@ def test_real_transport_never_follows_redirect_with_controller_key(monkeypatch):
             pass
 
     with HTTPServer(("127.0.0.1", 0), Handler) as server:
-        thread = Thread(target=server.serve_forever, daemon=True)
+        thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         thread.start()
         monkeypatch.setattr(linear_source, "ENDPOINT", f"http://127.0.0.1:{server.server_port}/graphql")
         try:

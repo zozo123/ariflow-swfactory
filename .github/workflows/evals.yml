@@ -37,7 +37,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with: { python-version: "3.12" }
       - name: Install swfactory
-        run: uv sync
+        run: uv sync --locked
       - name: Run the eval suite (scripted agent, local sandbox) and gate on the baseline
         run: uv run python -m swfactory.evals --suite demo/evals
       - name: Upload eval run artifacts
@@ -88,7 +88,7 @@ jobs:
           npm i -g @anthropic-ai/sandbox-runtime@0.0.75 @anthropic-ai/claude-code
           srt --version && claude --version
       - name: Install swfactory
-        run: uv sync
+        run: uv sync --locked
       - name: Real factory run on demo/issue.md (claude agent under srt, local git remote)
         env:
           # The demo blueprint declares both gates `mode = "human"`. #2066 stopped SWF_APPROVE=auto
@@ -144,7 +144,7 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           islo --version
       - name: Install swfactory
-        run: uv sync
+        run: uv sync --locked
       - name: Preflight (islo auth + tool integrations, gateway profile, environment, snapshot)
         run: uv run swfactory doctor --agent claude --sandbox islo --scm local --json
       - name: Real factory run on demo/issue.md (claude agent in an islo MicroVM, local git remote)

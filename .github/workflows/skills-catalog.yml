@@ -73,7 +73,7 @@ jobs:
 
       - name: Connector unit tests
         run: |
-          uv sync
+          uv sync --locked
           uv run pytest tests/test_skills_connector.py tests/test_skills_catalog.py
 
       - name: Connector catalog is executable

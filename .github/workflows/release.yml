@@ -258,7 +258,7 @@ jobs:
 
       - name: DAG parity and smoke (needs the airflow group)
         run: |
-          uv sync --group airflow
+          uv sync --locked --group airflow
           uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py
 
       - name: Build the wheel and sdist

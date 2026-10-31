@@ -80,7 +80,7 @@ def factory(tmp_path: Path, airflow: FakeAirflow, env: None) -> Iterator[Factory
 def client(factory: Factory, airflow: FakeAirflow) -> Iterator[Client]:
     """``factory`` served by the real ``make_server`` on an ephemeral loopback port."""
     server = make_server(factory, "127.0.0.1", 0)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         yield Client(server, airflow)

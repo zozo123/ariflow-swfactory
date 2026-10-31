@@ -146,7 +146,7 @@ def test_http_readiness_detects_a_failed_worker(tmp_path: Path, monkeypatch) -> 
         work_orders=WorkOrders("http://localhost:8082", "test-token"),
         log=lambda line: None,
     )
-    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    serving = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     serving.start()
 
     def status():
