@@ -14,7 +14,9 @@ from swfactory.cli import app
 from swfactory.execution_recipe import (
     BoundExecutionRecipe,
     ExecutionRecipe,
+    ExecutionRecipeError,
     load_execution_recipe,
+    parse_execution_recipe,
 )
 from swfactory.snapshot_replay import (
     SnapshotReplayError,
@@ -249,3 +251,37 @@ def test_retained_stream_path_must_stay_inside_bundle(tmp_path: Path, stream_nam
 
     with pytest.raises(SnapshotReplayError, match="unsafe retained stream path"):
         verify_snapshot_run(destination, snapshot=snapshot, repo=repo)
+
+
+@pytest.mark.parametrize("name", ["NPM_AUTHORIZATION", "AWS_ACCESS_KEY_ID", "SESSION_COOKIE"])
+def test_replay_grandfathers_env_names_admitted_before_shared_secret_rule(tmp_path: Path, name: str) -> None:
+    # Recipes committed and run before #2385 could carry these names; their replay evidence must still verify.
+    document = dict(RECIPE, environment={"PYTHONHASHSEED": "0", name: "recorded"})
+    repo, commit = make_repo(
+        tmp_path,
+        {"value.txt": "committed\n", ".swfactory/candidate-run.json": json.dumps(document) + "\n"},
+    )
+    snapshot = create_source_snapshot(repo, commit, tmp_path / "snapshots")
+    with pytest.raises(ExecutionRecipeError, match="looks secret"):
+        load_execution_recipe(repo, commit)
+    historical = BoundExecutionRecipe(
+        commit_sha=snapshot.commit_sha,
+        path=".swfactory/candidate-run.json",
+        recipe=parse_execution_recipe(document, retained=True),
+    )
+    run_snapshot_recipe(snapshot, historical, tmp_path / "run")
+
+    bound, _ = verify_snapshot_run(tmp_path / "run", snapshot=snapshot, repo=repo)
+    assert dict(bound.recipe.environment)[name] == "recorded"
+
+
+def test_replay_still_rejects_env_names_secret_under_the_old_rule(tmp_path: Path) -> None:
+    repo, snapshot, recipe = _repo(tmp_path)
+    run_snapshot_recipe(snapshot, recipe, tmp_path / "run")
+    path = tmp_path / "run" / "recipe.json"
+    document = json.loads(path.read_text())
+    document["recipe"]["environment"] = {"GH_TOKEN": "x"}
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(SnapshotReplayError, match="invalid replay manifest: .*looks secret"):
+        verify_snapshot_run(tmp_path / "run", snapshot=snapshot, repo=repo)
