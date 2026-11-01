@@ -1,188 +1,205 @@
 ---
 name: airflow-software-factory
-description: "Operate and extend an Apache Airflow software factory for coding agents: turn GitHub issues and work orders into tested, reviewed pull requests with human approval gates, durable Factory Cells, sandbox isolation, bounded work graphs, recovery, evidence and provenance, CI/CD, and Rust/Python operator surfaces. Use when adopting, configuring, running, debugging, deploying, auditing, or improving swfactory, factory.toml, Airflow blueprints, GitHub publication, agent sandboxes, or agentic software-delivery workflows. Keep Airflow as the sole lifecycle scheduler."
+description: "Operate SWFactory, an Apache Airflow software factory that turns GitHub issues into tested, reviewed PRs with human gates, Factory Cells, sandboxes, and evidence. Use when adopting, configuring, running, debugging, deploying, auditing, or extending swfactory, factory.toml, Airflow blueprints, GitHub publication, agent sandboxes, or agentic issue-to-PR delivery. Keep Airflow as the sole lifecycle scheduler."
 ---
 
 # Airflow software factory
 
-Build a repeatable software production system on Apache Airflow.
-
-Treat the GitHub issue as a work order, the blueprint as a production route, Airflow as the plant
-scheduler, and each sandbox as one work cell. Airflow expands issue-to-target jobs, pauses for
-human decisions, retries infrastructure failures, records state, and exposes operations. A coding
-agent performs the bounded job. Git keeps the trace record. A human keeps the merge key.
+Teach an agent how to adopt and operate **SWFactory**: GitHub issues become tested, reviewed pull
+requests under Apache Airflow, with human approval gates and retained evidence.
 
 ```text
-WORK ORDER -> ROUTE -> INTENT GATE -> SPEC -> PLAN GATE -> WORK CELL
+WORK ORDER -> BLUEPRINT ROUTE -> INTENT GATE -> SPEC -> PLAN GATE -> WORK CELL
            -> TESTS + REVIEW -> VALIDATED PATCH -> PULL REQUEST -> HUMAN MERGE
-                                                               |
-                                                               v
-                                                     CONTINUOUS IMPROVEMENT
 ```
 
-Install this skill from the public repository with Vercel's open `skills` CLI:
+Airflow schedules the line. Factory Cells own durable issue × target identity and epoch fencing.
+Coding agents run inside sandboxes. The factory backend owns publication. Humans keep the merge key
+on the default line.
+
+## When to use
+
+Load this skill when the user asks to:
+
+- install, demo, adopt, or deploy SWFactory / `ariflow-swfactory` / `swfactory`
+- write or change `factory.toml`, a blueprint under `blueprints/`, or protected paths
+- run, approve, inspect, retry, reject, or clean up factory work
+- choose or debug a sandbox (`local`, `islo`, `srt`, `docker`, `toolset`, `boat`)
+- audit evidence, gates, delivery verification, or concurrency fences
+- extend the factory with a stage policy, adapter, or metric response band
+- keep Airflow as the only lifecycle scheduler while coding agents do bounded stage work
+
+Do **not** use this skill to invent a second scheduler, push from an inner stage agent, or put
+backend/GitHub credentials into a coding sandbox. For driving an already-deployed factory from an
+outer coding harness through `swf`, prefer the companion skill `swfactory`.
+
+## Install
 
 ```bash
 npx skills add zozo123/ariflow-swfactory --skill airflow-software-factory
 ```
 
-Use it without installing:
+Use without installing:
 
 ```bash
 npx skills use zozo123/ariflow-swfactory@airflow-software-factory
 ```
 
-Browse the public listing at `https://skills.sh/zozo123/ariflow-swfactory/airflow-software-factory`.
+Catalog: https://skills.sh/zozo123/ariflow-swfactory/airflow-software-factory
 
-## Choose the job
+## Verified quickstart
 
-Infer the narrowest useful mode from the request:
-
-- **Demo:** run the scripted, keyless route to inspect behavior without model calls.
-- **Adopt:** add `factory.toml`, select a blueprint, and connect one target repository.
-- **Operate:** trigger, approve, inspect, retry, reject, or clean up existing runs.
-- **Audit:** inspect trust boundaries, evidence, failure behavior, and deployment configuration.
-- **Extend:** add a blueprint, stage policy, sandbox adapter, SCM adapter, or metric response band.
-
-Before changing a repository, inspect `factory.toml`, the chosen blueprint, protected paths, the
-test command, branch policy, and the deployment boundary. Preserve explicit user scope. Ask for
-separate authorization before merging, weakening protected paths, or exposing credentials.
-
-## Define the production route
-
-A blueprint is executable governance. Keep stage behavior in code and deployment choices in TOML.
-Require these invariants:
-
-- `intent` is the originator's text, preserved verbatim.
-- `spec` and `plan` are read-only agent stages.
-- build loops and review-fix loops are bounded.
-- every build or review line includes a typed plan.
-- verification fails closed when its fresh JUnit evidence is absent, empty, or malformed.
-- review reads a baseline-to-HEAD diff and cannot approve around a blocker.
-- gates bind the approver, decision, timestamp, and exact artifact digest.
-- delivery accepts only reviewed commits plus orchestrator-owned evidence.
-- reported, published, and independently verified are recorded as three fields, never one.
-- rejected and blocked work remains visible; it is never relabeled as success.
-
-The swfactory blueprint defines one production route. Astronomer Blueprint can compose that route
-inside a larger workflow. Its `software_factory` template selects an existing route and passes
-issues or target filters to the child DAG, preserving the child's approvals. Read
-`docs/astronomer-blueprint.md` (its dag-factory section covers YAML-first shops) before adding this
-composition layer.
-
-Use the target's `factory.toml` as the command contract. Do not guess package managers, test
-commands, source paths, or protected paths. Keep generated JUnit below `.factory/`.
-
-## Pick the boundary deliberately
-
-Read [references/sandboxes.md](references/sandboxes.md) whenever selecting, adding, or comparing a
-sandbox provider. The critical question is what crosses the boundary: one command, the agent
-process, or the whole Airflow task.
-
-Never silently downgrade a requested sandbox. If a backend cannot enforce a requested network,
-filesystem, lifetime, credential, or resource rule, stop with a configuration error.
-
-## Keep a trace record
-
-For each job, preserve a reviewable chain under `docs/factory/<issue>/`:
-
-- `intent.md`, `spec.md`, `plan.json`, and `plan.md`
-- artifact-bound approvals
-- structured review findings and verdict
-- bounded agent envelopes and guard decisions
-- verification counts, iterations, timings, cost, and final disposition
-
-Keep authoritative gate, baseline, review, and cost state outside the agent-writable checkout until
-delivery. Commit through the factory identity with run, stage, and agent provenance. The delivery
-credential stays in the orchestrator, never in the coding cell.
-
-## Fence concurrency at the scale it actually happens
-
-The factory is concurrent at two scales and they need different mechanisms. Inside one instance
-there is shared durable state, so the fences are database writes: durable admission and capacity,
-Cell epochs checked atomically with the event append, one owner per external operation, a versioned
-snapshot of the inputs an epoch accepted, human gates declared in the blueprint rather than inferred
-from an environment variable, and an agent-spend reservation journalled before the provider is paid.
-
-Across instances there is no shared state at all. Several sessions can work one repository, each in
-its own harness with its own Airflow, backend and state root, and the only fence is the repository
-both are obliged to obey. Do not add a coordination service for this — one was proposed and refused
-because it handed a lower-trust credential an unbounded write path while its safety rested on
-nobody consuming its signals. Use git: ref creation is a compare-and-swap the server enforces, and
-the publish branch keyed on the work rather than the run makes every session converge on one ref
-and one pull request.
-
-Two rules are easy to get backwards. A durable fact must be committed *before* the refusal that
-reports it, or the write rolls back with the exception and the next process cannot see it. And a
-fence against new effects belongs *after* the replay check, or idempotent retry breaks and a
-redelivered task publishes twice.
-
-Read [references/concurrency-and-durability.md](references/concurrency-and-durability.md) before
-changing anything that admits work, publishes, transitions a Cell, spends a budget or restores
-state. It carries the fence table, the two traps that have actually bitten (leasing against what you
-observed rather than what you published; a publication that writes state as a side effect), what a
-restore cannot undo, and why the phase names carry no authority.
-
-## Operate through one operations layer
-
-Every operator face — a script, a terminal UI, a chat responder, a monitoring probe — belongs over
-one shared operations layer that owns validation, readiness, and the write itself. A face that
-decides for itself is a second policy, and only one of two policies ever gets fixed. Read
-[references/operator-interface.md](references/operator-interface.md) before building or auditing
-one: it covers gate readiness, the three levels of delivery evidence, exit codes a script can trust,
-paging a control plane that clamps `limit` without saying so, what a bulk action owes an operator
-before it is allowed a blast radius, and shipping the client so a stranger can install and verify
-it.
-
-Prefer the repository's own commands and documentation over copied instructions:
+Requires Git, Python 3.12+, and [uv](https://docs.astral.sh/uv/). No model key, GitHub token,
+Airflow, Docker, or Rust.
 
 ```bash
-uv sync
-uv run swfactory doctor                            # readiness, before any live run
+git clone https://github.com/zozo123/ariflow-swfactory.git
+cd ariflow-swfactory
+uv sync --locked
 uv run swfactory demo
-uv run swfactory run --blueprint factory --issue 42
-uv run swfactory herd                              # the Python control room
+uv run swfactory state list
 ```
 
-`swf` is the same factory from a native binary that needs no Python — `swf doctor`, `swf submit`,
-`swf attention`, `swf gates approve`, `swf deliveries verify --clone`, `swf tui`. Its commands and
-its keystrokes share one `Ops` layer (`rust/crates/swf-app/`), and `swf snapshot --json` must
-describe the same factory as `swfactory herd --once --json` — `scripts/snapshot_diff.py` diffs the
-two against one live server — so the two control rooms are held together by a diff rather than by
-intent. See `docs/swf.md`.
+Expected outcome: the scripted replay changes a calculator target, fails a build, repairs it,
+reviews the result, and delivers to a local Git remote. Demo gates auto-approve. The terminal prints
+the stage table; machine-readable evidence lands under `.factory/<run_id>/` (including `report.json`
+and `pr.md`). `state list` shows the completed local run.
 
-For production, use Airflow's API or GitHub webhook path, keep approval tasks assigned, and retain
-Airflow logs plus the committed evidence chain. Do not run the real agent in the local sandbox
-unless the user explicitly accepts that development escape hatch.
+## Choose a mode, then follow its steps
 
-## Handle failure as product output
+Infer the narrowest useful mode from the request.
 
-Classify failures before retrying:
+### Demo
 
-- retry transient sandbox, network, or SCM transport failures within the configured bound;
-- do not retry invalid policy, missing evidence, rejected credentials, or an unenforceable sandbox
-  specification;
-- publish a clearly blocked or rejected result when policy allows delivery of failure evidence;
-- stop before publication if the patch scope, artifact hashes, baseline, or workspace cleanliness
-  cannot be proven.
+1. Run the quickstart above.
+2. Open `.factory/<run_id>/pr.md` and `docs/factory/DEMO-1/` in the demo target checkout for the
+   evidence chain (`intent.md`, `spec.md`, `plan.json`, review, approvals, metrics).
+3. Stop here unless the user asked to adopt or operate a live factory.
 
-When reporting the result, state the route used, target, boundary, gate decisions, review
-disposition, PR URL if created, and anything intentionally not executed. State verification
-evidence at the level it actually reaches — reported, published, or independently verified.
+### Adopt
 
-## Discover and install reusable skills
+1. Read the target's existing `factory.toml` (or add one). Do not guess `[commands].test`,
+   `[commands].lint`, or `[paths].{junit,source,tests,protected}`.
+2. Pick a blueprint under `blueprints/` (`factory` is the default SDLC line; `selfhost` targets this
+   repository; others are specialized). Confirm sandbox and SCM choices in that TOML.
+3. Connect one target repository and verify readiness:
 
-Keep skill discovery and installation on the trusted operator/orchestrator side. Skills are reusable
-instructions and tools; they do not gain lifecycle, publication, or credential authority.
+```bash
+uv run swfactory doctor --blueprint factory --repo owner/name
+```
 
-Use Vercel's canonical discovery skill when a reusable capability may already exist:
+4. Ask before merging, weakening protected paths, or exposing credentials.
+
+### Operate
+
+1. Prefer repository commands over copied runbooks:
+
+```bash
+uv run swfactory doctor
+uv run swfactory run --blueprint factory --issue 42
+uv run swfactory herd --once --json
+```
+
+2. Answer intent/plan gates only with explicit user authorization (`swfactory approve` against a
+   live Airflow HITL task, or `swf gates approve` / `swfactory herd --approve-all` when that is the
+   intended control surface).
+3. Inspect with `swfactory state …`, `swf attention`, `swf runs list`, `swf cells list`, and
+   `swf deliveries verify --clone` when verifying retained delivery.
+4. Never invent stage transitions in the harness. Airflow owns spec, plan, build, test, review,
+   approval, delivery, and cleanup.
+
+`swf` is the same operations layer as a native binary (no Python required on the operator laptop).
+`swf snapshot --json` and `swfactory herd --once --json` must describe the same factory;
+`scripts/snapshot_diff.py` diffs them against one live backend. See `docs/swf.md`.
+
+### Audit
+
+1. Confirm trust boundaries: credentials stay on the orchestrator; sandboxes stay credential-free
+   for publication; protected paths match `factory.toml` and CI gates.
+2. Trace one job under `docs/factory/<issue>/`: intent → spec → plan → approvals → review → metrics.
+3. Check delivery evidence at the level actually reached: reported, published, or independently
+   verified (three fields, never collapsed into one).
+4. Read [references/concurrency-and-durability.md](references/concurrency-and-durability.md) before
+   judging admission, epoch, publication, or restore behavior.
+
+### Extend
+
+1. Keep stage semantics in code; keep route and deployment choices in blueprint TOML.
+2. Add or compare sandboxes only after reading [references/sandboxes.md](references/sandboxes.md).
+   Never silently downgrade an unenforceable sandbox request: fail closed with a configuration error.
+3. Compose an existing line from Astronomer Blueprint / dag-factory YAML only as an outer trigger;
+   do not redefine gates or delivery authority. Read `docs/astronomer-blueprint.md`.
+4. Preserve the invariants below.
+
+## Production-route invariants
+
+A blueprint is executable governance. Require:
+
+- `intent` is the originator's text, preserved verbatim
+- `spec` and `plan` are read-only agent stages
+- build loops and review-fix loops are bounded
+- every build or review line includes a typed plan (`plan.json` / `Plan` schema)
+- verification fails closed when fresh JUnit evidence is absent, empty, or malformed
+- review reads a baseline-to-HEAD diff and cannot approve around a blocker
+- gates bind approver, decision, timestamp, and exact artifact digest
+- delivery accepts only reviewed commits plus orchestrator-owned evidence
+- reported / published / independently verified stay three distinct fields
+- rejected and blocked work stays visible; never relabel it as success
+
+## Examples
+
+**User:** "Show me SWFactory without API keys."
+
+```bash
+uv sync --locked && uv run swfactory demo && uv run swfactory state list
+```
+
+Report the run id, stage table, and paths to `.factory/<run_id>/pr.md` and the evidence under
+`docs/factory/DEMO-1/`.
+
+**User:** "Wire issue 42 through the default factory line for `acme/widgets`."
+
+1. `uv run swfactory doctor --blueprint factory --repo acme/widgets`
+2. `uv run swfactory run --blueprint factory --issue 42 --repo acme/widgets` (or submit via
+   `swf submit --harness <name> --factory-id <stable-session> --issue 42` when acting as an outer
+   harness)
+3. Watch gates with `swfactory herd` / `swf attention`; approve only with explicit authorization
+4. After delivery, verify with `swf deliveries verify --clone` and cite the evidence level reached
+
+**User:** "Is boat.dev a drop-in replacement for islo?"
+
+Read [references/sandboxes.md](references/sandboxes.md). Compare boundary (agent cell vs command
+tool), credential path, and what the repository actually ships. Do not claim live Claude-on-boat
+unless the current adapter provides a scoped model credential path; scripted boat demos exercise
+hosted VMs with fixtures.
+
+## Failure handling
+
+Classify before retrying:
+
+- retry transient sandbox, network, or SCM transport failures within configured bounds
+- do not retry invalid policy, missing evidence, rejected credentials, or unenforceable sandbox specs
+- publish a clearly blocked or rejected result when policy allows failure evidence
+- stop before publication if patch scope, artifact hashes, baseline, or workspace cleanliness cannot
+  be proven
+
+When reporting, state the route, target, boundary, gate decisions, review disposition, PR URL if
+created, anything intentionally not executed, and the verification level actually reached.
+
+## Operator surface and skill discovery
+
+Every operator face (CLI, TUI, script, chat responder) should sit on one shared operations layer.
+Read [references/operator-interface.md](references/operator-interface.md) before building or auditing
+one.
+
+Keep skill discovery on the trusted operator side. Skills never gain lifecycle or publication
+authority:
 
 ```bash
 npx skills add vercel-labs/skills@find-skills -y
-npx skills find <query> --owner vercel-labs
+npx skills find airflow --owner vercel-labs
 ```
 
-The repository exposes the same identities through `swfactory.skills_connector`, including the
-factory skill, the outer-harness skill, and `vercel-labs/skills@find-skills`. Read
-[references/skills-sh.md](references/skills-sh.md) before changing distribution metadata,
-installing networked skills as part of an operator workflow, or diagnosing skills.sh indexing.
+`swfactory.skills_connector` exposes canonical identities for this skill, the outer-harness
+`swfactory` skill, and `vercel-labs/skills@find-skills`. See
+[references/skills-sh.md](references/skills-sh.md).
