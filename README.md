@@ -50,7 +50,7 @@ draws the same stages and the two human gates as one diagram.
 
 ## Run on boat.dev
 
-<a href="https://boat.dev"><img src="https://boat.dev/brand/primary-logo-wash.svg" alt="boat.dev" width="156" /></a>
+<a href="https://boat.dev"><img src="site/boat-logo.svg" alt="boat.dev" width="156" /></a>
 
 **Cloud work cells on [boat.dev](https://boat.dev), governed by SWFactory.** The existing adapter
 creates a credential-free VM, clones the target, runs the stages, retains delivery evidence, and
