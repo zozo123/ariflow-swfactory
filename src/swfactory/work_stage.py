@@ -225,25 +225,19 @@ def _node_prompt(
     node: PlanTask,
     population_guidance: str = "",
 ) -> str:
-    base = stages.render_prompt(
-        "build",
-        issue_id=ctx.issue.id,
-        spec=spec_text,
-        plan=plan_text,
-        failures="",
-        protected=stages._protected(ctx, "build"),
-        dialect=stages.target_dialect(ctx),
-    )
     # A template, not a Python literal. As a literal this instruction was outside the accepted-
     # inputs pin (#2098): two swfactory builds differing only in these lines admitted the same
     # digest and told the model different things. `prompts/build_node.md` is digested with the rest.
     return _with_population_guidance(
         _with_file_pack(
             ctx,
-            base
-            + "\n"
-            + stages.render_prompt(
+            stages.render_prompt(
                 "build_node",
+                issue_id=ctx.issue.id,
+                spec=spec_text,
+                plan=plan_text,
+                protected=stages._protected(ctx, "build"),
+                dialect=stages.target_dialect(ctx),
                 node_id=node.id,
                 node_title=node.title,
                 node_depends=", ".join(node.depends_on),

@@ -294,12 +294,16 @@ def _plan_work_run(tmp_path: Path) -> tuple[RunReport, Path]:
 
 
 def test_plan_work_node_and_repair_prompts_carry_the_card(tmp_path: Path) -> None:
-    """The managed Plan.work path: the node prompt (build + build_node) and its bounded repair."""
+    """A node receives its bounded assignment, not contradictory whole-plan build instructions."""
     _, tmp = _plan_work_run(tmp_path)
     card = (tmp / "run" / "state" / stages.DIALECT_CONTROL).read_text(encoding="utf-8").rstrip("\n")
     scratch = tmp / "work" / ".factory"
     node = (scratch / "prompt.build.1.md").read_text(encoding="utf-8")
     assert "## Bound Plan.work node" in node
+    assert "Implement `plan.md` exactly" not in node
+    assert "then implement the code those tests require" not in node
+    assert "A tests-only node writes" in node
+    assert "Do not implement downstream nodes" in node
     for name in ("plan.1", "build.1", "fix.2"):
         _assert_card_in((scratch / f"prompt.{name}.md").read_text(encoding="utf-8"), card)
 
