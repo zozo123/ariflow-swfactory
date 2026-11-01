@@ -475,7 +475,11 @@ class ScriptedAgent:
         if not policy.writes:
             raise StageError("policy", f"patch fixture {name} used by a read-only stage")
         sb.write(".factory/scripted.patch", text)
-        res = sb.run("git apply --3way .factory/scripted.patch")
+        # Fixtures are target-relative. A remote checkout retains the parent repository:
+        # without --directory, git silently skips paths outside the current target subtree.
+        res = sb.run(
+            'prefix=$(git rev-parse --show-prefix) && git apply --3way --directory="$prefix" .factory/scripted.patch'
+        )
         if not res.ok:
             return AgentResult(
                 agent="scripted",

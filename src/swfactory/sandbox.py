@@ -298,7 +298,42 @@ CELL_ENV_ALLOWLIST = frozenset(
         "DOCKER_CONTEXT",
     }
 )
-LOCAL_AGENT_CREDENTIALS = frozenset({"ANTHROPIC_API_KEY"})
+LOCAL_AGENT_CREDENTIALS = frozenset({"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"})
+LOCAL_AGENT_SETTINGS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
+
+
+def claude_gateway_host(env: Mapping[str, str]) -> str | None:
+    """Validate an operator-selected gateway without echoing credentials or URL contents."""
+    value = env.get("ANTHROPIC_BASE_URL", "")
+    if not value:
+        if env.get("ANTHROPIC_AUTH_TOKEN"):
+            raise StageError("policy", "ANTHROPIC_AUTH_TOKEN requires an explicit HTTPS ANTHROPIC_BASE_URL")
+        return None
+    try:
+        url = urlsplit(value)
+        valid = (
+            url.scheme == "https"
+            and url.hostname
+            and re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?", url.hostname)
+            and url.username is None
+            and url.password is None
+            and not url.query
+            and not url.fragment
+            and not any(c.isspace() or c == "\\" for c in value)
+            and url.port in (None, 443)
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        raise StageError("policy", "ANTHROPIC_BASE_URL must be HTTPS on port 443 without userinfo, query or fragment")
+    return url.hostname
+
+
+def claude_agent_env_names(env: Mapping[str, str]) -> tuple[str, ...]:
+    """Exact agent-only projection; a bearer gateway never also receives the host API key."""
+    claude_gateway_host(env)
+    credential = "ANTHROPIC_AUTH_TOKEN" if env.get("ANTHROPIC_AUTH_TOKEN") else "ANTHROPIC_API_KEY"
+    return (credential, *(key for key in LOCAL_AGENT_SETTINGS if env.get(key)))
 
 
 def cell_env(env: Mapping[str, str]) -> dict[str, str]:
@@ -541,16 +576,20 @@ def _external_write_mounts(root: Path, writes: Sequence[str], protected: Sequenc
 
 
 def _credential_env(pass_env: Sequence[str]) -> dict[str, str]:
-    """Allow-listed cell env plus the one local-development model credential we still support.
+    """Allow-listed cell env plus explicitly selected model credentials and gateway settings.
 
     Production Islo uses gateway injection, so it never calls this path. New credential names are
     rejected rather than silently becoming ambient authority in a coding cell.
     """
-    unknown = sorted(set(pass_env) - LOCAL_AGENT_CREDENTIALS)
+    unknown = sorted(set(pass_env) - LOCAL_AGENT_CREDENTIALS - set(LOCAL_AGENT_SETTINGS))
     if unknown:
         raise StageError("policy", "unsupported sandbox credential passthrough: " + ", ".join(unknown))
     env = cell_env(os.environ)
-    env.update({key: os.environ[key] for key in pass_env if key in os.environ})
+    model_env = {key: os.environ[key] for key in pass_env if key in os.environ}
+    claude_gateway_host(model_env)
+    if model_env.get("ANTHROPIC_AUTH_TOKEN"):
+        model_env.pop("ANTHROPIC_API_KEY", None)
+    env.update(model_env)
     return env
 
 
@@ -2001,14 +2040,17 @@ def make_sandbox(
     docker's read-only bind mounts (``set_protected`` changes it later, e.g. to tighten for a fix
     call); ``repo`` (owner/name) makes the islo sandbox name unique per (issue, target).
     """
-    claude_env = ("ANTHROPIC_API_KEY",) if cfg.agent == "claude" else ()
+    forwarding = cfg.sandbox in {"srt", "toolset"} or (cfg.sandbox == "docker" and cfg.docker_credentials == "env")
+    claude_env = claude_agent_env_names(os.environ) if cfg.agent == "claude" and forwarding else ()
+    gateway_host = claude_gateway_host(os.environ) if claude_env else None
+    model_domains = (gateway_host,) if gateway_host else ()
     state = RunState(run_dir) if run_dir is not None else None
     if cfg.sandbox == "local":
         return LocalSandbox(Path(cfg.workdir))
     if cfg.sandbox == "srt":
         return SrtSandbox(
             Path(cfg.workdir),
-            allowed_domains=cfg.srt_allowed_domains,
+            allowed_domains=_dedupe([*cfg.srt_allowed_domains, *model_domains]),
             protected=protected,
             pass_env=claude_env,
         )
@@ -2038,7 +2080,7 @@ def make_sandbox(
             load_toolset_backend(cfg.toolset_backend, **backend_kwargs),
             workdir=workdir,
             env=agent_env,
-            allow_egress_to=_dedupe([*cfg.srt_allowed_domains, *SRT_CLAUDE_DOMAINS, "github.com"]),
+            allow_egress_to=_dedupe([*cfg.srt_allowed_domains, *model_domains, *SRT_CLAUDE_DOMAINS, "github.com"]),
             repo_root=repo_root,
             source=f"https://github.com/{cfg.repo}.git",
             base_branch=cfg.base_branch,

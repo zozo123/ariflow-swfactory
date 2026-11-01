@@ -518,12 +518,14 @@ def test_scripted_md_and_json_fixtures(tmp_path: Path) -> None:
     assert sb.files[".factory/prompt.spec.1.md"] == "p"
 
 
-def test_scripted_patch_applies_to_git_repo(tmp_path: Path) -> None:
-    repo, _ = make_repo(tmp_path, {"hello.txt": "hello\n"})
+@pytest.mark.parametrize("target_dir", ["", "demo/target", "demo/target with spaces"])
+def test_scripted_patch_applies_to_git_repo(tmp_path: Path, target_dir: str) -> None:
+    root, _ = make_repo(tmp_path, {str(Path(target_dir) / "hello.txt"): "hello\n"})
+    repo = root / target_dir
     (repo / "hello.txt").write_text("hello\nworld\n")
     (repo / "new.py").write_text("x = 1\n")
     git(repo, "add", "-N", "new.py")
-    diff = git(repo, "diff", "HEAD")
+    diff = git(repo, "diff", "--relative", "HEAD")
     git(repo, "reset", "-q", "--hard", "HEAD")
     git(repo, "clean", "-fdq")
     assert not (repo / "new.py").exists()

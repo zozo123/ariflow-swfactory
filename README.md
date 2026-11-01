@@ -48,6 +48,31 @@ draws the same stages and the two human gates as one diagram.
 
 ![A GitHub issue moving through isolated work cells toward a reviewed pull request](site/factory-line.webp)
 
+## Run on boat.dev
+
+<a href="https://boat.dev"><img src="site/boat-logo.svg" alt="boat.dev" width="156" /></a>
+
+**Cloud work cells on [boat.dev](https://boat.dev), governed by SWFactory.** The existing adapter
+creates a credential-free VM, clones the target, runs the stages, retains delivery evidence, and
+stops the VM. Airflow remains the lifecycle scheduler.
+
+```sh
+# Export BOAT_API_KEY from your secret manager; never commit it.
+uv run swfactory demo --sandbox boat
+```
+
+This exercises a real hosted VM with scripted agent fixtures and local Git delivery. Direct Claude
+execution on boat is currently refused because the adapter does not yet provide a scoped model
+credential path. For real Claude calls through Databricks, use the
+[Docker gateway rehearsal](docs/model-gateways.md). Inspect the report and review verdict: a
+completed run can correctly publish blocked evidence when acceptance tests are missing.
+
+| End-to-end check | What it exercises |
+| --- | --- |
+| `scripts/swf_e2e.sh` | Live Airflow, backend admission, human gates, independently verified deliveries |
+| `uv run swfactory demo --sandbox boat` | Hosted boat VM, stage execution, review, local publication, teardown |
+| [Databricks rehearsal](docs/model-gateways.md) | Real model calls, bounded build and review, credential-free tests |
+
 ## Choose a run
 
 | Path | Approvals and delivery | Start here |
@@ -282,6 +307,8 @@ Airflow continues to own lifecycle scheduling. See the
 [concurrent harness methodology](docs/harness-concurrency-methodology.md).
 
 ## Status and verification
+
+For Claude through Databricks or another HTTPS model gateway, see [model gateway setup](docs/model-gateways.md).
 
 This is an alpha implementation with executable delivery paths and a broader set of architectural
 contracts. Read capability claims at their demonstrated level:
