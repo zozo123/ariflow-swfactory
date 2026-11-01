@@ -283,6 +283,8 @@ Airflow continues to own lifecycle scheduling. See the
 
 ## Status and verification
 
+For Claude through Databricks or another HTTPS model gateway, see [model gateway setup](docs/model-gateways.md).
+
 This is an alpha implementation with executable delivery paths and a broader set of architectural
 contracts. Read capability claims at their demonstrated level:
 

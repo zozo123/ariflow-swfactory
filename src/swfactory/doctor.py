@@ -37,7 +37,7 @@ from swfactory import blueprint as blueprint_mod
 from swfactory.backend_http import MIN_BACKEND_TOKEN_CHARS, valid_backend_token
 from swfactory.config import FACTORY_ROOT, Config, TargetContract
 from swfactory.models import StageError
-from swfactory.sandbox import SRT_NPM_PACKAGE
+from swfactory.sandbox import SRT_NPM_PACKAGE, claude_gateway_host
 
 Runner = Callable[[Sequence[str]], str]
 Which = Callable[[str], str | None]
@@ -662,19 +662,23 @@ def _check_boat(env: Mapping[str, str]) -> Check:
 
 
 def _check_model_credential(env: Mapping[str, str]) -> Check:
-    """The key a docker (``credentials=env``) or toolset cell forwards to ``claude``, by name only.
+    """Check the credential and routing used by model processes before provisioning a cell.
 
-    Both pass ``ANTHROPIC_API_KEY`` only when the worker has it, so a missing key used to surface
-    as the agent's own auth error stages in, after a cell was provisioned. Presence only: a doctor
-    report gets pasted into issues, so the value is never read into it.
+    Reports are routinely pasted into issues, so neither credentials nor gateway URLs are echoed.
     """
+    try:
+        claude_gateway_host(env)
+    except StageError as error:
+        return Check("model credential", False, str(error), "configure the worker's HTTPS model gateway")
+    if (env.get("ANTHROPIC_AUTH_TOKEN") or "").strip():
+        return Check("model credential", True, "ANTHROPIC_AUTH_TOKEN is set (its value is never reported)")
     if (env.get("ANTHROPIC_API_KEY") or "").strip():
         return Check("model credential", True, "ANTHROPIC_API_KEY is set (its value is never reported)")
     return Check(
         "model credential",
         False,
         "ANTHROPIC_API_KEY is not set; the cell's claude would start without a key",
-        "export ANTHROPIC_API_KEY in the environment that runs the factory "
+        "export ANTHROPIC_API_KEY, or ANTHROPIC_AUTH_TOKEN with an HTTPS ANTHROPIC_BASE_URL, on the worker "
         "(a docker cell can use SWF_DOCKER_CREDENTIALS=host to mount ~/.claude instead)",
     )
 
@@ -751,7 +755,9 @@ def sandbox_checks(
         except (OSError, ValueError, StageError) as error:
             checks.append(Check("external agent", False, str(error), fix="verify SWF_AGENT_PROFILE on the worker"))
     if cfg.agent == "claude" and (
-        cfg.sandbox == "toolset" or (cfg.sandbox == "docker" and cfg.docker_credentials == "env")
+        cfg.sandbox == "toolset"
+        or (cfg.sandbox == "docker" and cfg.docker_credentials == "env")
+        or (cfg.sandbox == "srt" and (env.get("ANTHROPIC_BASE_URL") or env.get("ANTHROPIC_AUTH_TOKEN")))
     ):
         checks.append(_check_model_credential(env))
     return checks
