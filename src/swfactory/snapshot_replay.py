@@ -233,7 +233,7 @@ def verify_snapshot_run(
         if not isinstance(recipe_payload, dict):
             raise TypeError("recipe must be an object")
         recipe_payload = {key: value for key, value in recipe_payload.items() if key != "digest"}
-        recipe = parse_execution_recipe(recipe_payload)
+        recipe = parse_execution_recipe(recipe_payload, retained=True)
         bound_recipe = BoundExecutionRecipe(
             commit_sha=str(recipe_document["commit_sha"]),
             path=str(recipe_document["path"]),
@@ -306,7 +306,7 @@ def verify_snapshot_run(
 
     if repo is not None:
         try:
-            observed = load_execution_recipe(repo, bound_recipe.commit_sha, path=bound_recipe.path)
+            observed = load_execution_recipe(repo, bound_recipe.commit_sha, path=bound_recipe.path, retained=True)
         except ExecutionRecipeError as error:
             raise SnapshotReplayError(f"cannot re-load committed execution recipe: {error}") from error
         if observed.digest != bound_recipe.digest:

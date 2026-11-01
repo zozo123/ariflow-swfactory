@@ -71,8 +71,12 @@ def load_execution_recipe(
     revision: str,
     *,
     path: str = ".swfactory/candidate-run.json",
+    retained: bool = False,
 ) -> BoundExecutionRecipe:
-    """Load and validate a recipe from exactly one Git revision and path."""
+    """Load and validate a recipe from exactly one Git revision and path.
+
+    Pass ``retained=True`` only to re-bind recorded evidence; see ``parse_execution_recipe``.
+    """
     repo = Path(repo).resolve()
     if not repo.is_dir():
         raise ExecutionRecipeError(f"repository does not exist: {repo}")
@@ -86,11 +90,18 @@ def load_execution_recipe(
         document = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ExecutionRecipeError(f"execution recipe is not valid UTF-8 JSON: {error}") from error
-    recipe = parse_execution_recipe(document)
+    recipe = parse_execution_recipe(document, retained=retained)
     return BoundExecutionRecipe(commit_sha=commit, path=normalized_path, recipe=recipe)
 
 
-def parse_execution_recipe(document: Any) -> ExecutionRecipe:
+def parse_execution_recipe(document: Any, *, retained: bool = False) -> ExecutionRecipe:
+    """Validate a recipe document.
+
+    ``retained=True`` is for recipes read back from replay evidence. Those were
+    admitted when they were recorded, so their environment names are checked
+    against the secret-name rule in force before #2385. New recipes always get
+    the current ``looks_secret_key`` rule.
+    """
     if not isinstance(document, dict):
         raise ExecutionRecipeError("execution recipe must be a JSON object")
     allowed = {
@@ -144,7 +155,7 @@ def parse_execution_recipe(document: Any) -> ExecutionRecipe:
         _validate_env_name(key)
         if not isinstance(value, str) or "\x00" in value:
             raise ExecutionRecipeError(f"environment value for {key!r} must be a string")
-        if looks_secret_key(key):
+        if _legacy_looks_secret(key) if retained else looks_secret_key(key):
             raise ExecutionRecipeError(
                 f"environment key {key!r} looks secret; request a scoped credential capability "
                 "from the trusted broker instead"
@@ -196,6 +207,12 @@ def _validate_env_name(value: Any) -> None:
         raise ExecutionRecipeError(f"invalid environment name: {value!r}")
     if not all(ch.isalnum() or ch == "_" for ch in value):
         raise ExecutionRecipeError(f"invalid environment name: {value!r}")
+
+
+def _legacy_looks_secret(name: str) -> bool:
+    """Secret-name rule recipes were admitted under before #2385; replay only."""
+    upper = name.upper()
+    return any(token in upper for token in ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "API_KEY"))
 
 
 def _git(repo: Path, *args: str) -> str:

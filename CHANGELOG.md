@@ -6,6 +6,11 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Fix replay of evidence recorded before #2385. `verify_snapshot_run` and candidate evidence
+  verification re-parse the retained recipe, and the shared secret-name rule #2385 adopted made
+  older recipes with names such as `NPM_AUTHORIZATION`, `AWS_ACCESS_KEY_ID` or `*_COOKIE` fail as
+  "invalid replay manifest". Retained recipes are now checked against the rule they were admitted
+  under; new recipes still get `looks_secret_key`.
 - Finish naming the product SWFactory in prose and state its limits plainly. The README opens with
   the one-line definition, who it is for, and practical links; the autonomous line is described as
   documentation-only (`docs/**`) and tested only hermetically. The site hero says trusted code runs

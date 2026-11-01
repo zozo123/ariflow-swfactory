@@ -308,6 +308,7 @@ def verify_candidate_evidence_bundle(destination: Path, *, repo: Path | None = N
                     repo,
                     bundle.inherited_recipe_commit_sha or "",
                     path=bundle.inherited_recipe_path or "",
+                    retained=True,
                 )
             except RuntimeError as error:
                 raise CandidateEvidenceError(f"inherited execution recipe verification failed: {error}") from error
