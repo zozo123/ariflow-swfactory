@@ -767,6 +767,38 @@ mod tests {
     }
 
     #[test]
+    fn the_attention_table_never_hides_an_unresolved_publication() {
+        let mut att = Attention::default();
+        att.operations.push(swf_app::attention::OperationItem {
+            operation_key: "github:publish:42".into(),
+            cell_id: "cell_0123456789abcdef01234567".into(),
+            epoch: 7,
+            kind: "github_publish".into(),
+            state: "in_doubt".into(),
+            attempts: 2,
+        });
+        let text = attention(&att, &plain());
+        assert!(text.contains("unresolved mutations (1)"), "{text}");
+        assert!(text.contains("github:publish:42"), "{text}");
+        assert!(text.contains("in_doubt"), "{text}");
+        assert!(text.contains("swf operations inspect github:publish:42"), "{text}");
+        assert!(!text.contains('\u{1b}'), "plain mode must remain accessible");
+    }
+
+    #[test]
+    fn a_backend_read_error_is_not_a_false_all_clear() {
+        let mut att = Attention::default();
+        att.errors.push(swf_domain::model::SourceError {
+            source: "operations".into(),
+            message: "backend unreachable".into(),
+        });
+        let text = attention(&att, &plain());
+        assert!(!text.contains("nothing needs a person"), "{text}");
+        assert!(text.contains("operations"), "{text}");
+        assert!(text.contains("backend unreachable"), "{text}");
+    }
+
+    #[test]
     fn an_empty_table_says_so_rather_than_printing_nothing() {
         assert_eq!(jobs(&[], &plain()), "(no jobs)");
         assert_eq!(
