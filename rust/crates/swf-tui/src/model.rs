@@ -707,7 +707,7 @@ impl Model {
         let mut rows = Vec::new();
         for item in &self.attention.operations {
             rows.push(Row::new(
-                format!("operation:{}", item.operation_key),
+                format!("operation:{}", sanitize_line(&item.operation_key)),
                 RowKind::Operation,
                 vec![
                     "mutation".into(),
@@ -721,7 +721,7 @@ impl Model {
         }
         for item in &self.attention.followups {
             rows.push(Row::new(
-                format!("followup:{}", item.id),
+                format!("followup:{}", sanitize_line(&item.id)),
                 RowKind::Followup,
                 vec![
                     "follow-up".into(),
@@ -1598,7 +1598,12 @@ fn enter(model: &mut Model) -> Vec<Effect> {
                 .iter()
                 .find(|item| item.id == name)
             {
-                vec![Effect::Open(item.source_url.clone())]
+                if item.source_url.starts_with("https://") {
+                    vec![Effect::Open(item.source_url.clone())]
+                } else {
+                    model.note("refusing a follow-up URL without HTTPS");
+                    Vec::new()
+                }
             } else {
                 Vec::new()
             }
