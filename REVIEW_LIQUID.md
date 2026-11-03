@@ -5,7 +5,8 @@ promotion. Review is therefore an **evidence fan-out / deterministic fan-in** st
 scheduler and not a vote. Apache Airflow still owns the one `review` stage; Factory Cell identity,
 epoch fencing, budgets, publication authority, and the human merge decision remain unchanged.
 
-The managed Liquid line runs three independent read-only review lanes over the same candidate. A
+The managed Liquid line runs three mandatory read-only specialist lanes over the same candidate,
+and conditionally adds UX and UI-design lenses based on changed paths at each candidate HEAD. A
 finding survives fan-in by deterministic identity (`file`, `line`, `title`); when lanes disagree on
 severity, the stronger severity wins. A repair round must re-run the target verification command
 before another review round.
@@ -38,6 +39,27 @@ Review trust and operational risk only:
 - rollback/recovery gaps, retry amplification, unbounded cost or resource growth;
 - changes to control-plane, CI, deployment, sandbox, security, publication, or lifecycle code whose
   verification is not commensurate with their blast radius.
+
+### ux (conditional)
+
+Run for visual UI or command-line interface changes:
+- discoverability, task flows, actionable errors, safe defaults, and terminology;
+- keyboard and screen-reader accessibility when relevant;
+- loading, empty, failure, and recovery states that affect users;
+- actual journey evidence, without inventing executed tests or rendered screenshots.
+
+### ui_design (conditional)
+
+Run for visual interface changes:
+- information hierarchy, contrast, focus, consistency, and responsive layout;
+- labels, affordances, component presentation, and visual states;
+- conformance to stated UI requirements without claiming unobserved browser evidence.
+
+Host-selected path rules: visual interface directories (frontend, web, site, UI, pages,
+components, templates, views, or the SWFactory TUI) and HTML/CSS/JSX/TSX/Vue/Svelte/Astro
+files select both lenses. CLI paths select UX only. Backend-only paths retain the three
+mandatory reviewers and their original model-call cost. Every selected lane must complete;
+the agent cannot choose its review roster.
 
 ## Relaxation and annealing
 
