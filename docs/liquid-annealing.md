@@ -40,6 +40,7 @@ issue / durable intent
                  +---------------- review ----------------+
                  |                                         |
                  | correctness  verification  risk         |
+                 |    + UX + UI design for interfaces       |
                  |      \          |          /            |
                  |       deterministic fan-in              |
                  |               |                         |
@@ -67,7 +68,7 @@ stage and can only return evidence plus `ok`/`blocked`.
 | --- | --- |
 | Start from outcome and context | issue -> `intent.md` -> `spec.md` -> `plan.md`; accepted inputs freeze the epoch |
 | Let agents implement | bounded `Plan.work` execution in a disposable Cell |
-| Review from several angles | correctness, verification, and risk specialist lanes |
+| Review from several angles | correctness, verification, risk, plus path-triggered UX and UI design lenses |
 | Feed defects back to implementation | blocker **and major** findings enter the bounded `fix` loop |
 | Re-run CI after a repair | every relaxation repair executes the target verification command before re-review |
 | Gate risk explicitly | risk-sensitive interface penalty is recorded, but hard software invariants decide readiness |
@@ -81,11 +82,18 @@ score into self-promotion.
 ## Specialist fan-out
 
 The managed Liquid line selects `REVIEW_LIQUID.md`. Its exact content is part of the Cell epoch's
-accepted-input digest. The review task invokes three read-only lanes over the same candidate:
+accepted-input digest. The review task always invokes three read-only lanes over the same candidate:
 
 - `correctness` — invariants, state transitions, concurrency, recovery, API/data contracts;
 - `verification` — test quality, failure-path coverage, plan fidelity, candidate-bound evidence;
 - `risk` — security, capability widening, external effects, lifecycle authority, rollback and cost.
+
+For user-facing code the host selects additional read-only lenses from changed paths: `ux`
+for CLI and visual interfaces, and `ui_design` for visual UI. Backend-only changes use three
+calls, CLI changes use four, and visual UI changes use five. After a repair, the next round
+reselects lenses from the current candidate HEAD. Each trace row retains changed paths and
+the selected reviewer roster; review context uses the same fan-out count. All lanes are
+advisory and can only produce findings.
 
 The lanes are **independent but currently executed sequentially** inside one Airflow task. This is
 intentional. The current managed work path owns one governed workspace and one call ledger; adding a
@@ -114,7 +122,7 @@ If `material_defects > 0` and `max_review_fixes` is not exhausted:
 3. let the trusted factory commit the result;
 4. run the target's declared verification command;
 5. add a synthetic blocker if that verification is red;
-6. run all three specialist lanes again.
+6. reselect and run all applicable specialist lanes on the repaired HEAD.
 
 Minor and nit findings stay visible but do not cause another paid repair round by themselves.
 
@@ -195,6 +203,8 @@ evidence. The artifact contains:
   "trace": [
     {
       "round": 0,
+      "changed_files": ["..."],
+      "selected_lanes": ["correctness", "verification", "risk"],
       "lanes": [],
       "findings": [],
       "state": {"phase": "liquid", "crystallized": false}
@@ -220,7 +230,7 @@ blocked evidence PR may be published; publication is not acceptance.
 | same material defects survive | glass diagnostic; continue only within the bound |
 | red tests at final round | jammed + blocked |
 | major remains at final round | blocked even if `Review.verdict` itself is `approve` |
-| all lanes clean, tests green | crystal + review `ok` |
+| all selected lanes clean, tests green | crystal + review `ok` |
 
 ## Verification
 
