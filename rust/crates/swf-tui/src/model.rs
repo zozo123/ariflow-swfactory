@@ -1890,7 +1890,9 @@ mod tests {
         );
         model.attention.followups[0].source_url = "file:///tmp/secret".into();
         assert!(enter(&mut model).is_empty());
-        assert!(model.status.contains("refusing a follow-up URL without HTTPS"));
+        assert!(model
+            .status
+            .contains("refusing a follow-up URL without HTTPS"));
     }
 
     #[test]

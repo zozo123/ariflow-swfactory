@@ -456,8 +456,16 @@ fn details(frame: &mut Frame, model: &Model, theme: Theme, area: Rect) {
     match row.kind {
         RowKind::Operation => {
             let operation = row.key.strip_prefix("operation:").unwrap_or(&row.key);
-            lines.push(field(theme, "owner", row.cells.get(2).map_or("", String::as_str)));
-            lines.push(field(theme, "state", row.cells.get(3).map_or("", String::as_str)));
+            lines.push(field(
+                theme,
+                "owner",
+                row.cells.get(2).map_or("", String::as_str),
+            ));
+            lines.push(field(
+                theme,
+                "state",
+                row.cells.get(3).map_or("", String::as_str),
+            ));
             lines.push(Line::from(""));
             lines.push(Line::styled(
                 format!(" swf operations inspect {operation}"),
@@ -480,7 +488,10 @@ fn details(frame: &mut Frame, model: &Model, theme: Theme, area: Rect) {
                 lines.push(field(theme, "cell", &sanitize_line(&item.cell_id)));
                 lines.push(field(theme, "source", &sanitize_line(&item.source_url)));
             }
-            lines.push(Line::styled(" enter opens the original PR conversation", theme.muted()));
+            lines.push(Line::styled(
+                " enter opens the original PR conversation",
+                theme.muted(),
+            ));
         }
         RowKind::Gate => lines.extend(gate_details(model, theme)),
         RowKind::Job | RowKind::Failure | RowKind::Task => lines.extend(job_details(model, theme)),
