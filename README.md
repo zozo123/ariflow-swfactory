@@ -169,6 +169,22 @@ Autonomy requires a deployed backend, Airflow, and configured model/sandbox acce
 policy refusals with `uv run swfactory state autonomy --json`; set `SWF_BACKEND_URL` and
 `SWF_BACKEND_TOKEN` to read the deployed backend, or use `--root` with its local state directory.
 
+### Do not lose an in-doubt external effect
+
+After connecting to a deployed backend, `swf attention` and `swf tui` show **actionable
+external-mutation repair debt**, not just failed Airflow tasks and unanswered gates. An ambiguous,
+refused, or exhausted GitHub/provider effect appears with its operation key, Cell and epoch; a
+routine in-flight operation stays quiet until it has gone 30 minutes without an update.
+Follow-up PR revision requests also appear in both interfaces. Inspect one item with
+`swf operations inspect <operation_key>` before deciding whether to reconcile or retry.
+A failed backend read, or a repair-debt listing that hits its 1,000-row cap, is reported as
+incomplete visibility—never as an all-clear. Direct Airflow-only contexts cannot read
+backend journal debt; connect the factory backend for that evidence.
+
+These are read-only operator views. Showing an in-doubt operation neither retries it nor
+grants it new Cell authority. See [native operator](docs/swf.md) and
+[run recovery](docs/run-recovery.md) for the evidence and recovery boundaries.
+
 ## Run a real issue
 
 Start with a repository you can use for evaluation. The project is **alpha**. A real run requires
