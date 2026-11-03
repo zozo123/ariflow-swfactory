@@ -454,6 +454,29 @@ fn details(frame: &mut Frame, model: &Model, theme: Theme, area: Rect) {
 
     let mut lines: Vec<Line> = vec![Line::styled(format!(" {}", row.key), theme.title())];
     match row.kind {
+        RowKind::Operation => {
+            let operation = row.key.strip_prefix("operation:").unwrap_or(&row.key);
+            lines.push(field(theme, "owner", row.cells.get(2).map_or("", String::as_str)));
+            lines.push(field(theme, "state", row.cells.get(3).map_or("", String::as_str)));
+            lines.push(Line::from(""));
+            lines.push(Line::styled(
+                format!(" swf operations inspect {operation}"),
+                theme.muted(),
+            ));
+            lines.push(Line::styled(
+                " inspect evidence before deciding whether to reconcile",
+                theme.muted(),
+            ));
+        }
+        RowKind::Followup => {
+            let identifier = row.key.strip_prefix("followup:").unwrap_or(&row.key);
+            if let Some(item) = model.attention.followups.iter().find(|item| item.id == identifier) {
+                lines.push(field(theme, "actor", &sanitize_line(&item.actor)));
+                lines.push(field(theme, "cell", &sanitize_line(&item.cell_id)));
+                lines.push(field(theme, "source", &sanitize_line(&item.source_url)));
+            }
+            lines.push(Line::styled(" enter opens the original PR conversation", theme.muted()));
+        }
         RowKind::Gate => lines.extend(gate_details(model, theme)),
         RowKind::Job | RowKind::Failure | RowKind::Task => lines.extend(job_details(model, theme)),
         RowKind::Delivery => lines.extend(delivery_details(model, theme, &row)),
