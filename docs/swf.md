@@ -219,7 +219,7 @@ appended to it — because `[api] base_url` can put Airflow behind a prefix.
 | `swf doctor` | is this machine able to drive a factory: one line per check, a `fix:` per failure |
 | `swf factory run [NAME] --issue <ref>… [--target R]… [--wait] \| status <run>` | run one logical factory (`submit` is its alias) / its run's status |
 | `swf submit --issue <ref>… [--blueprint N] [--target R]… [--wait]` | send governed work to Airflow |
-| `swf attention` | approvals waiting, failures, blocked deliveries, orphan sandboxes, backend-managed PR revision requests |
+| `swf attention` | approvals waiting, failures, blocked deliveries, orphan sandboxes, PR revision requests, and actionable external-mutation repair debt |
 | `swf runs list \| inspect <run> \| stop <run> \| unpause <dag>` | DAG runs |
 | `swf jobs list [--attention] \| inspect <job>` | mapped jobs — identity, progress, gates |
 | `swf cells list [--limit N] \| inspect <cell_id> \| history <cell_id>` | durable Factory Cells and their ownership/evidence history |
@@ -349,6 +349,28 @@ person.
 
 ## Operating at scale
 
+### Exception-only attention for external effects
+
+`swf attention` reads its usual Airflow/GitHub/sandbox snapshot **once**, then enriches it from
+the configured backend's existing immutable operator views. It lists external operation-journal
+entries that are `in_doubt`, `exhausted`, `refused` or otherwise unresolved; ordinary
+`intent` and `reconciling` entries stay quiet until their last update is at least 30 minutes
+old. This threshold is an **attention heuristic**, not a retry timeout or a cleanup permission.
+Every listed entry carries the exact operation key, Cell, epoch, state, and attempt count:
+
+```sh
+swf attention                        # problems and missing-source warnings
+swf attention --json                 # machine-readable operations / followups / errors
+swf operations inspect '<operation_key>' # inspect journal evidence before any repair
+swf tui                              # same backend-enriched attention data
+```
+
+A backend read failure is retained as `errors[]`; a 1,000-entry response is explicitly marked
+potentially truncated. Thus `nothing needs a person` means no actionable rows **and** no missing
+sources, not proof of zero external effects. Only a configured factory backend can supply the
+operation journal; direct Airflow contexts cannot. The CLI and TUI only **observe** debt—they
+do not replay a publication, change a Cell epoch, or mark an ambiguous effect committed.
+
 Answering one gate is `swf gates review` then `swf gates approve`, and there is nothing to it. The
 day that hurts is the one with four blueprints, sixty runs and a hundred gates on the board, where
 the question stops being *how do I answer this gate* and becomes *which of these are mine, and can
@@ -451,6 +473,12 @@ consistently recorded), `published_only`, `reported_only`, `refuted` (one contra
 or `inconclusive`.
 
 ## The interactive factory — `swf tui`
+
+The Attention screen now includes backend mutation debt and explicit PR follow-up requests,
+with the same data as `swf attention`. Selecting a mutation shows the
+`swf operations inspect <operation_key>` command, rather than guessing a repair action;
+selecting a follow-up opens its source discussion. Neither row is ever treated as a
+sandbox or approval target.
 
 `swf tui` is the same operations layer with a screen on it. It refuses `--json` and a non-TTY stdout
 (exit 2). Rendering never awaits and never touches the network: every effect is an async task that
