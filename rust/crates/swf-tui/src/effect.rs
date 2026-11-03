@@ -168,7 +168,7 @@ async fn perform(ops: Arc<Ops>, tx: Sender<Msg>, cancel: CancellationToken, effe
                 Box::new(snapshot),
                 Box::new(attention),
             ))
-        },
+        }
         Effect::Review(id) => match ops.gate_review(&id, &cancel).await {
             Ok(review) => Some(Msg::Review(Box::new(review))),
             Err(err) => failed(format!("review {id}"), err),
