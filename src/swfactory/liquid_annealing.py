@@ -21,6 +21,10 @@ from swfactory.models import Finding, Review, StageError, StageResult
 from swfactory.phase_control import ControlMode, Phase
 
 LANES: tuple[str, ...] = ("correctness", "verification", "risk")
+# Paths, not model preference, select the extra read-only reviewers.
+UI_SUFFIXES = (".html", ".htm", ".css", ".scss", ".sass", ".less", ".jsx", ".tsx", ".vue", ".svelte", ".astro")
+UI_DIRECTORIES = frozenset({"frontend", "web", "site", "ui", "pages", "components", "templates", "views", "swf-tui"})
+CLI_DIRECTORIES = frozenset({"cli", "swf-cli"})
 RISK_PREFIXES: tuple[str, ...] = (
     ".github/",
     "dags/",
@@ -177,6 +181,36 @@ def merge_findings(groups: list[list[Finding]]) -> list[Finding]:
     )
 
 
+def lanes_for_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Choose extra review lenses from actual changed files, not agent claims."""
+
+    ui_changed = False
+    cli_changed = False
+    for path in paths:
+        normalized = path.casefold()
+        directories = frozenset(normalized.split("/")[:-1])
+        ui_changed |= normalized.endswith(UI_SUFFIXES) or not directories.isdisjoint(UI_DIRECTORIES)
+        cli_changed |= (
+            normalized == "cli.py"
+            or normalized.endswith("/cli.py")
+            or not directories.isdisjoint(CLI_DIRECTORIES)
+        )
+    return LANES + (("ux",) if ui_changed or cli_changed else ()) + (("ui_design",) if ui_changed else ())
+
+
+def _changed_paths(ctx: stages.Ctx, base: str) -> tuple[str, ...]:
+    """A repair can introduce new UI files, so select again for each candidate HEAD."""
+
+    return tuple(
+        line.strip()
+        for line in stages._sh(
+            ctx,
+            f"git diff --name-only --relative {base}..HEAD -- . {stages._exclude(ctx)}",
+        ).splitlines()
+        if line.strip()
+    )
+
+
 def _risk_count(paths: tuple[str, ...]) -> int:
     return sum(any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in RISK_PREFIXES) for path in paths)
 
@@ -216,10 +250,11 @@ def _round(
     plan: str,
     diff: str,
     checklist: str = "",
+    lanes: tuple[str, ...] = LANES,
 ) -> tuple[list[Finding], int, list[dict[str, object]]]:
     groups: list[list[Finding]] = []
     lane_records: list[dict[str, object]] = []
-    for lane_index, lane in enumerate(LANES, start=1):
+    for lane_index, lane in enumerate(lanes, start=1):
         iteration = round_index * 10 + lane_index
         result = stages._agent(
             ctx,
@@ -263,14 +298,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
     plan_data = stages._read_json(ctx, f"{ctx.art}/plan.json", None)
     trace_path = f"{ctx.art}/{stages.TRACE}"
     contract: stages.ContractTrace | None = None
-    changed = tuple(
-        line.strip()
-        for line in stages._sh(
-            ctx,
-            f"git diff --name-only --relative {base}..HEAD -- . {stages._exclude(ctx)}",
-        ).splitlines()
-        if line.strip()
-    )
+    changed = _changed_paths(ctx, base)
     risky_files = _risk_count(changed)
     reverted: list[dict[str, object]] = []
     previous_signature: tuple[tuple[str, str, int | None, str], ...] = ()
@@ -289,8 +317,12 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
     )
 
     for round_index in range(ctx.cfg.max_review_fixes + 1):
+        if round_index:
+            changed = _changed_paths(ctx, base)
+            risky_files = _risk_count(changed)
+        selected_lanes = lanes_for_paths(changed)
         review_diff, packed_diff = stages.review_context(
-            ctx, base, numbers, fanout=len(LANES), saved_key="review_context_replayed_bytes_avoided"
+            ctx, base, numbers, fanout=len(selected_lanes), saved_key="review_context_replayed_bytes_avoided"
         )
         # The same code-decided requirement trace as stages.review, for this round's HEAD.
         contract = stages.contract_trace(ctx, spec, plan_data)
@@ -301,6 +333,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
             plan=plan,
             diff=review_diff,
             checklist=contract.checklist,
+            lanes=selected_lanes,
         )
         findings.extend(stages._plan_fidelity(ctx, base))
         findings.extend(contract.findings)
@@ -329,7 +362,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
                 minors=counts["minor"],
                 nits=counts["nit"],
                 tests_green=tests_green,
-                lane_coverage=len(lane_records) / len(LANES),
+                lane_coverage=len(lane_records) / len(selected_lanes),
                 stagnated=stagnated,
                 exhausted=exhausted,
             )
@@ -338,6 +371,8 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
             {
                 "round": round_index,
                 "lanes": lane_records,
+                "selected_lanes": list(selected_lanes),
+                "changed_files": list(changed),
                 "findings": [item.model_dump() for item in findings],
                 "review_context": (
                     {
@@ -391,7 +426,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
         "phase_contract": "factory-phase/v1",
         "changed_files": list(changed),
         "risky_files": risky_files,
-        "specialist_lanes": list(LANES),
+        "specialist_lanes": list(selected_lanes),
         "trace": trace,
         "final": final_state.as_dict(),
     }
@@ -408,7 +443,7 @@ def _run_annealed_review(ctx: stages.Ctx) -> StageResult:
             "findings": float(len(final_findings)),
             "dropped_nits": float(dropped),
             "fixes": float(fixes),
-            "review_lanes": float(len(LANES)),
+            "review_lanes": float(len(selected_lanes)),
             "crystallized": float(final_state.crystallized),
             "anneal_temperature": final_state.temperature,
             "anneal_beta": final_state.beta,
