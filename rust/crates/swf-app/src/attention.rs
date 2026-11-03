@@ -571,8 +571,14 @@ mod tests {
             .collect();
         let mut att = Attention::default();
         att.record_operations(rows, now, 2);
-        assert!(att.operations.is_empty(), "fresh attempts are not actionable");
-        assert!(!att.is_clear(), "unknown rows beyond the cap must not appear healthy");
+        assert!(
+            att.operations.is_empty(),
+            "fresh attempts are not actionable"
+        );
+        assert!(
+            !att.is_clear(),
+            "unknown rows beyond the cap must not appear healthy"
+        );
         assert_eq!(att.errors.len(), 1);
         assert!(att.errors[0].message.contains("2-row read cap"));
     }
