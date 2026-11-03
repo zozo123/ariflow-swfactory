@@ -371,6 +371,26 @@ pub fn count_of(n: usize, what: &str) -> String {
 pub fn attention(att: &Attention, term: &Term) -> String {
     let mut blocks: Vec<String> = Vec::new();
 
+    if !att.operations.is_empty() {
+        let mut table = Table::new(["operation", "cell", "state", "attempts", "next action"]);
+        for item in &att.operations {
+            table.row([
+                swf_domain::sanitize::sanitize_line(&item.operation_key),
+                swf_domain::sanitize::sanitize_line(&item.cell_id),
+                term.bad(&swf_domain::sanitize::sanitize_line(&item.state)),
+                item.attempts.to_string(),
+                format!(
+                    "swf operations inspect {}",
+                    swf_domain::sanitize::sanitize_line(&item.operation_key)
+                ),
+            ]);
+        }
+        blocks.push(format!(
+            "{}\n{}",
+            term.head(&format!("unresolved mutations ({})", att.operations.len())),
+            table.render(term)
+        ));
+    }
     if !att.followups.is_empty() {
         let mut table = Table::new(["request", "cell", "source", "next action"]);
         for item in &att.followups {
