@@ -470,7 +470,12 @@ fn details(frame: &mut Frame, model: &Model, theme: Theme, area: Rect) {
         }
         RowKind::Followup => {
             let identifier = row.key.strip_prefix("followup:").unwrap_or(&row.key);
-            if let Some(item) = model.attention.followups.iter().find(|item| item.id == identifier) {
+            if let Some(item) = model
+                .attention
+                .followups
+                .iter()
+                .find(|item| item.id == identifier)
+            {
                 lines.push(field(theme, "actor", &sanitize_line(&item.actor)));
                 lines.push(field(theme, "cell", &sanitize_line(&item.cell_id)));
                 lines.push(field(theme, "source", &sanitize_line(&item.source_url)));
