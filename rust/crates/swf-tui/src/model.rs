@@ -124,6 +124,10 @@ impl View {
 /// What a row stands for, which decides what the detail pane shows and what a key does to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
+    /// An unresolved external mutation needing reconciliation.
+    Operation,
+    /// A maintainer's explicit PR revision request.
+    Followup,
     /// An approval waiting for an answer.
     Gate,
     /// One mapped job of a run.
@@ -701,6 +705,34 @@ impl Model {
 
     fn attention_rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
+        for item in &self.attention.operations {
+            rows.push(Row::new(
+                format!("operation:{}", item.operation_key),
+                RowKind::Operation,
+                vec![
+                    "mutation".into(),
+                    item.operation_key.clone(),
+                    format!("{} · cell {} epoch {}", item.kind, item.cell_id, item.epoch),
+                    item.state.clone(),
+                    format!("{} tries", item.attempts),
+                ],
+                Tone::Bad,
+            ));
+        }
+        for item in &self.attention.followups {
+            rows.push(Row::new(
+                format!("followup:{}", item.id),
+                RowKind::Followup,
+                vec![
+                    "follow-up".into(),
+                    item.id.clone(),
+                    item.next_action.clone(),
+                    "needs review".into(),
+                    "-".into(),
+                ],
+                Tone::Waiting,
+            ));
+        }
         for gate in &self.attention.gates {
             let status = if gate.ready {
                 "◆ ready".to_string()
@@ -988,6 +1020,13 @@ impl Model {
                 .into_iter()
                 .find(|d| d.number.to_string() == name)
                 .map(|d| d.id);
+        } else if key.starts_with("operation:") || key.starts_with("followup:") {
+            // Neither is a sandbox or a gate. Do not carry the last selected job's action
+            // into a debt row when the operator navigates with the keyboard.
+            self.selection.job = None;
+            self.selection.gate = None;
+            self.selection.delivery = None;
+            self.selection.infra = None;
         } else if !key.starts_with("source:") {
             self.selection.infra = Some(format!("sandbox:{key}"));
         }
@@ -1037,9 +1076,15 @@ impl Model {
 
     /// Adopt a completed collection pass without moving the cursor.
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) {
+        self.apply_snapshot_with_attention(snapshot, None);
+    }
+
+    /// Use the *same* collected snapshot as the CLI, with optional backend-held attention.
+    /// Test fixtures that supply only a snapshot still get the deterministic local projection.
+    fn apply_snapshot_with_attention(&mut self, snapshot: Snapshot, backend: Option<Attention>) {
         let mut snapshot = snapshot;
         sanitize_snapshot(&mut snapshot);
-        self.attention = Attention::from_snapshot(&snapshot, self.now);
+        self.attention = backend.unwrap_or_else(|| Attention::from_snapshot(&snapshot, self.now));
         for (name, health) in &snapshot.health {
             self.sources.insert(name.clone(), health.clone());
         }
@@ -1152,6 +1197,8 @@ pub enum Msg {
     Interrupt,
     /// A collection pass finished.
     Snapshot(Box<Snapshot>),
+    /// A collection pass and its backend-held attention, using the same snapshot.
+    SnapshotWithAttention(Box<Snapshot>, Box<Attention>),
     /// A gate's evidence arrived.
     Review(Box<GateReview>),
     /// A gate was answered.
@@ -1220,6 +1267,10 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         }
         Msg::Snapshot(snapshot) => {
             model.apply_snapshot(*snapshot);
+            Vec::new()
+        }
+        Msg::SnapshotWithAttention(snapshot, attention) => {
+            model.apply_snapshot_with_attention(*snapshot, Some(*attention));
             Vec::new()
         }
         Msg::Review(review) => {
@@ -1534,6 +1585,19 @@ fn enter(model: &mut Model) -> Vec<Effect> {
         return Vec::new();
     };
     match row.kind {
+        RowKind::Operation => {
+            let name = row.key.strip_prefix("operation:").unwrap_or(&row.key);
+            model.note(format!("inspect with: swf operations inspect {name}"));
+            Vec::new()
+        }
+        RowKind::Followup => {
+            let name = row.key.strip_prefix("followup:").unwrap_or(&row.key);
+            if let Some(item) = model.attention.followups.iter().find(|item| item.id == name) {
+                vec![Effect::Open(item.source_url.clone())]
+            } else {
+                Vec::new()
+            }
+        }
         RowKind::Gate => match row.key.parse::<GateId>() {
             Ok(id) => {
                 model.selection.gate = Some(id.clone());
@@ -1771,6 +1835,50 @@ mod tests {
 
     fn key(code: KeyCode) -> Msg {
         Msg::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    #[test]
+    fn a_refreshed_attention_snapshot_shows_mutation_debt_and_followups_without_stale_actions() {
+        let mut model = model();
+        let mut attention = Attention::default();
+        attention.operations.push(
+            serde_json::from_value(serde_json::json!({
+                "operation_key": "publish-123", "cell_id": "cell_0123456789abcdef01234567",
+                "epoch": 2, "kind": "github", "state": "in_doubt", "attempts": 1
+            }))
+            .expect("valid operation"),
+        );
+        attention.followups.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "github-comment:55", "cell_id": "cell_0123456789abcdef01234567",
+                "epoch": 2, "actor": "maintainer",
+                "source_url": "https://github.com/o/r/pull/7#issuecomment-55",
+                "next_action": "read and re-admit"
+            }))
+            .expect("valid followup"),
+        );
+        update(
+            &mut model,
+            Msg::SnapshotWithAttention(
+                Box::new(snapshot(&[])),
+                Box::new(attention),
+            ),
+        );
+        let rows = model.rows();
+        assert_eq!(model.attention.count(), 2);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, RowKind::Operation);
+        assert_eq!(rows[0].key, "operation:publish-123");
+        assert_eq!(rows[1].kind, RowKind::Followup);
+        model.select("operation:publish-123");
+        assert!(model.selection.job.is_none());
+        assert!(enter(&mut model).is_empty());
+        assert!(model.status.contains("swf operations inspect publish-123"));
+        model.select("followup:github-comment:55");
+        assert_eq!(
+            enter(&mut model),
+            vec![Effect::Open("https://github.com/o/r/pull/7#issuecomment-55".into())]
+        );
     }
 
     #[test]
