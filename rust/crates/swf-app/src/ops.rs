@@ -38,7 +38,7 @@ use swf_domain::model::{Gate, JobRow, Run, SandboxRef, Snapshot, SourceError, SO
 use swf_domain::sanitize::sanitize_line;
 use tokio_util::sync::CancellationToken;
 
-use crate::attention::Attention;
+use crate::attention::{operation_needs_attention, Attention};
 use crate::backend_context::BackendContext;
 use crate::context::{Context, ContextError};
 use crate::delivery::{Delivery, VerifyOpts};
@@ -479,7 +479,12 @@ impl Ops {
             match operations {
                 Ok(rows) => {
                     let capped = rows.len() >= MAX_OPERATIONS;
-                    attention.operations = rows.into_iter().map(Into::into).collect();
+                    let now = Utc::now().timestamp() as f64;
+                    attention.operations = rows
+                        .into_iter()
+                        .filter(|row| operation_needs_attention(row, now))
+                        .map(Into::into)
+                        .collect();
                     if capped {
                         attention.errors.push(SourceError {
                             source: "operations".to_string(),
