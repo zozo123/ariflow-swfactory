@@ -110,7 +110,7 @@ pub struct FollowupItem {
 
 /// An unresolved external effect that still owes observation, repair, or reconciliation.
 /// Only identifiers and state enter the attention view; provider payloads and error text do not.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OperationItem {
     pub operation_key: String,
     pub cell_id: String,
