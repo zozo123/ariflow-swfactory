@@ -8,7 +8,7 @@ from typing import Any
 from swfactory import accepted_inputs, liquid_annealing, stage_registry, stages
 from swfactory.blueprint import load
 from swfactory.config import TargetContract, protected_for
-from swfactory.liquid_annealing import LANES, AnnealingObservation, evaluate, merge_findings
+from swfactory.liquid_annealing import LANES, AnnealingObservation, evaluate, lanes_for_paths, merge_findings
 from swfactory.models import Finding
 from swfactory.models import TestResult as SwfTestResult
 
@@ -42,6 +42,19 @@ def _lanes() -> list[dict[str, object]]:
         }
         for index, lane in enumerate(LANES, 1)
     ]
+
+
+def test_adaptive_lane_selection_is_path_bound_and_cost_aware() -> None:
+    assert lanes_for_paths(("src/swfactory/backend/service.py", "tests/test_backend.py")) == LANES
+    assert lanes_for_paths(("docs/liquid-annealing.md",)) == LANES
+    assert lanes_for_paths(("src/swfactory/cli.py",)) == (*LANES, "ux")
+    assert lanes_for_paths(("rust/crates/swf-cli/src/render.rs",)) == (*LANES, "ux")
+    expected = (*LANES, "ux", "ui_design")
+    assert lanes_for_paths(("rust/crates/swf-tui/src/view.rs",)) == expected
+    assert lanes_for_paths(("site/index.html",)) == expected
+    assert lanes_for_paths(("src/frontend/components/Panel.tsx",)) == expected
+    assert lanes_for_paths(("src/deploy.css",)) == expected
+    assert lanes_for_paths(("src/build_widget.py",)) == LANES
 
 
 def test_clean_candidate_crystallizes_only_after_all_lanes_and_green_tests() -> None:
@@ -155,6 +168,34 @@ def test_one_round_calls_all_specialist_lanes_and_fans_them_in(monkeypatch: Any)
     assert [record["lane"] for record in records] == list(LANES)
     assert dropped == 0
     assert len(findings) == 1 and findings[0].severity == "major"
+
+
+def test_interface_round_runs_five_read_only_lenses(monkeypatch: Any) -> None:
+    lanes = lanes_for_paths(("site/index.html",))
+    calls: list[tuple[str, int, str]] = []
+    ctx = SimpleNamespace(issue=SimpleNamespace(id="LIQ-UI"))
+    monkeypatch.setattr(stages, "_review_policy", lambda _ctx: "# liquid policy")
+    monkeypatch.setattr(stages, "render_prompt", lambda _name, **kwargs: str(kwargs["review_policy"]))
+    monkeypatch.setattr(stages, "_nit_cap", lambda _ctx: 3)
+
+    def fake_agent(_ctx: Any, stage: str, iteration: int, prompt: str, _schema: Any) -> Any:
+        lane = next(lane for lane in lanes if f"\\n{lane}\\n" in prompt)
+        calls.append((stage, iteration, lane))
+        return SimpleNamespace(data={"verdict": "approve", "findings": []})
+
+    monkeypatch.setattr(stages, "_agent", fake_agent)
+    findings, dropped, records = liquid_annealing._round(
+        ctx, round_index=2, spec="spec", plan="plan", diff="diff", lanes=lanes
+    )
+    assert findings == [] and dropped == 0
+    assert calls == [
+        ("review", 21, "correctness"),
+        ("review", 22, "verification"),
+        ("review", 23, "risk"),
+        ("review", 24, "ux"),
+        ("review", 25, "ui_design"),
+    ]
+    assert [record["lane"] for record in records] == list(lanes)
 
 
 class _State:
@@ -291,6 +332,67 @@ def test_liquid_packs_review_context_once_per_round_and_reuses_it_across_lanes(m
     assert result.numbers["review_context_source_bytes"] == 20_000
     assert result.numbers["review_context_prompt_bytes"] == 1_000
     assert result.numbers["review_context_replayed_bytes_avoided"] == 57_000
+
+
+def test_interface_stage_records_selected_reviewers_and_fanout(monkeypatch: Any) -> None:
+    ctx = _Ctx(max_review_fixes=0)
+    _stage_harness(monkeypatch)
+    monkeypatch.setattr(
+        stages,
+        "_sh",
+        lambda _ctx, command, **_kwargs: "site/index.html\\n" if "--name-only" in command else "diff",
+    )
+    selected: list[tuple[str, ...]] = []
+
+    def fake_round(
+        _ctx: Any, *, lanes: tuple[str, ...], **_kwargs: Any
+    ) -> tuple[list[Finding], int, list[dict[str, object]]]:
+        selected.append(lanes)
+        return [], 0, [
+            {"lane": lane, "iteration": index, "verdict": "approve", "findings": 0, "blockers": 0}
+            for index, lane in enumerate(lanes, 1)
+        ]
+
+    monkeypatch.setattr(liquid_annealing, "_round", fake_round)
+    result = liquid_annealing._run_annealed_review(ctx)  # type: ignore[arg-type]
+    annealing = json.loads(ctx.written[f"{ctx.art}/annealing.json"])
+    assert result.status == "ok"
+    assert selected == [(*LANES, "ux", "ui_design")]
+    assert result.numbers["review_lanes"] == 5
+    assert annealing["specialist_lanes"] == list(selected[0])
+    assert annealing["trace"][0]["selected_lanes"] == list(selected[0])
+    assert annealing["trace"][0]["changed_files"] == ["site/index.html"]
+
+
+def test_a_repair_adding_ui_code_expands_next_round_reviewers(monkeypatch: Any) -> None:
+    ctx = _Ctx(max_review_fixes=1)
+    _stage_harness(monkeypatch)
+    selected: list[tuple[str, ...]] = []
+    major = Finding(severity="major", file="src/a.py", title="material defect", detail="repair me")
+    # _round models the first review. After the bounded fix, the next HEAD includes UI.
+    def fake_sh(_ctx: Any, command: str, **_kwargs: Any) -> str:
+        if "--name-only" in command:
+            return "site/index.html\\n" if selected else "src/a.py\\n"
+        return "diff"
+
+    def fake_round(
+        _ctx: Any, *, round_index: int, lanes: tuple[str, ...], **_kwargs: Any
+    ) -> tuple[list[Finding], int, list[dict[str, object]]]:
+        selected.append(lanes)
+        return ([major] if round_index == 0 else []), 0, [
+            {"lane": lane, "iteration": index, "verdict": "approve", "findings": 0, "blockers": 0}
+            for index, lane in enumerate(lanes, 1)
+        ]
+
+    monkeypatch.setattr(stages, "_sh", fake_sh)
+    monkeypatch.setattr(liquid_annealing, "_round", fake_round)
+    result = liquid_annealing._run_annealed_review(ctx)  # type: ignore[arg-type]
+    annealing = json.loads(ctx.written[f"{ctx.art}/annealing.json"])
+    assert result.status == "ok"
+    assert selected == [LANES, (*LANES, "ux", "ui_design")]
+    assert [len(row["lanes"]) for row in annealing["trace"]] == [3, 5]
+    assert result.numbers["review_lanes"] == 5
+    assert annealing["changed_files"] == ["site/index.html"]
 
 
 def test_stage_relaxes_major_retests_and_crystallizes(monkeypatch: Any) -> None:
