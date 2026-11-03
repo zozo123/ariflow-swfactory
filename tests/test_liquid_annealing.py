@@ -179,7 +179,7 @@ def test_interface_round_runs_five_read_only_lenses(monkeypatch: Any) -> None:
     monkeypatch.setattr(stages, "_nit_cap", lambda _ctx: 3)
 
     def fake_agent(_ctx: Any, stage: str, iteration: int, prompt: str, _schema: Any) -> Any:
-        lane = next(lane for lane in lanes if f"\\n{lane}\\n" in prompt)
+        lane = next(lane for lane in lanes if f"\n{lane}\n" in prompt)
         calls.append((stage, iteration, lane))
         return SimpleNamespace(data={"verdict": "approve", "findings": []})
 
@@ -340,7 +340,7 @@ def test_interface_stage_records_selected_reviewers_and_fanout(monkeypatch: Any)
     monkeypatch.setattr(
         stages,
         "_sh",
-        lambda _ctx, command, **_kwargs: "site/index.html\\n" if "--name-only" in command else "diff",
+        lambda _ctx, command, **_kwargs: "site/index.html\n" if "--name-only" in command else "diff",
     )
     selected: list[tuple[str, ...]] = []
 
@@ -372,7 +372,7 @@ def test_a_repair_adding_ui_code_expands_next_round_reviewers(monkeypatch: Any) 
     # _round models the first review. After the bounded fix, the next HEAD includes UI.
     def fake_sh(_ctx: Any, command: str, **_kwargs: Any) -> str:
         if "--name-only" in command:
-            return "site/index.html\\n" if selected else "src/a.py\\n"
+            return "site/index.html\n" if selected else "src/a.py\n"
         return "diff"
 
     def fake_round(
