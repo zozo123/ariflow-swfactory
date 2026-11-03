@@ -441,15 +441,55 @@ impl Ops {
     /// What needs a human right now.
     pub async fn attention(&self, cancel: &CancellationToken) -> Attention {
         let snap = self.snapshot_default(cancel).await;
-        let mut attention = Attention::from_snapshot(&snap, Utc::now());
+        self.attention_from_snapshot(&snap, cancel).await
+    }
+
+    /// Enrich one collected snapshot with backend-owned repair debt and follow-ups.
+    ///
+    /// The CLI and TUI both use this projection. Keeping the snapshot as an argument prevents
+    /// the TUI from silently running a second Airflow/GitHub collection on every refresh.
+    pub async fn attention_from_snapshot(
+        &self,
+        snap: &Snapshot,
+        cancel: &CancellationToken,
+    ) -> Attention {
+        const MAX_OPERATIONS: usize = 1000;
+        let mut attention = Attention::from_snapshot(snap, Utc::now());
         if let Some(backend) = &self.backend {
             match backend
                 .call("/followups/attention", serde_json::json!({}), cancel)
                 .await
             {
                 Ok(rows) => attention.followups = rows,
-                Err(error) => attention.errors.push(swf_domain::model::SourceError {
+                Err(error) => attention.errors.push(SourceError {
                     source: "followups".to_string(),
+                    message: error.to_string(),
+                }),
+            }
+            let operations: std::result::Result<
+                Vec<swf_domain::operator::OperationDebt>,
+                swf_adapters::error::AdapterError,
+            > = backend
+                .call(
+                    "/operations",
+                    serde_json::json!({"limit": MAX_OPERATIONS}),
+                    cancel,
+                )
+                .await;
+            match operations {
+                Ok(rows) => {
+                    let capped = rows.len() >= MAX_OPERATIONS;
+                    attention.operations = rows.into_iter().map(Into::into).collect();
+                    if capped {
+                        attention.errors.push(SourceError {
+                            source: "operations".to_string(),
+                            message: "repair debt list reached the 1000-row read cap; inspect the journal"
+                                .to_string(),
+                        });
+                    }
+                }
+                Err(error) => attention.errors.push(SourceError {
+                    source: "operations".to_string(),
                     message: error.to_string(),
                 }),
             }
