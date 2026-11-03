@@ -781,8 +781,14 @@ mod tests {
         assert!(text.contains("unresolved mutations (1)"), "{text}");
         assert!(text.contains("github:publish:42"), "{text}");
         assert!(text.contains("in_doubt"), "{text}");
-        assert!(text.contains("swf operations inspect github:publish:42"), "{text}");
-        assert!(!text.contains('\u{1b}'), "plain mode must remain accessible");
+        assert!(
+            text.contains("swf operations inspect github:publish:42"),
+            "{text}"
+        );
+        assert!(
+            !text.contains('\u{1b}'),
+            "plain mode must remain accessible"
+        );
     }
 
     #[test]
