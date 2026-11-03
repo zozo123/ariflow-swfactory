@@ -19,6 +19,7 @@ use swf_domain::ids::{GateId, JobId};
 use swf_domain::model::{
     is_factory_name, Gate, JobRow, PullRequest, SandboxRef, Snapshot, SourceError,
 };
+use swf_domain::operator::OperationDebt;
 use swf_domain::rollup::{age, stage_progress};
 use swf_domain::sanitize::sanitize_line;
 use swf_domain::states::is_failed;
@@ -107,9 +108,36 @@ pub struct FollowupItem {
     pub next_action: String,
 }
 
+/// An unresolved external effect that still owes observation, repair, or reconciliation.
+/// Only identifiers and state enter the attention view; provider payloads and error text do not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OperationItem {
+    pub operation_key: String,
+    pub cell_id: String,
+    pub epoch: u64,
+    pub kind: String,
+    pub state: String,
+    pub attempts: u64,
+}
+
+impl From<OperationDebt> for OperationItem {
+    fn from(value: OperationDebt) -> Self {
+        Self {
+            operation_key: value.operation_key,
+            cell_id: value.cell_id,
+            epoch: value.epoch,
+            kind: value.kind,
+            state: value.state,
+            attempts: value.attempts,
+        }
+    }
+}
+
 /// Everything waiting for a person, and everything the pass could not see.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Attention {
+    /// Unresolved mutations served by the backend operation journal.
+    pub operations: Vec<OperationItem>,
     /// Explicit PR follow-ups served by the backend Cell timeline.
     pub followups: Vec<FollowupItem>,
     /// Approvals. Ready ones first — those are the ones that can be answered right now.
@@ -127,7 +155,8 @@ pub struct Attention {
 impl Attention {
     /// How many rows a person is being asked to look at.
     pub fn count(&self) -> usize {
-        self.gates.len()
+        self.operations.len()
+            + self.gates.len()
             + self.failures.len()
             + self.blocked.len()
             + self.orphans.len()
@@ -167,6 +196,7 @@ impl Attention {
             .collect();
 
         Self {
+            operations: Vec::new(),
             followups: Vec::new(),
             gates,
             failures,
@@ -460,6 +490,27 @@ mod tests {
         );
         assert_eq!(attention.errors.len(), 1);
     }
+    #[test]
+    fn unresolved_mutations_prevent_a_clear_report_without_exposing_provider_payloads() {
+        let mut attention = Attention::default();
+        let source: OperationDebt = serde_json::from_value(serde_json::json!({
+            "operation_key": "publish:cell_0123", "cell_id": "cell_0123456789abcdef01234567",
+            "epoch": 3, "kind": "publish", "state": "in_doubt", "attempts": 2,
+            "last_error": "a private provider message",
+            "observation": {"credential": "secret"}
+        }))
+        .expect("a real backend operation");
+        attention.operations.push(source.into());
+        assert_eq!(attention.count(), 1);
+        assert!(!attention.is_clear());
+        let value = serde_json::to_value(&attention).expect("serializable");
+        assert_eq!(value["operations"][0]["operation_key"], "publish:cell_0123");
+        assert_eq!(value["operations"][0]["epoch"], 3);
+        assert_eq!(value["operations"][0]["state"], "in_doubt");
+        assert!(value.to_string().find("secret").is_none());
+        assert!(value.to_string().find("private provider").is_none());
+    }
+
     #[test]
     fn a_revision_request_prevents_a_clear_attention_report() {
         let mut attention = Attention::default();
