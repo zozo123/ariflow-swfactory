@@ -1592,7 +1592,12 @@ fn enter(model: &mut Model) -> Vec<Effect> {
         }
         RowKind::Followup => {
             let name = row.key.strip_prefix("followup:").unwrap_or(&row.key);
-            if let Some(item) = model.attention.followups.iter().find(|item| item.id == name) {
+            if let Some(item) = model
+                .attention
+                .followups
+                .iter()
+                .find(|item| item.id == name)
+            {
                 vec![Effect::Open(item.source_url.clone())]
             } else {
                 Vec::new()
@@ -1859,10 +1864,7 @@ mod tests {
         );
         update(
             &mut model,
-            Msg::SnapshotWithAttention(
-                Box::new(snapshot(&[])),
-                Box::new(attention),
-            ),
+            Msg::SnapshotWithAttention(Box::new(snapshot(&[])), Box::new(attention)),
         );
         let rows = model.rows();
         assert_eq!(model.attention.count(), 2);
@@ -1877,7 +1879,9 @@ mod tests {
         model.select("followup:github-comment:55");
         assert_eq!(
             enter(&mut model),
-            vec![Effect::Open("https://github.com/o/r/pull/7#issuecomment-55".into())]
+            vec![Effect::Open(
+                "https://github.com/o/r/pull/7#issuecomment-55".into()
+            )]
         );
     }
 
