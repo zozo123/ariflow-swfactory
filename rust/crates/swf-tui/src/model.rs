@@ -1888,6 +1888,9 @@ mod tests {
                 "https://github.com/o/r/pull/7#issuecomment-55".into()
             )]
         );
+        model.attention.followups[0].source_url = "file:///tmp/secret".into();
+        assert!(enter(&mut model).is_empty());
+        assert!(model.status.contains("refusing a follow-up URL without HTTPS"));
     }
 
     #[test]
