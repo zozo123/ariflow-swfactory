@@ -7,7 +7,9 @@ scheduling, retries, mapped jobs and the HITL gates; `swf` holds no authority of
 re-reads every decision from the API before acting on it.
 
 The product documentation lives in [docs/swf.md](../docs/swf.md). This page is for someone about to
-build the thing.
+build the thing. The Rust operator's exception-only Attention projection combines one collected
+snapshot with read-only backend operation-journal and follow-up views; the Python backend remains
+the sole owner of durable state, retry decisions and Cell fencing.
 
 ## The crates
 

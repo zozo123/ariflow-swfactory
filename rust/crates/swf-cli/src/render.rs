@@ -371,6 +371,26 @@ pub fn count_of(n: usize, what: &str) -> String {
 pub fn attention(att: &Attention, term: &Term) -> String {
     let mut blocks: Vec<String> = Vec::new();
 
+    if !att.operations.is_empty() {
+        let mut table = Table::new(["operation", "cell", "state", "attempts", "next action"]);
+        for item in &att.operations {
+            table.row([
+                swf_domain::sanitize::sanitize_line(&item.operation_key),
+                swf_domain::sanitize::sanitize_line(&item.cell_id),
+                term.bad(&swf_domain::sanitize::sanitize_line(&item.state)),
+                item.attempts.to_string(),
+                format!(
+                    "swf operations inspect {}",
+                    swf_domain::sanitize::sanitize_line(&item.operation_key)
+                ),
+            ]);
+        }
+        blocks.push(format!(
+            "{}\n{}",
+            term.head(&format!("unresolved mutations ({})", att.operations.len())),
+            table.render(term)
+        ));
+    }
     if !att.followups.is_empty() {
         let mut table = Table::new(["request", "cell", "source", "next action"]);
         for item in &att.followups {
@@ -744,6 +764,44 @@ mod tests {
         assert_eq!(ready_word(true, &term), "ready");
         assert_eq!(ready_word(false, &term), "waiting");
         assert_eq!(yes_no(false, &term), "no");
+    }
+
+    #[test]
+    fn the_attention_table_never_hides_an_unresolved_publication() {
+        let mut att = Attention::default();
+        att.operations.push(swf_app::attention::OperationItem {
+            operation_key: "github:publish:42".into(),
+            cell_id: "cell_0123456789abcdef01234567".into(),
+            epoch: 7,
+            kind: "github_publish".into(),
+            state: "in_doubt".into(),
+            attempts: 2,
+        });
+        let text = attention(&att, &plain());
+        assert!(text.contains("unresolved mutations (1)"), "{text}");
+        assert!(text.contains("github:publish:42"), "{text}");
+        assert!(text.contains("in_doubt"), "{text}");
+        assert!(
+            text.contains("swf operations inspect github:publish:42"),
+            "{text}"
+        );
+        assert!(
+            !text.contains('\u{1b}'),
+            "plain mode must remain accessible"
+        );
+    }
+
+    #[test]
+    fn a_backend_read_error_is_not_a_false_all_clear() {
+        let mut att = Attention::default();
+        att.errors.push(swf_domain::model::SourceError {
+            source: "operations".into(),
+            message: "backend unreachable".into(),
+        });
+        let text = attention(&att, &plain());
+        assert!(!text.contains("nothing needs a person"), "{text}");
+        assert!(text.contains("operations"), "{text}");
+        assert!(text.contains("backend unreachable"), "{text}");
     }
 
     #[test]

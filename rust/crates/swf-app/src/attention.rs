@@ -19,6 +19,7 @@ use swf_domain::ids::{GateId, JobId};
 use swf_domain::model::{
     is_factory_name, Gate, JobRow, PullRequest, SandboxRef, Snapshot, SourceError,
 };
+use swf_domain::operator::OperationDebt;
 use swf_domain::rollup::{age, stage_progress};
 use swf_domain::sanitize::sanitize_line;
 use swf_domain::states::is_failed;
@@ -28,6 +29,22 @@ pub const BLOCKED_LABELS: &[&str] = &["factory:blocked", "factory:rejected"];
 
 /// The title banners that say the same thing (`06-delivery-evidence.md` §1.3).
 pub const BLOCKED_BANNERS: &[&str] = &["[BLOCKED] ", "[REJECTED] "];
+
+/// Routine in-flight mutations are not human attention. Past this deadline they are.
+const STALE_OPERATION_SECS: f64 = 30.0 * 60.0;
+
+/// An in-doubt, exhausted or refused effect is immediately actionable. An attempt still running
+/// is not, unless it has remained unresolved long enough to warrant a human investigation.
+pub fn operation_needs_attention(operation: &OperationDebt, now_secs: f64) -> bool {
+    match operation.state.as_str() {
+        "committed" => false,
+        "intent" | "reconciling" => {
+            !operation.updated_at.is_finite()
+                || now_secs - operation.updated_at >= STALE_OPERATION_SECS
+        }
+        _ => true,
+    }
+}
 
 /// How long a factory sandbox may outlive its run before it is worth a human's attention.
 ///
@@ -107,9 +124,36 @@ pub struct FollowupItem {
     pub next_action: String,
 }
 
+/// An unresolved external effect that still owes observation, repair, or reconciliation.
+/// Only identifiers and state enter the attention view; provider payloads and error text do not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationItem {
+    pub operation_key: String,
+    pub cell_id: String,
+    pub epoch: u64,
+    pub kind: String,
+    pub state: String,
+    pub attempts: u64,
+}
+
+impl From<OperationDebt> for OperationItem {
+    fn from(value: OperationDebt) -> Self {
+        Self {
+            operation_key: value.operation_key,
+            cell_id: value.cell_id,
+            epoch: value.epoch,
+            kind: value.kind,
+            state: value.state,
+            attempts: value.attempts,
+        }
+    }
+}
+
 /// Everything waiting for a person, and everything the pass could not see.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Attention {
+    /// Unresolved mutations served by the backend operation journal.
+    pub operations: Vec<OperationItem>,
     /// Explicit PR follow-ups served by the backend Cell timeline.
     pub followups: Vec<FollowupItem>,
     /// Approvals. Ready ones first — those are the ones that can be answered right now.
@@ -125,9 +169,29 @@ pub struct Attention {
 }
 
 impl Attention {
+    /// Apply one bounded backend journal read. An exact-limit response may omit more debt,
+    /// even if all returned rows are healthy; in that case refuse a false all-clear.
+    pub fn record_operations(&mut self, rows: Vec<OperationDebt>, now_secs: f64, limit: usize) {
+        let may_be_truncated = rows.len() >= limit;
+        self.operations = rows
+            .into_iter()
+            .filter(|row| operation_needs_attention(row, now_secs))
+            .map(Into::into)
+            .collect();
+        if may_be_truncated {
+            self.errors.push(SourceError {
+                source: "operations".to_string(),
+                message: format!(
+                    "repair debt list reached the {limit}-row read cap; inspect the journal"
+                ),
+            });
+        }
+    }
+
     /// How many rows a person is being asked to look at.
     pub fn count(&self) -> usize {
-        self.gates.len()
+        self.operations.len()
+            + self.gates.len()
             + self.failures.len()
             + self.blocked.len()
             + self.orphans.len()
@@ -167,6 +231,7 @@ impl Attention {
             .collect();
 
         Self {
+            operations: Vec::new(),
             followups: Vec::new(),
             gates,
             failures,
@@ -460,6 +525,85 @@ mod tests {
         );
         assert_eq!(attention.errors.len(), 1);
     }
+    #[test]
+    fn routine_attempts_do_not_create_alerts_but_stale_or_uncertain_effects_do() {
+        let now = 1_800_000_000.0;
+        let mut row: OperationDebt = serde_json::from_value(serde_json::json!({
+            "operation_key": "publish:1", "cell_id": "cell_0123456789abcdef01234567",
+            "epoch": 2, "kind": "github_publish", "state": "intent",
+            "updated_at": now - 20.0
+        }))
+        .expect("a real journal row");
+
+        assert!(!operation_needs_attention(&row, now));
+        row.state = "reconciling".into();
+        assert!(!operation_needs_attention(&row, now));
+        row.state = "in_doubt".into();
+        assert!(operation_needs_attention(&row, now));
+        row.state = "exhausted".into();
+        assert!(operation_needs_attention(&row, now));
+        row.state = "refused".into();
+        assert!(operation_needs_attention(&row, now));
+        row.state = "intent".into();
+        row.updated_at = now - STALE_OPERATION_SECS;
+        assert!(operation_needs_attention(&row, now));
+        row.updated_at = f64::NAN;
+        assert!(operation_needs_attention(&row, now));
+        row.state = "committed".into();
+        assert!(!operation_needs_attention(&row, now));
+    }
+
+    #[test]
+    fn a_capped_read_never_looks_clear_even_if_every_returned_effect_is_healthy() {
+        let now = 1_800_000_000.0;
+        let rows: Vec<OperationDebt> = (0..2)
+            .map(|index| {
+                serde_json::from_value(serde_json::json!({
+                    "operation_key": format!("attempt-{index}"),
+                    "cell_id": "cell_0123456789abcdef01234567",
+                    "epoch": 3,
+                    "kind": "github_publish",
+                    "state": "intent",
+                    "updated_at": now
+                }))
+                .expect("backend row")
+            })
+            .collect();
+        let mut att = Attention::default();
+        att.record_operations(rows, now, 2);
+        assert!(
+            att.operations.is_empty(),
+            "fresh attempts are not actionable"
+        );
+        assert!(
+            !att.is_clear(),
+            "unknown rows beyond the cap must not appear healthy"
+        );
+        assert_eq!(att.errors.len(), 1);
+        assert!(att.errors[0].message.contains("2-row read cap"));
+    }
+
+    #[test]
+    fn unresolved_mutations_prevent_a_clear_report_without_exposing_provider_payloads() {
+        let mut attention = Attention::default();
+        let source: OperationDebt = serde_json::from_value(serde_json::json!({
+            "operation_key": "publish:cell_0123", "cell_id": "cell_0123456789abcdef01234567",
+            "epoch": 3, "kind": "publish", "state": "in_doubt", "attempts": 2,
+            "last_error": "a private provider message",
+            "observation": {"credential": "secret"}
+        }))
+        .expect("a real backend operation");
+        attention.operations.push(source.into());
+        assert_eq!(attention.count(), 1);
+        assert!(!attention.is_clear());
+        let value = serde_json::to_value(&attention).expect("serializable");
+        assert_eq!(value["operations"][0]["operation_key"], "publish:cell_0123");
+        assert_eq!(value["operations"][0]["epoch"], 3);
+        assert_eq!(value["operations"][0]["state"], "in_doubt");
+        assert!(value.to_string().find("secret").is_none());
+        assert!(value.to_string().find("private provider").is_none());
+    }
+
     #[test]
     fn a_revision_request_prevents_a_clear_attention_report() {
         let mut attention = Attention::default();
