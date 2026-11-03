@@ -169,6 +169,25 @@ pub struct Attention {
 }
 
 impl Attention {
+    /// Apply one bounded backend journal read. An exact-limit response may omit more debt,
+    /// even if all returned rows are healthy; in that case refuse a false all-clear.
+    pub fn record_operations(&mut self, rows: Vec<OperationDebt>, now_secs: f64, limit: usize) {
+        let may_be_truncated = rows.len() >= limit;
+        self.operations = rows
+            .into_iter()
+            .filter(|row| operation_needs_attention(row, now_secs))
+            .map(Into::into)
+            .collect();
+        if may_be_truncated {
+            self.errors.push(SourceError {
+                source: "operations".to_string(),
+                message: format!(
+                    "repair debt list reached the {limit}-row read cap; inspect the journal"
+                ),
+            });
+        }
+    }
+
     /// How many rows a person is being asked to look at.
     pub fn count(&self) -> usize {
         self.operations.len()
@@ -532,6 +551,30 @@ mod tests {
         assert!(operation_needs_attention(&row, now));
         row.state = "committed".into();
         assert!(!operation_needs_attention(&row, now));
+    }
+
+    #[test]
+    fn a_capped_read_never_looks_clear_even_if_every_returned_effect_is_healthy() {
+        let now = 1_800_000_000.0;
+        let rows: Vec<OperationDebt> = (0..2)
+            .map(|index| {
+                serde_json::from_value(serde_json::json!({
+                    "operation_key": format!("attempt-{index}"),
+                    "cell_id": "cell_0123456789abcdef01234567",
+                    "epoch": 3,
+                    "kind": "github_publish",
+                    "state": "intent",
+                    "updated_at": now
+                }))
+                .expect("backend row")
+            })
+            .collect();
+        let mut att = Attention::default();
+        att.record_operations(rows, now, 2);
+        assert!(att.operations.is_empty(), "fresh attempts are not actionable");
+        assert!(!att.is_clear(), "unknown rows beyond the cap must not appear healthy");
+        assert_eq!(att.errors.len(), 1);
+        assert!(att.errors[0].message.contains("2-row read cap"));
     }
 
     #[test]
