@@ -11,8 +11,9 @@
 #   human -> deliver opens a PR on a bot-owned branch the agent had no credential to push -> a
 #   PERSON merges.
 #
-# The managed review stage uses REVIEW_LIQUID.md: three independent read-only specialist lanes fan
-# into one deterministic finding set, material defects enter the existing bounded fix+test loop,
+# The managed review stage uses REVIEW_LIQUID.md: three mandatory specialist lenses plus
+# path-triggered UX/UI design review fan into one deterministic finding set; material defects enter
+# the existing bounded fix+test loop,
 # and annealing.json records why the candidate did or did not crystallize. This is review evidence,
 # not another scheduler or promotion authority.
 #
