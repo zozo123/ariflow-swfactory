@@ -30,6 +30,22 @@ pub const BLOCKED_LABELS: &[&str] = &["factory:blocked", "factory:rejected"];
 /// The title banners that say the same thing (`06-delivery-evidence.md` §1.3).
 pub const BLOCKED_BANNERS: &[&str] = &["[BLOCKED] ", "[REJECTED] "];
 
+/// Routine in-flight mutations are not human attention. Past this deadline they are.
+const STALE_OPERATION_SECS: f64 = 30.0 * 60.0;
+
+/// An in-doubt, exhausted or refused effect is immediately actionable. An attempt still running
+/// is not, unless it has remained unresolved long enough to warrant a human investigation.
+pub fn operation_needs_attention(operation: &OperationDebt, now_secs: f64) -> bool {
+    match operation.state.as_str() {
+        "committed" => false,
+        "intent" | "reconciling" => {
+            !operation.updated_at.is_finite()
+                || now_secs - operation.updated_at >= STALE_OPERATION_SECS
+        }
+        _ => true,
+    }
+}
+
 /// How long a factory sandbox may outlive its run before it is worth a human's attention.
 ///
 /// Six hours, because the longest shipped gate timeout is measured in hours and a MicroVM that
@@ -490,6 +506,34 @@ mod tests {
         );
         assert_eq!(attention.errors.len(), 1);
     }
+    #[test]
+    fn routine_attempts_do_not_create_alerts_but_stale_or_uncertain_effects_do() {
+        let now = 1_800_000_000.0;
+        let mut row: OperationDebt = serde_json::from_value(serde_json::json!({
+            "operation_key": "publish:1", "cell_id": "cell_0123456789abcdef01234567",
+            "epoch": 2, "kind": "github_publish", "state": "intent",
+            "updated_at": now - 20.0
+        }))
+        .expect("a real journal row");
+
+        assert!(!operation_needs_attention(&row, now));
+        row.state = "reconciling".into();
+        assert!(!operation_needs_attention(&row, now));
+        row.state = "in_doubt".into();
+        assert!(operation_needs_attention(&row, now));
+        row.state = "exhausted".into();
+        assert!(operation_needs_attention(&row, now));
+        row.state = "refused".into();
+        assert!(operation_needs_attention(&row, now));
+        row.state = "intent".into();
+        row.updated_at = now - STALE_OPERATION_SECS;
+        assert!(operation_needs_attention(&row, now));
+        row.updated_at = f64::NAN;
+        assert!(operation_needs_attention(&row, now));
+        row.state = "committed".into();
+        assert!(!operation_needs_attention(&row, now));
+    }
+
     #[test]
     fn unresolved_mutations_prevent_a_clear_report_without_exposing_provider_payloads() {
         let mut attention = Attention::default();
