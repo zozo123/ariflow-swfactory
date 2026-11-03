@@ -478,7 +478,11 @@ impl Ops {
                 .await;
             match operations {
                 Ok(rows) => {
-                    attention.record_operations(rows, Utc::now().timestamp() as f64, MAX_OPERATIONS);
+                    attention.record_operations(
+                        rows,
+                        Utc::now().timestamp() as f64,
+                        MAX_OPERATIONS,
+                    );
                 }
                 Err(error) => attention.errors.push(SourceError {
                     source: "operations".to_string(),
