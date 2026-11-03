@@ -38,7 +38,7 @@ use swf_domain::model::{Gate, JobRow, Run, SandboxRef, Snapshot, SourceError, SO
 use swf_domain::sanitize::sanitize_line;
 use tokio_util::sync::CancellationToken;
 
-use crate::attention::{operation_needs_attention, Attention};
+use crate::attention::Attention;
 use crate::backend_context::BackendContext;
 use crate::context::{Context, ContextError};
 use crate::delivery::{Delivery, VerifyOpts};
@@ -478,20 +478,7 @@ impl Ops {
                 .await;
             match operations {
                 Ok(rows) => {
-                    let capped = rows.len() >= MAX_OPERATIONS;
-                    let now = Utc::now().timestamp() as f64;
-                    attention.operations = rows
-                        .into_iter()
-                        .filter(|row| operation_needs_attention(row, now))
-                        .map(Into::into)
-                        .collect();
-                    if capped {
-                        attention.errors.push(SourceError {
-                            source: "operations".to_string(),
-                            message: "repair debt list reached the 1000-row read cap; inspect the journal"
-                                .to_string(),
-                        });
-                    }
+                    attention.record_operations(rows, Utc::now().timestamp() as f64, MAX_OPERATIONS);
                 }
                 Err(error) => attention.errors.push(SourceError {
                     source: "operations".to_string(),
