@@ -161,7 +161,14 @@ async fn perform(ops: Arc<Ops>, tx: Sender<Msg>, cancel: CancellationToken, effe
     let msg = match effect {
         // `snapshot` never fails: per-source errors ride inside it, which is what keeps one dead
         // service from blanking the other three panes (rule 4).
-        Effect::Refresh => Some(Msg::Snapshot(Box::new(ops.snapshot_default(&cancel).await))),
+        Effect::Refresh => {
+            let snapshot = ops.snapshot_default(&cancel).await;
+            let attention = ops.attention_from_snapshot(&snapshot, &cancel).await;
+            Some(Msg::SnapshotWithAttention(
+                Box::new(snapshot),
+                Box::new(attention),
+            ))
+        },
         Effect::Review(id) => match ops.gate_review(&id, &cancel).await {
             Ok(review) => Some(Msg::Review(Box::new(review))),
             Err(err) => failed(format!("review {id}"), err),
