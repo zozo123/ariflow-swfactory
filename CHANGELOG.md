@@ -6,6 +6,15 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-05
+
+The harness loop got host-owned guards (ratchet, delivery regression guard, adherence audit, review
+contract check), work can fan out across forked boat.dev VMs or fuse partial repairs, external
+agents and paid calls have a recovery path, and the live Airflow, srt and Docker legs now block a
+merge. Measured in this cycle: a real Databricks Claude run and a real boat.dev VM run each went
+through all six stages to delivery with zero blockers and zero regressions (#2392); the CI's live
+legs were 74/74, 86/86 and 82/82 green over 100 runs before they became mandatory.
+
 - Make the live paths blocking. `live-gate-e2e` (the `swf` binary's acceptance test against a live
   Airflow, plus the Python control room on the same run), `srt-smoke` and `docker-smoke` are now
   mandatory `candidate-readiness` legs, so a main-targeted PR cannot merge, and a tag cannot ship,
@@ -103,6 +112,53 @@ All notable changes to this project will be documented here. The format follows
   receipts. `swfactory demo --fusion` exercises a fusion-only win through review and
   local delivery. Native Claude uses SRT/Docker; local replay is scripted and remote
   checkpoint/external-harness combinations remain refused.
+
+- Add a dependency-free external agent boundary (#2375): an independently installed harness runs
+  behind the existing `Agent.run` seam through a versioned executable protocol. Operator profiles
+  and executable/image identity are pinned to accepted inputs, Docker writes are confined, output
+  is bounded, and exact container cleanup is confirmed before a retry. Candidate output cannot
+  author authority or billing. No runtime dependency is added.
+- Recover external launches (#2376): container creation is separated from execution and a start
+  intent is persisted before the harness attaches, so a Docker refusal no longer strands a pending
+  creation and its paid reservation. An optional Airflow deployment overlay mounts operator
+  profiles read-only in the worker.
+- Recover paid external calls from operator billing evidence (#2377): `swfactory state calls` lists
+  saved calls and `state reconcile-call` settles one against operator-attested final billing bound
+  to the original call, inputs and profile (live check: `$2 held -> $0.37 settled -> $1.63
+  resumed`). Owned Docker execution is recovered before a budget refusal can block cleanup.
+- Add shadow-only speculative campaign fan-in (#2378): `swfactory campaign-shadow compare`
+  re-verifies every answered candidate's retained evidence, then writes a digest-bound comparison
+  report marked `authority: advisory-only`. It launches nothing and changes no campaign winner.
+- Judge a delivery on the host (#2386): the publishable prefix comes from host configuration, and
+  the format-patch bytes are validated against it and the protected set before any SCM sees them,
+  so a cell that rewrites its own git view cannot widen a delivery. The backend's
+  `/v1/scm/publish` refuses (403, before using a credential) a non-`factory/` branch,
+  `allowed_prefixes: null`, or the `control-plane-maintenance` label.
+- Close leaked cells (#2387): a failed `setup` now closes the cell it created, `swfactory run` and
+  `demo --real` tear down in a `finally` (`--keep-sandbox` keeps a remote cell for inspection), and
+  doctor/preflight require a model credential for the Docker and toolset kinds that forward one.
+- Track GitHub PR follow-ups (#2390): an OWNER, MEMBER or COLLABORATOR comment starting
+  `@factory revise` on a managed PR is retained in the Cell timeline and shown in `swf attention`
+  with its source link. The backend re-reads GitHub and proves ownership from its publication
+  receipts; bots and untrusted actors are ignored or refused. A revision still needs a new work
+  order with fresh gates.
+- Use an HTTPS model gateway such as Databricks for Claude stages (#2392): gateway settings and the
+  bearer token reach only the model process, bearer mode drops unrelated API keys, and the gateway
+  host joins the srt/toolset egress allowlist. Work-node prompts now carry a self-contained
+  assignment, and replay patches apply with the repository prefix in a remote subdirectory.
+- Show unresolved external effects in `swf attention` and `swf tui` (#2396): in-doubt, refused and
+  exhausted operations appear at once with their operation key, Cell and epoch; routine ones only
+  after 30 minutes without an update. A failed backend read or a 1,000-row cap is reported as
+  incomplete visibility, never as an all-clear. The TUI also shows PR follow-up rows.
+- Translate git timeouts and launch failures into each module's own error (#2384, #2385) in
+  `source_snapshot`, `execution_recipe` and `candidate_evidence`, and use the shared
+  `looks_secret_key` rule for committed recipes. Replay verification rejects a symlink anywhere in
+  a retained log's parent path, not only at the file (#2389).
+- Tests stop their HTTP servers in 10 ms instead of 500 ms (the eight server-backed files: 93 s ->
+  10 s), and every workflow installs with `uv sync --locked` (#2388).
+- Rewrite the published `airflow-software-factory` and `swfactory` agent skills with sharper
+  triggers, the keyless quickstart and Demo/Adopt/Operate/Audit/Extend steps (#2393), and restructure
+  the README around a verified end-to-end quickstart (#2394).
 
 ## [2.5.0] - 2026-10-09
 
@@ -937,7 +993,8 @@ development snapshot that was never tagged or published.
 - Scripted keyless end-to-end replay and hermetic test suite.
 - GitHub delivery, issue dispatch, control room, maintenance bands, and webhook receiver.
 
-[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v2.5.0...HEAD
+[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.6.0
 [2.5.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.5.0
 [2.4.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.4.0
 [2.3.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.3.0
