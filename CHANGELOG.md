@@ -6,6 +6,11 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Keep run artifacts and build output out of the Docker build context. Neither `deploy/docker`
+  image copies files from the context, but `docker build .` sent the whole checkout: on a used dev
+  clone 25.2 GB (17 GB of `.factory/` runs, 7.7 GB of Cargo output), which stalled the documented
+  sandbox build for over 45 minutes. A root `.dockerignore` brings the context to 13.9 MB; a
+  `--no-cache` sandbox image build then takes 77 s.
 - Fix replay of evidence recorded before #2385. `verify_snapshot_run` and candidate evidence
   verification re-parse the retained recipe, and the shared secret-name rule #2385 adopted made
   older recipes with names such as `NPM_AUTHORIZATION`, `AWS_ACCESS_KEY_ID` or `*_COOKIE` fail as
