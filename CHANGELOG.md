@@ -6,6 +6,12 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-05
+
+- Add a "Why and when to use it" section to the README and a recorded keyless demo
+  (`site/demo.gif`) under the Quickstart.
+- Add a Code of Conduct (Contributor Covenant 2.1) and issue template contact links that route
+  security reports to private advisories.
 - Fix replay of evidence recorded before #2385. `verify_snapshot_run` and candidate evidence
   verification re-parse the retained recipe, and the shared secret-name rule #2385 adopted made
   older recipes with names such as `NPM_AUTHORIZATION`, `AWS_ACCESS_KEY_ID` or `*_COOKIE` fail as
@@ -929,7 +935,8 @@ development snapshot that was never tagged or published.
 - Scripted keyless end-to-end replay and hermetic test suite.
 - GitHub delivery, issue dispatch, control room, maintenance bands, and webhook receiver.
 
-[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v2.5.0...HEAD
+[Unreleased]: https://github.com/zozo123/ariflow-swfactory/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.6.0
 [2.5.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.5.0
 [2.4.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.4.0
 [2.3.0]: https://github.com/zozo123/ariflow-swfactory/releases/tag/v2.3.0

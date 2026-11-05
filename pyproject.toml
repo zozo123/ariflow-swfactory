@@ -1,6 +1,6 @@
 [project]
 name = "swfactory"
-version = "2.5.0"
+version = "2.6.0"
 description = "SWFactory turns GitHub issues into reviewed pull requests with coding agents, Airflow, verification, and human approval gates."
 readme = "README.md"
 license = "Apache-2.0"

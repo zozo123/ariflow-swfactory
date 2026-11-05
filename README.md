@@ -124,7 +124,7 @@ review the result, and deliver to a local Git remote. Demo approvals are automat
 installation needs network access; the replay needs **no model key, GitHub token, Airflow, Docker,
 or Rust**. It makes no model calls and opens no GitHub PR.
 
-Verified summary from a local run (`swfactory 2.5.0`):
+Verified summary from a local run (`swfactory 2.6.0`):
 
 ```text
 SCRIPTED REPLAY — agent=scripted, no model calls; fixtures: demo/scripted
