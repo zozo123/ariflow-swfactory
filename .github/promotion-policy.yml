@@ -56,13 +56,16 @@ checks:
     - airflow-main
     - rust
     - contract-equivalence
-  # Deliberately advisory, and staying that way: their hosted-runner timing or provider sandbox is
-  # not yet a supported release claim (see config/capability-inventory.json). They are declared
-  # here so that "advisory" is a recorded decision rather than an untracked `continue-on-error`.
-  advisory:
+    # Promoted from advisory on 2026-11-05 after the last 100 completed CI runs: live-gate-e2e
+    # 74/74, srt-smoke 86/86, docker-smoke 82/82 (cancelled runs excluded). Mandatory is a merge
+    # rule, not a support claim; the sandboxes stay experimental in the capability inventory.
     - live-gate-e2e
     - srt-smoke
     - docker-smoke
+  # Deliberately advisory: an early warning on Airflow main's in-development common.ai sandbox
+  # code, which this repository does not ship. Declared here so that "advisory" is a recorded
+  # decision rather than an untracked `continue-on-error`.
+  advisory:
     - airflow-main-sandbox-toolset
 
 control_plane:

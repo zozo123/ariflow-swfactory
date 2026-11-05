@@ -11,7 +11,7 @@ Four green ticks, one enforced boundary, and not the same one. That is issue
 The live repository still requires the historical `test` context. Until an administrator applies
 the desired protection policy, that name is retained only as a **fail-closed compatibility alias**:
 `test -> candidate-readiness -> {test-core, eval-suite, airflow-parity, airflow-main, rust,
-contract-equivalence}`. It no longer means the fast Python suite alone. The policy audit checks this
+contract-equivalence, live-gate-e2e, srt-smoke, docker-smoke}`. It no longer means the fast Python suite alone. The policy audit checks this
 dependency so the compatibility bridge cannot silently become shallow again.
 
 The boundary is now expressed as code in three files that must agree with each other:
@@ -27,8 +27,8 @@ The boundary is now expressed as code in three files that must agree with each o
 ## What must be green, and what must not be able to be skipped
 
 Mandatory legs — `test-core`, `eval-suite`, `airflow-parity`, `airflow-main`, `rust`,
-`contract-equivalence` — fan into `candidate-readiness`, which refuses to seal evidence unless each
-one reported `success`.
+`contract-equivalence`, `live-gate-e2e`, `srt-smoke`, `docker-smoke` — fan into
+`candidate-readiness`, which refuses to seal evidence unless each one reported `success`.
 
 **`skipped` is a refusal.** This is the failure mode the whole gate exists for. GitHub reports a
 skipped required check as neutral, and a neutral check does not block a merge; a gate that tests
@@ -37,11 +37,20 @@ anyone intending it: an `if:` condition that stops matching, a `needs:` upstream
 a path filter added for speed. `cancelled`, `neutral`, `timed_out`, `action_required` and *absent*
 are refusals for the same reason: none of them is evidence that the leg ran and passed.
 
-Advisory legs — `live-gate-e2e`, `srt-smoke`, `docker-smoke`, `airflow-main-sandbox-toolset` —
-stay advisory, on purpose. Their hosted-runner timing and provider sandboxes are not yet supported
-release claims (see `config/capability-inventory.json`). They may fail without blocking anything,
-and they never count as evidence. What they may **not** do is be mandatory in one place and advisory
-in another: the policy refuses to load if a leg appears in both lists, and the audit fails if an
+The live legs joined the mandatory set on 2026-11-05. Over the previous 100 completed CI runs
+(2026-10-07 to 11-03) they had never failed: `live-gate-e2e` 74/74, `srt-smoke` 86/86,
+`docker-smoke` 82/82, with cancelled runs excluded. The already mandatory `airflow-main` was 73/76
+over the same runs. `live-gate-e2e` is the acceptance test of the `swf` binary that releases ship,
+and the two smokes run the bundled demo in the srt and Docker sandboxes. A mandatory leg is a merge
+rule, not a support claim: both sandboxes stay `experimental` in
+`config/capability-inventory.json`. The cost is latency: `live-gate-e2e` takes about 17 minutes,
+so `candidate-readiness` now reports after the slowest leg instead of after `airflow-main`.
+
+One leg stays advisory, on purpose: `airflow-main-sandbox-toolset` runs Airflow main's
+in-development common.ai sandbox code, which this repository does not ship, so a red run there is
+upstream news rather than a defect in the candidate. It may fail without blocking anything, and it
+never counts as evidence. What a leg may **not** do is be mandatory in one place and advisory in
+another: the policy refuses to load if a leg appears in both lists, and the audit fails if an
 advisory leg is not actually `continue-on-error` in `ci.yml`, or a mandatory one is.
 
 ## The PR-merge-to-release identity rule

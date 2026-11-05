@@ -501,12 +501,13 @@ Provider-fork execution remains experimental and requires every work node to set
 `parallel_safe=True`; a mixed or default plan uses serial execution.
 
 [CI](.github/workflows/ci.yml) gives internal fan-out PRs the fast Python gate and main-targeted
-PRs the integration matrix. The pinned live-gate, SRT, Docker, and upstream sandbox-toolset jobs
-currently use `continue-on-error`; the separate [eval workflow](.github/workflows/evals.yml) is
-path-filtered, scheduled, or manually triggered, and real-agent jobs need configured secrets.
-**A green badge does not mean every live path passed.** The
-[methodology's promotion rules](docs/liquid-methodology.md#ci-and-promotion) define the stronger
-acceptance standard and explain the remaining enforcement work.
+PRs the integration matrix. A main-targeted PR merges only when all nine mandatory legs pass,
+including the live-Airflow `swf` end to end (2 issues × 2 targets, 8 gates, 4 independently
+verified deliveries) and the demo inside the SRT and Docker sandboxes. Those three live legs were
+74/74, 86/86 and 82/82 green over the 100 CI runs before they became mandatory. Only the Airflow
+main sandbox-toolset canary stays advisory. Real-model jobs live in the separate
+[eval workflow](.github/workflows/evals.yml) and need configured secrets. See
+[the promotion boundary](docs/promotion-policy.md) for what each leg proves.
 
 ## Method
 
@@ -560,9 +561,10 @@ remain. Treat publication, required CI, and merge as separate results; see the
 **Airflow finished but a sandbox is still up.** Teardown can leave recovery debt. Follow
 [run recovery](docs/run-recovery.md); do not assume cancelling a DAG run reclaims every VM.
 
-**Does a green CI badge mean every sandbox works?** No. Some live jobs use `continue-on-error`, and
-eval workflows need configured secrets. Trust [capability claims](#capability-claims) and the exact
-check results for the head you care about.
+**Does a green CI badge mean every sandbox works?** It means the scripted delivery passed on a live
+Airflow and inside the SRT and Docker sandboxes. Hosted sandboxes (islo, boat) and real-model runs
+are covered by the separately triggered eval workflow, so check the
+[capability claims](#capability-claims) for those.
 
 **Can agents merge their own PRs?** Not on the default line. Merge stays with a human (or the
 experimental docs-only autonomous policy). Agents never receive GitHub publishing credentials in

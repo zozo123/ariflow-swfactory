@@ -126,7 +126,7 @@
       "evidence": [
         "CI check ci:srt-smoke"
       ],
-      "follow_up": "Promote only after the hosted smoke is stable enough to join a required protected-branch context.",
+      "follow_up": "ci:srt-smoke is a mandatory candidate-readiness leg since 2026-11-05 (86/86 green over the prior 100 CI runs). Graduate support only with retained real-model runs that cover cancellation and teardown.",
       "public_surface": [
         "<code>srt</code>",
         "`srt`",
@@ -145,7 +145,7 @@
       "evidence": [
         "CI check ci:docker-smoke"
       ],
-      "follow_up": "Keep advisory until failure rate and cleanup semantics satisfy the supported sandbox SLO.",
+      "follow_up": "ci:docker-smoke is a mandatory candidate-readiness leg since 2026-11-05 (82/82 green over the prior 100 CI runs). Graduate support only once cleanup semantics are qualified; the rehearsal mounts the host Docker socket.",
       "public_surface": [
         "<code>docker</code>",
         "`docker`",
