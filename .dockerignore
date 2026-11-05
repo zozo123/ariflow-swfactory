@@ -1,0 +1,11 @@
+# Neither deploy/docker image copies files from the build context, but `docker build .` still
+# sends the whole checkout to the daemon. Run artifacts and build output grow without bound.
+# demo/target is a committed fixture, so only the two Cargo output directories are listed.
+.factory/
+target/
+rust/target/
+.venv/
+.git/
+.ruff_cache/
+**/node_modules/
+**/__pycache__/
