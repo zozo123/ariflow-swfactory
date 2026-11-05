@@ -11,8 +11,27 @@ bounded work cells; trusted code runs the product tests; the trusted backend own
 On the default line a person approves the intent and the plan, and a person merges the pull request.
 
 Docs site: [https://zozo123.github.io/ariflow-swfactory/](https://zozo123.github.io/ariflow-swfactory/) ·
-[Quickstart](#quickstart) · [Operator guide](docs/swf.md) ·
+[Quickstart](#quickstart) · [When to use it](#why-and-when-to-use-it) · [Operator guide](docs/swf.md) ·
 [Walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo)
+
+## Why and when to use it
+
+Coding agents can write a patch in minutes. The hard part is trusting it: who approved the
+intent, which tests ran on which commit, and what happens when the agent crashes halfway through.
+SWFactory puts that control around the agent so every change arrives with its own evidence.
+
+Use it when:
+
+- you want agents to work a backlog of GitHub issues, but a person still approves the plan and merges;
+- you already run Apache Airflow, or want one scheduler for retries, mapping, and audit history;
+- you need a record per change (intent, plan, approvals, test results, review) that outlives the agent run;
+- agents must run in a sandbox without GitHub write credentials.
+
+Skip it when:
+
+- you want an interactive pair programmer in your editor (use your agent CLI directly);
+- one person, one repo, one agent session is enough and nobody needs an audit trail;
+- you need a hosted service with no infrastructure (this is alpha software you run yourself).
 
 ## From issue to merged PR
 
@@ -97,6 +116,8 @@ cd ariflow-swfactory
 uv sync --locked
 uv run swfactory demo
 ```
+
+![swfactory demo: a scripted issue goes through intent, plan, build, review, and delivery in a few seconds](site/demo.gif)
 
 The replay uses authored agent fixtures to change a calculator project, fail a build, repair it,
 review the result, and deliver to a local Git remote. Demo approvals are automatic. Dependency
