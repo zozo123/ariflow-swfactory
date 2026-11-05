@@ -181,6 +181,45 @@ def test_cli_run_derives_its_config_with_job_config(tmp_path: Path, monkeypatch:
         "enforce_inputs": True,
     }
 
+def test_demo_next_steps_include_actual_run_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    bp = load("factory")
+    run_id = "demo2402"
+
+    report = RunReport(
+        run_id=run_id,
+        issue_id="DEMO-1",
+        agent="scripted",
+        sandbox="local",
+        scm="local",
+        stages=[],
+        approvals=[],
+        tests_passed=True,
+    )
+
+    monkeypatch.setattr(
+        runtime,
+        "ctx_for",
+        lambda cfg, **kw: SimpleNamespace(cfg=cfg),
+    )
+    monkeypatch.setattr(runtime, "_preflight", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "run_ctx", lambda ctx, *args, **kwargs: report)
+
+    cli._run_jobs(
+        bp,
+        [ISSUE],
+        {**LOCAL, "run_id": run_id},
+        show_next_steps=True,
+    )
+
+    output = capsys.readouterr().out
+    assert f".factory/{run_id}/pr.md" in output
+    assert "uv run swfactory state list" in output
+    assert '"Run a real issue"' in output
 
 # ------------------------------------------------------------------ preflight before provisioning
 

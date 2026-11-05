@@ -217,6 +217,7 @@ def _run_jobs(
     *,
     targets: list[str] | None = None,
     keep_sandbox: bool = False,
+    show_next_steps: bool = False,
 ) -> None:
     """Run every (issue x target) job of ``bp`` in sequence. ``overrides`` are the CLI flags the
     user passed (``None`` = not passed). Each job's report is printed as a table and written to
@@ -274,6 +275,11 @@ def _run_jobs(
         failed = failed or blocked or not report.tests_passed
     if failed:
         raise typer.Exit(1)
+    if show_next_steps:
+        typer.echo("\nNext steps:")
+        typer.echo(f"  1. Open .factory/{run_id}/pr.md")
+        typer.echo("  2. Run: uv run swfactory state list")
+        typer.echo('  3. Read the "Run a real issue" section in README.md')
 
 
 # ---------------------------------------------------------------- commands
@@ -553,6 +559,7 @@ def demo(
             ),
         },
         keep_sandbox=keep_sandbox,
+        show_next_steps=True,
     )
 
 
