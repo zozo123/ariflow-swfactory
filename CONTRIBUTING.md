@@ -49,6 +49,8 @@ uses Airflow 3.3.2:
 uv run --group airflow pytest tests/test_dag_parity.py tests/test_dag_smoke.py tests/test_dag_stress.py
 ```
 
+Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Pull requests
 
 - Keep a PR focused on one behavior or operational concern.

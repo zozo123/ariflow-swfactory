@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/zozo123/ariflow-swfactory/security/advisories/new
+    about: Please report vulnerabilities privately. See SECURITY.md.
+  - name: Read the operator guide
+    url: https://github.com/zozo123/ariflow-swfactory/blob/main/docs/swf.md
+    about: Commands, configuration, and troubleshooting for running SWFactory.
+  - name: Try the 60 second demo
+    url: https://github.com/zozo123/ariflow-swfactory#quickstart
+    about: Run the keyless scripted replay before filing a setup question.
