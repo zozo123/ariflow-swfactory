@@ -67,13 +67,12 @@ jobs:
           uv run --group airflow pytest
           tests/test_dag_parity.py tests/test_dag_smoke.py tests/test_dag_stress.py
 
-  # This exercises a real approval gate against a real scheduler. It remains advisory because its
-  # hosted-runner timing path is not yet a supported release claim; the supported Airflow path is
-  # blocked below by airflow-main and airflow-parity.
+  # This exercises a real approval gate against a real scheduler, and is the acceptance test of the
+  # `swf` binary every release ships. It is mandatory: it was 74/74 green over the last 100
+  # completed CI runs (2026-10-07..11-03; 19 more were cancelled by a newer push).
   live-gate-e2e:
     if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 45
     env:
       GH_TOKEN: ${{ github.token }}
@@ -91,14 +90,13 @@ jobs:
       - run: uv sync --locked --group airflow
       - name: swf drives a live Airflow end to end (2 issues x 2 targets, 8 gates, 4 deliveries)
         id: rust_harness
-        continue-on-error: true
         run: bash scripts/swf_e2e.sh
       - name: the Python control room answers the same gates on the same shape of run
         id: python_harness
-        # A superseding push cancels this run. Do not start another long harness while cancellation
-        # is trying to free the workflow concurrency slot for the newer candidate.
+        # Runs after a red Rust harness too, so one failed run reports both. A superseding push
+        # cancels this run: do not start another long harness while cancellation is trying to free
+        # the workflow concurrency slot for the newer candidate.
         if: ${{ !cancelled() }}
-        continue-on-error: true
         run: bash scripts/stress_airflow.sh
       - name: Keep scheduler evidence when either harness fails
         if: >-
@@ -107,22 +105,13 @@ jobs:
         run: |
           find "${TMPDIR:-/tmp}" -maxdepth 2 -name 'standalone.log' -newermt '-1 hour' \
             -exec sh -c 'echo "== $1"; tail -200 "$1"' _ {} \; 2>/dev/null || true
-      - name: Propagate harness failures to the job result
-        if: ${{ !cancelled() }}
-        env:
-          RUST_HARNESS: ${{ steps.rust_harness.outcome }}
-          PYTHON_HARNESS: ${{ steps.python_harness.outcome }}
-        run: |
-          printf 'rust=%s python=%s\n' "$RUST_HARNESS" "$PYTHON_HARNESS"
-          test "$RUST_HARNESS" = success
-          test "$PYTHON_HARNESS" = success
 
-  # Provider-specific sandbox jobs stay advisory until the capability inventory moves them from
-  # experimental to validated. A green advisory check must not silently upgrade a support claim.
+  # The srt and Docker smokes run the bundled demo in the two local sandboxes the README lists.
+  # They are mandatory (86/86 and 82/82 green over the last 100 completed CI runs). A required leg
+  # is not a support claim: both sandboxes stay `experimental` in config/capability-inventory.json.
   srt-smoke:
     if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-24.04
-    continue-on-error: true
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
@@ -160,7 +149,6 @@ jobs:
   docker-smoke:
     if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
@@ -190,6 +178,8 @@ jobs:
           SWF_STRESS_SETTLE_POLLS: "4"
         run: scripts/stress_airflow.sh
 
+  # Advisory by design: an early warning on Airflow main's in-development common.ai sandbox code,
+  # which this repository does not ship. A red run here is upstream news, not a candidate defect.
   airflow-main-sandbox-toolset:
     if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
@@ -250,7 +240,16 @@ jobs:
   # fails when they disagree. release.yml consumes the manifest this job seals.
   candidate-readiness:
     if: always() && (github.event_name == 'push' || github.base_ref == 'main')
-    needs: [test-core, eval-suite, airflow-parity, airflow-main, rust, contract-equivalence]
+    needs:
+      - test-core
+      - eval-suite
+      - airflow-parity
+      - airflow-main
+      - rust
+      - contract-equivalence
+      - live-gate-e2e
+      - srt-smoke
+      - docker-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -268,6 +267,9 @@ jobs:
       AIRFLOW_MAIN_RESULT: ${{ needs.airflow-main.result }}
       RUST_RESULT: ${{ needs.rust.result }}
       CONTRACT_RESULT: ${{ needs.contract-equivalence.result }}
+      LIVE_GATE_RESULT: ${{ needs.live-gate-e2e.result }}
+      SRT_RESULT: ${{ needs.srt-smoke.result }}
+      DOCKER_RESULT: ${{ needs.docker-smoke.result }}
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -310,6 +312,9 @@ jobs:
           --result "airflow-main=$AIRFLOW_MAIN_RESULT"
           --result "rust=$RUST_RESULT"
           --result "contract-equivalence=$CONTRACT_RESULT"
+          --result "live-gate-e2e=$LIVE_GATE_RESULT"
+          --result "srt-smoke=$SRT_RESULT"
+          --result "docker-smoke=$DOCKER_RESULT"
           --head-sha "$HEAD_SHA"
           --base-sha "$BASE_SHA"
           --tested-sha "$TESTED_SHA"
@@ -335,6 +340,9 @@ jobs:
           record airflow-main "$AIRFLOW_MAIN_RESULT"
           record rust "$RUST_RESULT"
           record contract-equivalence "$CONTRACT_RESULT"
+          record live-gate-e2e "$LIVE_GATE_RESULT"
+          record srt-smoke "$SRT_RESULT"
+          record docker-smoke "$DOCKER_RESULT"
       - name: Seal candidate evidence to exact head/base/tested identity
         run: >-
           uv run python -m swfactory.candidate_readiness
@@ -347,6 +355,9 @@ jobs:
           --required airflow-main=.factory/candidate-evidence/airflow-main.txt
           --required rust=.factory/candidate-evidence/rust.txt
           --required contract-equivalence=.factory/candidate-evidence/contract-equivalence.txt
+          --required live-gate-e2e=.factory/candidate-evidence/live-gate-e2e.txt
+          --required srt-smoke=.factory/candidate-evidence/srt-smoke.txt
+          --required docker-smoke=.factory/candidate-evidence/docker-smoke.txt
           --out .factory/candidate-readiness.json
       - name: Upload exact-candidate readiness manifest
         uses: actions/upload-artifact@v4

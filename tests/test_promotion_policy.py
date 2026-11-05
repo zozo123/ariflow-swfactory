@@ -569,14 +569,23 @@ def test_live_diff_audit_rejects_unreachable_commands(tmp_path: Path, wrapper) -
 
 
 def test_superseded_live_gate_does_not_start_more_long_harnesses() -> None:
-    """Cancellation must drain this advisory job instead of blocking the next CI candidate."""
+    """Cancellation must drain this job instead of blocking the next CI candidate."""
     steps = _workflow("ci.yml")["jobs"]["live-gate-e2e"]["steps"]
     by_id = {step.get("id"): step for step in steps if step.get("id")}
     by_name = {step.get("name"): step for step in steps if step.get("name")}
 
     assert "cancelled()" in str(by_id["python_harness"]["if"])
     assert "cancelled()" in str(by_name["Keep scheduler evidence when either harness fails"]["if"])
-    assert "cancelled()" in str(by_name["Propagate harness failures to the job result"]["if"])
+
+
+def test_a_red_rust_harness_still_runs_the_python_harness_and_fails_the_live_gate() -> None:
+    """Both harnesses report on one run, and either one failing fails the mandatory leg itself."""
+    assert "live-gate-e2e" in POLICY.mandatory_checks
+    steps = _workflow("ci.yml")["jobs"]["live-gate-e2e"]["steps"]
+    by_id = {step.get("id"): step for step in steps if step.get("id")}
+
+    assert by_id["python_harness"]["if"] == "${{ !cancelled() }}"
+    assert not any("continue-on-error" in step for step in steps)
 
 
 @pytest.mark.parametrize("event", ["push", "pull_request", "schedule"])

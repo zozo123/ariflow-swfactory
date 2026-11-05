@@ -6,6 +6,14 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+- Make the live paths blocking. `live-gate-e2e` (the `swf` binary's acceptance test against a live
+  Airflow, plus the Python control room on the same run), `srt-smoke` and `docker-smoke` are now
+  mandatory `candidate-readiness` legs, so a main-targeted PR cannot merge, and a tag cannot ship,
+  when one of them fails. Over the 100 completed CI runs before the change they were 74/74, 86/86
+  and 82/82 green (cancelled runs excluded); the already mandatory `airflow-main` was 73/76. The
+  live gate's harness steps no longer use `continue-on-error`: a red Rust harness still runs the
+  Python one, and either failing fails the job. `airflow-main-sandbox-toolset` stays advisory as an
+  upstream canary. The srt and Docker capability claims stay `experimental`.
 - Fix replay of evidence recorded before #2385. `verify_snapshot_run` and candidate evidence
   verification re-parse the retained recipe, and the shared secret-name rule #2385 adopted made
   older recipes with names such as `NPM_AUTHORIZATION`, `AWS_ACCESS_KEY_ID` or `*_COOKIE` fail as

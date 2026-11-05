@@ -415,8 +415,9 @@ The actual [CI workflow](../.github/workflows/ci.yml) and
 | Upstream Airflow, demo, live scheduler/mapping/approvals | Main-targeted PRs and pushes to `main`; ordinary failing check |
 | Rust format, clippy, tests, release build | Main-targeted PRs and pushes to `main`; ordinary failing check |
 | Python/Rust fixture contract equivalence | Main-targeted PRs and pushes to `main`; ordinary failing check |
-| Pinned live-gate E2E, SRT smoke, Docker smoke, upstream sandbox-toolset | Main-targeted PRs and pushes to `main`; job-level `continue-on-error: true` |
-| Scripted eval suite | Selected changed paths, weekly schedule, or manual dispatch; not every final PR |
+| Pinned live-gate E2E (`swf` and Python harnesses), SRT smoke, Docker smoke | Main-targeted PRs and pushes to `main`; mandatory `candidate-readiness` legs |
+| Upstream Airflow main sandbox-toolset canary | Main-targeted PRs and pushes to `main`; job-level `continue-on-error: true` |
+| Scripted eval suite | Main-targeted PRs and pushes to `main` as a mandatory leg; also selected paths, weekly, or manual in the eval workflow |
 | Real-agent SRT/islo evaluations | Same eval workflow; actual execution depends on configured secrets |
 
 An ordinary failing check is not automatically a required GitHub branch-protection check. Workflow
