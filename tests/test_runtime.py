@@ -181,6 +181,7 @@ def test_cli_run_derives_its_config_with_job_config(tmp_path: Path, monkeypatch:
         "enforce_inputs": True,
     }
 
+
 def test_demo_next_steps_include_actual_run_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -220,6 +221,7 @@ def test_demo_next_steps_include_actual_run_id(
     assert f".factory/{run_id}/pr.md" in output
     assert "uv run swfactory state list" in output
     assert '"Run a real issue"' in output
+
 
 # ------------------------------------------------------------------ preflight before provisioning
 
