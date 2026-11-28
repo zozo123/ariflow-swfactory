@@ -11,8 +11,8 @@ bounded work cells; trusted code runs the product tests; the trusted backend own
 On the default line a person approves the intent and the plan, and a person merges the pull request.
 
 Docs site: [https://zozo123.github.io/ariflow-swfactory/](https://zozo123.github.io/ariflow-swfactory/) ·
-[Quickstart](#quickstart) · [When to use it](#why-and-when-to-use-it) · [Operator guide](docs/swf.md) ·
-[Walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo)
+[Quickstart](#quickstart) · [Choose a run](#choose-a-run) · [When to use it](#why-and-when-to-use-it) ·
+[Operator guide](docs/swf.md) · [Walkthrough](https://zozo123.github.io/ariflow-swfactory/#factory-demo)
 
 ## Why and when to use it
 
@@ -153,6 +153,20 @@ draws the same stages and the two human gates as one diagram.
 
 ![A GitHub issue moving through isolated work cells toward a reviewed pull request](site/factory-line.webp)
 
+## Choose a run
+
+| Path | Approvals, execution, and delivery | Start here |
+| --- | --- | --- |
+| Local replay | Fixture approvals, no model calls, local Git delivery | The [quickstart](#quickstart) above |
+| Hosted VM rehearsal (`boat.dev`) | Scripted fixtures in a credential-free cloud VM, local Git delivery | [Run on boat.dev](#run-on-boatdev) |
+| Real-model gateway rehearsal | Real model calls via gateway, isolated container build and review | [Model gateways](docs/model-gateways.md) |
+| Human-approved work | An operator answers artifact gates and merges the resulting PR | [Operator guide](docs/swf.md) |
+| Autonomous documentation work (experimental) | Repo policy approves gates; the backend verifies checks and merges | [Autonomous operating guide](docs/autonomous.md) |
+
+Autonomy requires a deployed backend, Airflow, and configured model/sandbox access. Inspect
+policy refusals with `uv run swfactory state autonomy --json`; set `SWF_BACKEND_URL` and
+`SWF_BACKEND_TOKEN` to read the deployed backend, or use `--root` with its local state directory.
+
 ## Run on boat.dev
 
 <a href="https://boat.dev"><img src="site/boat-logo.svg" alt="boat.dev" width="156" /></a>
@@ -177,18 +191,6 @@ completed run can correctly publish blocked evidence when acceptance tests are m
 | `scripts/swf_e2e.sh` | Live Airflow, backend admission, human gates, independently verified deliveries |
 | `uv run swfactory demo --sandbox boat` | Hosted boat VM, stage execution, review, local publication, teardown |
 | [Databricks rehearsal](docs/model-gateways.md) | Real model calls, bounded build and review, credential-free tests |
-
-## Choose a run
-
-| Path | Approvals and delivery | Start here |
-| --- | --- | --- |
-| Local replay | Fixture approvals, no model calls, local Git delivery | The quickstart above |
-| Human-approved work | An operator answers artifact gates and merges the resulting PR | [Operator guide](docs/swf.md) |
-| Autonomous documentation work (experimental) | Repo policy approves gates; the backend verifies checks and merges | [Autonomous operating guide](docs/autonomous.md) |
-
-Autonomy requires a deployed backend, Airflow, and configured model/sandbox access. Inspect
-policy refusals with `uv run swfactory state autonomy --json`; set `SWF_BACKEND_URL` and
-`SWF_BACKEND_TOKEN` to read the deployed backend, or use `--root` with its local state directory.
 
 ### Do not lose an in-doubt external effect
 
